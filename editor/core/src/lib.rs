@@ -1302,6 +1302,7 @@ static COLOR_PICKER_SHARED_RES: UnsafeMainThreadOnlyOnceCell<ColorPickerSharedRe
 
 pub struct ColorPickerView {
     eh: Rc<ColorPickerEventHandler>,
+    first_rendered: bool,
 }
 impl ColorPickerView {
     const RING_THICKNESS: f32 = 12.0;
@@ -1535,16 +1536,23 @@ impl ColorPickerView {
             eh.hex_text_input_view.set_value(v, ctx.system_link);
         }
 
-        Self { eh }
+        Self {
+            eh,
+            first_rendered: false,
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    pub fn render(&mut self, ctx: &mut RenderContext, target: &(impl MountTarget + ?Sized)) {
+        if !self.first_rendered {
+            // first rende
+            ctx.composite_tree
+                .add_child(target.ct_root(), self.eh.ct_root);
+            ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+        }
 
+        self.first_rendered = true;
         // これだけ遅延させる必要がある（ScreenPositionInterestsどうしようか......）
-        self.eh.hex_text_input_view.mount(
+        self.eh.hex_text_input_view.render(
             ctx,
             &uikit::RawMountTarget {
                 ht_root: self.eh.ht_root,
@@ -2009,7 +2017,7 @@ impl ColorPickerHexTextInputView {
         );
         let eh = Rc::new(ColorPickerHexTextInputEventHandler {
             value: Cell::new(0),
-            raw,
+            raw: RefCell::new(raw),
             id: view_id,
             token: kf_token,
             parent_view_handler: parent_view_handler.clone(),
@@ -2020,8 +2028,8 @@ impl ColorPickerHexTextInputView {
         Self { eh }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        self.eh.raw.mount(ctx, parent);
+    pub fn render(&self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        self.eh.raw.borrow_mut().render(ctx, parent);
     }
 
     pub fn set_keyboard_focus_group(
@@ -2036,6 +2044,7 @@ impl ColorPickerHexTextInputView {
         self.eh.value.set(value);
         self.eh
             .raw
+            .borrow()
             .set_content_lazy(ColorPickerHexTextInputEventHandler::fmt(value));
         syslink.dispatch_event(Event::UpdateView { id: self.eh.id });
     }
@@ -2043,7 +2052,7 @@ impl ColorPickerHexTextInputView {
 
 struct ColorPickerHexTextInputEventHandler {
     value: Cell<u32>,
-    raw: uikit::RawTextInputView,
+    raw: RefCell<uikit::RawTextInputView>,
     id: ViewIdentifier,
     token: FocusTargetToken,
     parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
@@ -2051,20 +2060,20 @@ struct ColorPickerHexTextInputEventHandler {
 impl ViewEventHandler for ColorPickerHexTextInputEventHandler {
     #[inline(always)]
     fn update(&self, context: &mut ViewUpdateContext) {
-        self.raw.fwd_view_update(context);
+        self.raw.borrow().fwd_view_update(context);
     }
 }
 impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.set_focus_lazy(context.ht_manager);
+        self.raw.borrow().set_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
-        self.raw.release_focus_lazy(context.ht_manager);
+        self.raw.borrow().release_focus_lazy(context.ht_manager);
         self.confirm_direct_input(context.system_link, context.composite_tree);
     }
 
@@ -2081,12 +2090,12 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
             return;
         }
 
-        self.raw.fwd_keydown(context, code, modifier);
+        self.raw.borrow().fwd_keydown(context, code, modifier);
     }
 
     #[inline(always)]
     fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.raw.fwd_char(context, ch);
+        self.raw.borrow().fwd_char(context, ch);
     }
 
     #[inline(always)]
@@ -2098,6 +2107,7 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
         new_preedit_string: Option<&str>,
     ) {
         self.raw
+            .borrow()
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
     }
 }
@@ -2163,11 +2173,11 @@ impl ColorPickerHexTextInputEventHandler {
 
     fn confirm_direct_input<E>(&self, syslink: &SystemLink, composite_tree: &mut CompositeTree<E>) {
         let current_value = self.value.get();
-        let new_value = Self::parse(&self.raw.content()).unwrap_or(current_value);
+        let new_value = Self::parse(&self.raw.borrow().content()).unwrap_or(current_value);
         self.value.set(new_value);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.set_content_lazy(Self::fmt(new_value));
+        self.raw.borrow().set_content_lazy(Self::fmt(new_value));
         syslink.dispatch_event(Event::UpdateView { id: self.id });
 
         if current_value != new_value {
@@ -2183,7 +2193,9 @@ impl ColorPickerHexTextInputEventHandler {
     }
 
     fn cancel_direct_input(&self, syslink: &SystemLink) {
-        self.raw.set_content_lazy(Self::fmt(self.value.get()));
+        self.raw
+            .borrow()
+            .set_content_lazy(Self::fmt(self.value.get()));
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 }
@@ -2364,8 +2376,8 @@ impl EditableColorButtonPickerFlyoutView {
     }
 }
 impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
-    fn mount(&self, mount_context: &mut MountContext, surface: FlyoutSurfaceHandle) {
-        self.inner_view.mount(mount_context, &surface);
+    fn render(&mut self, ctx: &mut RenderContext, surface: FlyoutSurfaceHandle) {
+        self.inner_view.render(ctx, &surface);
     }
 }
 
@@ -2539,27 +2551,27 @@ impl UIKitPreviewPanePresenter {
         );
         label.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += label.compute_size_without_render(ctx.system_link).height;
-        let text_input_view = TextInputView::new(
+        let mut text_input_view = TextInputView::new(
             ctx,
             Rect::from_lt_size(
                 Point::new_logical(16.0, ytop),
                 Size::new_logical(128.0, 20.0),
             ),
         );
-        text_input_view.mount(ctx, &scroll_container);
+        text_input_view.render(&mut ctx.make_render_context(), &scroll_container);
         // text_input_view.set_keyboard_focus_group(
         //     main_window.keyboard_focus_group(),
         //     view_init_ctx.keyboard_focus_registry,
         // );
         ytop += 24.0;
-        let text_input_view2 = TextInputView::new(
+        let mut text_input_view2 = TextInputView::new(
             ctx,
             Rect::from_lt_size(
                 Point::new_logical(16.0, ytop),
                 Size::new_logical(128.0, 20.0),
             ),
         );
-        text_input_view2.mount(ctx, &scroll_container);
+        text_input_view2.render(&mut ctx.make_render_context(), &scroll_container);
         // text_input_view2.set_keyboard_focus_group(
         //     main_window.keyboard_focus_group(),
         //     view_init_ctx.keyboard_focus_registry,
@@ -2605,12 +2617,12 @@ impl UIKitPreviewPanePresenter {
         );
         label.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += label.compute_size_without_render(ctx.system_link).height;
-        let color_picker = ColorPickerView::new(
+        let mut color_picker = ColorPickerView::new(
             ctx,
             Point::new_logical(16.0, ytop),
             &Rc::downgrade(&color_picker_backing_store),
         );
-        color_picker.mount(ctx, &scroll_container);
+        color_picker.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += 128.0 + 32.0 + 16.0 + 20.0;
 
         ytop += 8.0;
@@ -2647,7 +2659,7 @@ impl UIKitPreviewPanePresenter {
         );
         label.render(&mut ctx.make_render_context(), &scroll_container);
         let label_width = label.compute_size_without_render(ctx.system_link).width;
-        let numeric_input_view = NumericInputView::new(
+        let mut numeric_input_view = NumericInputView::new(
             ctx,
             Rect::from_lt_size(
                 Point::new_logical(16.0 + label_width, ytop - 2.0),
@@ -2656,7 +2668,7 @@ impl UIKitPreviewPanePresenter {
             Rc::downgrade(&numeric_input_view_backing_store),
         );
         numeric_input_view.post_init(ctx);
-        numeric_input_view.mount(ctx, &scroll_container);
+        numeric_input_view.render(&mut ctx.make_render_context(), &scroll_container);
         // numeric_input_view.set_keyboard_focus_group(
         //     main_window.keyboard_focus_group(),
         //     view_init_ctx.keyboard_focus_registry,
@@ -3299,7 +3311,7 @@ impl InspectorPanePresenter {
             );
             label.set_font(FontID::UIFormLiftedLabel);
             label.render(&mut ctx.make_render_context(), &items_container_view);
-            let local_position_x_input_view = NumericInputView::new(
+            let mut local_position_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0, 8.0 + 12.0),
@@ -3307,8 +3319,9 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_x_input_view.mount(ctx, &items_container_view);
-            let local_position_y_input_view = NumericInputView::new(
+            local_position_x_input_view
+                .render(&mut ctx.make_render_context(), &items_container_view);
+            let mut local_position_y_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0 + 40.0, 8.0 + 12.0),
@@ -3316,8 +3329,9 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_y_input_view.mount(ctx, &items_container_view);
-            let local_position_z_input_view = NumericInputView::new(
+            local_position_y_input_view
+                .render(&mut ctx.make_render_context(), &items_container_view);
+            let mut local_position_z_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0),
@@ -3325,7 +3339,8 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_position_z_input_view.mount(ctx, &items_container_view);
+            local_position_z_input_view
+                .render(&mut ctx.make_render_context(), &items_container_view);
 
             let mut label = StaticTextView::new(
                 "ROTATION".into(),
@@ -3340,7 +3355,7 @@ impl InspectorPanePresenter {
             );
             label.set_font(FontID::UIFormLiftedLabel);
             label.render(&mut ctx.make_render_context(), &items_container_view);
-            let local_rotation_x_input_view = NumericInputView::new(
+            let mut local_rotation_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
@@ -3348,8 +3363,9 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_rotation_x_input_view.mount(ctx, &items_container_view);
-            let local_rotation_y_input_view = NumericInputView::new(
+            local_rotation_x_input_view
+                .render(&mut ctx.make_render_context(), &items_container_view);
+            let mut local_rotation_y_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
@@ -3357,8 +3373,9 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_rotation_y_input_view.mount(ctx, &items_container_view);
-            let local_rotation_z_input_view = NumericInputView::new(
+            local_rotation_y_input_view
+                .render(&mut ctx.make_render_context(), &items_container_view);
+            let mut local_rotation_z_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
@@ -3366,7 +3383,8 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_rotation_z_input_view.mount(ctx, &items_container_view);
+            local_rotation_z_input_view
+                .render(&mut ctx.make_render_context(), &items_container_view);
 
             let mut label = StaticTextView::new(
                 "SCALE".into(),
@@ -3381,7 +3399,7 @@ impl InspectorPanePresenter {
             );
             label.set_font(FontID::UIFormLiftedLabel);
             label.render(&mut ctx.make_render_context(), &items_container_view);
-            let local_scale_x_input_view = NumericInputView::new(
+            let mut local_scale_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
@@ -3389,8 +3407,8 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_x_input_view.mount(ctx, &items_container_view);
-            let local_scale_y_input_view = NumericInputView::new(
+            local_scale_x_input_view.render(&mut ctx.make_render_context(), &items_container_view);
+            let mut local_scale_y_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
@@ -3398,8 +3416,8 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_y_input_view.mount(ctx, &items_container_view);
-            let local_scale_z_input_view = NumericInputView::new(
+            local_scale_y_input_view.render(&mut ctx.make_render_context(), &items_container_view);
+            let mut local_scale_z_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
                     Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
@@ -3407,7 +3425,7 @@ impl InspectorPanePresenter {
                 ),
                 eh.clone(),
             );
-            local_scale_z_input_view.mount(ctx, &items_container_view);
+            local_scale_z_input_view.render(&mut ctx.make_render_context(), &items_container_view);
 
             let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
             let mut render_checkbox = CheckboxView::new(ViewPlacement {
@@ -7254,7 +7272,7 @@ async fn run<'sys>(
 }
 
 pub trait FlyoutSurfaceView {
-    fn mount(&self, mount_context: &mut MountContext, surface: FlyoutSurfaceHandle);
+    fn render(&mut self, ctx: &mut RenderContext, surface: FlyoutSurfaceHandle);
 
     #[allow(unused_variables)]
     fn rescale(
@@ -7296,8 +7314,8 @@ impl CustomViewFlyoutSession {
             delayed_render_messages,
         );
         view_init_context.ui_scale_factor = surface.render_scale();
-        let view = view_constructor.create(view_init_context);
-        view.mount(view_init_context, surface);
+        let mut view = view_constructor.create(view_init_context);
+        view.render(&mut view_init_context.make_render_context(), surface);
 
         Self {
             parent,

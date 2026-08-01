@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, Ref},
+    cell::{Cell, Ref, RefCell},
     rc::Rc,
 };
 
@@ -27,8 +27,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MountContext, MountTarget, ViewEventHandler, ViewIdentifier, ViewInitContext,
-        ViewUpdateContext,
+        MountContext, MountTarget, RenderContext, ViewEventHandler, ViewIdentifier,
+        ViewInitContext, ViewUpdateContext,
     },
     utils::{LogicalUnit, Point, Rect, SafeF32},
 };
@@ -44,6 +44,7 @@ bitflags! {
 pub struct RawTextInputView {
     ct_text_clip: CompositeTreeRef,
     eh: Rc<RawTextInputViewEventHandler>,
+    first_rendered: bool,
 }
 impl RawTextInputView {
     pub fn new(
@@ -174,25 +175,32 @@ impl RawTextInputView {
 
         eh.update_text(ctx.composite_tree);
 
-        Self { ct_text_clip, eh }
+        Self {
+            ct_text_clip,
+            eh,
+            first_rendered: false,
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(parent.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        if !self.first_rendered {
+            // first render
+            ctx.composite_tree
+                .add_child(parent.ct_root(), self.eh.ct_root);
+            ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
 
-        // TODO: これ見直したほうがよさそう(入力メソッドのポップをウィンドウ移動に追従させるために機構 ウィンドウ移動を毎回全Viewに流すと流石に重いと思うのでなんかいい感じに絞りたい)
-        /*
-        #[cfg(windows)]
-        unsafe {
-            ctx.ht_manager
-                .query_root_window(parent.ht_root())
-                .expect("no root window")
-                .extra_data_mut::<crate::PerWindowData>()
-                .screen_reposition_interests
-                .insert(self.eh.ht_root);
-        }*/
+            #[cfg(windows)]
+            unsafe {
+                ctx.ht_manager
+                    .query_root_window(parent.ht_root())
+                    .expect("no root window")
+                    .extra_data_mut::<crate::PerWindowData>()
+                    .screen_reposition_interests
+                    .insert(self.eh.ht_root);
+            }
+        }
+
+        self.first_rendered = true;
     }
 
     pub fn set_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
@@ -1726,6 +1734,7 @@ bitflags! {
 
 pub struct TextInputView {
     eh: Rc<TextInputViewEventHandler>,
+    first_rendered: bool,
 }
 impl TextInputView {
     pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
@@ -1749,7 +1758,7 @@ impl TextInputView {
             view_id,
         );
         let eh = Rc::new(TextInputViewEventHandler {
-            raw,
+            raw: RefCell::new(raw),
             id: view_id,
             token: kf_token,
             ht_root,
@@ -1758,12 +1767,19 @@ impl TextInputView {
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.view_registry.set_event_handler(eh.id, &eh);
 
-        Self { eh }
+        Self {
+            eh,
+            first_rendered: false,
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
-        self.eh.raw.mount(ctx, parent);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        if !self.first_rendered {
+            ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+        }
+
+        self.first_rendered = true;
+        self.eh.raw.borrow_mut().render(ctx, parent);
     }
 
     pub fn set_keyboard_focus_group(
@@ -1776,7 +1792,7 @@ impl TextInputView {
 }
 
 struct TextInputViewEventHandler {
-    raw: RawTextInputView,
+    raw: RefCell<RawTextInputView>,
     id: ViewIdentifier,
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
@@ -1784,13 +1800,13 @@ struct TextInputViewEventHandler {
 impl ViewEventHandler for TextInputViewEventHandler {
     #[inline(always)]
     fn update(&self, context: &mut ViewUpdateContext) {
-        self.raw.fwd_view_update(context);
+        self.raw.borrow().fwd_view_update(context);
     }
 }
 impl KeyInputEventHandler for TextInputViewEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.set_focus_lazy(context.ht_manager);
+        self.raw.borrow().set_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
@@ -1798,7 +1814,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
     fn focus_released(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.raw.release_focus_lazy(context.ht_manager);
+        self.raw.borrow().release_focus_lazy(context.ht_manager);
         context
             .system_link
             .dispatch_event(Event::UpdateView { id: self.id });
@@ -1806,12 +1822,12 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
 
     #[inline(always)]
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
-        self.raw.fwd_keydown(context, code, modifier);
+        self.raw.borrow().fwd_keydown(context, code, modifier);
     }
 
     #[inline(always)]
     fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.raw.fwd_char(context, ch)
+        self.raw.borrow().fwd_char(context, ch)
     }
 
     #[inline(always)]
@@ -1823,6 +1839,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
         new_preedit_string: Option<&str>,
     ) {
         self.raw
+            .borrow()
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
     }
 }
@@ -1834,7 +1851,7 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         // forward first event
-        self.raw.eh.on_pointer_down(sender, context, args);
+        self.raw.borrow().eh.on_pointer_down(sender, context, args);
 
         // 下の要素にフォーカス処理がいかないようにする
         EventContinueControl::STOP_PROPAGATION
@@ -1849,6 +1866,7 @@ pub trait NumericInputViewBackingStore {
 
 pub struct NumericInputView {
     eh: Rc<NumericInputViewEventHandler>,
+    first_rendered: bool,
 }
 impl NumericInputView {
     pub fn new(
@@ -1877,7 +1895,7 @@ impl NumericInputView {
         );
         let eh = Rc::new(NumericInputViewEventHandler {
             value: value as _,
-            raw,
+            raw: RefCell::new(raw),
             id: view_id,
             token: kf_token,
             ht_root,
@@ -1890,12 +1908,15 @@ impl NumericInputView {
         ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
         ctx.view_registry.set_event_handler(eh.id, &eh);
 
-        Self { eh }
+        Self {
+            eh,
+            first_rendered: false,
+        }
     }
 
     pub fn post_init(&self, ctx: &mut ViewInitContext) {
-        self.eh.raw.eh.update_views(
-            self.eh.raw.set_content(
+        self.eh.raw.borrow().eh.update_views(
+            self.eh.raw.borrow().set_content(
                 self.eh
                     .value
                     .upgrade()
@@ -1917,8 +1938,8 @@ impl NumericInputView {
         ht_manager: &HitTestTreeManager,
         current_sec: f32,
     ) {
-        self.eh.raw.eh.update_views(
-            self.eh.raw.set_content(
+        self.eh.raw.borrow().eh.update_views(
+            self.eh.raw.borrow().set_content(
                 self.eh
                     .value
                     .upgrade()
@@ -1932,9 +1953,14 @@ impl NumericInputView {
         );
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
-        self.eh.raw.mount(ctx, parent);
+    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+        if !self.first_rendered {
+            // first render
+            ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
+        }
+
+        self.first_rendered = true;
+        self.eh.raw.borrow_mut().render(ctx, parent);
     }
 
     #[inline(always)]
@@ -1953,7 +1979,7 @@ impl NumericInputView {
 
 struct NumericInputViewEventHandler {
     value: std::rc::Weak<dyn NumericInputViewBackingStore>,
-    raw: RawTextInputView,
+    raw: RefCell<RawTextInputView>,
     id: ViewIdentifier,
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
@@ -1965,7 +1991,7 @@ struct NumericInputViewEventHandler {
 impl ViewEventHandler for NumericInputViewEventHandler {
     #[inline(always)]
     fn update(&self, context: &mut ViewUpdateContext) {
-        self.raw.fwd_view_update(context);
+        self.raw.borrow().fwd_view_update(context);
     }
 }
 impl KeyInputEventHandler for NumericInputViewEventHandler {
@@ -2007,12 +2033,12 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
             return;
         }
 
-        self.raw.fwd_keydown(context, code, modifier);
+        self.raw.borrow().fwd_keydown(context, code, modifier);
     }
 
     #[inline(always)]
     fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.raw.fwd_char(context, ch);
+        self.raw.borrow().fwd_char(context, ch);
     }
 
     #[inline(always)]
@@ -2024,6 +2050,7 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
         new_preedit_string: Option<&str>,
     ) {
         self.raw
+            .borrow()
             .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
     }
 }
@@ -2064,8 +2091,9 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         // self.value.set(new_value);
         self.drag_accum_delta.set(new_drag_accum_delta);
 
-        self.raw.eh.update_views(
+        self.raw.borrow().eh.update_views(
             self.raw
+                .borrow()
                 .set_content(value.display_value(self.id, &context.application)),
             context.composite_tree,
             context.system_link,
@@ -2109,8 +2137,9 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
 
         let value = self.value.upgrade().expect("NumericInputView has defunct");
         value.set_delta(self.id, &mut context.application, args.amount);
-        self.raw.eh.update_views(
+        self.raw.borrow().eh.update_views(
             self.raw
+                .borrow()
                 .set_content(value.display_value(self.id, &context.application)),
             context.composite_tree,
             context.system_link,
@@ -2151,16 +2180,17 @@ impl NumericInputViewEventHandler {
         }
 
         // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
-        let update_mask = self.raw.set_content(
+        let update_mask = self.raw.borrow().set_content(
             self.value
                 .upgrade()
                 .expect("NumericInputView has defunct")
                 .display_value(self.id, application),
         );
-        self.raw
-            .eh
-            .pending_update_mask
-            .set(self.raw.eh.set_focus(ht_manager) | self.raw.eh.select_all() | update_mask);
+        self.raw.borrow().eh.pending_update_mask.set(
+            self.raw.borrow().eh.set_focus(ht_manager)
+                | self.raw.borrow().eh.select_all()
+                | update_mask,
+        );
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
@@ -2176,7 +2206,7 @@ impl NumericInputViewEventHandler {
         }
 
         let value = self.value.upgrade().expect("NumericInputView has defunct");
-        let content = self.raw.content();
+        let content = self.raw.borrow().content().clone();
         // let current_value = self.value.get();
         // let new_value = content
         //     .split_once('.')
@@ -2188,13 +2218,14 @@ impl NumericInputViewEventHandler {
         drop(content);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.raw.eh.release_focus(ht_manager);
+        let mut update_mask = self.raw.borrow().eh.release_focus(ht_manager);
         update_mask |= self
             .raw
+            .borrow()
             .set_content(value.display_value(self.id, application));
-        update_mask |= self.raw.eh.move_cursor(0);
+        update_mask |= self.raw.borrow().eh.move_cursor(0);
 
-        self.raw.eh.pending_update_mask.set(update_mask);
+        self.raw.borrow().eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 
@@ -2205,17 +2236,17 @@ impl NumericInputViewEventHandler {
         application: &Application,
     ) {
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.raw.eh.release_focus(ht_manager);
+        let mut update_mask = self.raw.borrow().eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
-        update_mask |= self.raw.set_content(
+        update_mask |= self.raw.borrow().set_content(
             self.value
                 .upgrade()
                 .expect("NumericInputView has defunct")
                 .display_value(self.id, application),
         );
-        update_mask |= self.raw.eh.move_cursor(0);
+        update_mask |= self.raw.borrow().eh.move_cursor(0);
 
-        self.raw.eh.pending_update_mask.set(update_mask);
+        self.raw.borrow().eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView { id: self.id });
     }
 }
