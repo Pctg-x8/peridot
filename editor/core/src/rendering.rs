@@ -1,5 +1,6 @@
 use core::num::NonZeroUsize;
 use std::{
+    cell::OnceCell,
     collections::HashMap,
     sync::{Mutex, atomic::AtomicBool},
 };
@@ -29,7 +30,7 @@ use crate::{
         vg::VectorRasterizationState,
     },
     uikit::MountTarget,
-    utils::SafeF32,
+    utils::{SafeF32, UnsafeMainThreadOnlyOnceCell},
 };
 
 pub mod atlas;
@@ -63,6 +64,45 @@ pub struct Normalized2DStaticMeshTexture {
     pub indices: &'static [u16],
     pub width: f32,
     pub height: f32,
+}
+
+pub struct Normalized2DStaticMeshTextureLazyInit {
+    data: Normalized2DStaticMeshTexture,
+    id: UnsafeMainThreadOnlyOnceCell<TextureID>,
+}
+impl Normalized2DStaticMeshTextureLazyInit {
+    pub const fn new(data: Normalized2DStaticMeshTexture) -> Self {
+        Self {
+            data,
+            id: UnsafeMainThreadOnlyOnceCell(OnceCell::new()),
+        }
+    }
+
+    pub const fn width(&self) -> f32 {
+        self.data.width
+    }
+
+    pub const fn height(&self) -> f32 {
+        self.data.height
+    }
+
+    pub fn get(
+        &self,
+        mt_texid_issuer: &mut MainThreadTextureIDIssuer,
+        rt_sender: &RenderMessageSender,
+    ) -> TextureID {
+        *self.id.0.get_or_init(|| {
+            let id = mt_texid_issuer.issue();
+            rt_sender
+                .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
+                    id,
+                    data: self.data.clone(),
+                })
+                .expect("rt_sender.send");
+
+            id
+        })
+    }
 }
 
 #[derive(Clone)]

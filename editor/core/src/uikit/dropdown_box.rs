@@ -10,8 +10,7 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
-        RenderMessageSender, TextureID,
+        Normalized2DStaticMeshTexture, Normalized2DStaticMeshTextureLazyInit,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectScaleFactor, CompositeRectText,
@@ -25,7 +24,7 @@ use crate::{
         MountContext, MountTarget, RenderContext, TeardownContext, ViewElementSize,
         ViewInitContext, ViewPlacement,
     },
-    utils::{Point, SafeF32, Size, UnsafeMainThreadOnlyOnceCell},
+    utils::{Point, SafeF32, Size},
 };
 
 const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -37,32 +36,13 @@ const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
 const ARROW_RELEASE_Y_ANIM: FloatAnimationTemplate =
     ARROW_PRESS_Y_ANIM.flip(AnimationCurve::EASE_OUT);
 
-struct SharedResources {
-    down_arrow_tex: TextureID,
-}
-impl SharedResources {
-    const DOWN_ARROW: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+static DOWN_ARROW_ICON: Normalized2DStaticMeshTextureLazyInit =
+    Normalized2DStaticMeshTextureLazyInit::new(Normalized2DStaticMeshTexture {
         vertices: &[[0.25, 0.375], [0.75, 0.375], [0.5, 0.625]],
         indices: &[0, 1, 2],
         width: 16.0,
         height: 16.0,
-    };
-
-    fn new(id_issuer: &mut MainThreadTextureIDIssuer, rt_sender: &RenderMessageSender) -> Self {
-        let down_arrow_tex = id_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: down_arrow_tex,
-                data: Self::DOWN_ARROW,
-            })
-            .expect("rt_sender.send");
-
-        Self { down_arrow_tex }
-    }
-}
-
-static SHARED_RESOURCES: UnsafeMainThreadOnlyOnceCell<SharedResources> =
-    UnsafeMainThreadOnlyOnceCell(core::cell::OnceCell::new());
+    });
 
 pub struct View {
     entity: Option<Rc<EventHandler>>,
@@ -85,12 +65,10 @@ impl View {
             }
             None => {
                 // first render
-                let shared_res = SHARED_RESOURCES.0.get_or_init(|| {
-                    SharedResources::new(
-                        ctx.main_thread_texture_id_issuer,
-                        ctx.system_link.rt_sender(),
-                    )
-                });
+                let down_arrow_icon = DOWN_ARROW_ICON.get(
+                    ctx.main_thread_texture_id_issuer,
+                    ctx.system_link.rt_sender(),
+                );
 
                 let size = match self.placement.size {
                     ViewElementSize::Fixed(s) => s,
@@ -185,14 +163,14 @@ impl View {
                     offset: [AnimatableFloat::Value(-20.0), AnimatableFloat::Value(-8.0)],
                     relative_offset_adjustment: [1.0, 0.5],
                     size: [
-                        AnimatableFloat::Value(SharedResources::DOWN_ARROW.width),
-                        AnimatableFloat::Value(SharedResources::DOWN_ARROW.height),
+                        AnimatableFloat::Value(DOWN_ARROW_ICON.width()),
+                        AnimatableFloat::Value(DOWN_ARROW_ICON.height()),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::ColorTint(
                         AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                         CompositeTexture {
-                            id: shared_res.down_arrow_tex,
+                            id: down_arrow_icon,
                             r#type: TextureType::Mask,
                             mapping: TextureMappingMode::Stretch,
                             slice_borders: [0.0; 4],

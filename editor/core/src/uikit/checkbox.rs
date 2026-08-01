@@ -10,8 +10,7 @@ use crate::{
         },
     },
     rendering::{
-        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
-        RenderMessageSender, TextureID,
+        Normalized2DStaticMeshTexture, Normalized2DStaticMeshTextureLazyInit,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
@@ -22,7 +21,7 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewPlacement},
-    utils::{Size, UnsafeMainThreadOnlyOnceCell, range_helper::range_from_len},
+    utils::{Size, range_helper::range_from_len},
 };
 
 const CHECKMARK_ACTIVATE_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -43,11 +42,8 @@ const CHECKMARK_ACTIVATE_SCALE_ANIM: FloatAnimationTemplate = FloatAnimationTemp
 const CHECKMARK_DEACTIVATE_SCALE_ANIM: FloatAnimationTemplate =
     CHECKMARK_ACTIVATE_SCALE_ANIM.flip(AnimationCurve::EASE_IN);
 
-struct SharedCheckIcon {
-    check_icon: TextureID,
-}
-impl SharedCheckIcon {
-    const CHECK_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+static SHARED_CHECK_ICON: Normalized2DStaticMeshTextureLazyInit =
+    Normalized2DStaticMeshTextureLazyInit::new(Normalized2DStaticMeshTexture {
         width: 12.0,
         height: 12.0,
         vertices: &[
@@ -59,26 +55,7 @@ impl SharedCheckIcon {
             [1.0, 0.3],
         ],
         indices: &[0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5],
-    };
-
-    fn new(
-        mt_texid_issuer: &mut MainThreadTextureIDIssuer,
-        rt_sender: &RenderMessageSender,
-    ) -> Self {
-        let check_icon = mt_texid_issuer.issue();
-        rt_sender
-            .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
-                id: check_icon,
-                data: Self::CHECK_ICON,
-            })
-            .expect("rt_sender.send");
-
-        Self { check_icon }
-    }
-}
-
-static SHARED_CHECK_ICON: UnsafeMainThreadOnlyOnceCell<SharedCheckIcon> =
-    UnsafeMainThreadOnlyOnceCell(OnceCell::new());
+    });
 
 pub struct ToggleButtonView {
     entity: Option<Rc<ToggleButtonEventHandler>>,
@@ -101,13 +78,10 @@ impl ToggleButtonView {
             }
             None => {
                 // first render
-                //
-                let shared_res = SHARED_CHECK_ICON.0.get_or_init(|| {
-                    SharedCheckIcon::new(
-                        ctx.main_thread_texture_id_issuer,
-                        ctx.system_link.rt_sender(),
-                    )
-                });
+                let check_icon = SHARED_CHECK_ICON.get(
+                    ctx.main_thread_texture_id_issuer,
+                    ctx.system_link.rt_sender(),
+                );
 
                 let size = match self.placement.size {
                     ViewElementSize::Fixed(s) => s,
@@ -165,19 +139,19 @@ impl ToggleButtonView {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
                         AnimatableFloat::Value(6.0),
-                        AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
+                        AnimatableFloat::Value(-SHARED_CHECK_ICON.height() * 0.5),
                     ],
                     relative_offset_adjustment: [0.0, 0.5],
                     size: [
-                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
-                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
+                        AnimatableFloat::Value(SHARED_CHECK_ICON.width()),
+                        AnimatableFloat::Value(SHARED_CHECK_ICON.height()),
                     ],
                     pivot: [0.5, 0.5],
                     has_bitmap: true,
                     composite_mode: CompositeMode::ColorTint(
                         AnimatableColor::Value([1.0; 4]),
                         CompositeTexture {
-                            id: shared_res.check_icon,
+                            id: check_icon,
                             r#type: TextureType::Mask,
                             mapping: TextureMappingMode::Stretch,
                             slice_borders: [0.0; 4],
@@ -328,12 +302,10 @@ impl CheckboxView {
             }
             None => {
                 // first render
-                let shared_res = SHARED_CHECK_ICON.0.get_or_init(|| {
-                    SharedCheckIcon::new(
-                        ctx.main_thread_texture_id_issuer,
-                        ctx.system_link.rt_sender(),
-                    )
-                });
+                let check_icon = SHARED_CHECK_ICON.get(
+                    ctx.main_thread_texture_id_issuer,
+                    ctx.system_link.rt_sender(),
+                );
 
                 let size = match self.placement.size {
                     ViewElementSize::Fixed(s) => s,
@@ -368,20 +340,20 @@ impl CheckboxView {
                 let ct_check = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.width * 0.5),
-                        AnimatableFloat::Value(-SharedCheckIcon::CHECK_ICON.height * 0.5),
+                        AnimatableFloat::Value(-SHARED_CHECK_ICON.width() * 0.5),
+                        AnimatableFloat::Value(-SHARED_CHECK_ICON.height() * 0.5),
                     ],
                     relative_offset_adjustment: [0.5, 0.5],
                     pivot: [0.5, 0.5],
                     size: [
-                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.width),
-                        AnimatableFloat::Value(SharedCheckIcon::CHECK_ICON.height),
+                        AnimatableFloat::Value(SHARED_CHECK_ICON.width()),
+                        AnimatableFloat::Value(SHARED_CHECK_ICON.height()),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::ColorTint(
                         AnimatableColor::Value([1.0; 4]),
                         CompositeTexture {
-                            id: shared_res.check_icon,
+                            id: check_icon,
                             r#type: TextureType::Mask,
                             mapping: TextureMappingMode::Stretch,
                             slice_borders: [0.0; 4],
