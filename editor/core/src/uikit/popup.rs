@@ -11,9 +11,7 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
         FloatAnimationTemplate,
     },
-    uikit::{
-        MountContext, MountTarget, RawMountTarget, RenderContext, TeardownContext, ViewInitContext,
-    },
+    uikit::{MountTarget, RawMountTarget, RenderContext, TeardownContext, ViewInitContext},
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
 
@@ -30,12 +28,11 @@ impl PopupID {
 /// ポップアップ共通ライフサイクル
 pub trait Popup {
     /// ポップアップViewがRenderされるときに呼ばれる
-    fn render(&mut self, ctx: &mut RenderContext, parent: &RawMountTarget);
-
-    fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &RawMountTarget,
+        keyboard_focus_group: KeyboardFocusGroupRef,
     );
 
     /// UI Render Scaleが変わったときに呼ばれる
@@ -44,7 +41,7 @@ pub trait Popup {
 
     /// ポップアップが閉じられるときに呼ばれる
     fn close(
-        &self,
+        &mut self,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
@@ -77,8 +74,8 @@ impl PopupManager {
         instance.render(
             &mut ctx.make_render_context(),
             &RawMountTarget::from_typed(&window),
+            popup_focus_group,
         );
-        instance.set_keyboard_focus_group(popup_focus_group, ctx.keyboard_focus_registry);
         self.instance_by_id
             .insert(id, (Box::new(instance), window, popup_focus_group));
 
@@ -98,15 +95,10 @@ impl PopupManager {
     }
 
     #[inline(always)]
-    pub fn close(
-        &self,
-        id: PopupID,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        current_sec: f32,
-    ) -> bool {
-        if let Some((instance, _, _)) = self.instance_by_id.get(&id) {
-            instance.close(composite_tree, ht_manager, current_sec);
+    pub fn close(&mut self, id: PopupID, ctx: &mut RenderContext) -> bool {
+        if let Some((instance, w, g)) = self.instance_by_id.get_mut(&id) {
+            instance.close(ctx.composite_tree, ctx.ht_manager, ctx.current_sec);
+            instance.render(ctx, &RawMountTarget::from_typed(w), *g);
             true
         } else {
             false
@@ -140,20 +132,13 @@ impl PopupManager {
     }
 }
 
-pub struct OverlayPopupBasicMaskView {
+struct OverlayPopupBasicMaskViewRenderElements {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
 }
-impl MountTarget for OverlayPopupBasicMaskView {
-    #[inline(always)]
-    fn ct_root(&self) -> CompositeTreeRef {
-        self.ct_root
-    }
 
-    #[inline(always)]
-    fn ht_root(&self) -> HitTestTreeRef {
-        self.ht_root
-    }
+pub struct OverlayPopupBasicMaskView {
+    render_elements: Option<OverlayPopupBasicMaskViewRenderElements>,
 }
 impl OverlayPopupBasicMaskView {
     pub const ANIMATION_DURATION: f32 = 0.125;
@@ -166,46 +151,74 @@ impl OverlayPopupBasicMaskView {
     const CLOSE_BLUR_ANIM: FloatAnimationTemplate =
         Self::OPEN_BLUR_ANIM.flip(AnimationCurve::Linear);
 
-    pub fn new(ctx: &mut ViewInitContext) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColorBackdropBlur(
-                AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
-                AnimatableFloat::Value(3.0),
-            ),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            // WindowHeaderのぶん開ける(ドラッグ判定がこない)
-            // TODO: ここだけ参照関係が逆になる（uikit -> ui） どうするか......
-            height: -crate::ui::window_header::View::THICKNESS,
-            top: crate::ui::window_header::View::THICKNESS,
-            ..Default::default()
-        });
-
-        Self { ct_root, ht_root }
+    pub fn new() -> Self {
+        Self {
+            render_elements: None,
+        }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+    pub fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &(impl MountTarget + ?Sized),
+    ) -> RawMountTarget {
+        match self.render_elements {
+            Some(ref e) => RawMountTarget {
+                ct_root: e.ct_root,
+                ht_root: e.ht_root,
+            },
+            None => {
+                // first render
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColorBackdropBlur(
+                        AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
+                        AnimatableFloat::Value(3.0),
+                    ),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width_adjustment_factor: 1.0,
+                    height_adjustment_factor: 1.0,
+                    // WindowHeaderのぶん開ける(ドラッグ判定がこない)
+                    // TODO: ここだけ参照関係が逆になる（uikit -> ui） どうするか......
+                    height: -crate::ui::window_header::View::THICKNESS,
+                    top: crate::ui::window_header::View::THICKNESS,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(parent.ct_root(), ct_root);
+                ctx.ht_manager.add_child(parent.ht_root(), ht_root);
+
+                // play open animation at first render
+                Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
+
+                self.render_elements =
+                    Some(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root });
+
+                RawMountTarget { ct_root, ht_root }
+            }
+        }
     }
 
-    pub fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.ct_root);
-        ctx.ht_manager.remove_child(self.ht_root);
+    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.render_elements.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(e.ct_root);
+        ctx.mount_context.ht_manager.free_all(e.ht_root);
     }
 
-    pub fn play_open_animation(
-        &self,
+    fn play_open_animation(
+        ct_root: CompositeTreeRef,
         composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
         composite_tree
-            .begin_mod_chain(self.ct_root)
+            .begin_mod_chain(ct_root)
             .composite_mode(CompositeMode::FillColorBackdropBlur(
                 AnimatableColor::Animated {
                     from_value: [0.0, 0.0, 0.0, 0.0],
@@ -225,7 +238,12 @@ impl OverlayPopupBasicMaskView {
         current_sec: f32,
     ) {
         composite_tree
-            .begin_mod_chain(self.ct_root)
+            .begin_mod_chain(
+                self.render_elements
+                    .as_ref()
+                    .expect("still not rendered?")
+                    .ct_root,
+            )
             .composite_mode(CompositeMode::FillColorBackdropBlur(
                 AnimatableColor::Animated {
                     from_value: [0.0, 0.0, 0.0, 0.25],
@@ -240,23 +258,14 @@ impl OverlayPopupBasicMaskView {
     }
 }
 
-pub struct OverlayPopupBasicFrameView {
+struct OverlayPopupBasicFrameViewRenderElements {
     ct_root: CompositeTreeRef,
-    ct_shadow: CompositeTreeRef,
-    ct_visual: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    size: Size<LogicalUnit>,
 }
-impl MountTarget for OverlayPopupBasicFrameView {
-    #[inline(always)]
-    fn ct_root(&self) -> CompositeTreeRef {
-        self.ct_root
-    }
 
-    #[inline(always)]
-    fn ht_root(&self) -> HitTestTreeRef {
-        self.ht_root
-    }
+pub struct OverlayPopupBasicFrameView {
+    render_elements: Option<OverlayPopupBasicFrameViewRenderElements>,
+    size: Size<LogicalUnit>,
 }
 impl OverlayPopupBasicFrameView {
     pub const ANIMATION_DURATION: f32 = OverlayPopupBasicMaskView::ANIMATION_DURATION;
@@ -283,85 +292,126 @@ impl OverlayPopupBasicFrameView {
     const CLOSE_OPACITY_ANIM: FloatAnimationTemplate =
         Self::OPEN_OPACITY_ANIM.flip(AnimationCurve::Linear);
 
-    pub fn new(ctx: &mut ViewInitContext, size: Size<LogicalUnit>) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_offset_adjustment: [0.5, 0.5],
-            size: [
-                AnimatableFloat::Value(size.width),
-                AnimatableFloat::Value(size.height),
-            ],
-            offset: [
-                AnimatableFloat::Value(-size.width * 0.5),
-                AnimatableFloat::Value(-size.height * 0.5),
-            ],
-            ..Default::default()
-        });
-        let ct_shadow = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(64.0)],
-            offset: [
-                AnimatableFloat::Value(-32.0),
-                AnimatableFloat::Value(-32.0 + 12.0),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.75])),
-            corner_radius: CornerRadius::all(64.0),
-            softedge: 64.0,
-            ..Default::default()
-        });
-        let ct_visual = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.1, 0.1, 1.0])),
-            corner_radius: CornerRadius::all(16.0),
-            border: Some(Border {
-                thickness: 0.5,
-                color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width: size.width,
-            height: size.height,
-            left_adjustment_factor: 0.5,
-            top_adjustment_factor: 0.5,
-            left: -size.width * 0.5,
-            // maskでヘッダ分開けてるのをここで補正
-            top: -size.height * 0.5 - crate::ui::window_header::View::THICKNESS * 0.5,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_shadow);
-        ctx.composite_tree.add_child(ct_root, ct_visual);
-
+    pub fn new(size: Size<LogicalUnit>) -> Self {
         Self {
-            ct_root,
-            ct_shadow,
-            ct_visual,
-            ht_root,
+            render_elements: None,
             size,
         }
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
+    pub fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &(impl MountTarget + ?Sized),
+    ) -> RawMountTarget {
+        match self.render_elements {
+            Some(ref e) => {
+                // TODO: reflect changes
+
+                RawMountTarget {
+                    ct_root: e.ct_root,
+                    ht_root: e.ht_root,
+                }
+            }
+            None => {
+                // first render
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_offset_adjustment: [0.5, 0.5],
+                    size: [
+                        AnimatableFloat::Value(self.size.width),
+                        AnimatableFloat::Value(self.size.height),
+                    ],
+                    offset: [
+                        AnimatableFloat::Value(-self.size.width * 0.5),
+                        AnimatableFloat::Value(-self.size.height * 0.5),
+                    ],
+                    ..Default::default()
+                });
+                let ct_shadow = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    size: [AnimatableFloat::Value(64.0), AnimatableFloat::Value(64.0)],
+                    offset: [
+                        AnimatableFloat::Value(-32.0),
+                        AnimatableFloat::Value(-32.0 + 12.0),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        0.0, 0.0, 0.0, 0.75,
+                    ])),
+                    corner_radius: CornerRadius::all(64.0),
+                    softedge: 64.0,
+                    ..Default::default()
+                });
+                let ct_visual = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        0.1, 0.1, 0.1, 1.0,
+                    ])),
+                    corner_radius: CornerRadius::all(16.0),
+                    border: Some(Border {
+                        thickness: 0.5,
+                        color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width: self.size.width,
+                    height: self.size.height,
+                    left_adjustment_factor: 0.5,
+                    top_adjustment_factor: 0.5,
+                    left: -self.size.width * 0.5,
+                    // maskでヘッダ分開けてるのをここで補正
+                    top: -self.size.height * 0.5 - crate::ui::window_header::View::THICKNESS * 0.5,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_shadow);
+                ctx.composite_tree.add_child(ct_root, ct_visual);
+
+                ctx.composite_tree.add_child(parent.ct_root(), ct_root);
+                ctx.ht_manager.add_child(parent.ht_root(), ht_root);
+
+                // play animation on first render
+                Self::play_open_animation(ct_root, &self.size, ctx.composite_tree, ctx.current_sec);
+
+                self.render_elements =
+                    Some(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root });
+
+                RawMountTarget { ct_root, ht_root }
+            }
+        }
     }
 
-    pub fn play_open_animation(
-        &self,
+    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(render_elements) = self.render_elements.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context
+            .composite_tree
+            .free_all(render_elements.ct_root);
+        ctx.mount_context
+            .ht_manager
+            .free_all(render_elements.ht_root);
+    }
+
+    fn play_open_animation(
+        ct_root: CompositeTreeRef,
+        size: &Size<LogicalUnit>,
         composite_tree: &mut CompositeTree<SyncEvent>,
         current_sec: f32,
     ) {
         composite_tree
-            .begin_mod_chain(self.ct_root)
+            .begin_mod_chain(ct_root)
             .y(AnimatableFloat::Animated {
-                from_value: -self.size.height * 0.5 + 4.0,
-                to_value: -self.size.height * 0.5,
+                from_value: -size.height * 0.5 + 4.0,
+                to_value: -size.height * 0.5,
                 curve: AnimationCurve::CubicBezier {
                     p1: (0.5, 0.5),
                     p2: (0.5, 1.0),
@@ -381,7 +431,12 @@ impl OverlayPopupBasicFrameView {
         event_on_complete: SyncEvent,
     ) {
         composite_tree
-            .begin_mod_chain(self.ct_root)
+            .begin_mod_chain(
+                self.render_elements
+                    .as_ref()
+                    .expect("still not rendered?")
+                    .ct_root,
+            )
             .y(AnimatableFloat::Animated {
                 from_value: -self.size.height * 0.5,
                 to_value: -self.size.height * 0.5 + 4.0,

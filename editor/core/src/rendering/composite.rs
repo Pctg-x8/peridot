@@ -2632,6 +2632,7 @@ impl<Event> CompositeTree<Event> {
     }
 
     pub fn free(&mut self, index: CompositeTreeRef) {
+        self.remove_child(index);
         self.unused.insert(index.0);
         self.dirty_rects.insert(index.0, DirtyRect::Deleted);
     }

@@ -1,13 +1,14 @@
+use core::cell::Cell;
 use std::rc::Rc;
 
 use crate::{
     Event, SyncEvent, SystemLink, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
+        KeyboardFocusGroupRef,
         hittest::{
-            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
-            HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
+            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef,
+            PointerActionArgs, PointerButtonActionArgs,
         },
     },
     rendering::{
@@ -17,10 +18,13 @@ use crate::{
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTree,
             CompositeTreeRef, CornerRadius,
         },
-        text::FontID,
+        text::{FontID, TextLayout},
     },
-    uikit::{MountContext, MountTarget, Positioning, ViewInitContext},
-    utils::{LogicalUnit, Size, range_helper::range_from_len},
+    uikit::{
+        MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewInitContext,
+        ViewPlacement,
+    },
+    utils::{Point, Size, range_helper::range_from_len},
 };
 
 pub trait SimpleButtonEventHandler {
@@ -35,139 +39,186 @@ impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
 }
 
 pub struct SimpleButtonView {
-    size: Size<LogicalUnit>,
-    action_handler: Rc<SimpleButtonActionHandler>,
     kf_token: FocusTargetToken,
+    entity: Option<Rc<SimpleButtonActionHandler>>,
+    label: String,
+    placement: ViewPlacement,
+    event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
+    interactive_changes: Option<bool>,
 }
 impl SimpleButtonView {
+    const ROUNDING: f32 = 8.0;
+
     pub fn new(
         ctx: &mut ViewInitContext,
         init_label: String,
-        size: Size<LogicalUnit>,
+        init_placement: ViewPlacement,
         event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
     ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(size.width),
-                AnimatableFloat::Value(size.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(8.0),
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }),
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: init_label,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    spacing_inline_start: 0.0,
-                }],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_focus = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(3.0), AnimatableFloat::Value(3.0)],
-            size: [AnimatableFloat::Value(-6.0), AnimatableFloat::Value(-6.0)],
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
-            corner_radius: CornerRadius::all(6.0),
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
-                break_pattern: [2.0, 2.0],
-            }),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let kf = ctx.keyboard_focus_registry.acquire_token();
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width: size.width,
-            height: size.height,
-            cursor_shape: CursorShape::Pointer,
-            keyboard_focus: Some(kf),
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_focus);
-
-        let action_handler = Rc::new(SimpleButtonActionHandler {
-            ht_root,
-            ct_root,
-            ct_focus,
-            event_handler,
-            state: core::cell::Cell::new(ButtonState::None),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &action_handler);
-        ctx.keyboard_focus_registry
-            .set_event_handler(kf, &action_handler);
-
         Self {
-            size,
-            action_handler,
-            kf_token: kf,
+            kf_token: ctx.keyboard_focus_registry.acquire_token(),
+            entity: None,
+            label: init_label,
+            placement: init_placement,
+            event_handler,
+            interactive_changes: None,
         }
     }
 
-    pub fn terminate(&mut self, ctx: &mut MountContext) {
-        ctx.ht_manager.free_all(self.action_handler.ht_root);
-        ctx.composite_tree.free_all(self.action_handler.ct_root);
-        ctx.keyboard_focus_registry.release_token(self.kf_token);
+    pub fn set_interactive(&mut self, interactive: bool) {
+        self.interactive_changes = Some(interactive);
     }
 
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(parent.ct_root(), self.action_handler.ct_root);
-        ctx.ht_manager
-            .add_child(parent.ht_root(), self.action_handler.ht_root);
-    }
-
-    pub fn unmount(&self, ctx: &mut MountContext) {
-        ctx.ht_manager.remove_child(self.action_handler.ht_root);
-        ctx.composite_tree.remove_child(self.action_handler.ct_root);
-    }
-
-    pub fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    pub fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
     ) {
-        keyboard_focus_registry.join_group(group, self.kf_token);
+        match self.entity {
+            Some(ref e) => {
+                if let Some(interactive) = self.interactive_changes.take() {
+                    ctx.ht_manager.get_data_mut(e.ht_root).active = interactive;
+                    e.interactive.set(interactive);
+                }
+
+                // TODO: reflect other changes
+            }
+            None => {
+                // first render
+                let size = match self.placement.size {
+                    ViewElementSize::Fixed(s) => s,
+                    ViewElementSize::Automatic => {
+                        let label_size = TextLayout::new_single(
+                            &self.label,
+                            FontID::UIDefault,
+                            ctx.system_link.font_set(),
+                            CompositeRectTextHorizontalAlignment::Start,
+                            None,
+                        )
+                        .size();
+                        // consider rounding pads
+                        Size::new_logical(
+                            label_size.width + Self::ROUNDING * 2.0,
+                            label_size.height + Self::ROUNDING,
+                        )
+                    }
+                };
+                let offset = Point::new_logical(
+                    self.placement.location.offset.x
+                        - size.width * self.placement.location.anchor[0],
+                    self.placement.location.offset.y
+                        - size.height * self.placement.location.anchor[1],
+                );
+                let relative_offset = [
+                    self.placement.location.anchor[0],
+                    self.placement.location.anchor[1],
+                ];
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [
+                        AnimatableFloat::Value(size.width),
+                        AnimatableFloat::Value(size.height),
+                    ],
+                    offset: [
+                        AnimatableFloat::Value(offset.x),
+                        AnimatableFloat::Value(offset.y),
+                    ],
+                    relative_offset_adjustment: relative_offset.clone(),
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    corner_radius: CornerRadius::all(Self::ROUNDING),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            font_id: FontID::UIDefault,
+                            content: self.label.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            spacing_inline_start: 0.0,
+                        }],
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_focus = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [AnimatableFloat::Value(3.0), AnimatableFloat::Value(3.0)],
+                    size: [AnimatableFloat::Value(-6.0), AnimatableFloat::Value(-6.0)],
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
+                    corner_radius: CornerRadius::all(6.0),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                        break_pattern: [2.0, 2.0],
+                    }),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width: size.width,
+                    height: size.height,
+                    left: offset.x,
+                    top: offset.y,
+                    left_adjustment_factor: relative_offset[0],
+                    top_adjustment_factor: relative_offset[1],
+                    cursor_shape: CursorShape::Pointer,
+                    keyboard_focus: Some(self.kf_token),
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_focus);
+
+                let action_handler = Rc::new(SimpleButtonActionHandler {
+                    ht_root,
+                    ct_root,
+                    ct_focus,
+                    event_handler: self.event_handler.take(),
+                    state: Cell::new(ButtonState::None),
+                    interactive: Cell::new(true),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &action_handler);
+                ctx.keyboard_focus_registry
+                    .set_event_handler(self.kf_token, &action_handler);
+
+                ctx.composite_tree
+                    .add_child(parent.ct_root(), action_handler.ct_root);
+                ctx.ht_manager
+                    .add_child(parent.ht_root(), action_handler.ht_root);
+
+                ctx.keyboard_focus_registry
+                    .join_group(keyboard_focus_group, self.kf_token);
+
+                if let Some(interactive) = self.interactive_changes.take() {
+                    ctx.ht_manager.get_data_mut(action_handler.ht_root).active = interactive;
+                    action_handler.interactive.set(interactive);
+                }
+
+                self.entity = Some(action_handler);
+            }
+        }
     }
 
-    pub fn locate(
-        &self,
-        pos: &Positioning,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        let ht = ht_manager.get_data_mut(self.action_handler.ht_root);
-        let ct = composite_tree.get_mut(self.action_handler.ct_root);
+    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+        if let Some(entity) = self.entity.take() {
+            // some rendered
+            ctx.mount_context.ht_manager.free_all(entity.ht_root);
+            ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        }
 
-        ht.left_adjustment_factor = pos.parent_anchor[0];
-        ht.top_adjustment_factor = pos.parent_anchor[1];
-        ht.left = pos.offset[0] - self.size.width * pos.anchor[0];
-        ht.top = pos.offset[1] - self.size.height * pos.anchor[1];
-        ct.relative_offset_adjustment = [pos.parent_anchor[0], pos.parent_anchor[1]];
-        ct.offset = [
-            AnimatableFloat::Value(pos.offset[0] - self.size.width * pos.anchor[0]),
-            AnimatableFloat::Value(pos.offset[1] - self.size.height * pos.anchor[1]),
-        ];
-
-        composite_tree.mark_dirty(self.action_handler.ct_root);
-    }
-
-    pub fn set_interactive(&self, interactive: bool, ht_manager: &mut HitTestTreeManager) {
-        ht_manager.get_data_mut(self.action_handler.ht_root).active = interactive;
+        ctx.mount_context
+            .keyboard_focus_registry
+            .release_token(self.kf_token);
     }
 }
 
@@ -176,7 +227,8 @@ struct SimpleButtonActionHandler {
     ct_root: CompositeTreeRef,
     ct_focus: CompositeTreeRef,
     event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
-    state: core::cell::Cell<ButtonState>,
+    state: Cell<ButtonState>,
+    interactive: Cell<bool>,
 }
 impl KeyInputEventHandler for SimpleButtonActionHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
@@ -195,6 +247,11 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
         code: crate::input::KeyInputCode,
         _modifier: crate::input::ModifierKey,
     ) {
+        if !self.interactive.get() {
+            // interaction disabled
+            return;
+        }
+
         if code == crate::input::KeyInputCode::Enter {
             // hit enter
             self.perform_click_action(

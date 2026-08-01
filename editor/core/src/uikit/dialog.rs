@@ -1,15 +1,14 @@
 use crate::{
     Event, SyncEvent, WindowHandle,
-    input::{KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, hittest::HitTestTreeManager},
+    input::{KeyboardFocusGroupRef, hittest::HitTestTreeManager},
     rendering::{
         composite::{CompositeRectTextHorizontalAlignment, CompositeTree},
         text::{FontID, TextLayout},
     },
     uikit::{
-        MountContext, MountTarget, OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup,
-        PopupID, Positioning, RawMountTarget, RenderContext, SimpleButtonConstantEventHandler,
-        SimpleButtonView, StaticTextView, TeardownContext, ViewElementSize, ViewInitContext,
-        ViewLocation, ViewPlacement,
+        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, RawMountTarget,
+        RenderContext, SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView,
+        TeardownContext, ViewElementSize, ViewInitContext, ViewLocation, ViewPlacement,
     },
     utils::{Point, Size},
 };
@@ -20,7 +19,6 @@ pub struct AlertDialogPresenter {
     frame: OverlayPopupBasicFrameView,
     msg: StaticTextView,
     confirm_button: SimpleButtonView,
-    first_rendered: bool,
 }
 impl AlertDialogPresenter {
     const AROUND_PADDING: f32 = 16.0;
@@ -44,18 +42,23 @@ impl AlertDialogPresenter {
             .max(64.0)
             .min(owner_window.client_size().width * 0.8);
 
-        let mask = OverlayPopupBasicMaskView::new(ctx);
-        let frame = OverlayPopupBasicFrameView::new(
-            ctx,
-            Size::new_logical(
-                text_width + Self::AROUND_PADDING * 2.0,
-                tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
-            ),
-        );
+        let mask = OverlayPopupBasicMaskView::new();
+        let frame = OverlayPopupBasicFrameView::new(Size::new_logical(
+            text_width + Self::AROUND_PADDING * 2.0,
+            tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
+        ));
+
         let confirm_button = SimpleButtonView::new(
             ctx,
             "OK".into(),
-            Size::new_logical(64.0, 24.0),
+            ViewPlacement {
+                location: ViewLocation {
+                    parent_anchor: [0.5, 1.0],
+                    anchor: [0.5, 1.0],
+                    offset: Point::new_logical(0.0, -Self::AROUND_PADDING),
+                },
+                size: ViewElementSize::Fixed(Size::new_logical(64.0, 24.0)),
+            },
             Some(Box::new(SimpleButtonConstantEventHandler(
                 Event::PopupClose { id: popup_id },
             ))),
@@ -65,9 +68,9 @@ impl AlertDialogPresenter {
             message,
             ViewPlacement {
                 location: ViewLocation {
-                    offset: Point::new_logical(-text_width * 0.5, Self::AROUND_PADDING),
-                    parent_anchor_x: 0.5,
-                    parent_anchor_y: 0.0,
+                    offset: Point::new_logical(0.0, Self::AROUND_PADDING),
+                    anchor: [0.5, 0.0],
+                    parent_anchor: [0.5, 0.0],
                 },
                 size: ViewElementSize::Fixed(Size::new_logical(text_width, 16.0)),
             },
@@ -75,62 +78,37 @@ impl AlertDialogPresenter {
         msg.allow_wrapping();
         msg.set_horizontal_alignment(CompositeRectTextHorizontalAlignment::Middle);
 
-        confirm_button.locate(
-            &Positioning {
-                parent_anchor: [0.5, 1.0],
-                anchor: [0.5, 1.0],
-                offset: [0.0, -Self::AROUND_PADDING],
-            },
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
-        );
-
         Self {
             id: popup_id,
             mask,
             frame,
             msg,
             confirm_button,
-            first_rendered: false,
         }
     }
 }
 impl Popup for AlertDialogPresenter {
-    fn render(&mut self, ctx: &mut RenderContext, parent: &RawMountTarget) {
-        self.msg.render(ctx, &self.frame);
-
-        if !self.first_rendered {
-            let mut mount_context = ctx.make_mount_context();
-            self.confirm_button.mount(&mut mount_context, &self.frame);
-            self.frame.mount(&mut mount_context, &self.mask);
-            self.mask.mount(&mut mount_context, parent);
-
-            self.mask
-                .play_open_animation(ctx.composite_tree, ctx.current_sec);
-            self.frame
-                .play_open_animation(ctx.composite_tree, ctx.current_sec);
-        }
-
-        self.first_rendered = true;
-    }
-
-    fn set_keyboard_focus_group(
-        &self,
-        group: KeyboardFocusGroupRef,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+        parent: &RawMountTarget,
+        keyboard_focus_group: KeyboardFocusGroupRef,
     ) {
+        let mask = self.mask.render(ctx, parent);
+        let frame = self.frame.render(ctx, &mask);
+        self.msg.render(ctx, &frame);
         self.confirm_button
-            .set_keyboard_focus_group(group, keyboard_focus_registry);
+            .render(ctx, &frame, keyboard_focus_group);
     }
 
     fn close(
-        &self,
+        &mut self,
         composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
+        _ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     ) {
         // disable button interaction while animating
-        self.confirm_button.set_interactive(false, ht_manager);
+        self.confirm_button.set_interactive(false);
 
         self.mask.play_close_animation(composite_tree, current_sec);
         self.frame.play_close_animation(
@@ -141,15 +119,9 @@ impl Popup for AlertDialogPresenter {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        self.mask.unmount(&mut ctx.mount_context);
-
-        self.confirm_button.unmount(&mut ctx.mount_context);
-        self.confirm_button.terminate(&mut ctx.mount_context);
+        self.confirm_button.teardown(ctx);
         self.msg.teardown(ctx);
-
-        ctx.mount_context
-            .composite_tree
-            .free_all(self.mask.ct_root());
-        ctx.mount_context.ht_manager.free_all(self.mask.ht_root());
+        self.frame.teardown(ctx);
+        self.mask.teardown(ctx);
     }
 }

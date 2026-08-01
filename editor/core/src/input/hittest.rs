@@ -130,6 +130,7 @@ impl<'h> HitTestTreeManager<'h> {
 
     #[inline]
     pub fn free(&mut self, r: HitTestTreeRef) {
+        self.remove_child(r);
         self.free_index.insert(r.0);
     }
 

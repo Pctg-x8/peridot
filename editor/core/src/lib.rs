@@ -53,7 +53,7 @@ use crate::{
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
         MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
-        PopupManager, Positioning, RawMountTarget, ScrollContainer, SimpleButtonEventHandler,
+        PopupManager, RawMountTarget, RenderContext, ScrollContainer, SimpleButtonEventHandler,
         SimpleButtonView, StaticTextView, TeardownContext, TextInputView, ViewElementSize,
         ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
         ViewFeedbackRegistry, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
@@ -2439,6 +2439,7 @@ impl NumericInputViewBackingStore for UIKitPreviewNumericInputValueStore {
 }
 
 pub struct UIKitPreviewPanePresenter {
+    kf_group: KeyboardFocusGroupRef,
     scroll_container: ScrollContainer,
     test_alert_btn: SimpleButtonView,
     test_alert_btn2: SimpleButtonView,
@@ -2464,6 +2465,9 @@ impl UIKitPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("UIKitPreview");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
+        // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
+        let kf_group = ctx.keyboard_focus_registry.acquire_group();
+
         let scroll_container = ScrollContainer::new(
             ctx,
             Rect::from_lt_size(
@@ -2474,21 +2478,18 @@ impl UIKitPreviewPanePresenter {
 
         let mut ytop = 8.0;
         let mut content_width = 8.0f32;
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Simple Buttons + Alert Dialog".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
+        let mut label = StaticTextView::new(
+            "Simple Buttons + Alert Dialog".into(),
+            ViewPlacement {
+                location: ViewLocation {
+                    parent_anchor: [0.0, 0.0],
+                    anchor: [0.0, 0.0],
+                    offset: Point::new_logical(8.0, ytop),
+                },
+                size: ViewElementSize::Automatic,
+            },
+        );
+        label.render(&mut ctx.make_render_context(), &scroll_container);
         ytop += 16.0;
 
         struct AlertButtonEventHandler(String);
@@ -2502,41 +2503,36 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
-        let test_alert_btn = SimpleButtonView::new(
+        let mut test_alert_btn = SimpleButtonView::new(
             ctx,
             "Test Alert".into(),
-            Size::new_logical(64.0, 24.0),
+            ViewPlacement {
+                location: ViewLocation {
+                    parent_anchor: [0.0, 0.0],
+                    anchor: [0.0, 0.0],
+                    offset: Point::new_logical(16.0, ytop),
+                },
+                size: ViewElementSize::Automatic,
+            },
             Some(Box::new(AlertButtonEventHandler(
                 "てすとめっせーじ from button\n改行もしてみる".into(),
             ))),
         );
-        test_alert_btn.locate(
-            &Positioning {
-                parent_anchor: [0.0, 0.0],
-                anchor: [0.0, 0.0],
-                offset: [16.0, ytop],
-            },
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
-        );
-        test_alert_btn.mount(ctx, &scroll_container);
-
-        let test_alert_btn2 = SimpleButtonView::new(
+        let mut test_alert_btn2 = SimpleButtonView::new(
             ctx,
             "Test Alert 2".into(),
-            Size::new_logical(96.0, 24.0),
+            ViewPlacement {
+                location: ViewLocation {
+                    parent_anchor: [0.0, 0.0],
+                    anchor: [0.0, 0.0],
+                    offset: Point::new_logical(88.0, ytop),
+                }, size: ViewElementSize::Fixed(Size::new_logical(96.0, 24.0))
+            },
             Some(Box::new(AlertButtonEventHandler("とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into()))),
         );
-        test_alert_btn2.locate(
-            &Positioning {
-                parent_anchor: [0.0, 0.0],
-                anchor: [0.0, 0.0],
-                offset: [88.0, ytop],
-            },
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
-        );
-        test_alert_btn2.mount(ctx, &scroll_container);
+
+        test_alert_btn.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
+        test_alert_btn2.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
 
         ytop += 24.0;
         ytop += 8.0;
@@ -2837,21 +2833,13 @@ impl UIKitPreviewPanePresenter {
         radio_button4.mount(ctx, &scroll_container);
         ytop += 24.0;
 
-        // test_alert_btn.set_keyboard_focus_group(
-        //     main_window.keyboard_focus_group(),
-        //     ctx.keyboard_focus_registry,
-        // );
-        // test_alert_btn2.set_keyboard_focus_group(
-        //     main_window.keyboard_focus_group(),
-        //     ctx.keyboard_focus_registry,
-        // );
-
         scroll_container.set_content_size(
             Size::new_logical(content_width, ytop + 8.0),
             ctx.mount_context.composite_tree,
             ctx.mount_context.ht_manager,
         );
         Self {
+            kf_group,
             scroll_container,
             test_alert_btn,
             test_alert_btn2,
@@ -3375,8 +3363,8 @@ impl InspectorPanePresenter {
                 ViewPlacement {
                     location: ViewLocation {
                         offset: Point::new_logical(8.0, 8.0),
-                        parent_anchor_x: 0.0,
-                        parent_anchor_y: 0.0,
+                        anchor: [0.0, 0.0],
+                        parent_anchor: [0.0, 0.0],
                     },
                     size: ViewElementSize::Automatic,
                 },
@@ -3416,8 +3404,8 @@ impl InspectorPanePresenter {
                 ViewPlacement {
                     location: ViewLocation {
                         offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
-                        parent_anchor_x: 0.0,
-                        parent_anchor_y: 0.0,
+                        anchor: [0.0, 0.0],
+                        parent_anchor: [0.0, 0.0],
                     },
                     size: ViewElementSize::Automatic,
                 },
@@ -3457,8 +3445,8 @@ impl InspectorPanePresenter {
                 ViewPlacement {
                     location: ViewLocation {
                         offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
-                        parent_anchor_x: 0.0,
-                        parent_anchor_y: 0.0,
+                        anchor: [0.0, 0.0],
+                        parent_anchor: [0.0, 0.0],
                     },
                     size: ViewElementSize::Automatic,
                 },
@@ -3507,8 +3495,8 @@ impl InspectorPanePresenter {
                 ViewPlacement {
                     location: ViewLocation {
                         offset: Point::new_logical(8.0 + 24.0, render_section_top),
-                        parent_anchor_x: 0.0,
-                        parent_anchor_y: 0.0,
+                        anchor: [0.0, 0.0],
+                        parent_anchor: [0.0, 0.0],
                     },
                     size: ViewElementSize::Automatic,
                 },
@@ -3520,8 +3508,8 @@ impl InspectorPanePresenter {
                 ViewPlacement {
                     location: ViewLocation {
                         offset: Point::new_logical(8.0, render_section_top + 24.0),
-                        parent_anchor_x: 0.0,
-                        parent_anchor_y: 0.0,
+                        anchor: [0.0, 0.0],
+                        parent_anchor: [0.0, 0.0],
                     },
                     size: ViewElementSize::Automatic,
                 },
@@ -6127,9 +6115,13 @@ async fn run<'sys>(
             Event::PopupClose { id } => {
                 if popup_manager.close(
                     id,
-                    &mut composite_tree,
-                    &mut ht_manager,
-                    global_time_base.elapsed().as_secs_f32(),
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                    },
                 ) {
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

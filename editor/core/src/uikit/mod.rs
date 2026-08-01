@@ -213,10 +213,20 @@ impl RawMountTarget {
     }
 }
 
-pub struct Positioning {
+pub struct ViewLocation {
     pub parent_anchor: [f32; 2],
     pub anchor: [f32; 2],
-    pub offset: [f32; 2],
+    pub offset: Point<LogicalUnit>,
+}
+
+pub enum ViewElementSize {
+    Automatic,
+    Fixed(Size<LogicalUnit>),
+}
+
+pub struct ViewPlacement {
+    pub location: ViewLocation,
+    pub size: ViewElementSize,
 }
 
 #[repr(transparent)]
@@ -455,22 +465,6 @@ impl ViewFeedbackHandlerUntyped {
 
         true
     }
-}
-
-pub struct ViewLocation {
-    pub offset: Point<LogicalUnit>,
-    pub parent_anchor_x: f32,
-    pub parent_anchor_y: f32,
-}
-
-pub enum ViewElementSize {
-    Automatic,
-    Fixed(Size<LogicalUnit>),
-}
-
-pub struct ViewPlacement {
-    pub location: ViewLocation,
-    pub size: ViewElementSize,
 }
 
 mod popup;

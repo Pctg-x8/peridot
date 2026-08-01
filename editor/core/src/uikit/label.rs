@@ -75,12 +75,18 @@ impl StaticTextView {
                 let ct = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(self.placement.location.offset.x),
-                        AnimatableFloat::Value(self.placement.location.offset.y),
+                        AnimatableFloat::Value(
+                            self.placement.location.offset.x
+                                - size.width * self.placement.location.anchor[0],
+                        ),
+                        AnimatableFloat::Value(
+                            self.placement.location.offset.y
+                                - size.height * self.placement.location.anchor[1],
+                        ),
                     ],
                     relative_offset_adjustment: [
-                        self.placement.location.parent_anchor_x,
-                        self.placement.location.parent_anchor_y,
+                        self.placement.location.parent_anchor[0],
+                        self.placement.location.parent_anchor[1],
                     ],
                     size: [
                         AnimatableFloat::Value(size.width),
