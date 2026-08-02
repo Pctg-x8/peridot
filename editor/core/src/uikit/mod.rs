@@ -328,7 +328,7 @@ pub trait View: core::any::Any {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ViewIdentifier(NonZeroUsize);
 impl core::fmt::Debug for ViewIdentifier {
     #[inline(always)]
@@ -370,6 +370,7 @@ impl ViewInstanceModifier<'_> {
 struct ViewRegistryData {
     instance: Option<Box<dyn View>>,
     event_handler: Weak<dyn ViewEventHandler>,
+    current_mounted_on: Option<(RawMountTarget, KeyboardFocusGroupRef)>,
     parent: Option<ViewIdentifier>,
     children: Vec<ViewIdentifier>,
     joining_group: Option<ViewGroupID>,
@@ -377,6 +378,82 @@ struct ViewRegistryData {
 
 struct ViewGroupData {
     participants: HashSet<ViewIdentifier>,
+}
+
+pub struct ViewRenderQueue {
+    pending: BTreeSet<ViewIdentifier>,
+}
+impl ViewRenderQueue {
+    pub fn new() -> Self {
+        Self {
+            pending: BTreeSet::new(),
+        }
+    }
+
+    pub fn schedule(&mut self, id: ViewIdentifier) {
+        self.pending.insert(id);
+    }
+
+    pub fn perform(&mut self, registry: &mut ViewRegistry, ctx: &mut RenderContext) {
+        while let Some(mut target) = self.pending.pop_first() {
+            let (mount_target, kf_group) = loop {
+                let Some(p) = registry.instances[target.into_array_index()].parent else {
+                    // root
+                    match registry.instances[target.into_array_index()].current_mounted_on {
+                        None => {
+                            panic!("unable to re-render root, which haven't rendered yet");
+                        }
+                        Some((ref mt, kfg)) => break (mt.clone(), kfg),
+                    }
+                };
+
+                if self.pending.contains(&p) {
+                    // 親も更新対象
+                    self.pending.remove(&p);
+                    target = p;
+                    continue;
+                }
+
+                match registry.instances[target.into_array_index()].current_mounted_on {
+                    None => {
+                        // 親がわからないので親からrenderする
+                        target = p;
+                    }
+                    Some((ref mt, kfg)) => break (mt.clone(), kfg),
+                }
+            };
+
+            let mut scheduled_renders = VecDeque::new();
+            scheduled_renders.push_back((mount_target, target));
+            while let Some((mt, v)) = scheduled_renders.pop_front() {
+                let Some(data) = registry.instances.get_mut(v.into_array_index()) else {
+                    // no data set
+                    continue;
+                };
+                let Some(ref mut instance) = data.instance else {
+                    // no instance associated
+                    continue;
+                };
+
+                let mut sched = RenderChildScheduler::new();
+                instance
+                    .render(
+                        &mut ViewInstanceModifier {
+                            event_handler_ref: &mut data.event_handler,
+                        },
+                        ctx,
+                        &mut sched,
+                    )
+                    .mount_on(&mt, kf_group, &mut ctx.make_mount_context());
+                data.current_mounted_on = Some((mt, kf_group));
+                // もうrenderしたので次のループからはRenderしない
+                self.pending.remove(&v);
+                if let Some(mt) = sched.mount_on {
+                    scheduled_renders.extend(data.children.iter().map(|&x| (mt.clone(), x)));
+                }
+            }
+        }
+    }
 }
 
 pub struct ViewRegistry {
@@ -413,6 +490,7 @@ impl ViewRegistry {
         self.instances.push(ViewRegistryData {
             instance: None,
             event_handler: Weak::<EmptyViewEventHandler>::new(),
+            current_mounted_on: None,
             parent: None,
             children: Vec::new(),
             joining_group: None,
@@ -433,6 +511,7 @@ impl ViewRegistry {
         self.instances.push(ViewRegistryData {
             instance: Some(instance as _),
             event_handler: Weak::<EmptyViewEventHandler>::new(),
+            current_mounted_on: None,
             parent: None,
             children: Vec::new(),
             joining_group: None,
@@ -457,6 +536,7 @@ impl ViewRegistry {
         self.instances.push(ViewRegistryData {
             instance: Some(instance),
             event_handler: Weak::<EmptyViewEventHandler>::new(),
+            current_mounted_on: None,
             parent: None,
             children: Vec::new(),
             joining_group: None,
@@ -616,6 +696,7 @@ impl ViewRegistry {
                     &mut sched,
                 )
                 .mount_on(&mt, keyboard_focus_group, &mut ctx.make_mount_context());
+            data.current_mounted_on = Some((mt, keyboard_focus_group));
             if let Some(mt) = sched.mount_on {
                 scheduled_renders.extend(data.children.iter().map(|&x| (mt.clone(), x)));
             }
@@ -641,6 +722,7 @@ impl ViewRegistry {
             if let Some(ref mut instance) = self.instances[v.into_array_index()].instance {
                 instance.teardown(ctx);
             }
+            self.instances[v.into_array_index()].current_mounted_on = None;
         }
     }
 

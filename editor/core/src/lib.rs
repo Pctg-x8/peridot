@@ -58,7 +58,7 @@ use crate::{
         TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize, ViewEventHandler,
         ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegistry,
         ViewGroupID, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement, ViewRegistry,
-        ViewUpdateContext,
+        ViewRenderQueue, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -4144,6 +4144,7 @@ async fn run<'sys>(
     let mut pointer_input_manager = PointerInputManager::new();
     let mut view_registry = ViewRegistry::new();
     let mut view_feedback_registry = ViewFeedbackRegistry::new();
+    let mut view_render_queue = ViewRenderQueue::new();
     let mut dock_store = ui::dock::DockStore::new();
     let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
     let mut popup_manager = PopupManager::new();
@@ -4724,7 +4725,8 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
-                    view_registry: &view_registry,
+                    view_registry: &mut view_registry,
+                    view_render_queue: &mut view_render_queue,
                     application: ApplicationMutation {
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
@@ -4821,6 +4823,19 @@ async fn run<'sys>(
                     });
                 }
 
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -4849,7 +4864,8 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
-                    view_registry: &view_registry,
+                    view_registry: &mut view_registry,
+                    view_render_queue: &mut view_render_queue,
                     application: ApplicationMutation {
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
@@ -4928,6 +4944,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5016,7 +5046,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5073,6 +5104,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5094,7 +5139,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5148,6 +5194,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5169,7 +5229,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5222,6 +5283,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5240,7 +5315,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5296,6 +5372,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5309,7 +5399,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5362,6 +5453,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5373,7 +5478,8 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
-                    view_registry: &view_registry,
+                    view_registry: &mut view_registry,
+                    view_render_queue: &mut view_render_queue,
                     application: ApplicationMutation {
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
@@ -5425,6 +5531,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5441,7 +5561,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5494,6 +5615,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5519,7 +5654,8 @@ async fn run<'sys>(
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             system_link: &mut system_link,
                             ht_manager: &ht_manager,
-                            view_registry: &view_registry,
+                            view_registry: &mut view_registry,
+                            view_render_queue: &mut view_render_queue,
                             application: ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
@@ -5573,6 +5709,20 @@ async fn run<'sys>(
                             },
                         });
                     }
+
+                    view_render_queue.perform(
+                        &mut view_registry,
+                        &mut RenderContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            system_link: &system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            application: &application,
+                        },
+                    );
+
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5591,7 +5741,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5645,6 +5796,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5662,7 +5827,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5716,6 +5882,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5733,7 +5913,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5787,6 +5968,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5804,7 +5999,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5858,6 +6054,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -5893,7 +6103,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5947,6 +6158,19 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -6266,7 +6490,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6323,6 +6548,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -6344,7 +6583,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6398,6 +6638,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -6419,7 +6673,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6475,6 +6730,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -6488,7 +6757,8 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
-                        view_registry: &view_registry,
+                        view_registry: &mut view_registry,
+                        view_render_queue: &mut view_render_queue,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6541,6 +6811,20 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -6654,6 +6938,19 @@ async fn run<'sys>(
                         },
                     });
                 }
+
+                view_render_queue.perform(
+                    &mut view_registry,
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                );
 
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);

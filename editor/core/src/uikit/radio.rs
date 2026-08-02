@@ -24,6 +24,7 @@ pub struct RadioButtonView {
     id: ViewIdentifier,
     eh: Option<Rc<RadioButtonEventHandler>>,
     placement: ViewPlacement,
+    selected_changes: Option<bool>,
 }
 impl RadioButtonView {
     pub fn new(id: ViewIdentifier, placement: ViewPlacement) -> Self {
@@ -31,6 +32,7 @@ impl RadioButtonView {
             id,
             eh: None,
             placement,
+            selected_changes: None,
         }
     }
 }
@@ -42,8 +44,14 @@ impl View for RadioButtonView {
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
         match self.eh {
-            Some(_) => {
-                // TODO: reflect changes
+            Some(ref eh) => {
+                if let Some(selected) = self.selected_changes.take() {
+                    if eh.current.replace(selected) != selected {
+                        // changed
+                        eh.update_mark(ctx.composite_tree, ctx.current_sec);
+                    }
+                }
+
                 ViewNewRenderElements::EMPTY
             }
             None => {
@@ -119,6 +127,13 @@ impl View for RadioButtonView {
                     current: Cell::new(false),
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+                if let Some(selected) = self.selected_changes.take() {
+                    if eh.current.replace(selected) != selected {
+                        // changed
+                        eh.update_mark(ctx.composite_tree, ctx.current_sec);
+                    }
+                }
 
                 self.eh = Some(eh);
                 ViewNewRenderElements {
@@ -203,20 +218,24 @@ impl HitTestTreeActionHandler for RadioButtonEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        // 自分自身をtrueにする(ViewGroupに属していないViewの場合これをしないとONにならない)
+        context
+            .view_registry
+            .instance_mut::<RadioButtonView>(self.view_id)
+            .expect("query failed")
+            .selected_changes = Some(true);
+        context.view_render_queue.schedule(self.view_id);
+
+        // 他をOFFに
         let other_participants = context
             .view_registry
             .iter_self_group_parcitipants(self.view_id)
             .filter(|&x| x != self.view_id)
             .collect::<Vec<_>>();
-
-        self.set_current(true, context.composite_tree, context.current_sec);
         for x in other_participants {
-            if let Some(x) = context.view_registry.instance::<RadioButtonView>(x) {
-                x.eh.as_ref().expect("not rendered").set_current(
-                    false,
-                    context.composite_tree,
-                    context.current_sec,
-                );
+            if let Some(inst) = context.view_registry.instance_mut::<RadioButtonView>(x) {
+                inst.selected_changes = Some(false);
+                context.view_render_queue.schedule(x);
             }
         }
 
@@ -243,12 +262,5 @@ impl RadioButtonEventHandler {
             };
         }
         composite_tree.mark_dirty(self.ct_mark);
-    }
-
-    fn set_current<E>(&self, value: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        if self.current.replace(value) != value {
-            // changed
-            self.update_mark(composite_tree, current_sec);
-        }
     }
 }
