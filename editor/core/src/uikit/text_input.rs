@@ -393,9 +393,9 @@ impl RawTextInputViewEventHandler {
             KeyInputCode::Insert => TextInputViewUpdateMask::empty(),
             // deletions
             KeyInputCode::Backspace if !self.has_selection() => self.delete_prev_char(),
-            KeyInputCode::Backspace => self.delete_selection(),
+            KeyInputCode::Backspace => self.clear_selection(),
             KeyInputCode::Delete if !self.has_selection() => self.delete_next_char(),
-            KeyInputCode::Delete => self.delete_selection(),
+            KeyInputCode::Delete => self.clear_selection(),
             _ => TextInputViewUpdateMask::empty(),
         };
 
@@ -416,11 +416,7 @@ impl RawTextInputViewEventHandler {
         }
 
         let mut update_mask = self.clear_preedit();
-        update_mask |= if self.has_selection() {
-            self.replace_selection_by_char(ch)
-        } else {
-            self.insert_char_at_cursor(ch)
-        };
+        update_mask |= self.insert_char_at_cursor(ch);
 
         self.update_views(
             update_mask,
@@ -441,84 +437,13 @@ impl RawTextInputViewEventHandler {
     ) {
         tracing::trace!("ime_state_changes");
 
-        let selection_range = self.selection_range();
-        if !selection_range.is_empty() {
-            // remove selection first
-            self.content
-                .borrow_mut()
-                .replace_range(selection_range.clone(), "");
-            self.cursor_pos_bytes.set(selection_range.start);
-            self.selection_begin_bytes.set(selection_range.start);
-        }
-
-        // TODO: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
-        // 他PFではどうなのかは不明
-        let mut update_mask = self.clear_preedit();
-
-        if let Some(new_committed_string) = new_committed_string {
-            let cursor_pos = self.cursor_pos_bytes.get();
-            tracing::trace!(?new_committed_string, cursor_pos, "insert committed");
-
-            // insert committed
-            self.content
-                .borrow_mut()
-                .insert_str(cursor_pos, new_committed_string);
-            self.cursor_pos_bytes
-                .update(|x| x + new_committed_string.len());
-            update_mask |= TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR;
-        }
-
-        if let Some(new_preedit_string) = new_preedit_string {
-            let cursor_pos = self.cursor_pos_bytes.get();
-            tracing::trace!(?new_preedit_string, cursor_pos, "insert preedit");
-
-            // insert preedit
-            self.content
-                .borrow_mut()
-                .insert_str(cursor_pos, new_preedit_string);
-            let new_preedit_range = cursor_pos..cursor_pos + new_preedit_string.len();
-
-            self.preedit_range_start_bytes.set(new_preedit_range.start);
-            self.preedit_range_end_bytes.set(new_preedit_range.end);
-            self.cursor_pos_bytes.set(new_preedit_range.end);
-            update_mask |= TextInputViewUpdateMask::TEXT
-                | TextInputViewUpdateMask::CURSOR
-                | TextInputViewUpdateMask::PREEDIT;
-        }
-
-        // no selection in editing
-        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-
         self.update_views(
-            update_mask,
+            self.perform_wl_ime_state_changes(new_committed_string, new_preedit_string),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
             context.current_sec,
         );
-    }
-
-    pub fn clear_preedit(&self) -> TextInputViewUpdateMask {
-        let current_preedit_range =
-            self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
-        if current_preedit_range.is_empty() {
-            // not in preediting
-            return TextInputViewUpdateMask::empty();
-        }
-
-        tracing::trace!(?current_preedit_range, "clear preedit");
-
-        self.content
-            .borrow_mut()
-            .replace_range(current_preedit_range.clone(), "");
-
-        self.preedit_range_end_bytes
-            .set(current_preedit_range.start);
-        self.cursor_pos_bytes.set(current_preedit_range.start);
-
-        TextInputViewUpdateMask::TEXT
-            | TextInputViewUpdateMask::PREEDIT
-            | TextInputViewUpdateMask::CURSOR
     }
 
     #[inline(always)]
@@ -599,6 +524,60 @@ impl RawTextInputViewEventHandler {
 
     pub fn content<'a>(&'a self) -> Ref<'a, String> {
         self.content.borrow()
+    }
+
+    #[cfg(feature = "wayland")]
+    fn perform_wl_ime_state_changes(
+        &self,
+        committed_string: Option<&str>,
+        preedit_string: Option<&str>,
+    ) -> TextInputViewUpdateMask {
+        let mut update_mask = TextInputViewUpdateMask::empty();
+
+        // remove selection first(this is overwriting op)
+        update_mask |= self.clear_selection();
+
+        // Note: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
+        update_mask |= self.clear_preedit();
+        // TODO: remove surrounding text
+        if let Some(committed_string) = committed_string {
+            update_mask |= self.insert_str_at_cursor(committed_string);
+        }
+        // TODO: compute new surrounding text
+        if let Some(preedit_string) = preedit_string {
+            let preedit_begin = self.cursor_pos_bytes.get();
+            update_mask |= self.insert_str_at_cursor(preedit_string);
+
+            // update preedit range to cover preedit_string
+            self.preedit_range_start_bytes.set(preedit_begin);
+            self.preedit_range_end_bytes
+                .set(preedit_begin + preedit_string.len());
+            update_mask |= TextInputViewUpdateMask::PREEDIT;
+        }
+
+        update_mask
+    }
+
+    fn clear_preedit(&self) -> TextInputViewUpdateMask {
+        let current_preedit_range =
+            self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
+        if current_preedit_range.is_empty() {
+            // not in preediting
+            return TextInputViewUpdateMask::empty();
+        }
+
+        tracing::trace!(?current_preedit_range, "clear preedit");
+
+        self.content
+            .borrow_mut()
+            .replace_range(current_preedit_range.clone(), "");
+
+        self.preedit_range_end_bytes
+            .set(current_preedit_range.start);
+
+        TextInputViewUpdateMask::TEXT
+            | TextInputViewUpdateMask::PREEDIT
+            | self.move_cursor(current_preedit_range.start)
     }
 
     pub fn move_cursor_by_point(
@@ -1091,27 +1070,23 @@ impl RawTextInputViewEventHandler {
     }
 
     fn insert_char_at_cursor(&self, c: char) -> TextInputViewUpdateMask {
-        self.content
-            .borrow_mut()
-            .insert(self.cursor_pos_bytes.get(), c);
-        self.cursor_pos_bytes.update(|x| x + c.len_utf8());
-        let deselect_updates = self.deselect();
+        let mut update_mask = self.clear_selection();
+        let insert_at = self.cursor_pos_bytes.get();
+        self.content.borrow_mut().insert(insert_at, c);
+        update_mask |= TextInputViewUpdateMask::TEXT;
+        update_mask |= self.move_cursor(insert_at + c.len_utf8());
 
-        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR | deselect_updates
+        update_mask
     }
 
-    fn replace_selection_by_char(&self, c: char) -> TextInputViewUpdateMask {
-        let selection_range = self.selection_range();
-        assert!(!selection_range.is_empty(), "replacing empty selection");
+    fn insert_str_at_cursor(&self, text: &str) -> TextInputViewUpdateMask {
+        let cursor_pos = self.cursor_pos_bytes.get();
+        tracing::trace!(?text, cursor_pos, "insert str");
 
-        self.content
-            .borrow_mut()
-            .replace_range(selection_range.clone(), &c.to_string());
-        self.cursor_pos_bytes
-            .set(selection_range.start + c.len_utf8());
-        let deselect_updates = self.deselect();
+        // insert committed
+        self.content.borrow_mut().insert_str(cursor_pos, text);
 
-        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR | deselect_updates
+        TextInputViewUpdateMask::TEXT | self.move_cursor(cursor_pos + text.len())
     }
 
     fn delete_prev_char(&self) -> TextInputViewUpdateMask {
@@ -1122,14 +1097,12 @@ impl RawTextInputViewEventHandler {
             return TextInputViewUpdateMask::empty();
         }
 
-        // remove_to < remove_from
+        debug_assert!(remove_to < remove_from);
         self.content
             .borrow_mut()
             .replace_range(remove_to..remove_from, "");
-        self.cursor_pos_bytes.set(remove_to);
-        self.selection_begin_bytes.set(remove_to);
 
-        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR
+        TextInputViewUpdateMask::TEXT | self.move_cursor(remove_to)
     }
 
     fn delete_next_char(&self) -> TextInputViewUpdateMask {
@@ -1140,6 +1113,7 @@ impl RawTextInputViewEventHandler {
             return TextInputViewUpdateMask::empty();
         }
 
+        debug_assert!(remove_from < remove_to);
         self.content
             .borrow_mut()
             .replace_range(remove_from..remove_to, "");
@@ -1148,7 +1122,7 @@ impl RawTextInputViewEventHandler {
         TextInputViewUpdateMask::TEXT
     }
 
-    fn delete_selection(&self) -> TextInputViewUpdateMask {
+    fn clear_selection(&self) -> TextInputViewUpdateMask {
         let selection_range = self.selection_range();
         if selection_range.is_empty() {
             // no selection
@@ -1158,19 +1132,15 @@ impl RawTextInputViewEventHandler {
         self.content
             .borrow_mut()
             .replace_range(selection_range.clone(), "");
-        self.cursor_pos_bytes.set(selection_range.start);
-        self.selection_begin_bytes.set(selection_range.start);
 
-        TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR
+        TextInputViewUpdateMask::TEXT | self.move_cursor(selection_range.start)
     }
 
     fn jump_to_beginning_of_line(&self) -> TextInputViewUpdateMask {
-        // TODO: multiline
         self.move_cursor(0)
     }
 
     fn jump_to_end_of_line(&self) -> TextInputViewUpdateMask {
-        // TODO: multiline
         self.move_cursor(self.content.borrow().len())
     }
 
