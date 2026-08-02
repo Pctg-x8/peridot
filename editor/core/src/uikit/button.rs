@@ -5,7 +5,6 @@ use crate::{
     Event, SyncEvent, SystemLink, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
-        KeyboardFocusGroupRef,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef,
             PointerActionArgs, PointerButtonActionArgs,
@@ -21,8 +20,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewInitContext,
-        ViewPlacement,
+        RawMountTarget, RenderContext, TeardownContext, View, ViewElementSize, ViewInitContext,
+        ViewNewRenderElements, ViewPlacement,
     },
     utils::{Point, Size, range_helper::range_from_len},
 };
@@ -39,7 +38,6 @@ impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
 }
 
 pub struct SimpleButtonView {
-    kf_token: FocusTargetToken,
     entity: Option<Rc<SimpleButtonActionHandler>>,
     label: String,
     placement: ViewPlacement,
@@ -56,7 +54,6 @@ impl SimpleButtonView {
         event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
     ) -> Self {
         Self {
-            kf_token: ctx.keyboard_focus_registry.acquire_token(),
             entity: None,
             label: init_label,
             placement: init_placement,
@@ -68,13 +65,12 @@ impl SimpleButtonView {
     pub fn set_interactive(&mut self, interactive: bool) {
         self.interactive_changes = Some(interactive);
     }
-
-    pub fn render(
+}
+impl View for SimpleButtonView {
+    fn render(
         &mut self,
         ctx: &mut RenderContext,
-        parent: &(impl MountTarget + ?Sized),
-        keyboard_focus_group: KeyboardFocusGroupRef,
-    ) {
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
         match self.entity {
             Some(ref e) => {
                 if let Some(interactive) = self.interactive_changes.take() {
@@ -83,6 +79,7 @@ impl SimpleButtonView {
                 }
 
                 // TODO: reflect other changes
+                (ViewNewRenderElements::EMPTY, None)
             }
             None => {
                 // first render
@@ -114,6 +111,8 @@ impl SimpleButtonView {
                     self.placement.location.anchor[0],
                     self.placement.location.anchor[1],
                 ];
+
+                let kf_token = ctx.keyboard_focus_registry.acquire_token();
 
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
@@ -173,13 +172,14 @@ impl SimpleButtonView {
                     left_adjustment_factor: relative_offset[0],
                     top_adjustment_factor: relative_offset[1],
                     cursor_shape: CursorShape::Pointer,
-                    keyboard_focus: Some(self.kf_token),
+                    keyboard_focus: Some(kf_token),
                     ..Default::default()
                 });
 
                 ctx.composite_tree.add_child(ct_root, ct_focus);
 
                 let action_handler = Rc::new(SimpleButtonActionHandler {
+                    kf_token,
                     ht_root,
                     ct_root,
                     ct_focus,
@@ -189,40 +189,40 @@ impl SimpleButtonView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &action_handler);
                 ctx.keyboard_focus_registry
-                    .set_event_handler(self.kf_token, &action_handler);
-
-                ctx.composite_tree
-                    .add_child(parent.ct_root(), action_handler.ct_root);
-                ctx.ht_manager
-                    .add_child(parent.ht_root(), action_handler.ht_root);
-
-                ctx.keyboard_focus_registry
-                    .join_group(keyboard_focus_group, self.kf_token);
+                    .set_event_handler(kf_token, &action_handler);
 
                 if let Some(interactive) = self.interactive_changes.take() {
-                    ctx.ht_manager.get_data_mut(action_handler.ht_root).active = interactive;
+                    ctx.ht_manager.get_data_mut(ht_root).active = interactive;
                     action_handler.interactive.set(interactive);
                 }
 
                 self.entity = Some(action_handler);
+                (
+                    ViewNewRenderElements {
+                        composite_tree: Some(ct_root),
+                        hit_tree: Some(ht_root),
+                        keyboard_focus: Some(kf_token),
+                    },
+                    None,
+                )
             }
         }
     }
 
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         if let Some(entity) = self.entity.take() {
             // some rendered
             ctx.mount_context.ht_manager.free_all(entity.ht_root);
             ctx.mount_context.composite_tree.free_all(entity.ct_root);
+            ctx.mount_context
+                .keyboard_focus_registry
+                .release_token(entity.kf_token);
         }
-
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(self.kf_token);
     }
 }
 
 struct SimpleButtonActionHandler {
+    kf_token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
     ct_focus: CompositeTreeRef,

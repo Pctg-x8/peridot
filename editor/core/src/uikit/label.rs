@@ -8,7 +8,10 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewPlacement},
+    uikit::{
+        RawMountTarget, RenderContext, TeardownContext, View, ViewElementSize,
+        ViewNewRenderElements, ViewPlacement,
+    },
     utils::{LogicalUnit, Size},
 };
 
@@ -70,11 +73,15 @@ impl StaticTextView {
             .size(),
         }
     }
-
-    pub fn render(&mut self, ctx: &mut RenderContext, target: &(impl MountTarget + ?Sized)) {
+}
+impl View for StaticTextView {
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
         match self.ct {
             // TODO: needs reflect modified properties
-            Some(_) => (),
+            Some(_) => (ViewNewRenderElements::EMPTY, None),
             None => {
                 let size = match self.placement.size {
                     ViewElementSize::Fixed(s) => s,
@@ -123,13 +130,19 @@ impl StaticTextView {
                     ..Default::default()
                 });
 
-                ctx.composite_tree.add_child(target.ct_root(), ct);
                 self.ct = Some(ct);
+                (
+                    ViewNewRenderElements {
+                        composite_tree: Some(ct),
+                        ..ViewNewRenderElements::EMPTY
+                    },
+                    None,
+                )
             }
-        };
+        }
     }
 
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         if let Some(ct) = self.ct.take() {
             ctx.mount_context.composite_tree.free(ct);
         }

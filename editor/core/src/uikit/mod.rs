@@ -9,7 +9,7 @@ use std::{
 use crate::{
     Application, SyncEvent, SystemLink,
     input::{
-        KeyboardFocusTokenRegistry,
+        FocusTargetToken, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
     rendering::{
@@ -249,6 +249,51 @@ pub enum ViewElementSize {
 pub struct ViewPlacement {
     pub location: ViewLocation,
     pub size: ViewElementSize,
+}
+
+#[derive(Default)]
+pub struct ViewNewRenderElements {
+    pub composite_tree: Option<CompositeTreeRef>,
+    pub hit_tree: Option<HitTestTreeRef>,
+    pub keyboard_focus: Option<FocusTargetToken>,
+}
+impl ViewNewRenderElements {
+    pub const EMPTY: Self = Self {
+        composite_tree: None,
+        hit_tree: None,
+        keyboard_focus: None,
+    };
+
+    pub fn mount_on(
+        &self,
+        target: &(impl MountTarget + ?Sized),
+        kf_group: KeyboardFocusGroupRef,
+        ctx: &mut MountContext,
+    ) {
+        if let Some(composite_tree) = self.composite_tree {
+            ctx.composite_tree
+                .add_child(target.ct_root(), composite_tree);
+        }
+        if let Some(hit_tree) = self.hit_tree {
+            ctx.ht_manager.add_child(target.ht_root(), hit_tree);
+        }
+        if let Some(keyboard_focus) = self.keyboard_focus {
+            ctx.keyboard_focus_registry
+                .join_group(kf_group, keyboard_focus);
+        }
+    }
+}
+
+/// Viewのライフサイクル
+pub trait View {
+    /// Render(初回マウント/更新)時に呼ばれる
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>);
+
+    /// Teardown(アンマウント)時に呼ばれる
+    fn teardown(&mut self, ctx: &mut TeardownContext);
 }
 
 #[repr(transparent)]

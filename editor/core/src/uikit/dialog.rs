@@ -8,7 +8,7 @@ use crate::{
     uikit::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, RawMountTarget,
         RenderContext, SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView,
-        TeardownContext, ViewElementSize, ViewInitContext, ViewLocation, ViewPlacement,
+        TeardownContext, View, ViewElementSize, ViewInitContext, ViewLocation, ViewPlacement,
     },
     utils::{Point, Size},
 };
@@ -94,11 +94,26 @@ impl Popup for AlertDialogPresenter {
         parent: &RawMountTarget,
         keyboard_focus_group: KeyboardFocusGroupRef,
     ) {
-        let mask = self.mask.render(ctx, parent);
-        let frame = self.frame.render(ctx, &mask);
-        self.msg.render(ctx, &frame);
-        self.confirm_button
-            .render(ctx, &frame, keyboard_focus_group);
+        let (mask_re, mask_mt) = self.mask.render(ctx);
+        mask_re.mount_on(parent, keyboard_focus_group, &mut ctx.make_mount_context());
+
+        let (frame_re, frame_mt) = self.frame.render(ctx);
+        frame_re.mount_on(
+            mask_mt.as_ref().expect("not mountable"),
+            keyboard_focus_group,
+            &mut ctx.make_mount_context(),
+        );
+
+        self.msg.render(ctx).0.mount_on(
+            frame_mt.as_ref().expect("not mountable"),
+            keyboard_focus_group,
+            &mut ctx.make_mount_context(),
+        );
+        self.confirm_button.render(ctx).0.mount_on(
+            frame_mt.as_ref().expect("not mountable"),
+            keyboard_focus_group,
+            &mut ctx.make_mount_context(),
+        );
     }
 
     fn close(

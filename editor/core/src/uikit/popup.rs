@@ -11,7 +11,10 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
         FloatAnimationTemplate,
     },
-    uikit::{MountTarget, RawMountTarget, RenderContext, TeardownContext, ViewInitContext},
+    uikit::{
+        MountTarget, RawMountTarget, RenderContext, TeardownContext, View, ViewInitContext,
+        ViewNewRenderElements,
+    },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
 
@@ -157,61 +160,6 @@ impl OverlayPopupBasicMaskView {
         }
     }
 
-    pub fn render(
-        &mut self,
-        ctx: &mut RenderContext,
-        parent: &(impl MountTarget + ?Sized),
-    ) -> RawMountTarget {
-        match self.render_elements {
-            Some(ref e) => RawMountTarget {
-                ct_root: e.ct_root,
-                ht_root: e.ht_root,
-            },
-            None => {
-                // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    relative_size_adjustment: [1.0, 1.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColorBackdropBlur(
-                        AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
-                        AnimatableFloat::Value(3.0),
-                    ),
-                    ..Default::default()
-                });
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width_adjustment_factor: 1.0,
-                    height_adjustment_factor: 1.0,
-                    // WindowHeaderのぶん開ける(ドラッグ判定がこない)
-                    // TODO: ここだけ参照関係が逆になる（uikit -> ui） どうするか......
-                    height: -crate::ui::window_header::View::THICKNESS,
-                    top: crate::ui::window_header::View::THICKNESS,
-                    ..Default::default()
-                });
-
-                ctx.composite_tree.add_child(parent.ct_root(), ct_root);
-                ctx.ht_manager.add_child(parent.ht_root(), ht_root);
-
-                // play open animation at first render
-                Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
-
-                self.render_elements =
-                    Some(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root });
-
-                RawMountTarget { ct_root, ht_root }
-            }
-        }
-    }
-
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
-        let Some(e) = self.render_elements.take() else {
-            // not rendered
-            return;
-        };
-
-        ctx.mount_context.composite_tree.free_all(e.ct_root);
-        ctx.mount_context.ht_manager.free_all(e.ht_root);
-    }
-
     fn play_open_animation(
         ct_root: CompositeTreeRef,
         composite_tree: &mut CompositeTree<SyncEvent>,
@@ -257,6 +205,68 @@ impl OverlayPopupBasicMaskView {
             .apply();
     }
 }
+impl View for OverlayPopupBasicMaskView {
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        match self.render_elements {
+            Some(ref e) => (
+                ViewNewRenderElements::EMPTY,
+                Some(RawMountTarget {
+                    ct_root: e.ct_root,
+                    ht_root: e.ht_root,
+                }),
+            ),
+            None => {
+                // first render
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColorBackdropBlur(
+                        AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
+                        AnimatableFloat::Value(3.0),
+                    ),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width_adjustment_factor: 1.0,
+                    height_adjustment_factor: 1.0,
+                    // WindowHeaderのぶん開ける(ドラッグ判定がこない)
+                    // TODO: ここだけ参照関係が逆になる（uikit -> ui） どうするか......
+                    height: -crate::ui::window_header::View::THICKNESS,
+                    top: crate::ui::window_header::View::THICKNESS,
+                    ..Default::default()
+                });
+
+                // play open animation at first render
+                Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
+
+                self.render_elements =
+                    Some(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root });
+
+                (
+                    ViewNewRenderElements {
+                        composite_tree: Some(ct_root),
+                        hit_tree: Some(ht_root),
+                        ..ViewNewRenderElements::EMPTY
+                    },
+                    Some(RawMountTarget { ct_root, ht_root }),
+                )
+            }
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.render_elements.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(e.ct_root);
+        ctx.mount_context.ht_manager.free_all(e.ht_root);
+    }
+}
 
 struct OverlayPopupBasicFrameViewRenderElements {
     ct_root: CompositeTreeRef,
@@ -299,19 +309,77 @@ impl OverlayPopupBasicFrameView {
         }
     }
 
-    pub fn render(
+    fn play_open_animation(
+        ct_root: CompositeTreeRef,
+        size: &Size<LogicalUnit>,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+    ) {
+        composite_tree
+            .begin_mod_chain(ct_root)
+            .y(AnimatableFloat::Animated {
+                from_value: -size.height * 0.5 + 4.0,
+                to_value: -size.height * 0.5,
+                curve: AnimationCurve::CubicBezier {
+                    p1: (0.5, 0.5),
+                    p2: (0.5, 1.0),
+                },
+                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
+                event_on_complete: None,
+            })
+            .scale_animated_from_template(&Self::OPEN_SCALE_ANIM, current_sec)
+            .opacity_animated_from_template(&Self::OPEN_OPACITY_ANIM, current_sec)
+            .apply();
+    }
+
+    pub fn play_close_animation(
+        &self,
+        composite_tree: &mut CompositeTree<SyncEvent>,
+        current_sec: f32,
+        event_on_complete: SyncEvent,
+    ) {
+        composite_tree
+            .begin_mod_chain(
+                self.render_elements
+                    .as_ref()
+                    .expect("still not rendered?")
+                    .ct_root,
+            )
+            .y(AnimatableFloat::Animated {
+                from_value: -self.size.height * 0.5,
+                to_value: -self.size.height * 0.5 + 4.0,
+                curve: AnimationCurve::CubicBezier {
+                    p1: (0.5, 0.5),
+                    p2: (0.5, 1.0),
+                },
+                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
+                event_on_complete: None,
+            })
+            .scale_animated_from_template(&Self::CLOSE_SCALE_ANIM, current_sec)
+            .opacity_animated_from_template_with_completion(
+                &Self::CLOSE_OPACITY_ANIM,
+                current_sec,
+                event_on_complete,
+            )
+            .apply();
+    }
+}
+impl View for OverlayPopupBasicFrameView {
+    fn render(
         &mut self,
         ctx: &mut RenderContext,
-        parent: &(impl MountTarget + ?Sized),
-    ) -> RawMountTarget {
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
         match self.render_elements {
             Some(ref e) => {
                 // TODO: reflect changes
 
-                RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                }
+                (
+                    ViewNewRenderElements::EMPTY,
+                    Some(RawMountTarget {
+                        ct_root: e.ct_root,
+                        ht_root: e.ht_root,
+                    }),
+                )
             }
             None => {
                 // first render
@@ -373,21 +441,25 @@ impl OverlayPopupBasicFrameView {
                 ctx.composite_tree.add_child(ct_root, ct_shadow);
                 ctx.composite_tree.add_child(ct_root, ct_visual);
 
-                ctx.composite_tree.add_child(parent.ct_root(), ct_root);
-                ctx.ht_manager.add_child(parent.ht_root(), ht_root);
-
                 // play animation on first render
                 Self::play_open_animation(ct_root, &self.size, ctx.composite_tree, ctx.current_sec);
 
                 self.render_elements =
                     Some(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root });
 
-                RawMountTarget { ct_root, ht_root }
+                (
+                    ViewNewRenderElements {
+                        composite_tree: Some(ct_root),
+                        hit_tree: Some(ht_root),
+                        ..ViewNewRenderElements::EMPTY
+                    },
+                    Some(RawMountTarget { ct_root, ht_root }),
+                )
             }
         }
     }
 
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(render_elements) = self.render_elements.take() else {
             // not rendered
             return;
@@ -399,60 +471,5 @@ impl OverlayPopupBasicFrameView {
         ctx.mount_context
             .ht_manager
             .free_all(render_elements.ht_root);
-    }
-
-    fn play_open_animation(
-        ct_root: CompositeTreeRef,
-        size: &Size<LogicalUnit>,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-    ) {
-        composite_tree
-            .begin_mod_chain(ct_root)
-            .y(AnimatableFloat::Animated {
-                from_value: -size.height * 0.5 + 4.0,
-                to_value: -size.height * 0.5,
-                curve: AnimationCurve::CubicBezier {
-                    p1: (0.5, 0.5),
-                    p2: (0.5, 1.0),
-                },
-                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
-                event_on_complete: None,
-            })
-            .scale_animated_from_template(&Self::OPEN_SCALE_ANIM, current_sec)
-            .opacity_animated_from_template(&Self::OPEN_OPACITY_ANIM, current_sec)
-            .apply();
-    }
-
-    pub fn play_close_animation(
-        &self,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-        event_on_complete: SyncEvent,
-    ) {
-        composite_tree
-            .begin_mod_chain(
-                self.render_elements
-                    .as_ref()
-                    .expect("still not rendered?")
-                    .ct_root,
-            )
-            .y(AnimatableFloat::Animated {
-                from_value: -self.size.height * 0.5,
-                to_value: -self.size.height * 0.5 + 4.0,
-                curve: AnimationCurve::CubicBezier {
-                    p1: (0.5, 0.5),
-                    p2: (0.5, 1.0),
-                },
-                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
-                event_on_complete: None,
-            })
-            .scale_animated_from_template(&Self::CLOSE_SCALE_ANIM, current_sec)
-            .opacity_animated_from_template_with_completion(
-                &Self::CLOSE_OPACITY_ANIM,
-                current_sec,
-                event_on_complete,
-            )
-            .apply();
     }
 }

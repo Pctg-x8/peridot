@@ -1,6 +1,8 @@
 use core::cell::{Cell, OnceCell};
 use std::rc::Rc;
 
+use bedrock::vk::fns;
+
 use crate::{
     input::{
         EventContinueControl, InputEventContext,
@@ -20,7 +22,10 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{MountTarget, RenderContext, TeardownContext, ViewElementSize, ViewPlacement},
+    uikit::{
+        MountTarget, RawMountTarget, RenderContext, TeardownContext, View, ViewElementSize,
+        ViewNewRenderElements, ViewPlacement,
+    },
     utils::{Size, range_helper::range_from_len},
 };
 
@@ -70,11 +75,16 @@ impl ToggleButtonView {
             label,
         }
     }
-
-    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+}
+impl View for ToggleButtonView {
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
         match self.entity {
             Some(_) => {
                 // TODO: reflect changes
+                (ViewNewRenderElements::EMPTY, None)
             }
             None => {
                 // first render
@@ -181,15 +191,20 @@ impl ToggleButtonView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-                ctx.composite_tree.add_child(parent.ct_root(), eh.ct_root);
-                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
-
                 self.entity = Some(eh);
+                (
+                    ViewNewRenderElements {
+                        composite_tree: Some(ct_root),
+                        hit_tree: Some(ht_root),
+                        ..ViewNewRenderElements::EMPTY
+                    },
+                    None,
+                )
             }
         }
     }
 
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(e) = self.entity.take() else {
             // not rendered
             return;
@@ -294,11 +309,16 @@ impl CheckboxView {
             placement,
         }
     }
-
-    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+}
+impl View for CheckboxView {
+    fn render(
+        &mut self,
+        ctx: &mut RenderContext,
+    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
         match self.entity {
             Some(_) => {
                 // TODO: reflect changes
+                (ViewNewRenderElements::EMPTY, None)
             }
             None => {
                 // first render
@@ -383,15 +403,20 @@ impl CheckboxView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-                ctx.composite_tree.add_child(parent.ct_root(), eh.ct_root);
-                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
-
                 self.entity = Some(eh);
+                (
+                    ViewNewRenderElements {
+                        composite_tree: Some(ct_root),
+                        hit_tree: Some(ht_root),
+                        ..ViewNewRenderElements::EMPTY
+                    },
+                    None,
+                )
             }
         }
     }
 
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(e) = self.entity.take() else {
             // not rendered
             return;
