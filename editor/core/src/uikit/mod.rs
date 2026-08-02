@@ -47,6 +47,19 @@ impl<'h> RenderContext<'_, 'h> {
     }
 }
 
+pub struct RenderChildScheduler {
+    mount_on: Option<RawMountTarget>,
+}
+impl RenderChildScheduler {
+    pub fn new() -> Self {
+        Self { mount_on: None }
+    }
+
+    pub fn schedule_render_children(&mut self, mount_on: RawMountTarget) {
+        self.mount_on = Some(mount_on);
+    }
+}
+
 pub struct ViewInitContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
     pub view_registry: &'a mut ViewRegistry,
@@ -194,6 +207,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct RawMountTarget {
     pub ct_root: CompositeTreeRef,
     pub ht_root: HitTestTreeRef,
@@ -290,7 +304,8 @@ pub trait View {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>);
+        sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements;
 
     /// Teardown(アンマウント)時に呼ばれる
     fn teardown(&mut self, ctx: &mut TeardownContext);

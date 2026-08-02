@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use crate::{
     SyncEvent, WindowHandle,
@@ -12,8 +12,8 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        MountTarget, RawMountTarget, RenderContext, TeardownContext, View, ViewInitContext,
-        ViewNewRenderElements,
+        MountTarget, RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
+        ViewInitContext, ViewNewRenderElements,
     },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
@@ -28,15 +28,51 @@ impl PopupID {
     }
 }
 
-/// ポップアップ共通ライフサイクル
-pub trait Popup {
-    /// ポップアップViewがRenderされるときに呼ばれる
-    fn render(
+pub struct ViewHierarchyMut<'a> {
+    pub element: &'a mut dyn View,
+    pub children: Vec<ViewHierarchyMut<'a>>,
+}
+impl<'a> ViewHierarchyMut<'a> {
+    pub fn render_all(
         &mut self,
         ctx: &mut RenderContext,
-        parent: &RawMountTarget,
+        mount_on: &(impl MountTarget + ?Sized),
         keyboard_focus_group: KeyboardFocusGroupRef,
-    );
+    ) {
+        let mut scheduled_renders = VecDeque::new();
+        scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), self));
+        while let Some((mt, v)) = scheduled_renders.pop_front() {
+            let mut sched = RenderChildScheduler::new();
+            v.element.render(ctx, &mut sched).mount_on(
+                &mt,
+                keyboard_focus_group,
+                &mut ctx.make_mount_context(),
+            );
+            if let Some(mt) = sched.mount_on {
+                scheduled_renders.extend(v.children.iter_mut().map(|x| (mt.clone(), x)));
+            }
+        }
+    }
+
+    pub fn teardown_all(&mut self, ctx: &mut TeardownContext) {
+        // 逆向きに(深いものから)teardownしていく
+        let mut scheduled_teardowns = Vec::new();
+        let mut descend_stack = VecDeque::new();
+        descend_stack.push_back(self);
+        while let Some(v) = descend_stack.pop_front() {
+            scheduled_teardowns.push(&mut v.element);
+            descend_stack.extend(v.children.iter_mut());
+        }
+
+        for v in scheduled_teardowns {
+            v.teardown(ctx);
+        }
+    }
+}
+
+/// ポップアップ共通ライフサイクル
+pub trait Popup {
+    fn view_hierarchy_mut<'a>(&'a mut self) -> ViewHierarchyMut<'a>;
 
     /// UI Render Scaleが変わったときに呼ばれる
     #[allow(unused_variables)]
@@ -74,9 +110,9 @@ impl PopupManager {
         let id = PopupID::new();
         let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
         let mut instance = ctor(id, ctx);
-        instance.render(
+        instance.view_hierarchy_mut().render_all(
             &mut ctx.make_render_context(),
-            &RawMountTarget::from_typed(&window),
+            &window,
             popup_focus_group,
         );
         self.instance_by_id
@@ -101,7 +137,7 @@ impl PopupManager {
     pub fn close(&mut self, id: PopupID, ctx: &mut RenderContext) -> bool {
         if let Some((instance, w, g)) = self.instance_by_id.get_mut(&id) {
             instance.close(ctx.composite_tree, ctx.ht_manager, ctx.current_sec);
-            instance.render(ctx, &RawMountTarget::from_typed(w), *g);
+            instance.view_hierarchy_mut().render_all(ctx, w, *g);
             true
         } else {
             false
@@ -209,15 +245,17 @@ impl View for OverlayPopupBasicMaskView {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
         match self.render_elements {
-            Some(ref e) => (
-                ViewNewRenderElements::EMPTY,
-                Some(RawMountTarget {
+            Some(ref e) => {
+                sched.schedule_render_children(RawMountTarget {
                     ct_root: e.ct_root,
                     ht_root: e.ht_root,
-                }),
-            ),
+                });
+
+                ViewNewRenderElements::EMPTY
+            }
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -245,14 +283,12 @@ impl View for OverlayPopupBasicMaskView {
                 self.render_elements =
                     Some(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root });
 
-                (
-                    ViewNewRenderElements {
-                        composite_tree: Some(ct_root),
-                        hit_tree: Some(ht_root),
-                        ..ViewNewRenderElements::EMPTY
-                    },
-                    Some(RawMountTarget { ct_root, ht_root }),
-                )
+                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..ViewNewRenderElements::EMPTY
+                }
             }
         }
     }
@@ -368,18 +404,17 @@ impl View for OverlayPopupBasicFrameView {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
         match self.render_elements {
             Some(ref e) => {
                 // TODO: reflect changes
 
-                (
-                    ViewNewRenderElements::EMPTY,
-                    Some(RawMountTarget {
-                        ct_root: e.ct_root,
-                        ht_root: e.ht_root,
-                    }),
-                )
+                sched.schedule_render_children(RawMountTarget {
+                    ct_root: e.ct_root,
+                    ht_root: e.ht_root,
+                });
+                ViewNewRenderElements::EMPTY
             }
             None => {
                 // first render
@@ -447,14 +482,12 @@ impl View for OverlayPopupBasicFrameView {
                 self.render_elements =
                     Some(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root });
 
-                (
-                    ViewNewRenderElements {
-                        composite_tree: Some(ct_root),
-                        hit_tree: Some(ht_root),
-                        ..ViewNewRenderElements::EMPTY
-                    },
-                    Some(RawMountTarget { ct_root, ht_root }),
-                )
+                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..ViewNewRenderElements::EMPTY
+                }
             }
         }
     }

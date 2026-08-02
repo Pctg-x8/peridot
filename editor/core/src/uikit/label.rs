@@ -9,8 +9,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        RawMountTarget, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewNewRenderElements, ViewPlacement,
+        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
+        ViewElementSize, ViewNewRenderElements, ViewPlacement,
     },
     utils::{LogicalUnit, Size},
 };
@@ -78,10 +78,11 @@ impl View for StaticTextView {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
         match self.ct {
             // TODO: needs reflect modified properties
-            Some(_) => (ViewNewRenderElements::EMPTY, None),
+            Some(_) => ViewNewRenderElements::EMPTY,
             None => {
                 let size = match self.placement.size {
                     ViewElementSize::Fixed(s) => s,
@@ -131,13 +132,10 @@ impl View for StaticTextView {
                 });
 
                 self.ct = Some(ct);
-                (
-                    ViewNewRenderElements {
-                        composite_tree: Some(ct),
-                        ..ViewNewRenderElements::EMPTY
-                    },
-                    None,
-                )
+                ViewNewRenderElements {
+                    composite_tree: Some(ct),
+                    ..ViewNewRenderElements::EMPTY
+                }
             }
         }
     }

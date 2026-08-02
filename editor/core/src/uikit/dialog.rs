@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use crate::{
     Event, SyncEvent, WindowHandle,
     input::{KeyboardFocusGroupRef, hittest::HitTestTreeManager},
@@ -7,8 +9,9 @@ use crate::{
     },
     uikit::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, RawMountTarget,
-        RenderContext, SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView,
-        TeardownContext, View, ViewElementSize, ViewInitContext, ViewLocation, ViewPlacement,
+        RenderChildScheduler, RenderContext, SimpleButtonConstantEventHandler, SimpleButtonView,
+        StaticTextView, TeardownContext, View, ViewElementSize, ViewInitContext, ViewLocation,
+        ViewNewRenderElements, ViewPlacement, popup::ViewHierarchyMut,
     },
     utils::{Point, Size},
 };
@@ -88,32 +91,23 @@ impl AlertDialogPresenter {
     }
 }
 impl Popup for AlertDialogPresenter {
-    fn render(
-        &mut self,
-        ctx: &mut RenderContext,
-        parent: &RawMountTarget,
-        keyboard_focus_group: KeyboardFocusGroupRef,
-    ) {
-        let (mask_re, mask_mt) = self.mask.render(ctx);
-        mask_re.mount_on(parent, keyboard_focus_group, &mut ctx.make_mount_context());
-
-        let (frame_re, frame_mt) = self.frame.render(ctx);
-        frame_re.mount_on(
-            mask_mt.as_ref().expect("not mountable"),
-            keyboard_focus_group,
-            &mut ctx.make_mount_context(),
-        );
-
-        self.msg.render(ctx).0.mount_on(
-            frame_mt.as_ref().expect("not mountable"),
-            keyboard_focus_group,
-            &mut ctx.make_mount_context(),
-        );
-        self.confirm_button.render(ctx).0.mount_on(
-            frame_mt.as_ref().expect("not mountable"),
-            keyboard_focus_group,
-            &mut ctx.make_mount_context(),
-        );
+    fn view_hierarchy_mut<'a>(&'a mut self) -> ViewHierarchyMut<'a> {
+        ViewHierarchyMut {
+            element: &mut self.mask,
+            children: vec![ViewHierarchyMut {
+                element: &mut self.frame,
+                children: vec![
+                    ViewHierarchyMut {
+                        element: &mut self.msg,
+                        children: vec![],
+                    },
+                    ViewHierarchyMut {
+                        element: &mut self.confirm_button,
+                        children: vec![],
+                    },
+                ],
+            }],
+        }
     }
 
     fn close(
@@ -134,9 +128,6 @@ impl Popup for AlertDialogPresenter {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        self.confirm_button.teardown(ctx);
-        self.msg.teardown(ctx);
-        self.frame.teardown(ctx);
-        self.mask.teardown(ctx);
+        self.view_hierarchy_mut().teardown_all(ctx);
     }
 }

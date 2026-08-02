@@ -23,8 +23,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        MountTarget, RawMountTarget, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewNewRenderElements, ViewPlacement,
+        MountTarget, RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
+        ViewElementSize, ViewNewRenderElements, ViewPlacement,
     },
     utils::{Size, range_helper::range_from_len},
 };
@@ -80,11 +80,12 @@ impl View for ToggleButtonView {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
         match self.entity {
             Some(_) => {
                 // TODO: reflect changes
-                (ViewNewRenderElements::EMPTY, None)
+                ViewNewRenderElements::EMPTY
             }
             None => {
                 // first render
@@ -192,14 +193,11 @@ impl View for ToggleButtonView {
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
                 self.entity = Some(eh);
-                (
-                    ViewNewRenderElements {
-                        composite_tree: Some(ct_root),
-                        hit_tree: Some(ht_root),
-                        ..ViewNewRenderElements::EMPTY
-                    },
-                    None,
-                )
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..ViewNewRenderElements::EMPTY
+                }
             }
         }
     }
@@ -314,11 +312,12 @@ impl View for CheckboxView {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
         match self.entity {
             Some(_) => {
                 // TODO: reflect changes
-                (ViewNewRenderElements::EMPTY, None)
+                ViewNewRenderElements::EMPTY
             }
             None => {
                 // first render
@@ -404,14 +403,11 @@ impl View for CheckboxView {
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
                 self.entity = Some(eh);
-                (
-                    ViewNewRenderElements {
-                        composite_tree: Some(ct_root),
-                        hit_tree: Some(ht_root),
-                        ..ViewNewRenderElements::EMPTY
-                    },
-                    None,
-                )
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..ViewNewRenderElements::EMPTY
+                }
             }
         }
     }

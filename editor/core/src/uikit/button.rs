@@ -20,8 +20,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        RawMountTarget, RenderContext, TeardownContext, View, ViewElementSize, ViewInitContext,
-        ViewNewRenderElements, ViewPlacement,
+        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
+        ViewElementSize, ViewInitContext, ViewNewRenderElements, ViewPlacement,
     },
     utils::{Point, Size, range_helper::range_from_len},
 };
@@ -70,7 +70,8 @@ impl View for SimpleButtonView {
     fn render(
         &mut self,
         ctx: &mut RenderContext,
-    ) -> (ViewNewRenderElements, Option<RawMountTarget>) {
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
         match self.entity {
             Some(ref e) => {
                 if let Some(interactive) = self.interactive_changes.take() {
@@ -79,7 +80,7 @@ impl View for SimpleButtonView {
                 }
 
                 // TODO: reflect other changes
-                (ViewNewRenderElements::EMPTY, None)
+                ViewNewRenderElements::EMPTY
             }
             None => {
                 // first render
@@ -197,14 +198,11 @@ impl View for SimpleButtonView {
                 }
 
                 self.entity = Some(action_handler);
-                (
-                    ViewNewRenderElements {
-                        composite_tree: Some(ct_root),
-                        hit_tree: Some(ht_root),
-                        keyboard_focus: Some(kf_token),
-                    },
-                    None,
-                )
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    keyboard_focus: Some(kf_token),
+                }
             }
         }
     }

@@ -53,11 +53,11 @@ use crate::{
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
         MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
-        PopupManager, RawMountTarget, RenderContext, ScrollContainer, SimpleButtonEventHandler,
-        SimpleButtonView, StaticTextView, TeardownContext, TextInputView, View, ViewElementSize,
-        ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
-        ViewFeedbackRegistry, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
-        ViewRegistry, ViewUpdateContext,
+        PopupManager, RawMountTarget, RenderChildScheduler, RenderContext, ScrollContainer,
+        SimpleButtonEventHandler, SimpleButtonView, StaticTextView, TeardownContext, TextInputView,
+        View, ViewElementSize, ViewEventHandler, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier, ViewInitContext,
+        ViewLocation, ViewPlacement, ViewRegistry, ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -2535,16 +2535,22 @@ impl UIKitPreviewPanePresenter {
         ytop += 24.0;
 
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         test_alert_btn
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         test_alert_btn2
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
 
         ytop += 8.0;
@@ -2575,8 +2581,10 @@ impl UIKitPreviewPanePresenter {
         ytop += 24.0;
 
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         text_input_view.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
         text_input_view2.render(&mut ctx.make_render_context(), &scroll_container, kf_group);
@@ -2591,8 +2599,10 @@ impl UIKitPreviewPanePresenter {
             },
         );
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         ytop += label.compute_size_without_render(ctx.system_link).height;
         let ml_text_kf_token = ctx.keyboard_focus_registry.acquire_token();
@@ -2622,8 +2632,10 @@ impl UIKitPreviewPanePresenter {
             },
         );
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         ytop += label.compute_size_without_render(ctx.system_link).height;
         let mut color_picker = ColorPickerView::new(
@@ -2644,8 +2656,10 @@ impl UIKitPreviewPanePresenter {
             },
         );
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         let label_width = label.compute_size_without_render(ctx.system_link).width;
         let editable_color_button = EditableColorButtonView::new(
@@ -2670,8 +2684,10 @@ impl UIKitPreviewPanePresenter {
             },
         );
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         let label_width = label.compute_size_without_render(ctx.system_link).width;
         let mut numeric_input_view = NumericInputView::new(
@@ -2694,8 +2710,10 @@ impl UIKitPreviewPanePresenter {
             },
         );
         label
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
         let label_width = label.compute_size_without_render(ctx.system_link).width;
         let mut dropdown_box = uikit::dropdown_box::View::new(
@@ -2720,19 +2738,22 @@ impl UIKitPreviewPanePresenter {
             "Toggle / Checkbox".into(),
         );
         toggle_button
-            .render(&mut ctx.make_render_context())
-            .0
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
             .mount_on(&scroll_container, kf_group, ctx);
 
         let mut checkbox = uikit::CheckboxView::new(ViewPlacement {
             location: ViewLocation::new_left_top(144.0, ytop + 4.0),
             size: ViewElementSize::Automatic,
         });
-        checkbox.render(&mut ctx.make_render_context()).0.mount_on(
-            &scroll_container,
-            kf_group,
-            ctx,
-        );
+        checkbox
+            .render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
+            .mount_on(&scroll_container, kf_group, ctx);
         ytop += 24.0;
 
         ytop += 8.0;
@@ -3334,11 +3355,12 @@ impl InspectorPanePresenter {
                 },
             );
             label.set_font(FontID::UIFormLiftedLabel);
-            label.render(&mut ctx.make_render_context()).0.mount_on(
-                &items_container_view,
-                kf_group,
-                ctx,
-            );
+            label
+                .render(
+                    &mut ctx.make_render_context(),
+                    &mut RenderChildScheduler::new(),
+                )
+                .mount_on(&items_container_view, kf_group, ctx);
             let mut local_position_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3376,11 +3398,12 @@ impl InspectorPanePresenter {
                 },
             );
             label.set_font(FontID::UIFormLiftedLabel);
-            label.render(&mut ctx.make_render_context()).0.mount_on(
-                &items_container_view,
-                kf_group,
-                ctx,
-            );
+            label
+                .render(
+                    &mut ctx.make_render_context(),
+                    &mut RenderChildScheduler::new(),
+                )
+                .mount_on(&items_container_view, kf_group, ctx);
             let mut local_rotation_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3418,11 +3441,12 @@ impl InspectorPanePresenter {
                 },
             );
             label.set_font(FontID::UIFormLiftedLabel);
-            label.render(&mut ctx.make_render_context()).0.mount_on(
-                &items_container_view,
-                kf_group,
-                ctx,
-            );
+            label
+                .render(
+                    &mut ctx.make_render_context(),
+                    &mut RenderChildScheduler::new(),
+                )
+                .mount_on(&items_container_view, kf_group, ctx);
             let mut local_scale_x_input_view = NumericInputView::new(
                 ctx,
                 Rect::from_lt_size(
@@ -3465,8 +3489,10 @@ impl InspectorPanePresenter {
                 },
             );
             section_label
-                .render(&mut ctx.make_render_context())
-                .0
+                .render(
+                    &mut ctx.make_render_context(),
+                    &mut RenderChildScheduler::new(),
+                )
                 .mount_on(&items_container_view, kf_group, ctx);
 
             let mut label = StaticTextView::new(
@@ -3481,11 +3507,12 @@ impl InspectorPanePresenter {
                 },
             );
             label.set_font(FontID::UIFormLiftedLabel);
-            label.render(&mut ctx.make_render_context()).0.mount_on(
-                &items_container_view,
-                kf_group,
-                ctx,
-            );
+            label
+                .render(
+                    &mut ctx.make_render_context(),
+                    &mut RenderChildScheduler::new(),
+                )
+                .mount_on(&items_container_view, kf_group, ctx);
             let mut shape_selector = uikit::dropdown_box::View::new(
                 ViewPlacement {
                     location: ViewLocation {
@@ -3554,11 +3581,11 @@ impl InspectorPanePresenter {
             );
         }
         for x in eh.checkboxes.borrow_mut().iter_mut() {
-            x.render(&mut ctx.make_render_context()).0.mount_on(
-                &eh.items_container_view,
-                kf_group,
-                ctx,
-            );
+            x.render(
+                &mut ctx.make_render_context(),
+                &mut RenderChildScheduler::new(),
+            )
+            .mount_on(&eh.items_container_view, kf_group, ctx);
         }
         for x in eh.dropdowns.borrow_mut().iter_mut() {
             x.render(&mut ctx.make_render_context(), &eh.items_container_view);
