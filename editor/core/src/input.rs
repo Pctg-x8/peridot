@@ -14,6 +14,7 @@ use crate::{
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     rendering::composite::CompositeTree,
+    uikit::ViewRegistry,
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
@@ -30,6 +31,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
     pub ht_manager: &'env HitTestTreeManager<'h>,
+    pub view_registry: &'env ViewRegistry,
     pub application: ApplicationMutation<'env>,
 }
 

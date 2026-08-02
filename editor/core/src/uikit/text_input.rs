@@ -2138,13 +2138,6 @@ impl NumericInputViewEventHandler {
     }
 }
 
-bitflags! {
-    #[derive(Clone, Copy, Debug)]
-    pub struct RawTextInputViewCreateFlags : u8 {
-        const NON_DELEGATED_HT = 0x01;
-    }
-}
-
 pub struct MultilineTextInputView {
     id: ViewIdentifier,
     eh: Option<Rc<MultilineTextInputEventHandler>>,

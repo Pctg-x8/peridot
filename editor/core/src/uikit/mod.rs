@@ -1,10 +1,12 @@
 //! Non-Application related common ui kits
 
 use std::{
-    collections::{BTreeSet, HashMap, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     num::NonZeroUsize,
     rc::{Rc, Weak},
 };
+
+use libc::grantpt;
 
 use crate::{
     Application, SyncEvent, SystemLink,
@@ -331,10 +333,25 @@ pub struct ViewIdentifier(NonZeroUsize);
 impl core::fmt::Debug for ViewIdentifier {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ViewID#{}", self.0)
+        write!(f, "View#{}", self.0)
     }
 }
 impl ViewIdentifier {
+    const fn into_array_index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ViewGroupID(NonZeroUsize);
+impl core::fmt::Debug for ViewGroupID {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ViewGroup#{}", self.0)
+    }
+}
+impl ViewGroupID {
     const fn into_array_index(self) -> usize {
         self.0.get() - 1
     }
@@ -355,12 +372,20 @@ struct ViewRegistryData {
     event_handler: Weak<dyn ViewEventHandler>,
     parent: Option<ViewIdentifier>,
     children: Vec<ViewIdentifier>,
+    joining_group: Option<ViewGroupID>,
+}
+
+struct ViewGroupData {
+    participants: HashSet<ViewIdentifier>,
 }
 
 pub struct ViewRegistry {
     last_free_identifier: NonZeroUsize,
     free_identifier: BTreeSet<NonZeroUsize>,
     instances: Vec<ViewRegistryData>,
+    last_free_view_group_id: NonZeroUsize,
+    free_view_group_id: BTreeSet<NonZeroUsize>,
+    view_groups: Vec<ViewGroupData>,
 }
 impl ViewRegistry {
     pub fn new() -> Self {
@@ -368,6 +393,9 @@ impl ViewRegistry {
             last_free_identifier: unsafe { NonZeroUsize::new_unchecked(1) },
             free_identifier: BTreeSet::new(),
             instances: Vec::new(),
+            last_free_view_group_id: unsafe { NonZeroUsize::new_unchecked(1) },
+            free_view_group_id: BTreeSet::new(),
+            view_groups: Vec::new(),
         }
     }
 
@@ -387,6 +415,7 @@ impl ViewRegistry {
             event_handler: Weak::<EmptyViewEventHandler>::new(),
             parent: None,
             children: Vec::new(),
+            joining_group: None,
         });
         r
     }
@@ -406,6 +435,7 @@ impl ViewRegistry {
             event_handler: Weak::<EmptyViewEventHandler>::new(),
             parent: None,
             children: Vec::new(),
+            joining_group: None,
         });
         r
     }
@@ -429,13 +459,15 @@ impl ViewRegistry {
             event_handler: Weak::<EmptyViewEventHandler>::new(),
             parent: None,
             children: Vec::new(),
+            joining_group: None,
         });
         r
     }
 
     pub fn free(&mut self, id: ViewIdentifier) {
-        // ensure no parent owns this item
+        // ensure no parent/group owns this item
         self.detach_parent(id);
+        self.leave_group(id);
 
         if id.0.get() + 1 == self.last_free_identifier.get() {
             // returned last identifier
@@ -446,6 +478,7 @@ impl ViewRegistry {
         }
 
         self.free_identifier.insert(id.0);
+        // clear heap references
         self.instances[id.into_array_index()].event_handler = Weak::<EmptyViewEventHandler>::new();
         self.instances[id.into_array_index()].instance = None;
     }
@@ -472,6 +505,86 @@ impl ViewRegistry {
                 .children
                 .retain(|&x| x != id);
         }
+    }
+
+    pub fn alloc_group(&mut self) -> ViewGroupID {
+        if let Some(id) = self.free_view_group_id.pop_first() {
+            return ViewGroupID(id);
+        }
+
+        let r = ViewGroupID(self.last_free_view_group_id);
+        self.last_free_view_group_id = self
+            .last_free_view_group_id
+            .checked_add(1)
+            .expect("too many view groups!");
+        self.view_groups.push(ViewGroupData {
+            participants: HashSet::new(),
+        });
+        r
+    }
+
+    pub fn free_group(&mut self, id: ViewGroupID) {
+        // ensure no view participants to this view
+        for x in self.view_groups[id.into_array_index()]
+            .participants
+            .drain()
+            .collect::<Vec<_>>()
+        {
+            self.instances[x.into_array_index()].joining_group = None;
+        }
+
+        if id.0.get() + 1 == self.last_free_view_group_id.get() {
+            // returned last identifier
+            self.last_free_view_group_id =
+                unsafe { NonZeroUsize::new_unchecked(self.last_free_view_group_id.get() - 1) };
+            self.view_groups.pop();
+            return;
+        }
+
+        self.free_view_group_id.insert(id.0);
+    }
+
+    pub fn join_group(&mut self, id: ViewIdentifier, group_id: ViewGroupID) {
+        if let Some(g) = self.instances[id.into_array_index()]
+            .joining_group
+            .replace(group_id)
+        {
+            if g == group_id {
+                // same group
+                return;
+            }
+
+            self.view_groups[g.into_array_index()]
+                .participants
+                .remove(&id);
+        }
+
+        self.view_groups[group_id.into_array_index()]
+            .participants
+            .insert(id);
+    }
+
+    pub fn leave_group(&mut self, id: ViewIdentifier) {
+        let Some(g) = self.instances[id.into_array_index()].joining_group.take() else {
+            // not joining any group
+            return;
+        };
+
+        self.view_groups[g.into_array_index()]
+            .participants
+            .remove(&id);
+    }
+
+    pub fn iter_self_group_parcitipants(
+        &self,
+        id: ViewIdentifier,
+    ) -> impl Iterator<Item = ViewIdentifier> + '_ {
+        self.instances
+            .get(id.into_array_index())
+            .and_then(|x| x.joining_group)
+            .and_then(|x| self.view_groups.get(x.into_array_index()))
+            .into_iter()
+            .flat_map(|x| x.participants.iter().copied())
     }
 
     pub fn render_recursive(
@@ -766,8 +879,8 @@ pub use self::menu::{
 
 mod text_input;
 pub use self::text_input::{
-    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore,
-    RawTextInputViewCreateFlags, TextInputView, TextInputViewCore, TextInputViewIO,
+    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore, TextInputView,
+    TextInputViewCore, TextInputViewIO,
 };
 
 mod scroll;
@@ -777,3 +890,6 @@ pub mod dropdown_box;
 
 pub mod checkbox;
 pub use self::checkbox::{CheckboxView, ToggleButtonView};
+
+mod radio;
+pub use self::radio::*;

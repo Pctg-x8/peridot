@@ -48,16 +48,17 @@ use crate::{
             CompositeTreeSyncBuffer, CornerRadius, Gradient, GradientRef, TextureMappingMode,
             TextureType,
         },
-        text::{FontID, FontSet, TextLayout},
+        text::{FontID, FontSet},
     },
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
         MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
-        PopupManager, RawMountTarget, RenderChildScheduler, RenderContext, ScrollContainer,
-        SimpleButtonEventHandler, SimpleButtonView, StaticTextView, TeardownContext, TextInputView,
-        TextInputViewIO, View, ViewElementSize, ViewEventHandler, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewIdentifier,
-        ViewInitContext, ViewLocation, ViewPlacement, ViewRegistry, ViewUpdateContext,
+        PopupManager, RadioButtonView, RawMountTarget, RenderChildScheduler, RenderContext,
+        ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
+        TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize, ViewEventHandler,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegistry,
+        ViewGroupID, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement, ViewRegistry,
+        ViewUpdateContext,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -1052,208 +1053,6 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
         match unsafe { (&mut *self.get_mut().q.event_store).pop_front() } {
             None => core::task::Poll::Pending,
             Some(x) => core::task::Poll::Ready(x),
-        }
-    }
-}
-
-pub struct RadioButtonView {
-    eh: Rc<RadioButtonEventHandler>,
-}
-impl RadioButtonView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        rect: Rect<LogicalUnit>,
-        group_controller: &Rc<RadioButtonGroupController>,
-    ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            border: Some(Border {
-                thickness: 0.5,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
-                ..Default::default()
-            }),
-            corner_radius: CornerRadius::all(8.0),
-            ..Default::default()
-        });
-        let ct_mark = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(4.0), AnimatableFloat::Value(4.0)],
-            size: [
-                AnimatableFloat::Value(rect.width - 8.0),
-                AnimatableFloat::Value(rect.height - 8.0),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            corner_radius: CornerRadius::all(4.0),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: rect.left,
-            top: rect.top,
-            width: rect.width,
-            height: rect.height,
-            cursor_shape: CursorShape::Pointer,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_mark);
-
-        let eh = Rc::new_cyclic(|thisref| RadioButtonEventHandler {
-            thisref: thisref.clone(),
-            ct_root,
-            ct_mark,
-            ht_root,
-            group_controller: Rc::downgrade(group_controller),
-            current: Cell::new(false),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-        unsafe { &mut *group_controller.views.get() }.push(Rc::downgrade(&eh));
-
-        Self { eh }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-}
-
-struct RadioButtonEventHandler {
-    thisref: std::rc::Weak<RadioButtonEventHandler>,
-    ct_root: CompositeTreeRef,
-    ct_mark: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    group_controller: std::rc::Weak<RadioButtonGroupController>,
-    current: Cell<bool>,
-}
-impl HitTestTreeActionHandler for RadioButtonEventHandler {
-    fn on_pointer_enter(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context
-            .composite_tree
-            .get_mut(self.ct_root)
-            .border
-            .as_mut()
-            .expect("no border?")
-            .color = AnimatableColor::Animated {
-            from_value: [1.0, 1.0, 1.0, 0.5],
-            to_value: [1.0, 1.0, 1.0, 1.0],
-            sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_root);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context
-            .composite_tree
-            .get_mut(self.ct_root)
-            .border
-            .as_mut()
-            .expect("no border?")
-            .color = AnimatableColor::Animated {
-            from_value: [1.0, 1.0, 1.0, 1.0],
-            to_value: [1.0, 1.0, 1.0, 0.5],
-            sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
-            curve: AnimationCurve::Linear,
-            event_on_complete: None,
-        };
-        context.composite_tree.mark_dirty(self.ct_root);
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_click(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        if let Some(ref x) = self.group_controller.upgrade() {
-            x.select(&self.thisref, context.composite_tree, context.current_sec);
-        }
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-}
-impl RadioButtonEventHandler {
-    fn update_mark<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        if self.current.get() {
-            composite_tree.get_mut(self.ct_mark).opacity = AnimatableFloat::Animated {
-                from_value: 0.0,
-                to_value: 1.0,
-                sec_duration: (current_sec..current_sec + 0.1).into(),
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-        } else {
-            composite_tree.get_mut(self.ct_mark).opacity = AnimatableFloat::Animated {
-                from_value: 1.0,
-                to_value: 0.0,
-                sec_duration: (current_sec..current_sec + 0.1).into(),
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            };
-        }
-        composite_tree.mark_dirty(self.ct_mark);
-    }
-
-    fn set_current<E>(&self, value: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        if self.current.replace(value) != value {
-            // changed
-            self.update_mark(composite_tree, current_sec);
-        }
-    }
-}
-
-pub struct RadioButtonGroupController {
-    views: core::cell::UnsafeCell<Vec<std::rc::Weak<RadioButtonEventHandler>>>,
-}
-impl RadioButtonGroupController {
-    pub fn new() -> Self {
-        Self {
-            views: core::cell::UnsafeCell::new(Vec::new()),
-        }
-    }
-
-    fn select<E>(
-        &self,
-        target: &std::rc::Weak<RadioButtonEventHandler>,
-        composite_tree: &mut CompositeTree<E>,
-        current_sec: f32,
-    ) {
-        for x in unsafe { &*self.views.get() }.iter() {
-            if let Some(ref x1) = x.upgrade() {
-                x1.set_current(
-                    std::rc::Weak::ptr_eq(x, target),
-                    composite_tree,
-                    current_sec,
-                );
-            }
         }
     }
 }
@@ -2511,13 +2310,7 @@ pub struct UIKitPreviewPanePresenter {
     color_picker_backing_store: Rc<ColorPickerTestBackingStore>,
     editable_color_button: EditableColorButtonView,
     numeric_input_view_backing_store: Rc<UIKitPreviewNumericInputValueStore>,
-    dropdown_box: uikit::dropdown_box::View,
-    rgc1: Rc<RadioButtonGroupController>,
-    rgc2: Rc<RadioButtonGroupController>,
-    radio_button1: RadioButtonView,
-    radio_button2: RadioButtonView,
-    radio_button3: RadioButtonView,
-    radio_button4: RadioButtonView,
+    rgc1: ViewGroupID,
 }
 impl UIKitPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("UIKitPreview");
@@ -2550,7 +2343,7 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
-        let mut label = StaticTextView::new(
+        let label = StaticTextView::new(
             "Simple Buttons + Alert Dialog".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop),
@@ -2558,7 +2351,7 @@ impl UIKitPreviewPanePresenter {
             },
         );
         ytop += label.compute_size_without_render(ctx.system_link).height;
-        let mut test_alert_btn = SimpleButtonView::new(
+        let test_alert_btn = SimpleButtonView::new(
             "Test Alert".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(16.0, ytop),
@@ -2568,7 +2361,7 @@ impl UIKitPreviewPanePresenter {
                 "てすとめっせーじ from button\n改行もしてみる".into(),
             ))),
         );
-        let mut test_alert_btn2 = SimpleButtonView::new(
+        let test_alert_btn2 = SimpleButtonView::new(
             "Test Alert 2".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(88.0, ytop),
@@ -2593,7 +2386,7 @@ impl UIKitPreviewPanePresenter {
         let text_input_backing_store2 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
 
-        let mut label = StaticTextView::new(
+        let label = StaticTextView::new(
             "Text Input(Single Line)".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop),
@@ -2632,7 +2425,7 @@ impl UIKitPreviewPanePresenter {
 
         ytop += 8.0;
 
-        let mut label = StaticTextView::new(
+        let label = StaticTextView::new(
             "Text Input (Multiline)".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop),
@@ -2660,7 +2453,7 @@ impl UIKitPreviewPanePresenter {
         let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
             color: Cell::new(0xffffffff),
         });
-        let mut label = StaticTextView::new(
+        let label = StaticTextView::new(
             "Color Picker(Standalone)".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop),
@@ -2671,7 +2464,7 @@ impl UIKitPreviewPanePresenter {
         let (view_registry, mut rc) = ctx.make_render_context2();
         let label = view_registry.alloc(Box::new(label));
         view_registry.render_recursive(label, &mut rc, &scroll_container, kf_group);
-        let mut color_picker = ColorPickerView::new(
+        let color_picker = ColorPickerView::new(
             ctx,
             Point::new_logical(16.0, ytop),
             &Rc::downgrade(&color_picker_backing_store),
@@ -2708,7 +2501,7 @@ impl UIKitPreviewPanePresenter {
 
         let numeric_input_view_backing_store =
             Rc::new(UIKitPreviewNumericInputValueStore(Cell::new(0)));
-        let mut label = StaticTextView::new(
+        let label = StaticTextView::new(
             "Numeric Input".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop),
@@ -2732,7 +2525,7 @@ impl UIKitPreviewPanePresenter {
         view_registry.render_recursive(numeric_input_view, &mut rc, &scroll_container, kf_group);
         ytop += 20.0;
 
-        let mut label = StaticTextView::new(
+        let label = StaticTextView::new(
             "Dropdown".into(),
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop + 4.0),
@@ -2743,7 +2536,7 @@ impl UIKitPreviewPanePresenter {
         let (view_registry, mut rc) = ctx.make_render_context2();
         let label = view_registry.alloc(Box::new(label));
         view_registry.render_recursive(label, &mut rc, &scroll_container, kf_group);
-        let mut dropdown_box = uikit::dropdown_box::View::new(
+        let dropdown_box = view_registry.alloc(Box::new(uikit::dropdown_box::View::new(
             ViewPlacement {
                 location: ViewLocation::new_left_top(label_width + 16.0, ytop),
                 size: ViewElementSize::Fixed(Size::new_logical(128.0, 24.0)),
@@ -2753,11 +2546,11 @@ impl UIKitPreviewPanePresenter {
                 "DropdownBox Item 2".into(),
                 "DropdownBox Item 3 too long version".into(),
             ],
-        );
-        dropdown_box.render(&mut ctx.make_render_context(), &scroll_container);
+        )));
+        view_registry.render_recursive(dropdown_box, &mut rc, &scroll_container, kf_group);
         ytop += 28.0;
 
-        let mut toggle_button = uikit::ToggleButtonView::new(
+        let toggle_button = uikit::ToggleButtonView::new(
             ViewPlacement {
                 location: ViewLocation::new_left_top(8.0, ytop),
                 size: ViewElementSize::Automatic,
@@ -2768,7 +2561,7 @@ impl UIKitPreviewPanePresenter {
         let toggle_button = view_registry.alloc(Box::new(toggle_button));
         view_registry.render_recursive(toggle_button, &mut rc, &scroll_container, kf_group);
 
-        let mut checkbox = uikit::CheckboxView::new(ViewPlacement {
+        let checkbox = uikit::CheckboxView::new(ViewPlacement {
             location: ViewLocation::new_left_top(144.0, ytop + 4.0),
             size: ViewElementSize::Automatic,
         });
@@ -2779,61 +2572,61 @@ impl UIKitPreviewPanePresenter {
 
         ytop += 8.0;
 
-        let label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(8.0), AnimatableFloat::Value(ytop)],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "Radio Buttons/Groups".into(),
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        ctx.composite_tree
-            .add_child(scroll_container.ct_root(), label);
-        ytop += 16.0;
+        let label = StaticTextView::new(
+            "Radio Buttons/Groups".into(),
+            ViewPlacement {
+                location: ViewLocation::new_left_top(8.0, ytop),
+                size: ViewElementSize::Automatic,
+            },
+        );
+        ytop += label.compute_size_without_render(rc.system_link).height;
+        let label = view_registry.alloc(Box::new(label));
+        view_registry.render_recursive(label, &mut rc, &scroll_container, kf_group);
 
-        let rgc1 = Rc::new(RadioButtonGroupController::new());
-        let rgc2 = Rc::new(RadioButtonGroupController::new());
-        let radio_button1 = RadioButtonView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(16.0, ytop),
-                Size::new_logical(16.0, 16.0),
-            ),
-            &rgc1,
-        );
-        radio_button1.mount(ctx, &scroll_container);
-        let radio_button2 = RadioButtonView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(36.0, ytop),
-                Size::new_logical(16.0, 16.0),
-            ),
-            &rgc1,
-        );
-        radio_button2.mount(ctx, &scroll_container);
-        let radio_button3 = RadioButtonView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(56.0, ytop),
-                Size::new_logical(16.0, 16.0),
-            ),
-            &rgc1,
-        );
-        radio_button3.mount(ctx, &scroll_container);
-        let radio_button4 = RadioButtonView::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(76.0, ytop),
-                Size::new_logical(16.0, 16.0),
-            ),
-            &rgc2,
-        );
-        radio_button4.mount(ctx, &scroll_container);
+        let rgc1 = view_registry.alloc_group();
+        let radio_button1 = view_registry.construct(|id| {
+            Box::new(RadioButtonView::new(
+                id,
+                ViewPlacement {
+                    location: ViewLocation::new_left_top(16.0, ytop),
+                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
+                },
+            ))
+        });
+        view_registry.join_group(radio_button1, rgc1);
+        view_registry.render_recursive(radio_button1, &mut rc, &scroll_container, kf_group);
+        let radio_button2 = view_registry.construct(|id| {
+            Box::new(RadioButtonView::new(
+                id,
+                ViewPlacement {
+                    location: ViewLocation::new_left_top(36.0, ytop),
+                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
+                },
+            ))
+        });
+        view_registry.join_group(radio_button2, rgc1);
+        view_registry.render_recursive(radio_button2, &mut rc, &scroll_container, kf_group);
+        let radio_button3 = view_registry.construct(|id| {
+            Box::new(RadioButtonView::new(
+                id,
+                ViewPlacement {
+                    location: ViewLocation::new_left_top(56.0, ytop),
+                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
+                },
+            ))
+        });
+        view_registry.join_group(radio_button3, rgc1);
+        view_registry.render_recursive(radio_button3, &mut rc, &scroll_container, kf_group);
+        let radio_button4 = view_registry.construct(|id| {
+            Box::new(RadioButtonView::new(
+                id,
+                ViewPlacement {
+                    location: ViewLocation::new_left_top(76.0, ytop),
+                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
+                },
+            ))
+        });
+        view_registry.render_recursive(radio_button4, &mut rc, &scroll_container, kf_group);
         ytop += 24.0;
 
         scroll_container.set_content_size(
@@ -2849,13 +2642,7 @@ impl UIKitPreviewPanePresenter {
             color_picker_backing_store,
             editable_color_button,
             numeric_input_view_backing_store,
-            dropdown_box,
             rgc1,
-            rgc2,
-            radio_button1,
-            radio_button2,
-            radio_button3,
-            radio_button4,
         }
     }
 }
@@ -3534,7 +3321,7 @@ impl InspectorPanePresenter {
             let (view_registry, mut rc) = ctx.make_render_context2();
             let label = view_registry.alloc(Box::new(label));
             view_registry.render_recursive(label, &mut rc, &items_container_view, kf_group);
-            let mut shape_selector = uikit::dropdown_box::View::new(
+            let shape_selector = view_registry.alloc(Box::new(uikit::dropdown_box::View::new(
                 ViewPlacement {
                     location: ViewLocation {
                         parent_anchor: [0.0, 0.0],
@@ -3549,7 +3336,7 @@ impl InspectorPanePresenter {
                     "Cylinder".into(),
                     "Capsule".into(),
                 ],
-            );
+            )));
 
             items_container_view.set_content_size(
                 Size::new_logical(128.0 + 16.0, render_section_top + 24.0 + 12.0 + 24.0),
@@ -3590,8 +3377,8 @@ impl InspectorPanePresenter {
         for &x in eh.checkboxes.borrow_mut().iter() {
             view_registry.render_recursive(x, &mut rc, &eh.items_container_view, kf_group);
         }
-        for x in eh.dropdowns.borrow_mut().iter_mut() {
-            x.render(&mut ctx.make_render_context(), &eh.items_container_view);
+        for &x in eh.dropdowns.borrow_mut().iter() {
+            view_registry.render_recursive(x, &mut rc, &eh.items_container_view, kf_group);
         }
 
         ctx.composite_tree.add_child(
@@ -3663,7 +3450,7 @@ struct InspectorPaneEventHandler {
     items_container_view: ScrollContainer,
     numeric_input_view_ids: Vec<ViewIdentifier>,
     checkboxes: RefCell<Vec<ViewIdentifier>>,
-    dropdowns: RefCell<Vec<uikit::dropdown_box::View>>,
+    dropdowns: RefCell<Vec<ViewIdentifier>>,
     keyboard_focus_group: KeyboardFocusGroupRef,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandler {
@@ -4937,6 +4724,7 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    view_registry: &view_registry,
                     application: ApplicationMutation {
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
@@ -5061,6 +4849,7 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    view_registry: &view_registry,
                     application: ApplicationMutation {
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
@@ -5227,6 +5016,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5304,6 +5094,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5378,6 +5169,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5448,6 +5240,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5516,6 +5309,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5579,6 +5373,7 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    view_registry: &view_registry,
                     application: ApplicationMutation {
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
@@ -5646,6 +5441,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5723,6 +5519,7 @@ async fn run<'sys>(
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             system_link: &mut system_link,
                             ht_manager: &ht_manager,
+                            view_registry: &view_registry,
                             application: ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
@@ -5794,6 +5591,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5864,6 +5662,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -5934,6 +5733,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6004,6 +5804,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6092,6 +5893,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6464,6 +6266,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6541,6 +6344,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6615,6 +6419,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
@@ -6683,6 +6488,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        view_registry: &view_registry,
                         application: ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,

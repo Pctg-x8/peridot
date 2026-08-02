@@ -57,11 +57,18 @@ impl View {
             items,
         }
     }
-
-    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
+}
+impl super::View for View {
+    fn render(
+        &mut self,
+        _self_instance: &mut super::ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        _sched: &mut super::RenderChildScheduler,
+    ) -> super::ViewNewRenderElements {
         match self.entity {
             Some(_) => {
                 // TODO: reflect changes
+                super::ViewNewRenderElements::EMPTY
             }
             None => {
                 // first render
@@ -203,15 +210,17 @@ impl View {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-                ctx.composite_tree.add_child(parent.ct_root(), eh.ct_root);
-                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
-
                 self.entity = Some(eh);
+                super::ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..super::ViewNewRenderElements::EMPTY
+                }
             }
         }
     }
 
-    pub fn teardown(&mut self, ctx: &mut TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(e) = self.entity.take() else {
             // not rendered
             return;
