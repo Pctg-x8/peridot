@@ -378,7 +378,8 @@ impl RawTextInputViewEventHandler {
     ) {
         tracing::debug!(?code, "keydown");
 
-        let update_mask = match code {
+        let mut update_mask = self.clear_preedit();
+        update_mask |= match code {
             // cursor operations
             KeyInputCode::LeftArrow => {
                 self.move_cursor_to_left(modifier.contains(ModifierKey::SHIFT))
@@ -414,7 +415,8 @@ impl RawTextInputViewEventHandler {
             return;
         }
 
-        let update_mask = if self.has_selection() {
+        let mut update_mask = self.clear_preedit();
+        update_mask |= if self.has_selection() {
             self.replace_selection_by_char(ch)
         } else {
             self.insert_char_at_cursor(ch)
@@ -437,6 +439,8 @@ impl RawTextInputViewEventHandler {
         new_committed_string: Option<&str>,
         new_preedit_string: Option<&str>,
     ) {
+        tracing::trace!("ime_state_changes");
+
         let selection_range = self.selection_range();
         if !selection_range.is_empty() {
             // remove selection first
@@ -449,76 +453,72 @@ impl RawTextInputViewEventHandler {
 
         // TODO: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
         // 他PFではどうなのかは不明
-        let has_preedit_text =
-            self.preedit_range_start_bytes.get() != self.preedit_range_end_bytes.get();
+        let mut update_mask = self.clear_preedit();
 
-        if has_preedit_text && let Some(new_preedit_string) = new_preedit_string {
-            if !new_preedit_string.is_empty() {
-                // replace preedit
-                self.content.borrow_mut().replace_range(
-                    self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get(),
-                    new_preedit_string,
-                );
-                self.preedit_range_start_bytes
-                    .set(self.preedit_range_start_bytes.get());
-                self.preedit_range_end_bytes
-                    .set(self.preedit_range_start_bytes.get() + new_preedit_string.len());
-                self.cursor_pos_bytes
-                    .set(self.preedit_range_end_bytes.get());
-            } else {
-                // clear preedit
-                self.content.borrow_mut().replace_range(
-                    self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get(),
-                    "",
-                );
-                self.preedit_range_start_bytes
-                    .set(self.preedit_range_start_bytes.get());
-                self.preedit_range_end_bytes
-                    .set(self.preedit_range_start_bytes.get());
-                self.cursor_pos_bytes
-                    .set(self.preedit_range_start_bytes.get());
-            }
-        }
+        if let Some(new_committed_string) = new_committed_string {
+            let cursor_pos = self.cursor_pos_bytes.get();
+            tracing::trace!(?new_committed_string, cursor_pos, "insert committed");
 
-        if let Some(new_committed_string) = new_committed_string
-            && !new_committed_string.is_empty()
-        {
             // insert committed
             self.content
                 .borrow_mut()
-                .insert_str(self.cursor_pos_bytes.get(), new_committed_string);
+                .insert_str(cursor_pos, new_committed_string);
             self.cursor_pos_bytes
-                .set(self.cursor_pos_bytes.get() + new_committed_string.len());
+                .update(|x| x + new_committed_string.len());
+            update_mask |= TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR;
         }
 
-        if !has_preedit_text
-            && let Some(new_preedit_string) = new_preedit_string
-            && !new_preedit_string.is_empty()
-        {
+        if let Some(new_preedit_string) = new_preedit_string {
+            let cursor_pos = self.cursor_pos_bytes.get();
+            tracing::trace!(?new_preedit_string, cursor_pos, "insert preedit");
+
             // insert preedit
             self.content
                 .borrow_mut()
-                .insert_str(self.cursor_pos_bytes.get(), new_preedit_string);
-            self.preedit_range_start_bytes
-                .set(self.cursor_pos_bytes.get());
-            self.preedit_range_end_bytes
-                .set(self.cursor_pos_bytes.get() + new_preedit_string.len());
-            self.cursor_pos_bytes
-                .set(self.preedit_range_end_bytes.get());
+                .insert_str(cursor_pos, new_preedit_string);
+            let new_preedit_range = cursor_pos..cursor_pos + new_preedit_string.len();
+
+            self.preedit_range_start_bytes.set(new_preedit_range.start);
+            self.preedit_range_end_bytes.set(new_preedit_range.end);
+            self.cursor_pos_bytes.set(new_preedit_range.end);
+            update_mask |= TextInputViewUpdateMask::TEXT
+                | TextInputViewUpdateMask::CURSOR
+                | TextInputViewUpdateMask::PREEDIT;
         }
 
         // no selection in editing
         self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
 
         self.update_views(
-            TextInputViewUpdateMask::TEXT
-                | TextInputViewUpdateMask::CURSOR
-                | TextInputViewUpdateMask::PREEDIT,
+            update_mask,
             context.composite_tree,
             context.system_link,
             context.ht_manager,
             context.current_sec,
         );
+    }
+
+    pub fn clear_preedit(&self) -> TextInputViewUpdateMask {
+        let current_preedit_range =
+            self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
+        if current_preedit_range.is_empty() {
+            // not in preediting
+            return TextInputViewUpdateMask::empty();
+        }
+
+        tracing::trace!(?current_preedit_range, "clear preedit");
+
+        self.content
+            .borrow_mut()
+            .replace_range(current_preedit_range.clone(), "");
+
+        self.preedit_range_end_bytes
+            .set(current_preedit_range.start);
+        self.cursor_pos_bytes.set(current_preedit_range.start);
+
+        TextInputViewUpdateMask::TEXT
+            | TextInputViewUpdateMask::PREEDIT
+            | TextInputViewUpdateMask::CURSOR
     }
 
     #[inline(always)]
@@ -754,9 +754,9 @@ impl RawTextInputViewEventHandler {
                 .border_color(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 0.5],
                     to_value: [1.0, 1.0, 1.0, 1.0],
-                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                 })
                 .apply();
             composite_tree
@@ -769,10 +769,9 @@ impl RawTextInputViewEventHandler {
                 .border_color(AnimatableColor::Animated {
                     from_value: [1.0, 1.0, 1.0, 1.0],
                     to_value: [1.0, 1.0, 1.0, 0.5],
-
-                    sec_duration: (current_sec..current_sec + 0.1).into(),
                     curve: AnimationCurve::Linear,
                     event_on_complete: None,
+                    sec_duration: (current_sec..current_sec + 0.1).into(),
                 })
                 .apply();
             composite_tree
@@ -797,7 +796,6 @@ impl RawTextInputViewEventHandler {
         &self,
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
-        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
     ) {
         let tw = TextLayout::measure_total_advances(
             &self.content.borrow()[..self.cursor_pos_bytes.get()],
@@ -806,7 +804,6 @@ impl RawTextInputViewEventHandler {
         );
 
         let mut text_scroll_occured = false;
-        let cursor_rect = composite_tree.get_mut(self.ct_cursor);
         let mut cursor_display_x = tw + self.content_h_offset.get();
         if cursor_display_x < 0.0 {
             // 範囲外になる(左すぎ cursor_display_xが0になるようにスクロール量を調整)
@@ -823,34 +820,18 @@ impl RawTextInputViewEventHandler {
             text_scroll_occured = true;
             cursor_display_x = self.content_visible_width - 2.0;
         }
-        cursor_rect.offset[0] = AnimatableFloat::Value(cursor_display_x);
 
-        #[cfg(feature = "wayland")]
-        let (sx, sy) = ht_manager.translate_tree_local_to_root_autoroot(
-            self.ht_root,
-            2.0 + cursor_display_x,
-            2.0,
-        );
-        #[cfg(feature = "wayland")]
-        system_link.set_ime_cursor_rect(crate::utils::Rect::from_lt_size(
-            Point::new_logical(sx, sy),
-            crate::utils::Size::new_logical(2.0, 16.0),
-        ));
-        #[cfg(feature = "wayland")]
-        system_link.ime_set_surrounding_text(
-            &self.content.borrow(),
-            self.cursor_pos_bytes.get(),
-            self.selection_begin_bytes.get(),
-        );
-        #[cfg(feature = "wayland")]
-        system_link.ime_commit();
-
-        composite_tree.mark_dirty(self.ct_cursor);
+        composite_tree
+            .begin_mod_chain(self.ct_cursor)
+            .x_imm(cursor_display_x)
+            .apply();
 
         if text_scroll_occured {
-            composite_tree.get_mut(self.ct_text).offset[0] =
-                AnimatableFloat::Value(self.content_h_offset.get());
-            composite_tree.mark_dirty(self.ct_text);
+            composite_tree
+                .begin_mod_chain(self.ct_text)
+                .x_imm(self.content_h_offset.get())
+                .apply();
+
             self.update_preedit_underline(composite_tree, system_link);
             self.update_selection(composite_tree, system_link);
         }
@@ -980,7 +961,7 @@ impl RawTextInputViewEventHandler {
         }
         if mask.intersects(TextInputViewUpdateMask::CURSOR | TextInputViewUpdateMask::TEXT) {
             // needs update cursor position and selection highlight
-            self.update_cursor_position(composite_tree, system_link, ht_manager);
+            self.update_cursor_position(composite_tree, system_link);
             self.update_selection(composite_tree, system_link);
         }
         if mask.contains(TextInputViewUpdateMask::PREEDIT) {
@@ -991,7 +972,7 @@ impl RawTextInputViewEventHandler {
         }
 
         if Self::should_sync_selection_native(mask) {
-            self.sync_selection_native();
+            self.sync_selection_native(ht_manager, system_link);
         }
     }
 
@@ -1001,11 +982,17 @@ impl RawTextInputViewEventHandler {
         // どっちにも影響する
         #[cfg(windows)]
         return mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR);
-        #[cfg(not(windows))]
+
+        // 両方に影響する
+        #[cfg(feature = "wayland")]
+        return mask.intersects(TextInputViewUpdateMask::TEXT | TextInputViewUpdateMask::CURSOR);
+
+        // fallback for unsupported platforms
+        #[allow(unreachable_code)]
         return false;
     }
 
-    fn sync_selection_native(&self) {
+    fn sync_selection_native(&self, ht_manager: &HitTestTreeManager, system_link: &SystemLink) {
         #[cfg(windows)]
         let selection_begin_bytes = self.selection_begin_bytes.get();
         #[cfg(windows)]
@@ -1029,6 +1016,32 @@ impl RawTextInputViewEventHandler {
             selection_begin_acp.min(cursor_pos_acp) as _,
             selection_begin_acp.max(cursor_pos_acp) as _,
         );
+
+        #[cfg(feature = "wayland")]
+        let cursor_display_x = TextLayout::measure_total_advances(
+            &self.content.borrow()[..self.cursor_pos_bytes.get()],
+            FontID::UIDefault,
+            system_link.font_set(),
+        ) + self.content_h_offset.get();
+        #[cfg(feature = "wayland")]
+        let (sx, sy) = ht_manager.translate_tree_local_to_root_autoroot(
+            self.ht_root,
+            2.0 + cursor_display_x,
+            2.0,
+        );
+        #[cfg(feature = "wayland")]
+        system_link.set_ime_cursor_rect(crate::utils::Rect::from_lt_size(
+            Point::new_logical(sx, sy),
+            crate::utils::Size::new_logical(2.0, 16.0),
+        ));
+        #[cfg(feature = "wayland")]
+        system_link.ime_set_surrounding_text(
+            &self.content.borrow(),
+            self.cursor_pos_bytes.get(),
+            self.selection_begin_bytes.get(),
+        );
+        #[cfg(feature = "wayland")]
+        system_link.ime_commit();
     }
 
     #[inline(always)]
