@@ -1,7 +1,5 @@
-use core::cell::{Cell, OnceCell};
+use core::cell::Cell;
 use std::rc::Rc;
-
-use bedrock::vk::fns;
 
 use crate::{
     input::{
@@ -23,8 +21,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        MountTarget, RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
-        ViewElementSize, ViewNewRenderElements, ViewPlacement,
+        RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
+        ViewInstanceModifier, ViewNewRenderElements, ViewPlacement,
     },
     utils::{Size, range_helper::range_from_len},
 };
@@ -79,6 +77,7 @@ impl ToggleButtonView {
 impl View for ToggleButtonView {
     fn render(
         &mut self,
+        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -311,6 +310,7 @@ impl CheckboxView {
 impl View for CheckboxView {
     fn render(
         &mut self,
+        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

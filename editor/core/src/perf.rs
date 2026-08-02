@@ -500,21 +500,17 @@ pub fn init_profiler() {
         &time::OffsetDateTime::now_utc()
             .format(
                 &[
-                    time::format_description::BorrowedFormatItem::Literal(b".profile-data/"),
+                    time::format_description::BorrowedFormatItem::StringLiteral(".profile-data/"),
                     time::format_description::BorrowedFormatItem::Component(
-                        time::format_description::Component::Year(
-                            time::format_description::modifier::Year::default()
-                                .with_padding(time::format_description::modifier::Padding::Zero)
-                                .with_repr(time::format_description::modifier::YearRepr::Full),
+                        time::format_description::Component::IsoYearFullStandardRange(
+                            time::format_description::modifier::IsoYearFullStandardRange::default()
+                                .with_padding(time::format_description::modifier::Padding::Zero),
                         ),
                     ),
                     time::format_description::BorrowedFormatItem::Component(
-                        time::format_description::Component::Month(
-                            time::format_description::modifier::Month::default()
-                                .with_padding(time::format_description::modifier::Padding::Zero)
-                                .with_repr(
-                                    time::format_description::modifier::MonthRepr::Numerical,
-                                ),
+                        time::format_description::Component::MonthNumerical(
+                            time::format_description::modifier::MonthNumerical::default()
+                                .with_padding(time::format_description::modifier::Padding::Zero),
                         ),
                     ),
                     time::format_description::BorrowedFormatItem::Component(
@@ -523,10 +519,10 @@ pub fn init_profiler() {
                                 .with_padding(time::format_description::modifier::Padding::Zero),
                         ),
                     ),
-                    time::format_description::BorrowedFormatItem::Literal(b"-"),
+                    time::format_description::BorrowedFormatItem::StringLiteral("-"),
                     time::format_description::BorrowedFormatItem::Component(
-                        time::format_description::Component::Hour(
-                            time::format_description::modifier::Hour::default()
+                        time::format_description::Component::Hour24(
+                            time::format_description::modifier::Hour24::default()
                                 .with_padding(time::format_description::modifier::Padding::Zero),
                         ),
                     ),
@@ -542,7 +538,7 @@ pub fn init_profiler() {
                                 .with_padding(time::format_description::modifier::Padding::Zero),
                         ),
                     ),
-                    time::format_description::BorrowedFormatItem::Literal(b".bin"),
+                    time::format_description::BorrowedFormatItem::StringLiteral(".bin"),
                 ][..],
             )
             .expect("time.format"),

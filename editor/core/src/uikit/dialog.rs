@@ -1,27 +1,24 @@
-use std::collections::VecDeque;
-
 use crate::{
     Event, SyncEvent, WindowHandle,
-    input::{KeyboardFocusGroupRef, hittest::HitTestTreeManager},
+    input::hittest::HitTestTreeManager,
     rendering::{
         composite::{CompositeRectTextHorizontalAlignment, CompositeTree},
         text::{FontID, TextLayout},
     },
     uikit::{
-        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID, RawMountTarget,
-        RenderChildScheduler, RenderContext, SimpleButtonConstantEventHandler, SimpleButtonView,
-        StaticTextView, TeardownContext, View, ViewElementSize, ViewInitContext, ViewLocation,
-        ViewNewRenderElements, ViewPlacement, popup::ViewHierarchyMut,
+        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
+        SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView, TeardownContext,
+        ViewElementSize, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
+        ViewRegistry,
     },
     utils::{Point, Size},
 };
 
 pub struct AlertDialogPresenter {
     id: PopupID,
-    mask: OverlayPopupBasicMaskView,
-    frame: OverlayPopupBasicFrameView,
-    msg: StaticTextView,
-    confirm_button: SimpleButtonView,
+    root_view_id: ViewIdentifier,
+    frame: ViewIdentifier,
+    confirm_button: ViewIdentifier,
 }
 impl AlertDialogPresenter {
     const AROUND_PADDING: f32 = 16.0;
@@ -52,7 +49,6 @@ impl AlertDialogPresenter {
         ));
 
         let confirm_button = SimpleButtonView::new(
-            ctx,
             "OK".into(),
             ViewPlacement {
                 location: ViewLocation {
@@ -81,53 +77,54 @@ impl AlertDialogPresenter {
         msg.allow_wrapping();
         msg.set_horizontal_alignment(CompositeRectTextHorizontalAlignment::Middle);
 
+        let mask = ctx.view_registry.alloc(Box::new(mask));
+        let frame = ctx.view_registry.alloc(Box::new(frame));
+        let msg = ctx.view_registry.alloc(Box::new(msg));
+        let confirm_button = ctx.view_registry.alloc(Box::new(confirm_button));
+        ctx.view_registry.set_parent(frame, mask);
+        ctx.view_registry.set_parent(msg, frame);
+        ctx.view_registry.set_parent(confirm_button, frame);
+
         Self {
             id: popup_id,
-            mask,
+            root_view_id: mask,
             frame,
-            msg,
             confirm_button,
         }
     }
 }
 impl Popup for AlertDialogPresenter {
-    fn view_hierarchy_mut<'a>(&'a mut self) -> ViewHierarchyMut<'a> {
-        ViewHierarchyMut {
-            element: &mut self.mask,
-            children: vec![ViewHierarchyMut {
-                element: &mut self.frame,
-                children: vec![
-                    ViewHierarchyMut {
-                        element: &mut self.msg,
-                        children: vec![],
-                    },
-                    ViewHierarchyMut {
-                        element: &mut self.confirm_button,
-                        children: vec![],
-                    },
-                ],
-            }],
-        }
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
     }
 
     fn close(
         &mut self,
+        view_registry: &mut ViewRegistry,
         composite_tree: &mut CompositeTree<SyncEvent>,
         _ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     ) {
         // disable button interaction while animating
-        self.confirm_button.set_interactive(false);
+        view_registry
+            .instance_mut::<SimpleButtonView>(self.confirm_button)
+            .expect("query failed")
+            .set_interactive(false);
 
-        self.mask.play_close_animation(composite_tree, current_sec);
-        self.frame.play_close_animation(
-            composite_tree,
-            current_sec,
-            SyncEvent::PopupUnmount { id: self.id },
-        );
+        view_registry
+            .instance::<OverlayPopupBasicMaskView>(self.root_view_id)
+            .expect("query failed")
+            .play_close_animation(composite_tree, current_sec);
+        view_registry
+            .instance::<OverlayPopupBasicFrameView>(self.frame)
+            .expect("query failed")
+            .play_close_animation(
+                composite_tree,
+                current_sec,
+                SyncEvent::PopupUnmount { id: self.id },
+            );
     }
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {
-        self.view_hierarchy_mut().teardown_all(ctx);
-    }
+    #[allow(unused_variables)]
+    fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }

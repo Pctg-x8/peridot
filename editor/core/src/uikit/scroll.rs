@@ -222,7 +222,7 @@ impl ScrollContainer {
         ctx.composite_tree.add_child(ct_root, ct_content_root);
         ctx.ht_manager.add_child(ht_root, ht_content_root);
 
-        let view_id = ctx.view_registry.alloc();
+        let view_id = ctx.view_registry.alloc_id_only();
         let eh = Rc::new(ScrollContainerEventHandler {
             view_id,
             ct_content_root,

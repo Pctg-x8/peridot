@@ -30,7 +30,6 @@ pub struct RenderContext<'env, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub ht_manager: &'env mut HitTestTreeManager<'h>,
     pub keyboard_focus_registry: &'env mut KeyboardFocusTokenRegistry,
-    pub view_registry: &'env mut ViewRegistry,
     pub current_sec: f32,
     pub system_link: &'env SystemLink<'env>,
     pub main_thread_texture_id_issuer: &'env mut MainThreadTextureIDIssuer,
@@ -92,7 +91,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
                 keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
                 current_sec: self.mount_context.current_sec,
             },
-            view_registry: &mut self.view_registry,
             view_feedback_subscription_delayed_ops: &mut self
                 .view_feedback_subscription_delayed_ops,
         }
@@ -103,12 +101,28 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             composite_tree: &mut self.mount_context.composite_tree,
             ht_manager: &mut self.mount_context.ht_manager,
             keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-            view_registry: &mut self.view_registry,
             current_sec: self.mount_context.current_sec,
             system_link: self.system_link,
             main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
             application: self.application,
         }
+    }
+
+    pub const fn make_render_context2<'env>(
+        &'env mut self,
+    ) -> (&'env mut ViewRegistry, RenderContext<'env, 'h>) {
+        (
+            self.view_registry,
+            RenderContext {
+                composite_tree: &mut self.mount_context.composite_tree,
+                ht_manager: &mut self.mount_context.ht_manager,
+                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+                current_sec: self.mount_context.current_sec,
+                system_link: self.system_link,
+                main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
+                application: self.application,
+            },
+        )
     }
 
     pub const fn derive<'a2>(&'a2 mut self) -> ViewInitContext<'a2, 'h> {
@@ -167,7 +181,6 @@ impl<'a, 'h> core::ops::DerefMut for ViewUpdateContext<'a, 'h> {
 
 pub struct TeardownContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
-    pub view_registry: &'a mut ViewRegistry,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
 }
 impl<'a, 'h> TeardownContext<'a, 'h> {
@@ -299,10 +312,11 @@ impl ViewNewRenderElements {
 }
 
 /// Viewのライフサイクル
-pub trait View {
+pub trait View: core::any::Any {
     /// Render(初回マウント/更新)時に呼ばれる
     fn render(
         &mut self,
+        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements;
@@ -320,6 +334,250 @@ impl core::fmt::Debug for ViewIdentifier {
         write!(f, "ViewID#{}", self.0)
     }
 }
+impl ViewIdentifier {
+    const fn into_array_index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
+pub struct ViewInstanceModifier<'a> {
+    event_handler_ref: &'a mut Weak<dyn ViewEventHandler>,
+}
+impl ViewInstanceModifier<'_> {
+    #[inline(always)]
+    pub fn bind_event_handler(&mut self, handler: &std::rc::Rc<impl ViewEventHandler + 'static>) {
+        *self.event_handler_ref = Rc::downgrade(handler) as _;
+    }
+}
+
+struct ViewRegistryData {
+    instance: Option<Box<dyn View>>,
+    event_handler: Weak<dyn ViewEventHandler>,
+    parent: Option<ViewIdentifier>,
+    children: Vec<ViewIdentifier>,
+}
+
+pub struct ViewRegistry {
+    last_free_identifier: NonZeroUsize,
+    free_identifier: BTreeSet<NonZeroUsize>,
+    instances: Vec<ViewRegistryData>,
+}
+impl ViewRegistry {
+    pub fn new() -> Self {
+        Self {
+            last_free_identifier: unsafe { NonZeroUsize::new_unchecked(1) },
+            free_identifier: BTreeSet::new(),
+            instances: Vec::new(),
+        }
+    }
+
+    #[deprecated = "use View trait based lifecycle management"]
+    pub fn alloc_id_only(&mut self) -> ViewIdentifier {
+        if let Some(id) = self.free_identifier.pop_first() {
+            return ViewIdentifier(id);
+        }
+
+        let r = ViewIdentifier(self.last_free_identifier);
+        self.last_free_identifier = self
+            .last_free_identifier
+            .checked_add(1)
+            .expect("too many views!");
+        self.instances.push(ViewRegistryData {
+            instance: None,
+            event_handler: Weak::<EmptyViewEventHandler>::new(),
+            parent: None,
+            children: Vec::new(),
+        });
+        r
+    }
+
+    pub fn alloc(&mut self, instance: Box<impl View + 'static>) -> ViewIdentifier {
+        if let Some(id) = self.free_identifier.pop_first() {
+            return ViewIdentifier(id);
+        }
+
+        let r = ViewIdentifier(self.last_free_identifier);
+        self.last_free_identifier = self
+            .last_free_identifier
+            .checked_add(1)
+            .expect("too many views!");
+        self.instances.push(ViewRegistryData {
+            instance: Some(instance as _),
+            event_handler: Weak::<EmptyViewEventHandler>::new(),
+            parent: None,
+            children: Vec::new(),
+        });
+        r
+    }
+
+    pub fn construct(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier {
+        if let Some(id) = self.free_identifier.pop_first() {
+            return ViewIdentifier(id);
+        }
+
+        let r = ViewIdentifier(self.last_free_identifier);
+        let instance = ctor(r);
+        self.last_free_identifier = self
+            .last_free_identifier
+            .checked_add(1)
+            .expect("too many views!");
+        self.instances.push(ViewRegistryData {
+            instance: Some(instance),
+            event_handler: Weak::<EmptyViewEventHandler>::new(),
+            parent: None,
+            children: Vec::new(),
+        });
+        r
+    }
+
+    pub fn free(&mut self, id: ViewIdentifier) {
+        // ensure no parent owns this item
+        self.detach_parent(id);
+
+        if id.0.get() + 1 == self.last_free_identifier.get() {
+            // returned last identifier
+            self.last_free_identifier =
+                unsafe { NonZeroUsize::new_unchecked(self.last_free_identifier.get() - 1) };
+            self.instances.pop();
+            return;
+        }
+
+        self.free_identifier.insert(id.0);
+        self.instances[id.into_array_index()].event_handler = Weak::<EmptyViewEventHandler>::new();
+        self.instances[id.into_array_index()].instance = None;
+    }
+
+    pub fn set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
+        if let Some(p) = self.instances[id.into_array_index()].parent.replace(parent) {
+            if p == parent {
+                // same parent
+                return;
+            }
+
+            // unlink from old parent
+            self.instances[p.into_array_index()]
+                .children
+                .retain(|&x| x != id);
+        }
+
+        self.instances[parent.into_array_index()].children.push(id);
+    }
+
+    pub fn detach_parent(&mut self, id: ViewIdentifier) {
+        if let Some(p) = self.instances[id.into_array_index()].parent.take() {
+            self.instances[p.into_array_index()]
+                .children
+                .retain(|&x| x != id);
+        }
+    }
+
+    pub fn render_recursive(
+        &mut self,
+        id: ViewIdentifier,
+        ctx: &mut RenderContext,
+        mount_on: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
+        let mut scheduled_renders = VecDeque::new();
+        scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), id));
+        while let Some((mt, v)) = scheduled_renders.pop_front() {
+            let Some(data) = self.instances.get_mut(v.into_array_index()) else {
+                // no data set
+                continue;
+            };
+            let Some(ref mut instance) = data.instance else {
+                // no instance associated
+                continue;
+            };
+
+            let mut sched = RenderChildScheduler::new();
+            instance
+                .render(
+                    &mut ViewInstanceModifier {
+                        event_handler_ref: &mut data.event_handler,
+                    },
+                    ctx,
+                    &mut sched,
+                )
+                .mount_on(&mt, keyboard_focus_group, &mut ctx.make_mount_context());
+            if let Some(mt) = sched.mount_on {
+                scheduled_renders.extend(data.children.iter().map(|&x| (mt.clone(), x)));
+            }
+        }
+    }
+
+    pub fn teardown_recursive(&mut self, id: ViewIdentifier, ctx: &mut TeardownContext) {
+        // 逆向きに(深いものから)teardownしていく
+        let mut scheduled_teardowns = Vec::new();
+        let mut descend_stack = VecDeque::new();
+        descend_stack.push_back(id);
+        while let Some(id) = descend_stack.pop_front() {
+            scheduled_teardowns.push(id);
+            descend_stack.extend(
+                self.instances
+                    .get(id.into_array_index())
+                    .into_iter()
+                    .flat_map(|x| x.children.iter().copied()),
+            );
+        }
+
+        for v in scheduled_teardowns {
+            if let Some(ref mut instance) = self.instances[v.into_array_index()].instance {
+                instance.teardown(ctx);
+            }
+        }
+    }
+
+    pub fn instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        (self
+            .instances
+            .get(id.into_array_index())?
+            .instance
+            .as_ref()?
+            .as_ref() as &dyn core::any::Any)
+            .downcast_ref::<T>()
+    }
+
+    pub fn instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        (self
+            .instances
+            .get_mut(id.into_array_index())?
+            .instance
+            .as_mut()?
+            .as_mut() as &mut dyn core::any::Any)
+            .downcast_mut::<T>()
+    }
+
+    pub fn set_event_handler(
+        &mut self,
+        id: ViewIdentifier,
+        handler: &Rc<impl ViewEventHandler + 'static>,
+    ) {
+        self.instances[id.into_array_index()].event_handler = Rc::downgrade(handler) as _;
+    }
+
+    pub fn call_update(&self, id: ViewIdentifier, context: &mut ViewUpdateContext) {
+        let Some(eh) = self.instances[id.into_array_index()]
+            .event_handler
+            .upgrade()
+        else {
+            return;
+        };
+
+        eh.update(context);
+    }
+}
+
+pub trait ViewEventHandler {
+    #[allow(unused_variables)]
+    fn update(&self, context: &mut ViewUpdateContext) {}
+}
+
+struct EmptyViewEventHandler;
+impl ViewEventHandler for EmptyViewEventHandler {}
 
 pub enum ViewFeedbackRegistryDelayedOps {
     SubscribePerformAtomic(Weak<dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>>),
@@ -438,73 +696,6 @@ impl ViewFeedbackRegistry {
     }
 }
 
-pub struct ViewRegistry {
-    last_free_identifier: NonZeroUsize,
-    free_identifier: BTreeSet<NonZeroUsize>,
-    event_handlers: Vec<Weak<dyn ViewEventHandler>>,
-}
-impl ViewRegistry {
-    pub fn new() -> Self {
-        Self {
-            last_free_identifier: unsafe { NonZeroUsize::new_unchecked(1) },
-            free_identifier: BTreeSet::new(),
-            event_handlers: Vec::new(),
-        }
-    }
-
-    pub fn alloc(&mut self) -> ViewIdentifier {
-        if let Some(id) = self.free_identifier.pop_first() {
-            return ViewIdentifier(id);
-        }
-
-        let r = ViewIdentifier(self.last_free_identifier);
-        self.last_free_identifier = self
-            .last_free_identifier
-            .checked_add(1)
-            .expect("too many views!");
-        self.event_handlers
-            .push(Weak::<EmptyViewEventHandler>::new());
-        r
-    }
-
-    pub fn free(&mut self, id: ViewIdentifier) {
-        if id.0.get() + 1 == self.last_free_identifier.get() {
-            // returned last identifier
-            self.last_free_identifier =
-                unsafe { NonZeroUsize::new_unchecked(self.last_free_identifier.get() - 1) };
-            self.event_handlers.pop();
-            return;
-        }
-
-        self.free_identifier.insert(id.0);
-        self.event_handlers[id.0.get() - 1] = Weak::<EmptyViewEventHandler>::new();
-    }
-
-    pub fn set_event_handler(
-        &mut self,
-        id: ViewIdentifier,
-        handler: &Rc<impl ViewEventHandler + 'static>,
-    ) {
-        self.event_handlers[id.0.get() - 1] = Rc::downgrade(handler) as _;
-    }
-
-    pub fn call_update(&self, id: ViewIdentifier, context: &mut ViewUpdateContext) {
-        let Some(eh) = self.event_handlers[id.0.get() - 1].upgrade() else {
-            return;
-        };
-
-        eh.update(context);
-    }
-}
-
-pub trait ViewEventHandler {
-    #[allow(unused_variables)]
-    fn update(&self, context: &mut ViewUpdateContext) {}
-}
-
-struct EmptyViewEventHandler;
-impl ViewEventHandler for EmptyViewEventHandler {}
-
 pub struct ViewFeedbackContext<'a, 'h> {
     pub application: &'a Application,
     pub view_init_context: ViewInitContext<'a, 'h>,
@@ -575,8 +766,8 @@ pub use self::menu::{
 
 mod text_input;
 pub use self::text_input::{
-    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore, RawTextInputView,
-    RawTextInputViewCreateFlags, RawTextInputViewEventHandler, TextInputView,
+    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore,
+    RawTextInputViewCreateFlags, TextInputView, TextInputViewCore, TextInputViewIO,
 };
 
 mod scroll;

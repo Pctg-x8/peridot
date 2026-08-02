@@ -466,7 +466,6 @@ impl<'a, 'h> RedockingContext<'a, 'h> {
                 keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
                 current_sec: self.view_init_ctx.mount_context.current_sec,
             },
-            view_registry: self.view_init_ctx.view_registry,
             view_feedback_subscription_delayed_ops: self
                 .view_init_ctx
                 .view_feedback_subscription_delayed_ops,
@@ -1341,7 +1340,7 @@ impl DockedPaneSplitterView {
         });
 
         let eh = Rc::new(DockedPaneSplitterEventHandler {
-            view_id: ctx.view_registry.alloc(),
+            view_id: ctx.view_registry.alloc_id_only(),
             dir,
             controlling_dock: Cell::new(controlling_dock),
             ct_root,
@@ -1575,7 +1574,7 @@ impl PaneGroupView {
 
         let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let controller = Rc::new_cyclic(|wgc| PaneGroupViewController {
-            view_id: ctx.view_registry.alloc(),
+            view_id: ctx.view_registry.alloc_id_only(),
             ct_root,
             ht_root,
             ct_content_root,

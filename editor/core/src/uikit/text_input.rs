@@ -9,7 +9,7 @@ use crate::{
     Application, ApplicationMutation, Event, LogicFiberEventDispatcher, SystemLink,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
-        KeyInputEventHandler, KeyboardFocusGroupRef, ModifierKey, PointerInputUnit,
+        KeyInputEventHandler, ModifierKey, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
             HitTestTreeRef, HitTestTreeScreenRepositionHandler, PointerActionArgs,
@@ -26,8 +26,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MountContext, MountTarget, RenderContext, ViewEventHandler, ViewIdentifier,
-        ViewInitContext, ViewUpdateContext,
+        RenderChildScheduler, RenderContext, View, ViewEventHandler, ViewIdentifier,
+        ViewInstanceModifier, ViewNewRenderElements, ViewUpdateContext,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32,
@@ -35,29 +35,24 @@ use crate::{
     },
 };
 
-bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct RawTextInputViewCreateFlags : u8 {
-        /// HitTestを外部ツリーに移譲しない（常にRawTextInputViewでポインタ入力を扱う）
-        const NON_DELEGATED_HT = 1 << 0;
-    }
+pub trait TextInputViewIO {
+    fn text(&self, requester: ViewIdentifier, app: &Application) -> String;
+    fn set_text(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, text: String);
 }
 
-pub struct RawTextInputView {
+pub struct TextInputViewCore {
     ct_text_clip: CompositeTreeRef,
-    eh: Rc<RawTextInputViewEventHandler>,
-    first_rendered: bool,
+    eh: Rc<TextInputViewCoreEventHandler>,
 }
-impl RawTextInputView {
+impl TextInputViewCore {
     pub fn new(
-        ctx: &mut ViewInitContext,
+        ctx: &mut RenderContext,
         rect: Rect<LogicalUnit>,
-        init_content: String,
         keyboard_focus_token: FocusTargetToken,
-        flags: RawTextInputViewCreateFlags,
         delegated_view_id: ViewIdentifier,
+        io: std::rc::Weak<dyn TextInputViewIO>,
     ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             size: [
                 AnimatableFloat::Value(rect.width),
@@ -75,7 +70,7 @@ impl RawTextInputView {
             }),
             ..Default::default()
         });
-        let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_text_clip = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             size: [
                 AnimatableFloat::Value(rect.width - 4.0),
@@ -90,11 +85,11 @@ impl RawTextInputView {
             }),
             ..Default::default()
         });
-        let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_text = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             ..Default::default()
         });
-        let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_cursor = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
@@ -103,7 +98,7 @@ impl RawTextInputView {
             opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
-        let ct_preedit_underline = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_preedit_underline = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(14.0)],
@@ -112,7 +107,7 @@ impl RawTextInputView {
             opacity: AnimatableFloat::Value(0.0),
             ..Default::default()
         });
-        let ct_selection_bg = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_selection_bg = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(16.0)],
             has_bitmap: true,
@@ -127,7 +122,8 @@ impl RawTextInputView {
             .add_child(ct_text_clip, ct_preedit_underline);
         ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
-        let eh = Rc::new(RawTextInputViewEventHandler {
+        let eh = Rc::new(TextInputViewCoreEventHandler {
+            io: io,
             ht_root: ctx.ht_manager.create(HitTestTreeData {
                 left: rect.left,
                 top: rect.top,
@@ -135,7 +131,6 @@ impl RawTextInputView {
                 height: rect.height,
                 cursor_shape: CursorShape::IBeam,
                 keyboard_focus: Some(keyboard_focus_token),
-                active: flags.contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT),
                 ..Default::default()
             }),
             ct_root,
@@ -144,10 +139,9 @@ impl RawTextInputView {
             ct_preedit_underline,
             ct_selection_bg,
             has_focus: core::cell::Cell::new(false),
-            render_scale: core::cell::Cell::new(ctx.ui_scale_factor),
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
-            content: core::cell::RefCell::new(init_content),
+            content: core::cell::RefCell::new(String::new()),
             cursor_pos_bytes: core::cell::Cell::new(0),
             preedit_range_start_bytes: core::cell::Cell::new(0),
             preedit_range_end_bytes: core::cell::Cell::new(0),
@@ -162,7 +156,6 @@ impl RawTextInputView {
             font_set_ptr: core::ptr::from_ref(ctx.system_link.font_set()),
             pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
             event_dispatcher: ctx.system_link.event_dispatcher,
-            creation_flags: flags,
             delegated_view_id,
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
@@ -177,40 +170,16 @@ impl RawTextInputView {
 
         eh.update_text(ctx.composite_tree);
 
-        Self {
-            ct_text_clip,
-            eh,
-            first_rendered: false,
-        }
+        Self { ct_text_clip, eh }
     }
 
-    pub fn render(&mut self, ctx: &mut RenderContext, parent: &(impl MountTarget + ?Sized)) {
-        if !self.first_rendered {
-            // first render
-            ctx.composite_tree
-                .add_child(parent.ct_root(), self.eh.ct_root);
-            ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
-
-            #[cfg(windows)]
-            unsafe {
-                ctx.ht_manager
-                    .query_root_window(parent.ht_root())
-                    .expect("no root window")
-                    .extra_data_mut::<crate::PerWindowData>()
-                    .screen_reposition_interests
-                    .insert(self.eh.ht_root);
-            }
-        }
-
-        self.first_rendered = true;
-    }
-
-    pub const fn entity(&self) -> &std::rc::Rc<RawTextInputViewEventHandler> {
+    pub const fn entity(&self) -> &std::rc::Rc<TextInputViewCoreEventHandler> {
         &self.eh
     }
 }
 
-pub struct RawTextInputViewEventHandler {
+pub struct TextInputViewCoreEventHandler {
+    io: std::rc::Weak<dyn TextInputViewIO>,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
@@ -218,7 +187,6 @@ pub struct RawTextInputViewEventHandler {
     ct_preedit_underline: CompositeTreeRef,
     ct_selection_bg: CompositeTreeRef,
     has_focus: core::cell::Cell<bool>,
-    render_scale: core::cell::Cell<f32>,
     content_h_offset: core::cell::Cell<f32>,
     content_visible_width: f32,
     content: core::cell::RefCell<String>,
@@ -234,10 +202,9 @@ pub struct RawTextInputViewEventHandler {
     font_set_ptr: *const FontSet,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
-    creation_flags: RawTextInputViewCreateFlags,
     delegated_view_id: ViewIdentifier,
 }
-impl HitTestTreeScreenRepositionHandler for RawTextInputViewEventHandler {
+impl HitTestTreeScreenRepositionHandler for TextInputViewCoreEventHandler {
     fn on_screen_reposition_required(
         &self,
         _sender: HitTestTreeRef,
@@ -250,7 +217,51 @@ impl HitTestTreeScreenRepositionHandler for RawTextInputViewEventHandler {
         }
     }
 }
-impl HitTestTreeActionHandler for RawTextInputViewEventHandler {
+impl ViewEventHandler for TextInputViewCoreEventHandler {
+    #[inline(always)]
+    fn update(&self, context: &mut ViewUpdateContext) {
+        self.fwd_view_update(context);
+    }
+}
+impl KeyInputEventHandler for TextInputViewCoreEventHandler {
+    fn focus_taken(&self, context: &mut InputEventContext) {
+        // HitTestTreeへの変更がはいるので遅延させる
+        self.set_focus_lazy(context.ht_manager);
+        context.system_link.dispatch_event(Event::UpdateView {
+            id: self.delegated_view_id,
+        });
+    }
+
+    fn focus_released(&self, context: &mut InputEventContext) {
+        // HitTestTreeへの変更がはいるので遅延させる
+        self.release_focus_lazy(context.ht_manager);
+        context.system_link.dispatch_event(Event::UpdateView {
+            id: self.delegated_view_id,
+        });
+    }
+
+    #[inline(always)]
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        self.fwd_keydown(context, code, modifier);
+    }
+
+    #[inline(always)]
+    fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
+        self.fwd_char(context, ch)
+    }
+
+    #[inline(always)]
+    #[cfg(feature = "wayland")]
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
+    ) {
+        self.fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
+    }
+}
+impl HitTestTreeActionHandler for TextInputViewCoreEventHandler {
     fn on_pointer_down(
         &self,
         sender: HitTestTreeRef,
@@ -349,7 +360,19 @@ impl HitTestTreeActionHandler for RawTextInputViewEventHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 }
-impl RawTextInputViewEventHandler {
+impl TextInputViewCoreEventHandler {
+    pub const fn delegated_view_id(&self) -> ViewIdentifier {
+        self.delegated_view_id
+    }
+
+    pub const fn ct_root(&self) -> CompositeTreeRef {
+        self.ct_root
+    }
+
+    pub const fn ht_root(&self) -> HitTestTreeRef {
+        self.ht_root
+    }
+
     pub fn set_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
         self.pending_update_mask
             .update(|x| x | self.set_focus(ht_manager));
@@ -899,13 +922,13 @@ impl RawTextInputViewEventHandler {
             current_sec,
         );
 
-        if update_mask.contains(TextInputViewUpdateMask::FOCUS)
-            && !self
-                .creation_flags
-                .contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT)
-        {
-            ht_manager.get_data_mut(self.ht_root).active = self.has_focus.get();
-        }
+        // if update_mask.contains(TextInputViewUpdateMask::FOCUS)
+        //     && !self
+        //         .creation_flags
+        //         .contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT)
+        // {
+        //     ht_manager.get_data_mut(self.ht_root).active = self.has_focus.get();
+        // }
     }
 
     pub fn process_pending_updates<E>(
@@ -1175,7 +1198,7 @@ impl RawTextInputViewEventHandler {
     }
 }
 #[cfg(windows)]
-impl crate::platform::windows::TextProvider for RawTextInputViewEventHandler {
+impl crate::platform::windows::TextProvider for TextInputViewCoreEventHandler {
     fn text(
         &self,
         range: windows::UI::Text::Core::CoreTextRange,
@@ -1220,7 +1243,7 @@ impl crate::platform::windows::TextProvider for RawTextInputViewEventHandler {
     }
 }
 #[cfg(windows)]
-impl crate::platform::windows::CoreTextDeferrableEventHandler for RawTextInputViewEventHandler {
+impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewCoreEventHandler {
     fn layout(
         &self,
         ctx: &mut InputEventContext,
@@ -1366,7 +1389,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for RawTextInputVi
     }
 }
 #[cfg(target_os = "macos")]
-impl crate::platform::mac::bridge::TextInputClientForwarding for RawTextInputViewEventHandler {
+impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCoreEventHandler {
     fn has_marked_text(&self) -> bool {
         tracing::debug!(
             start = self.preedit_range_start_bytes.get(),
@@ -1633,115 +1656,95 @@ bitflags! {
 }
 
 pub struct TextInputView {
-    eh: Rc<TextInputViewEventHandler>,
-    raw: RawTextInputView,
-    first_rendered: bool,
+    id: ViewIdentifier,
+    eh: Option<Rc<TextInputViewEventHandler>>,
+    rect: Rect<LogicalUnit>,
+    io: std::rc::Weak<dyn TextInputViewIO>,
 }
 impl TextInputView {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
-        let view_id = ctx.view_registry.alloc();
-        let kf_token = ctx.keyboard_focus_registry.acquire_token();
-        let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
-            width: rect.width,
-            height: rect.height,
-            left: rect.left,
-            top: rect.top,
-            cursor_shape: CursorShape::IBeam,
-            keyboard_focus: Some(kf_token),
-            ..Default::default()
-        });
-        let raw = RawTextInputView::new(
-            ctx,
-            rect,
-            "".into(),
-            kf_token,
-            RawTextInputViewCreateFlags::empty(),
-            view_id,
-        );
-        let eh = Rc::new(TextInputViewEventHandler {
-            base: raw.eh.clone(),
-            id: view_id,
-            token: kf_token,
-            ht_root,
-        });
-        ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-        ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
-        ctx.view_registry.set_event_handler(eh.id, &eh);
-
+    pub fn new(
+        id: ViewIdentifier,
+        rect: Rect<LogicalUnit>,
+        io: std::rc::Weak<impl TextInputViewIO + 'static>,
+    ) -> Self {
         Self {
-            eh,
-            raw,
-            first_rendered: false,
+            id,
+            eh: None,
+            rect,
+            io: io as _,
+        }
+    }
+}
+impl View for TextInputView {
+    fn render(
+        &mut self,
+        self_instance: &mut ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
+        match self.eh {
+            Some(_) => {
+                // TODO: reflect changes
+                ViewNewRenderElements::EMPTY
+            }
+            None => {
+                // first render
+                let kf_token = ctx.keyboard_focus_registry.acquire_token();
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width: self.rect.width,
+                    height: self.rect.height,
+                    left: self.rect.left,
+                    top: self.rect.top,
+                    cursor_shape: CursorShape::IBeam,
+                    keyboard_focus: Some(kf_token),
+                    ..Default::default()
+                });
+                let eh = Rc::new(TextInputViewEventHandler {
+                    core: TextInputViewCore::new(
+                        ctx,
+                        self.rect.clone(),
+                        kf_token,
+                        self.id,
+                        self.io.clone() as _,
+                    ),
+                    id: self.id,
+                    token: kf_token,
+                    ht_root,
+                });
+                ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
+                // sink some events to base impl
+                ctx.keyboard_focus_registry
+                    .set_event_handler(kf_token, &eh.core.eh);
+                self_instance.bind_event_handler(&eh.core.eh);
+
+                let r = ViewNewRenderElements {
+                    composite_tree: Some(eh.core.eh.ct_root),
+                    hit_tree: Some(ht_root),
+                    keyboard_focus: Some(kf_token),
+                };
+                self.eh = Some(eh);
+                r
+            }
         }
     }
 
-    pub fn render(
-        &mut self,
-        ctx: &mut RenderContext,
-        parent: &(impl MountTarget + ?Sized),
-        keyboard_focus_group: KeyboardFocusGroupRef,
-    ) {
-        if !self.first_rendered {
-            ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
-            ctx.keyboard_focus_registry
-                .join_group(keyboard_focus_group, self.eh.token);
-        }
+    fn teardown(&mut self, ctx: &mut super::TeardownContext) {
+        let Some(entity) = self.eh.take() else {
+            // not rendered
+            return;
+        };
 
-        self.first_rendered = true;
-        self.raw.render(ctx, parent);
+        ctx.mount_context
+            .keyboard_focus_registry
+            .release_token(entity.token);
     }
 }
 
 struct TextInputViewEventHandler {
-    base: std::rc::Rc<RawTextInputViewEventHandler>,
+    core: TextInputViewCore,
     id: ViewIdentifier,
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
-}
-impl ViewEventHandler for TextInputViewEventHandler {
-    #[inline(always)]
-    fn update(&self, context: &mut ViewUpdateContext) {
-        self.base.fwd_view_update(context);
-    }
-}
-impl KeyInputEventHandler for TextInputViewEventHandler {
-    fn focus_taken(&self, context: &mut InputEventContext) {
-        // HitTestTreeへの変更がはいるので遅延させる
-        self.base.set_focus_lazy(context.ht_manager);
-        context
-            .system_link
-            .dispatch_event(Event::UpdateView { id: self.id });
-    }
-
-    fn focus_released(&self, context: &mut InputEventContext) {
-        // HitTestTreeへの変更がはいるので遅延させる
-        self.base.release_focus_lazy(context.ht_manager);
-        context
-            .system_link
-            .dispatch_event(Event::UpdateView { id: self.id });
-    }
-
-    #[inline(always)]
-    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
-        self.base.fwd_keydown(context, code, modifier);
-    }
-
-    #[inline(always)]
-    fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.base.fwd_char(context, ch)
-    }
-
-    #[inline(always)]
-    #[cfg(feature = "wayland")]
-    fn ime_state_changes(
-        &self,
-        context: &mut InputEventContext,
-        new_committed_string: Option<&str>,
-        new_preedit_string: Option<&str>,
-    ) {
-        self.base
-            .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
-    }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
     fn on_pointer_down(
@@ -1751,51 +1754,33 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         // forward first event
-        self.base.on_pointer_down(sender, context, args);
+        self.core.eh.on_pointer_down(sender, context, args);
 
         // 下の要素にフォーカス処理がいかないようにする
         EventContinueControl::STOP_PROPAGATION
     }
 }
 
-pub trait NumericInputViewBackingStore {
-    fn display_value(&self, requester: ViewIdentifier, app: &Application) -> String;
+pub trait NumericInputViewBackingStore: TextInputViewIO {
     fn set_delta(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, delta: f32);
-    fn set_from_string(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, input: &str);
 }
 
 pub struct NumericInputView {
     id: ViewIdentifier,
-    kf_token: FocusTargetToken,
     eh: Option<Rc<NumericInputViewEventHandler>>,
-    raw: RawTextInputView,
     rect: Rect<LogicalUnit>,
     value: std::rc::Weak<dyn NumericInputViewBackingStore>,
     should_revalidate_on_next_render: Cell<bool>,
 }
 impl NumericInputView {
     pub fn new(
-        ctx: &mut ViewInitContext,
+        id: ViewIdentifier,
         rect: Rect<LogicalUnit>,
         value: std::rc::Weak<impl NumericInputViewBackingStore + 'static>,
     ) -> Self {
-        let view_id = ctx.view_registry.alloc();
-        let kf_token = ctx.keyboard_focus_registry.acquire_token();
-
-        let raw = RawTextInputView::new(
-            ctx,
-            rect.clone(),
-            String::new(),
-            kf_token,
-            RawTextInputViewCreateFlags::empty(),
-            view_id,
-        );
-
         Self {
-            id: view_id,
-            kf_token,
+            id,
             eh: None,
-            raw,
             rect,
             value: value as _,
             should_revalidate_on_next_render: Cell::new(true),
@@ -1805,60 +1790,66 @@ impl NumericInputView {
     pub fn revalidate(&self) {
         self.should_revalidate_on_next_render.set(true);
     }
-
-    pub fn render(
+}
+impl View for NumericInputView {
+    fn render(
         &mut self,
+        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
-        parent: &(impl MountTarget + ?Sized),
-        keyboard_focus_group: KeyboardFocusGroupRef,
-    ) {
-        self.raw.render(ctx, parent);
-
-        let eh = match self.eh {
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
+        let (eh, new_elements) = match self.eh {
             Some(ref x) => {
                 // TODO: reflect changes
-                x
+                (x, ViewNewRenderElements::EMPTY)
             }
             None => {
                 // first render
+                let kf_token = ctx.keyboard_focus_registry.acquire_token();
+
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
                     width: self.rect.width,
                     height: self.rect.height,
                     left: self.rect.left,
                     top: self.rect.top,
                     cursor_shape: CursorShape::ResizeVertical,
-                    keyboard_focus: Some(self.kf_token),
+                    keyboard_focus: Some(kf_token),
                     ..Default::default()
                 });
                 let eh = Rc::new(NumericInputViewEventHandler {
-                    base: self.raw.eh.clone(),
+                    core: TextInputViewCore::new(
+                        ctx,
+                        self.rect.clone(),
+                        kf_token,
+                        self.id,
+                        self.value.clone(),
+                    ),
                     value: self.value.clone(),
-                    id: self.id,
-                    token: self.kf_token,
+                    kf_token,
                     ht_root,
                     key_input_enabled: Cell::new(false),
                 });
                 ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-                ctx.keyboard_focus_registry
-                    .set_event_handler(self.kf_token, &eh);
-                ctx.view_registry.set_event_handler(eh.id, &eh);
+                ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
+                // sink some events to base impl
+                self_instance.bind_event_handler(&eh.core.eh);
 
-                ctx.ht_manager.add_child(parent.ht_root(), eh.ht_root);
-                ctx.keyboard_focus_registry
-                    .join_group(keyboard_focus_group, eh.token);
-
-                self.eh = Some(eh);
-                unsafe { self.eh.as_ref().unwrap_unchecked() }
+                let r = ViewNewRenderElements {
+                    composite_tree: Some(eh.core.eh.ct_root),
+                    hit_tree: Some(ht_root),
+                    keyboard_focus: Some(kf_token),
+                };
+                (&*self.eh.insert(eh), r)
             }
         };
 
         if self.should_revalidate_on_next_render.replace(false) {
-            self.raw.eh.update_views(
-                self.raw.eh.set_content(
+            eh.core.eh.update_views(
+                eh.core.eh.set_content(
                     eh.value
                         .upgrade()
                         .expect("NumericInputView has defunct")
-                        .display_value(self.id, ctx.application),
+                        .text(self.id, ctx.application),
                 ),
                 ctx.composite_tree,
                 ctx.system_link,
@@ -1866,27 +1857,28 @@ impl NumericInputView {
                 ctx.current_sec,
             );
         }
+
+        new_elements
     }
 
-    #[inline(always)]
-    pub fn id(&self) -> ViewIdentifier {
-        self.id
+    fn teardown(&mut self, ctx: &mut super::TeardownContext) {
+        let Some(entity) = self.eh.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context
+            .keyboard_focus_registry
+            .release_token(entity.kf_token);
     }
 }
 
 struct NumericInputViewEventHandler {
-    base: std::rc::Rc<RawTextInputViewEventHandler>,
+    core: TextInputViewCore,
     value: std::rc::Weak<dyn NumericInputViewBackingStore>,
-    id: ViewIdentifier,
-    token: FocusTargetToken,
+    kf_token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     key_input_enabled: Cell<bool>,
-}
-impl ViewEventHandler for NumericInputViewEventHandler {
-    #[inline(always)]
-    fn update(&self, context: &mut ViewUpdateContext) {
-        self.base.fwd_view_update(context);
-    }
 }
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
@@ -1927,12 +1919,14 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
             return;
         }
 
-        self.base.fwd_keydown(context, code, modifier);
+        // delegate
+        self.core.eh.keydown(context, code, modifier);
     }
 
     #[inline(always)]
-    fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.base.fwd_char(context, ch);
+    fn r#char(&self, context: &mut InputEventContext, ch: char, modifier: ModifierKey) {
+        // delegate
+        self.core.eh.r#char(context, ch, modifier);
     }
 
     #[inline(always)]
@@ -1943,8 +1937,10 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
         new_committed_string: Option<&str>,
         new_preedit_string: Option<&str>,
     ) {
-        self.base
-            .fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
+        // delegate
+        self.core
+            .eh
+            .ime_state_changes(context, new_committed_string, new_preedit_string);
     }
 }
 impl HitTestTreeActionHandler for NumericInputViewEventHandler {
@@ -1955,7 +1951,8 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         if self.key_input_enabled.get() {
-            self.base.fwd_pointer_down(sender, context, args);
+            // delegate
+            self.core.eh.on_pointer_down(sender, context, args);
         }
 
         // 下の要素にフォーカス処理がいかないようにする
@@ -1978,10 +1975,15 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         args: &crate::input::hittest::GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
         let value = self.value.upgrade().expect("NumericInputView has defunct");
-        value.set_delta(self.id, &mut context.application, -args.delta.y);
-        self.base.update_views(
-            self.base
-                .set_content(value.display_value(self.id, &context.application)),
+        value.set_delta(
+            self.core.eh.delegated_view_id,
+            &mut context.application,
+            -args.delta.y,
+        );
+        self.core.eh.update_views(
+            self.core
+                .eh
+                .set_content(value.text(self.core.eh.delegated_view_id, &context.application)),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2016,10 +2018,15 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         args: &ScrollWheelActionArgs,
     ) -> ScrollWheelActionResponse {
         let value = self.value.upgrade().expect("NumericInputView has defunct");
-        value.set_delta(self.id, &mut context.application, args.amount);
-        self.base.update_views(
-            self.base
-                .set_content(value.display_value(self.id, &context.application)),
+        value.set_delta(
+            self.core.eh.delegated_view_id,
+            &mut context.application,
+            args.amount,
+        );
+        self.core.eh.update_views(
+            self.core
+                .eh
+                .set_content(value.text(self.core.eh.delegated_view_id, &context.application)),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2060,16 +2067,19 @@ impl NumericInputViewEventHandler {
         }
 
         // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
-        let update_mask = self.base.set_content(
+        let update_mask = self.core.eh.set_content(
             self.value
                 .upgrade()
                 .expect("NumericInputView has defunct")
-                .display_value(self.id, application),
+                .text(self.core.eh.delegated_view_id, application),
         );
-        self.base
+        self.core
+            .eh
             .pending_update_mask
-            .set(self.base.set_focus(ht_manager) | self.base.select_all() | update_mask);
-        syslink.dispatch_event(Event::UpdateView { id: self.id });
+            .set(self.core.eh.set_focus(ht_manager) | self.core.eh.select_all() | update_mask);
+        syslink.dispatch_event(Event::UpdateView {
+            id: self.core.eh.delegated_view_id,
+        });
     }
 
     fn confirm_direct_input(
@@ -2084,17 +2094,24 @@ impl NumericInputViewEventHandler {
         }
 
         let value = self.value.upgrade().expect("NumericInputView has defunct");
-        value.set_from_string(self.id, application, &self.base.content());
+        value.set_text(
+            self.core.eh.delegated_view_id,
+            application,
+            self.core.eh.content().clone(),
+        );
 
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.base.release_focus(ht_manager);
+        let mut update_mask = self.core.eh.release_focus(ht_manager);
         update_mask |= self
-            .base
-            .set_content(value.display_value(self.id, application));
-        update_mask |= self.base.move_cursor(0);
+            .core
+            .eh
+            .set_content(value.text(self.core.eh.delegated_view_id, application));
+        update_mask |= self.core.eh.move_cursor(0);
 
-        self.base.pending_update_mask.set(update_mask);
-        syslink.dispatch_event(Event::UpdateView { id: self.id });
+        self.core.eh.pending_update_mask.set(update_mask);
+        syslink.dispatch_event(Event::UpdateView {
+            id: self.core.eh.delegated_view_id,
+        });
     }
 
     fn cancel_direct_input(
@@ -2104,380 +2121,219 @@ impl NumericInputViewEventHandler {
         application: &Application,
     ) {
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.base.release_focus(ht_manager);
+        let mut update_mask = self.core.eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
-        update_mask |= self.base.set_content(
+        update_mask |= self.core.eh.set_content(
             self.value
                 .upgrade()
                 .expect("NumericInputView has defunct")
-                .display_value(self.id, application),
+                .text(self.core.eh.delegated_view_id, application),
         );
-        update_mask |= self.base.move_cursor(0);
+        update_mask |= self.core.eh.move_cursor(0);
 
-        self.base.pending_update_mask.set(update_mask);
-        syslink.dispatch_event(Event::UpdateView { id: self.id });
+        self.core.eh.pending_update_mask.set(update_mask);
+        syslink.dispatch_event(Event::UpdateView {
+            id: self.core.eh.delegated_view_id,
+        });
+    }
+}
+
+bitflags! {
+    #[derive(Clone, Copy, Debug)]
+    pub struct RawTextInputViewCreateFlags : u8 {
+        const NON_DELEGATED_HT = 0x01;
     }
 }
 
 pub struct MultilineTextInputView {
-    ct_text_clip: CompositeTreeRef,
-    eh: Rc<MultilineTextInputEventHandler>,
+    id: ViewIdentifier,
+    eh: Option<Rc<MultilineTextInputEventHandler>>,
+    rect: Rect<LogicalUnit>,
 }
 impl MultilineTextInputView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        rect: Rect<LogicalUnit>,
-        init_content: String,
-        keyboard_focus_token: FocusTargetToken,
-        flags: RawTextInputViewCreateFlags,
-    ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            has_bitmap: true,
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_text_clip = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(rect.width - 4.0),
-                AnimatableFloat::Value(rect.height - 4.0),
-            ],
-            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
-            clip_child: Some(ClipConfig {
-                left_softness: unsafe { SafeF32::new_unchecked(1.0) },
-                right_softness: unsafe { SafeF32::new_unchecked(1.0) },
-                top_softness: unsafe { SafeF32::new_unchecked(1.0) },
-                bottom_softness: unsafe { SafeF32::new_unchecked(1.0) },
-            }),
-            ..Default::default()
-        });
-        let ct_text = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            ..Default::default()
-        });
-        let ct_cursor = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_preedit_underline = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(14.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_selection_base = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            ..Default::default()
-        });
-
-        ctx.composite_tree
-            .add_child(ct_text_clip, ct_selection_base);
-        ctx.composite_tree.add_child(ct_text_clip, ct_text);
-        ctx.composite_tree.add_child(ct_text_clip, ct_cursor);
-        ctx.composite_tree
-            .add_child(ct_text_clip, ct_preedit_underline);
-        ctx.composite_tree.add_child(ct_root, ct_text_clip);
-
-        let eh = Rc::new(MultilineTextInputEventHandler {
-            view_id: ctx.view_registry.alloc(),
-            ht_root: ctx.ht_manager.create(HitTestTreeData {
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height,
-                cursor_shape: CursorShape::IBeam,
-                keyboard_focus: Some(keyboard_focus_token),
-                active: flags.contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT),
-                ..Default::default()
-            }),
-            ct_root,
-            ct_text,
-            ct_cursor,
-            ct_preedit_underline,
-            ct_selection_base,
-            ct_selection_bgs: core::cell::RefCell::new(Vec::new()),
-            has_focus: core::cell::Cell::new(false),
-            render_scale: core::cell::Cell::new(ctx.ui_scale_factor),
-            content_h_offset: core::cell::Cell::new(0.0),
-            content_v_offset: core::cell::Cell::new(0.0),
-            content_visible_width: rect.width - 4.0,
-            content_visible_height: rect.height - 4.0,
-            content: core::cell::RefCell::new(init_content),
-            cursor_pos_bytes: core::cell::Cell::new(0),
-            preedit_range_start_bytes: core::cell::Cell::new(0),
-            preedit_range_end_bytes: core::cell::Cell::new(0),
-            selection_begin_bytes: core::cell::Cell::new(0),
-            #[cfg(windows)]
-            native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
-                ctx.system_link,
-            ),
-            #[cfg(target_os = "macos")]
-            ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
-            #[cfg(target_os = "macos")]
-            font_set_ptr: core::ptr::from_ref(ctx.system_link.font_set()),
-            pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
-            event_dispatcher: ctx.system_link.event_dispatcher,
-            creation_flags: flags,
-        });
-        ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-        ctx.ht_manager
-            .set_screen_reposition_handler(eh.ht_root, &eh);
-        ctx.keyboard_focus_registry
-            .set_event_handler(keyboard_focus_token, &eh);
-        ctx.view_registry.set_event_handler(eh.view_id, &eh);
-        #[cfg(windows)]
-        ctx.ht_manager
-            .set_native_text_deferrable_event_handler(eh.ht_root, &eh);
-        #[cfg(windows)]
-        eh.native_text_input_context
-            .bind_action(ctx.system_link, &eh, eh.ht_root);
-
-        eh.update_text(ctx.composite_tree);
-
-        Self { ct_text_clip, eh }
+    pub fn new(id: ViewIdentifier, rect: Rect<LogicalUnit>) -> Self {
+        Self { id, eh: None, rect }
     }
-
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(parent.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.eh.ht_root);
-
-        // TODO: これ見直したほうがよさそう(入力メソッドのポップをウィンドウ移動に追従させるために機構 ウィンドウ移動を毎回全Viewに流すと流石に重いと思うのでなんかいい感じに絞りたい)
-        /*
-        #[cfg(windows)]
-        unsafe {
-            ctx.ht_manager
-                .query_root_window(parent.ht_root())
-                .expect("no root window")
-                .extra_data_mut::<crate::PerWindowData>()
-                .screen_reposition_interests
-                .insert(self.eh.ht_root);
-        }*/
-    }
-
-    pub fn set_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
-        self.eh
-            .pending_update_mask
-            .update(|x| x | self.eh.set_focus(ht_manager));
-    }
-
-    pub fn release_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
-        self.eh
-            .pending_update_mask
-            .update(|x| x | self.eh.release_focus(ht_manager));
-    }
-
-    pub fn set_content_lazy(&self, content: String) {
-        self.eh
-            .pending_update_mask
-            .update(|x| x | self.set_content(content));
-    }
-
-    pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
-        let mut update_mask = TextInputViewUpdateMask::empty();
-        if self.eh.cursor_pos_bytes.get() > content.len() {
-            self.eh.cursor_pos_bytes.set(content.len());
-            update_mask |= TextInputViewUpdateMask::CURSOR;
-        }
-        if self.eh.selection_begin_bytes.get() > content.len() {
-            self.eh.selection_begin_bytes.set(content.len());
-            update_mask |= TextInputViewUpdateMask::CURSOR;
-        }
-        *self.eh.content.borrow_mut() = content;
-        update_mask | TextInputViewUpdateMask::TEXT
-    }
-
-    pub fn content<'a>(&'a self) -> Ref<'a, String> {
-        self.eh.content.borrow()
-    }
-
-    #[inline(always)]
-    pub fn fwd_view_update(&self, context: &mut ViewUpdateContext) {
-        self.eh.process_pending_updates_with_ht_mutation(
-            context.mount_context.composite_tree,
-            context.system_link,
-            context.mount_context.ht_manager,
-            context.mount_context.current_sec,
-        );
-    }
-
-    pub fn fwd_keydown(
-        &self,
-        context: &mut InputEventContext,
-        code: KeyInputCode,
-        modifier: ModifierKey,
-    ) {
-        tracing::debug!(?code, "keydown");
-
-        let update_mask = match code {
-            // cursor operations
-            KeyInputCode::LeftArrow => self
-                .eh
-                .move_cursor_to_left(modifier.contains(ModifierKey::SHIFT)),
-            KeyInputCode::RightArrow => self
-                .eh
-                .move_cursor_to_right(modifier.contains(ModifierKey::SHIFT)),
-            KeyInputCode::Home => self.eh.jump_to_beginning_of_line(),
-            KeyInputCode::End => self.eh.jump_to_end_of_line(),
-            // TODO: insert mode
-            KeyInputCode::Insert => TextInputViewUpdateMask::empty(),
-            // deletions
-            KeyInputCode::Backspace if !self.eh.has_selection() => self.eh.delete_prev_char(),
-            KeyInputCode::Backspace => self.eh.delete_selection(),
-            KeyInputCode::Delete if !self.eh.has_selection() => self.eh.delete_next_char(),
-            KeyInputCode::Delete => self.eh.delete_selection(),
-            // non-control chars
-            KeyInputCode::Character(c) if !c.is_control() && !self.eh.has_selection() => {
-                self.eh.insert_char_at_cursor(c)
+}
+impl View for MultilineTextInputView {
+    fn render(
+        &mut self,
+        self_instance: &mut ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
+        match self.eh {
+            Some(_) => {
+                // TODO: reflect changes
+                ViewNewRenderElements::EMPTY
             }
-            KeyInputCode::Character(c) if !c.is_control() => self.eh.replace_selection_by_char(c),
-            _ => TextInputViewUpdateMask::empty(),
+            None => {
+                // first render
+                let kf_token = ctx.keyboard_focus_registry.acquire_token();
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [
+                        AnimatableFloat::Value(self.rect.width),
+                        AnimatableFloat::Value(self.rect.height),
+                    ],
+                    offset: [
+                        AnimatableFloat::Value(self.rect.left),
+                        AnimatableFloat::Value(self.rect.top),
+                    ],
+                    has_bitmap: true,
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_text_clip = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [
+                        AnimatableFloat::Value(self.rect.width - 4.0),
+                        AnimatableFloat::Value(self.rect.height - 4.0),
+                    ],
+                    offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
+                    clip_child: Some(ClipConfig {
+                        left_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                        right_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                        top_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                        bottom_softness: unsafe { SafeF32::new_unchecked(1.0) },
+                    }),
+                    ..Default::default()
+                });
+                let ct_text = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    ..Default::default()
+                });
+                let ct_cursor = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
+                    offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 1.0,
+                    ])),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ct_preedit_underline = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
+                    offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(14.0)],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 1.0,
+                    ])),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ct_selection_base = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree
+                    .add_child(ct_text_clip, ct_selection_base);
+                ctx.composite_tree.add_child(ct_text_clip, ct_text);
+                ctx.composite_tree.add_child(ct_text_clip, ct_cursor);
+                ctx.composite_tree
+                    .add_child(ct_text_clip, ct_preedit_underline);
+                ctx.composite_tree.add_child(ct_root, ct_text_clip);
+
+                let eh = Rc::new(MultilineTextInputEventHandler {
+                    view_id: self.id,
+                    kf_token,
+                    ht_root: ctx.ht_manager.create(HitTestTreeData {
+                        left: self.rect.left,
+                        top: self.rect.top,
+                        width: self.rect.width,
+                        height: self.rect.height,
+                        cursor_shape: CursorShape::IBeam,
+                        keyboard_focus: Some(kf_token),
+                        ..Default::default()
+                    }),
+                    ct_root,
+                    ct_text,
+                    ct_cursor,
+                    ct_preedit_underline,
+                    ct_selection_base,
+                    ct_selection_bgs: core::cell::RefCell::new(Vec::new()),
+                    ct_text_clip,
+                    has_focus: core::cell::Cell::new(false),
+                    content_h_offset: core::cell::Cell::new(0.0),
+                    content_v_offset: core::cell::Cell::new(0.0),
+                    content_visible_width: self.rect.width - 4.0,
+                    content_visible_height: self.rect.height - 4.0,
+                    content: core::cell::RefCell::new(String::new()),
+                    cursor_pos_bytes: core::cell::Cell::new(0),
+                    preedit_range_start_bytes: core::cell::Cell::new(0),
+                    preedit_range_end_bytes: core::cell::Cell::new(0),
+                    selection_begin_bytes: core::cell::Cell::new(0),
+                    #[cfg(windows)]
+                    native_text_input_context:
+                        crate::platform::windows::NativeTextInputContext::new(ctx.system_link),
+                    #[cfg(target_os = "macos")]
+                    ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
+                    #[cfg(target_os = "macos")]
+                    font_set_ptr: core::ptr::from_ref(ctx.system_link.font_set()),
+                    pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
+                    event_dispatcher: ctx.system_link.event_dispatcher,
+                });
+                ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
+                ctx.ht_manager
+                    .set_screen_reposition_handler(eh.ht_root, &eh);
+                ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
+                self_instance.bind_event_handler(&eh);
+                #[cfg(windows)]
+                ctx.ht_manager
+                    .set_native_text_deferrable_event_handler(eh.ht_root, &eh);
+                #[cfg(windows)]
+                eh.native_text_input_context
+                    .bind_action(ctx.system_link, &eh, eh.ht_root);
+
+                eh.update_text(ctx.composite_tree);
+
+                // TODO: これ見直したほうがよさそう(入力メソッドのポップをウィンドウ移動に追従させるために機構 ウィンドウ移動を毎回全Viewに流すと流石に重いと思うのでなんかいい感じに絞りたい)
+                /*
+                #[cfg(windows)]
+                unsafe {
+                    ctx.ht_manager
+                        .query_root_window(parent.ht_root())
+                        .expect("no root window")
+                        .extra_data_mut::<crate::PerWindowData>()
+                        .screen_reposition_interests
+                        .insert(self.eh.ht_root);
+                }*/
+
+                let r = ViewNewRenderElements {
+                    composite_tree: Some(eh.ct_root),
+                    hit_tree: Some(eh.ht_root),
+                    keyboard_focus: Some(kf_token),
+                };
+                self.eh = Some(eh);
+                r
+            }
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut super::TeardownContext) {
+        let Some(entity) = self.eh.take() else {
+            // not rendered
+            return;
         };
 
-        self.eh.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
-    }
-
-    #[cfg(feature = "wayland")]
-    pub fn fwd_ime_state_changes(
-        &self,
-        context: &mut InputEventContext,
-        new_committed_string: &str,
-        new_preedit_string: &str,
-    ) {
-        let selection_range = self.eh.selection_range();
-        if !selection_range.is_empty() {
-            // remove selection first
-            self.eh
-                .content
-                .borrow_mut()
-                .replace_range(selection_range.clone(), "");
-            self.eh.cursor_pos_bytes.set(selection_range.start);
-            self.eh.selection_begin_bytes.set(selection_range.start);
-        }
-
-        // TODO: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
-        // 他PFではどうなのかは不明
-        let has_preedit_text =
-            self.eh.preedit_range_start_bytes.get() != self.eh.preedit_range_end_bytes.get();
-
-        if has_preedit_text {
-            if !new_preedit_string.is_empty() {
-                // replace preedit
-                self.eh.content.borrow_mut().replace_range(
-                    self.eh.preedit_range_start_bytes.get()..self.eh.preedit_range_end_bytes.get(),
-                    new_preedit_string,
-                );
-                self.eh
-                    .preedit_range_start_bytes
-                    .set(self.eh.preedit_range_start_bytes.get());
-                self.eh
-                    .preedit_range_end_bytes
-                    .set(self.eh.preedit_range_start_bytes.get() + new_preedit_string.len());
-                self.eh
-                    .cursor_pos_bytes
-                    .set(self.eh.preedit_range_end_bytes.get());
-            } else {
-                // clear preedit
-                self.eh.content.borrow_mut().replace_range(
-                    self.eh.preedit_range_start_bytes.get()..self.eh.preedit_range_end_bytes.get(),
-                    "",
-                );
-                self.eh
-                    .preedit_range_start_bytes
-                    .set(self.eh.preedit_range_start_bytes.get());
-                self.eh
-                    .preedit_range_end_bytes
-                    .set(self.eh.preedit_range_start_bytes.get());
-                self.eh
-                    .cursor_pos_bytes
-                    .set(self.eh.preedit_range_start_bytes.get());
-            }
-        }
-
-        if !new_committed_string.is_empty() {
-            // insert committed
-            self.eh
-                .content
-                .borrow_mut()
-                .insert_str(self.eh.cursor_pos_bytes.get(), new_committed_string);
-            self.eh
-                .cursor_pos_bytes
-                .set(self.eh.cursor_pos_bytes.get() + new_committed_string.len());
-        }
-
-        if !has_preedit_text && !new_preedit_string.is_empty() {
-            // insert preedit
-            self.eh
-                .content
-                .borrow_mut()
-                .insert_str(self.eh.cursor_pos_bytes.get(), new_preedit_string);
-            self.eh
-                .preedit_range_start_bytes
-                .set(self.eh.cursor_pos_bytes.get());
-            self.eh
-                .preedit_range_end_bytes
-                .set(self.eh.cursor_pos_bytes.get() + new_preedit_string.len());
-            self.eh
-                .cursor_pos_bytes
-                .set(self.eh.preedit_range_end_bytes.get());
-        }
-
-        // no selection in editing
-        self.eh
-            .selection_begin_bytes
-            .set(self.eh.cursor_pos_bytes.get());
-
-        self.eh.update_views(
-            TextInputViewUpdateMask::TEXT
-                | TextInputViewUpdateMask::CURSOR
-                | TextInputViewUpdateMask::PREEDIT,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
-    }
-
-    #[inline(always)]
-    pub fn fwd_pointer_down(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        self.eh.on_pointer_down(sender, context, args)
+        ctx.mount_context
+            .keyboard_focus_registry
+            .release_token(entity.kf_token);
     }
 }
 
 struct MultilineTextInputEventHandler {
     view_id: ViewIdentifier,
+    kf_token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
@@ -2485,8 +2341,8 @@ struct MultilineTextInputEventHandler {
     ct_preedit_underline: CompositeTreeRef,
     ct_selection_base: CompositeTreeRef,
     ct_selection_bgs: core::cell::RefCell<Vec<CompositeTreeRef>>,
+    ct_text_clip: CompositeTreeRef,
     has_focus: core::cell::Cell<bool>,
-    render_scale: core::cell::Cell<f32>,
     content_h_offset: core::cell::Cell<f32>,
     content_v_offset: core::cell::Cell<f32>,
     content_visible_width: f32,
@@ -2504,7 +2360,6 @@ struct MultilineTextInputEventHandler {
     font_set_ptr: *const FontSet,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
-    creation_flags: RawTextInputViewCreateFlags,
 }
 impl ViewEventHandler for MultilineTextInputEventHandler {
     #[inline(always)]
@@ -3288,13 +3143,13 @@ impl MultilineTextInputEventHandler {
             current_sec,
         );
 
-        if update_mask.contains(TextInputViewUpdateMask::FOCUS)
-            && !self
-                .creation_flags
-                .contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT)
-        {
-            ht_manager.get_data_mut(self.ht_root).active = self.has_focus.get();
-        }
+        // if update_mask.contains(TextInputViewUpdateMask::FOCUS)
+        //     && !self
+        //         .creation_flags
+        //         .contains(RawTextInputViewCreateFlags::NON_DELEGATED_HT)
+        // {
+        //     ht_manager.get_data_mut(self.ht_root).active = self.has_focus.get();
+        // }
     }
 
     pub fn process_pending_updates<E>(

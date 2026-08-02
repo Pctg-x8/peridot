@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use crate::{
     SyncEvent, WindowHandle,
@@ -12,8 +12,8 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        MountTarget, RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
-        ViewInitContext, ViewNewRenderElements,
+        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
+        ViewInitContext, ViewInstanceModifier, ViewNewRenderElements, ViewRegistry,
     },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
@@ -28,51 +28,9 @@ impl PopupID {
     }
 }
 
-pub struct ViewHierarchyMut<'a> {
-    pub element: &'a mut dyn View,
-    pub children: Vec<ViewHierarchyMut<'a>>,
-}
-impl<'a> ViewHierarchyMut<'a> {
-    pub fn render_all(
-        &mut self,
-        ctx: &mut RenderContext,
-        mount_on: &(impl MountTarget + ?Sized),
-        keyboard_focus_group: KeyboardFocusGroupRef,
-    ) {
-        let mut scheduled_renders = VecDeque::new();
-        scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), self));
-        while let Some((mt, v)) = scheduled_renders.pop_front() {
-            let mut sched = RenderChildScheduler::new();
-            v.element.render(ctx, &mut sched).mount_on(
-                &mt,
-                keyboard_focus_group,
-                &mut ctx.make_mount_context(),
-            );
-            if let Some(mt) = sched.mount_on {
-                scheduled_renders.extend(v.children.iter_mut().map(|x| (mt.clone(), x)));
-            }
-        }
-    }
-
-    pub fn teardown_all(&mut self, ctx: &mut TeardownContext) {
-        // 逆向きに(深いものから)teardownしていく
-        let mut scheduled_teardowns = Vec::new();
-        let mut descend_stack = VecDeque::new();
-        descend_stack.push_back(self);
-        while let Some(v) = descend_stack.pop_front() {
-            scheduled_teardowns.push(&mut v.element);
-            descend_stack.extend(v.children.iter_mut());
-        }
-
-        for v in scheduled_teardowns {
-            v.teardown(ctx);
-        }
-    }
-}
-
 /// ポップアップ共通ライフサイクル
 pub trait Popup {
-    fn view_hierarchy_mut<'a>(&'a mut self) -> ViewHierarchyMut<'a>;
+    fn root_view_id(&self) -> ViewIdentifier;
 
     /// UI Render Scaleが変わったときに呼ばれる
     #[allow(unused_variables)]
@@ -81,6 +39,7 @@ pub trait Popup {
     /// ポップアップが閉じられるときに呼ばれる
     fn close(
         &mut self,
+        view_registry: &mut ViewRegistry,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
@@ -109,9 +68,11 @@ impl PopupManager {
     ) -> PopupID {
         let id = PopupID::new();
         let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
-        let mut instance = ctor(id, ctx);
-        instance.view_hierarchy_mut().render_all(
-            &mut ctx.make_render_context(),
+        let instance = ctor(id, ctx);
+        let (view_registry, mut rc) = ctx.make_render_context2();
+        view_registry.render_recursive(
+            instance.root_view_id(),
+            &mut rc,
             &window,
             popup_focus_group,
         );
@@ -134,10 +95,20 @@ impl PopupManager {
     }
 
     #[inline(always)]
-    pub fn close(&mut self, id: PopupID, ctx: &mut RenderContext) -> bool {
+    pub fn close(
+        &mut self,
+        id: PopupID,
+        registry: &mut ViewRegistry,
+        ctx: &mut RenderContext,
+    ) -> bool {
         if let Some((instance, w, g)) = self.instance_by_id.get_mut(&id) {
-            instance.close(ctx.composite_tree, ctx.ht_manager, ctx.current_sec);
-            instance.view_hierarchy_mut().render_all(ctx, w, *g);
+            instance.close(
+                registry,
+                ctx.composite_tree,
+                ctx.ht_manager,
+                ctx.current_sec,
+            );
+            registry.render_recursive(instance.root_view_id(), ctx, w, *g);
             true
         } else {
             false
@@ -145,11 +116,17 @@ impl PopupManager {
     }
 
     #[inline(always)]
-    pub fn teardown(&mut self, ctx: &mut TeardownContext, id: PopupID) -> bool {
+    pub fn teardown(
+        &mut self,
+        registry: &mut ViewRegistry,
+        ctx: &mut TeardownContext,
+        id: PopupID,
+    ) -> bool {
         if let Some((mut instance, mut w, g)) = self.instance_by_id.remove(&id) {
             w.keyboard_focus_state_mut().pop_tab_stop_group();
             ctx.mount_context.keyboard_focus_registry.release_group(g);
             instance.teardown(ctx);
+            registry.teardown_recursive(instance.root_view_id(), ctx);
             true
         } else {
             false
@@ -244,6 +221,7 @@ impl OverlayPopupBasicMaskView {
 impl View for OverlayPopupBasicMaskView {
     fn render(
         &mut self,
+        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -403,6 +381,7 @@ impl OverlayPopupBasicFrameView {
 impl View for OverlayPopupBasicFrameView {
     fn render(
         &mut self,
+        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

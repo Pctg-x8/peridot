@@ -9,8 +9,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
-        ViewElementSize, ViewNewRenderElements, ViewPlacement,
+        RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
+        ViewInstanceModifier, ViewNewRenderElements, ViewPlacement,
     },
     utils::{LogicalUnit, Size},
 };
@@ -77,6 +77,7 @@ impl StaticTextView {
 impl View for StaticTextView {
     fn render(
         &mut self,
+        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

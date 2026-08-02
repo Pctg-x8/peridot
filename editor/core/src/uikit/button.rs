@@ -20,8 +20,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
-        ViewElementSize, ViewInitContext, ViewNewRenderElements, ViewPlacement,
+        RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
+        ViewInstanceModifier, ViewNewRenderElements, ViewPlacement,
     },
     utils::{Point, Size, range_helper::range_from_len},
 };
@@ -48,7 +48,6 @@ impl SimpleButtonView {
     const ROUNDING: f32 = 8.0;
 
     pub fn new(
-        ctx: &mut ViewInitContext,
         init_label: String,
         init_placement: ViewPlacement,
         event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
@@ -69,6 +68,7 @@ impl SimpleButtonView {
 impl View for SimpleButtonView {
     fn render(
         &mut self,
+        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
