@@ -48,11 +48,11 @@ use windows::{
             Input::{
                 GetRawInputData, HRAWINPUT,
                 KeyboardAndMouse::{
-                    MAPVK_VK_TO_VSC_EX, MAPVK_VSC_TO_VK_EX, MapVirtualKeyW, ReleaseCapture,
-                    SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-                    TrackMouseEvent, VK_0, VK_9, VK_A, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN,
-                    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL,
-                    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP, VK_Z,
+                    MAPVK_VSC_TO_VK_EX, MapVirtualKeyW, ReleaseCapture, SetCapture, TME_HOVER,
+                    TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent, VK_0, VK_9, VK_A,
+                    VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_LCONTROL, VK_LEFT, VK_LMENU,
+                    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
+                    VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP, VK_Z,
                 },
                 RAWINPUT, RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RID_INPUT,
                 RIM_TYPEKEYBOARD, RegisterRawInputDevices,
@@ -548,7 +548,6 @@ impl NativeWindow {
             },
             app_context,
             event_dispatcher,
-            edit_context: None,
             modifier_key_state: ModifierKey::empty(),
         });
         unsafe {
@@ -618,7 +617,6 @@ struct WindowEventHandler {
     state: WindowState,
     app_context: *const ApplicationContext,
     event_dispatcher: LogicFiberEventDispatcher,
-    edit_context: Option<CoreTextEditContext>,
     modifier_key_state: ModifierKey,
 }
 impl WindowEventHandler {
@@ -723,7 +721,7 @@ impl WindowEventHandler {
     }
 
     #[tracing::instrument(skip(self))]
-    fn mouse_move(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>, key_modifiers: u32) {
+    fn mouse_move(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
         if unsafe { &*self.app_context }.pane_dragging.get() {
             // in pane dragging
             let mut cursor_pos = core::mem::MaybeUninit::uninit();
@@ -762,118 +760,73 @@ impl WindowEventHandler {
             return;
         }
 
-        let mut key_modifier = ModifierKey::empty();
-        if (key_modifiers & MK_SHIFT.0) != 0 {
-            key_modifier.insert(ModifierKey::SHIFT);
-        }
-        if (key_modifiers & MK_CONTROL.0) != 0 {
-            key_modifier.insert(ModifierKey::CONTROL);
-        }
-        // TODO: alt?
-
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn left_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>, key_modifiers: u32) {
-        let mut key_modifier = ModifierKey::empty();
-        if (key_modifiers & MK_SHIFT.0) != 0 {
-            key_modifier.insert(ModifierKey::SHIFT);
-        }
-        if (key_modifiers & MK_CONTROL.0) != 0 {
-            key_modifier.insert(ModifierKey::CONTROL);
-        }
-        // TODO: alt?
-
+    fn left_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
         // move then down
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Primary,
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn left_button_up(&mut self, hwnd: HWND, key_modifiers: u32) {
+    fn left_button_up(&mut self, hwnd: HWND) {
         if self.try_perform_confirm_drag(hwnd) {
             return;
         }
-
-        let mut key_modifier = ModifierKey::empty();
-        if (key_modifiers & MK_SHIFT.0) != 0 {
-            key_modifier.insert(ModifierKey::SHIFT);
-        }
-        if (key_modifiers & MK_CONTROL.0) != 0 {
-            key_modifier.insert(ModifierKey::CONTROL);
-        }
-        // TODO: alt?
 
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Primary,
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn right_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>, key_modifiers: u32) {
-        let mut key_modifier = ModifierKey::empty();
-        if (key_modifiers & MK_SHIFT.0) != 0 {
-            key_modifier.insert(ModifierKey::SHIFT);
-        }
-        if (key_modifiers & MK_CONTROL.0) != 0 {
-            key_modifier.insert(ModifierKey::CONTROL);
-        }
-        // TODO: alt?
-
+    fn right_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
         // move then down
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn right_button_up(&mut self, hwnd: HWND, key_modifiers: u32) {
+    fn right_button_up(&mut self, hwnd: HWND) {
         if self.try_perform_confirm_drag(hwnd) {
             return;
         }
-
-        let mut key_modifier = ModifierKey::empty();
-        if (key_modifiers & MK_SHIFT.0) != 0 {
-            key_modifier.insert(ModifierKey::SHIFT);
-        }
-        if (key_modifiers & MK_CONTROL.0) != 0 {
-            key_modifier.insert(ModifierKey::CONTROL);
-        }
-        // TODO: alt?
 
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
-            key_modifier,
+            key_modifier: self.modifier_key_state,
         });
     }
 
@@ -1227,7 +1180,7 @@ impl WindowEventHandler {
                 };
                 let is_down = (keyboard.Flags as u32 & RI_KEY_BREAK) == 0;
 
-                tracing::debug!(data = ?unsafe { data.data.keyboard }, vk, "raw input keyboard");
+                tracing::debug!(data = ?unsafe { data.data.keyboard }, is_down, vk, "raw input keyboard");
             }
 
             return LRESULT(0);
@@ -1356,7 +1309,6 @@ impl WindowEventHandler {
                     (lparam.0 & 0xffff) as i16 as _,
                     ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 ),
-                wparam.0 as _,
             );
 
             return LRESULT(0);
@@ -1373,18 +1325,14 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(hwnd), &mut p);
             }
 
-            Self::get_for_window(hwnd).left_button_down(
-                hwnd,
-                Point::new_pixels(p[0].x, p[0].y),
-                wparam.0 as _,
-            );
+            Self::get_for_window(hwnd).left_button_down(hwnd, Point::new_pixels(p[0].x, p[0].y));
             return LRESULT(0);
         }
 
         if msg == WM_LBUTTONUP
             || (msg == WM_NCLBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
         {
-            Self::get_for_window(hwnd).left_button_up(hwnd, wparam.0 as _);
+            Self::get_for_window(hwnd).left_button_up(hwnd);
             return LRESULT(0);
         }
 
@@ -1395,7 +1343,6 @@ impl WindowEventHandler {
                     (lparam.0 & 0xffff) as i16 as _,
                     ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 ),
-                wparam.0 as _,
             );
 
             return LRESULT(0);
@@ -1412,18 +1359,14 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(hwnd), &mut p);
             }
 
-            Self::get_for_window(hwnd).right_button_down(
-                hwnd,
-                Point::new_pixels(p[0].x, p[0].y),
-                wparam.0 as _,
-            );
+            Self::get_for_window(hwnd).right_button_down(hwnd, Point::new_pixels(p[0].x, p[0].y));
             return LRESULT(0);
         }
 
         if msg == WM_RBUTTONUP
             || (msg == WM_NCRBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
         {
-            Self::get_for_window(hwnd).right_button_up(hwnd, wparam.0 as _);
+            Self::get_for_window(hwnd).right_button_up(hwnd);
             return LRESULT(0);
         }
 
@@ -1444,7 +1387,6 @@ impl WindowEventHandler {
                     (lparam.0 & 0xffff) as i16 as _,
                     ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 ),
-                wparam.0 as _,
             );
 
             return LRESULT(0);
@@ -1470,11 +1412,7 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(hwnd), &mut p);
             }
 
-            Self::get_for_window(hwnd).mouse_move(
-                hwnd,
-                Point::new_pixels(p[0].x, p[0].y),
-                wparam.0 as _,
-            );
+            Self::get_for_window(hwnd).mouse_move(hwnd, Point::new_pixels(p[0].x, p[0].y));
             // Note: NCMOUSEMOVEはデフォルト動作もさせる
         }
 
