@@ -548,7 +548,7 @@ impl NativeWindow {
             },
             app_context,
             event_dispatcher,
-            modifier_key_state: ModifierKey::empty(),
+            modifier_key_state: ModifierKeyRecorder::new(),
         });
         unsafe {
             SetWindowLongPtrW(
@@ -612,12 +612,55 @@ pub unsafe fn unlocate_non_client_hittest_managers() {
     }
 }
 
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub(self) struct ModifierKeyRecorder {
+    pub current: ModifierKey,
+}
+impl ModifierKeyRecorder {
+    pub const fn new() -> Self {
+        Self {
+            current: ModifierKey::empty(),
+        }
+    }
+
+    pub fn handle_keydown(&mut self, code: usize) {
+        if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
+            self.current |= ModifierKey::SHIFT;
+        }
+        if code == VK_MENU.0 as _ || code == VK_LMENU.0 as _ || code == VK_RMENU.0 as _ {
+            self.current |= ModifierKey::ALT;
+        }
+        if code == VK_CONTROL.0 as _ || code == VK_LCONTROL.0 as _ || code == VK_RCONTROL.0 as _ {
+            self.current |= ModifierKey::CONTROL;
+        }
+        if code == VK_LWIN.0 as _ || code == VK_RWIN.0 as _ {
+            self.current |= ModifierKey::SUPER;
+        }
+    }
+
+    pub fn handle_keyup(&mut self, code: usize) {
+        if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
+            self.current &= !ModifierKey::SHIFT;
+        }
+        if code == VK_MENU.0 as _ || code == VK_LMENU.0 as _ || code == VK_RMENU.0 as _ {
+            self.current &= !ModifierKey::ALT;
+        }
+        if code == VK_CONTROL.0 as _ || code == VK_LCONTROL.0 as _ || code == VK_RCONTROL.0 as _ {
+            self.current &= !ModifierKey::CONTROL;
+        }
+        if code == VK_LWIN.0 as _ || code == VK_RWIN.0 as _ {
+            self.current &= !ModifierKey::SUPER;
+        }
+    }
+}
+
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
 struct WindowEventHandler {
     state: WindowState,
     app_context: *const ApplicationContext,
     event_dispatcher: LogicFiberEventDispatcher,
-    modifier_key_state: ModifierKey,
+    modifier_key_state: ModifierKeyRecorder,
 }
 impl WindowEventHandler {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = NativeWindow::EVENT_HANDLER_LONG_PTR_INDEX;
@@ -764,7 +807,7 @@ impl WindowEventHandler {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
     }
 
@@ -775,13 +818,13 @@ impl WindowEventHandler {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Primary,
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
     }
 
@@ -795,7 +838,7 @@ impl WindowEventHandler {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Primary,
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
     }
 
@@ -806,13 +849,13 @@ impl WindowEventHandler {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
     }
 
@@ -826,7 +869,7 @@ impl WindowEventHandler {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
-            key_modifier: self.modifier_key_state,
+            key_modifier: self.modifier_key_state.current,
         });
     }
 
@@ -964,43 +1007,21 @@ impl WindowEventHandler {
     }
 
     fn keydown(&mut self, hwnd: HWND, code: usize) {
-        if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
-            self.modifier_key_state |= ModifierKey::SHIFT;
-        }
-        if code == VK_MENU.0 as _ || code == VK_LMENU.0 as _ || code == VK_RMENU.0 as _ {
-            self.modifier_key_state |= ModifierKey::ALT;
-        }
-        if code == VK_CONTROL.0 as _ || code == VK_LCONTROL.0 as _ || code == VK_RCONTROL.0 as _ {
-            self.modifier_key_state |= ModifierKey::CONTROL;
-        }
-        if code == VK_LWIN.0 as _ || code == VK_RWIN.0 as _ {
-            self.modifier_key_state |= ModifierKey::SUPER;
-        }
+        self.modifier_key_state.handle_keydown(code);
 
         self.event_dispatcher.dispatch(Event::KeyDown {
             code: Self::translate_keycode(code),
-            modifier: self.modifier_key_state,
+            modifier: self.modifier_key_state.current,
             window: WindowHandle(hwnd),
         });
     }
 
     fn keyup(&mut self, hwnd: HWND, code: usize) {
-        if code == VK_SHIFT.0 as _ || code == VK_LSHIFT.0 as _ || code == VK_RSHIFT.0 as _ {
-            self.modifier_key_state &= !ModifierKey::SHIFT;
-        }
-        if code == VK_MENU.0 as _ || code == VK_LMENU.0 as _ || code == VK_RMENU.0 as _ {
-            self.modifier_key_state &= !ModifierKey::ALT;
-        }
-        if code == VK_CONTROL.0 as _ || code == VK_LCONTROL.0 as _ || code == VK_RCONTROL.0 as _ {
-            self.modifier_key_state &= !ModifierKey::CONTROL;
-        }
-        if code == VK_LWIN.0 as _ || code == VK_RWIN.0 as _ {
-            self.modifier_key_state &= !ModifierKey::SUPER;
-        }
+        self.modifier_key_state.handle_keyup(code);
 
         self.event_dispatcher.dispatch(Event::KeyUp {
             code: Self::translate_keycode(code),
-            modifier: self.modifier_key_state,
+            modifier: self.modifier_key_state.current,
             window: WindowHandle(hwnd),
         });
     }
@@ -1013,7 +1034,7 @@ impl WindowEventHandler {
 
         self.event_dispatcher.dispatch(Event::KeyChar {
             ch: unsafe { char::from_u32_unchecked(code as _) },
-            modifier: self.modifier_key_state,
+            modifier: self.modifier_key_state.current,
             window: WindowHandle(hwnd),
         });
     }
