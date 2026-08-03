@@ -399,6 +399,75 @@ impl<'h> HitTestTreeManager<'h> {
     }
 
     #[cfg(windows)]
+    pub fn compute_screen_rect_with_render_scale(
+        &self,
+        r: HitTestTreeRef,
+    ) -> (Rect<crate::utils::LogicalUnit>, f32) {
+        fn rec(
+            this: &HitTestTreeManager,
+            r: HitTestTreeRef,
+        ) -> (Rect<crate::utils::LogicalUnit>, f32) {
+            let d = &this.data[r.0];
+            match this.relations[r.0].parent {
+                None => {
+                    let (window_screen_rect, root_render_scale) = match d.root_of_window {
+                        None => (
+                            Rect::from_lt_size(Point::new_pixels(0, 0), Size::new_pixels(0, 0)),
+                            1.0,
+                        ),
+                        Some(root) => (root.screen_rect(), root.ui_scale_factor()),
+                    };
+                    let window_screen_rect = Rect::from_lt_size(
+                        window_screen_rect.left_top().to_logical(root_render_scale),
+                        window_screen_rect.size().to_logical(root_render_scale),
+                    );
+
+                    (
+                        Rect::from_lt_size(
+                            Point::new_logical(
+                                window_screen_rect.left
+                                    + window_screen_rect.width * d.left_adjustment_factor
+                                    + d.left,
+                                window_screen_rect.top
+                                    + window_screen_rect.height * d.top_adjustment_factor
+                                    + d.top,
+                            ),
+                            Size::new_logical(
+                                window_screen_rect.width * d.width_adjustment_factor + d.width,
+                                window_screen_rect.height * d.height_adjustment_factor + d.height,
+                            ),
+                        ),
+                        root_render_scale,
+                    )
+                }
+                Some(parent) => {
+                    let (parent_rect, root_render_scale) = rec(this, parent);
+
+                    (
+                        Rect::from_lt_size(
+                            Point::new_logical(
+                                parent_rect.left
+                                    + parent_rect.width * d.left_adjustment_factor
+                                    + d.left,
+                                parent_rect.top
+                                    + parent_rect.height * d.top_adjustment_factor
+                                    + d.top,
+                            ),
+                            Size::new_logical(
+                                parent_rect.width * d.width_adjustment_factor + d.width,
+                                parent_rect.height * d.height_adjustment_factor + d.height,
+                            ),
+                        ),
+                        root_render_scale,
+                    )
+                }
+            }
+        }
+
+        rec(self, r)
+    }
+
+    #[cfg(windows)]
     pub fn compute_screen_rect_pixels_with_insets(
         &self,
         r: HitTestTreeRef,

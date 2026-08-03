@@ -286,7 +286,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         SystemLink {
             font_set: &root_font_set,
             rt_sender: rt_sender.clone(),
-            vk_device,
+            gfx: vk_device,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context: app_context,
             pointer_hovering_timer: pointer_hovering_timer.as_ref().get_ref(),
@@ -1850,20 +1850,31 @@ impl View for ColorPickerHexTextInputView {
             None => {
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
 
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: self.rect.left,
+                    top: self.rect.top,
+                    width: self.rect.width,
+                    height: self.rect.height,
+                    cursor_shape: CursorShape::IBeam,
+                    ..Default::default()
+                });
                 let eh = Rc::new_cyclic(|eh| ColorPickerHexTextInputEventHandler {
                     core: uikit::TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
                         kf_token,
                         self.id,
+                        ht_root,
                         eh.clone() as _,
                     ),
                     value_edit: RefCell::new("00000000".into()),
                     value: Cell::new(0),
+                    ht_root,
                     token: kf_token,
                     parent_view_handler: self.parent_view_handler.clone(),
                 });
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
+                ctx.ht_manager.set_action_handler(ht_root, eh.core.entity());
                 self_instance.bind_event_handler(eh.core.entity());
 
                 let r = uikit::ViewNewRenderElements {
@@ -1886,6 +1897,7 @@ impl View for ColorPickerHexTextInputView {
         ctx.mount_context
             .keyboard_focus_registry
             .release_token(entity.token);
+        ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
 }
 
@@ -1893,6 +1905,7 @@ struct ColorPickerHexTextInputEventHandler {
     core: uikit::TextInputViewCore,
     value_edit: RefCell<String>,
     value: Cell<u32>,
+    ht_root: HitTestTreeRef,
     token: FocusTargetToken,
     parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
 }
@@ -7199,6 +7212,19 @@ async fn run<'sys>(
                         sub_windows.insert(new_window);
                     }
 
+                    view_render_queue.perform(
+                        &mut view_registry,
+                        &mut RenderContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            system_link: &system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            application: &application,
+                        },
+                    );
+
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
@@ -7332,6 +7358,12 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
                                 ht_manager: &ht_manager,
+                                view_registry: &mut view_registry,
+                                view_render_queue: &mut view_render_queue,
+                                application: ApplicationMutation {
+                                    state: &mut application,
+                                    view_feedbacks: &mut view_feedback_store,
+                                },
                             },
                             &request,
                         ) {
@@ -7348,6 +7380,22 @@ async fn run<'sys>(
                                 }
                             }
                         }
+
+                        view_render_queue.perform(
+                            &mut view_registry,
+                            &mut RenderContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                application: &application,
+                            },
+                        );
+
+                        composite_tree
+                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }
@@ -7368,6 +7416,12 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
                                 ht_manager: &ht_manager,
+                                view_registry: &mut view_registry,
+                                view_render_queue: &mut view_render_queue,
+                                application: ApplicationMutation {
+                                    state: &mut application,
+                                    view_feedbacks: &mut view_feedback_store,
+                                },
                             },
                             &e,
                         ) {
@@ -7384,6 +7438,22 @@ async fn run<'sys>(
                                 }
                             }
                         }
+
+                        view_render_queue.perform(
+                            &mut view_registry,
+                            &mut RenderContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                application: &application,
+                            },
+                        );
+
+                        composite_tree
+                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }
@@ -7404,6 +7474,12 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
                                 ht_manager: &ht_manager,
+                                view_registry: &mut view_registry,
+                                view_render_queue: &mut view_render_queue,
+                                application: ApplicationMutation {
+                                    state: &mut application,
+                                    view_feedbacks: &mut view_feedback_store,
+                                },
                             },
                             &e,
                         ) {
@@ -7420,6 +7496,22 @@ async fn run<'sys>(
                                 }
                             }
                         }
+
+                        view_render_queue.perform(
+                            &mut view_registry,
+                            &mut RenderContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                system_link: &system_link,
+                                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                                application: &application,
+                            },
+                        );
+
+                        composite_tree
+                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }

@@ -15,6 +15,7 @@ use windows::{
             },
             Gdi::MapWindowPoints,
         },
+        System::SystemServices::{MK_CONTROL, MK_SHIFT},
         UI::{
             Controls::WM_MOUSELEAVE,
             HiDpi::GetDpiForWindow,
@@ -29,8 +30,8 @@ use windows::{
                 HTTOPRIGHT, HTTRANSPARENT, MA_NOACTIVATE, SW_SHOWNOACTIVATE, SetWindowLongPtrW,
                 ShowWindow, WINDOW_LONG_PTR_INDEX, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
                 WM_MOUSEMOVE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE,
-                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_RBUTTONDOWN, WM_RBUTTONUP, WNDCLASSEXW,
-                WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
+                WM_NCMOUSEMOVE, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST, WS_POPUP,
                 WindowFromPoint,
             },
         },
@@ -43,8 +44,8 @@ use crate::{
     Event, LogicFiberEventDispatcher, SystemLink, WindowHandle,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
-        ShellPointerActions,
+        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, ModifierKey,
+        PerWindowKeyboardFocusState, ShellPointerActions,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
     platform::windows::ApplicationContext,
@@ -353,6 +354,15 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     if msg == WM_LBUTTONDOWN {
+        let mut key_modifier = ModifierKey::empty();
+        if (wparam.0 as u32 & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (wparam.0 as u32 & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
+
         // move then down
         state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
@@ -362,17 +372,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 ((lparam.0 >> 16) & 0xffff) as i16 as _,
             )
             .to_logical(Handle(hwnd).render_scale()),
+            key_modifier,
         });
         state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Primary,
+            key_modifier,
         });
 
         return LRESULT(0);
     }
 
     if msg == WM_NCLBUTTONDOWN && is_application_handled_hittest(wparam.0 as _) {
+        // TODO: key modifier
+        let key_modifier = ModifierKey::empty();
+
         // アプリケーションでハンドリングするNonClientエリア
         // NonClientイベントはスクリーン座標で来る
         let mut p = [POINT {
@@ -388,11 +403,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+            key_modifier,
         });
         state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Primary,
+            key_modifier,
         });
 
         return LRESULT(0);
@@ -401,15 +418,38 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_LBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
+        let mut key_modifier = ModifierKey::empty();
+        if msg == WM_LBUTTONUP {
+            if (wparam.0 as u32 & MK_SHIFT.0) != 0 {
+                key_modifier.insert(ModifierKey::SHIFT);
+            }
+            if (wparam.0 as u32 & MK_CONTROL.0) != 0 {
+                key_modifier.insert(ModifierKey::CONTROL);
+            }
+            // TODO: alt?
+        } else {
+            // TODO: keymod for NCLBUTTONUP
+        }
+
         state(hwnd).dispatch_event(Event::MenuPointerUp {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Primary,
+            key_modifier,
         });
         return LRESULT(0);
     }
 
     if msg == WM_RBUTTONDOWN {
+        let mut key_modifier = ModifierKey::empty();
+        if (wparam.0 as u32 & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (wparam.0 as u32 & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
+
         // move then down
         state(hwnd).dispatch_event(Event::MenuPointerMove {
             target: Handle(hwnd),
@@ -419,17 +459,22 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 ((lparam.0 >> 16) & 0xffff) as i16 as _,
             )
             .to_logical(Handle(hwnd).render_scale()),
+            key_modifier,
         });
         state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Secondary,
+            key_modifier,
         });
 
         return LRESULT(0);
     }
 
     if msg == WM_NCRBUTTONDOWN && is_application_handled_hittest(wparam.0 as _) {
+        // TODO: keymod
+        let key_modifier = ModifierKey::empty();
+
         // アプリケーションでハンドリングするNonClientエリア
         // NonClientイベントはスクリーン座標で来る
         let mut p = [POINT {
@@ -445,28 +490,53 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+            key_modifier,
         });
         state(hwnd).dispatch_event(Event::MenuPointerDown {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Secondary,
+            key_modifier,
         });
 
         return LRESULT(0);
     }
 
     if msg == WM_RBUTTONUP
-        || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
+        || (msg == WM_NCRBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
+        let mut key_modifier = ModifierKey::empty();
+        if msg == WM_RBUTTONUP {
+            if (wparam.0 as u32 & MK_SHIFT.0) != 0 {
+                key_modifier.insert(ModifierKey::SHIFT);
+            }
+            if (wparam.0 as u32 & MK_CONTROL.0) != 0 {
+                key_modifier.insert(ModifierKey::CONTROL);
+            }
+            // TODO: alt?
+        } else {
+            // TODO: keymod for nc
+        }
+
         state(hwnd).dispatch_event(Event::MenuPointerUp {
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             button: PointerButton::Secondary,
+            key_modifier,
         });
         return LRESULT(0);
     }
 
     if msg == WM_MOUSEMOVE {
+        let mut key_modifier = ModifierKey::empty();
+        if (wparam.0 as u32 & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (wparam.0 as u32 & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
+
         unsafe {
             TrackMouseEvent(&mut TRACKMOUSEEVENT {
                 cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
@@ -487,12 +557,16 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 ((lparam.0 >> 16) & 0xffff) as i16 as _,
             )
             .to_logical(Handle(hwnd).render_scale()),
+            key_modifier,
         });
 
         return LRESULT(0);
     }
 
     if msg == WM_NCMOUSEMOVE {
+        // TODO: keymod for nc
+        let mut key_modifier = ModifierKey::empty();
+
         unsafe {
             TrackMouseEvent(&mut TRACKMOUSEEVENT {
                 cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
@@ -518,6 +592,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             target: Handle(hwnd),
             pointer_id: super::PointerID(),
             client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+            key_modifier,
         });
         // Note: NCMOUSEMOVEはデフォルト動作もさせる
     }

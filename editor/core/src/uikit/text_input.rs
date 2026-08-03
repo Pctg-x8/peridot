@@ -27,7 +27,7 @@ use crate::{
     },
     uikit::{
         RenderChildScheduler, RenderContext, View, ViewEventHandler, ViewIdentifier,
-        ViewInstanceModifier, ViewNewRenderElements, ViewUpdateContext,
+        ViewInstanceModifier, ViewNewRenderElements, ViewRenderQueue, ViewUpdateContext,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32,
@@ -50,6 +50,7 @@ impl TextInputViewCore {
         rect: Rect<LogicalUnit>,
         keyboard_focus_token: FocusTargetToken,
         delegated_view_id: ViewIdentifier,
+        ht_root: HitTestTreeRef,
         io: std::rc::Weak<dyn TextInputViewIO>,
     ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -124,15 +125,7 @@ impl TextInputViewCore {
 
         let eh = Rc::new(TextInputViewCoreEventHandler {
             io: io,
-            ht_root: ctx.ht_manager.create(HitTestTreeData {
-                left: rect.left,
-                top: rect.top,
-                width: rect.width,
-                height: rect.height,
-                cursor_shape: CursorShape::IBeam,
-                keyboard_focus: Some(keyboard_focus_token),
-                ..Default::default()
-            }),
+            ht_root,
             ct_root,
             ct_text,
             ct_cursor,
@@ -158,7 +151,6 @@ impl TextInputViewCore {
             event_dispatcher: ctx.system_link.event_dispatcher,
             delegated_view_id,
         });
-        ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
         ctx.ht_manager
             .set_screen_reposition_handler(eh.ht_root, &eh);
         #[cfg(windows)]
@@ -1249,6 +1241,8 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
         ctx: &mut InputEventContext,
         req: &windows::UI::Text::Core::CoreTextLayoutRequest,
     ) -> windows_core::Result<()> {
+        use crate::utils::Size;
+
         let range = req.Range()?;
         tracing::trace!(
             req.range = ?range,
@@ -1265,10 +1259,12 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             .take(range.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
 
-        let r = ctx.ht_manager.compute_screen_rect_pixels_with_insets(
-            self.ht_root,
-            Point::new_logical(2.0, 2.0),
-            Point::new_logical(2.0, 2.0),
+        let (r, render_scale) = ctx
+            .ht_manager
+            .compute_screen_rect_with_render_scale(self.ht_root);
+        let r = Rect::from_lt_size(
+            Point::new_logical(r.left + 2.0, r.top + 2.0).to_pixels_round(render_scale),
+            Size::new_logical(r.width - 4.0, r.height - 4.0).to_pixels_ceil(render_scale),
         );
         let o = TextLayout::measure_total_advances(
             &content[..start_bytes],
@@ -1281,13 +1277,23 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             ctx.system_link.font_set(),
         );
 
+        tracing::debug!(?r, "ScreenRect");
+
         req.LayoutBounds()?
             .SetTextBounds(windows::Foundation::Rect {
-                X: r.left as f32 + (o + self.content_h_offset.get()) * self.render_scale.get(),
+                X: r.left as f32 + (o + self.content_h_offset.get()) * render_scale,
                 Y: r.top as _,
-                Width: w * self.render_scale.get(),
+                Width: w * render_scale,
                 Height: r.height as _,
-            })
+            })?;
+        req.LayoutBounds()?
+            .SetControlBounds(windows::Foundation::Rect {
+                X: r.left as _,
+                Y: r.top as _,
+                Width: r.width as _,
+                Height: r.height as _,
+            })?;
+        Ok(())
     }
 
     fn text_updating(
@@ -1705,6 +1711,7 @@ impl View for TextInputView {
                         self.rect.clone(),
                         kf_token,
                         self.id,
+                        ht_root,
                         self.io.clone() as _,
                     ),
                     id: self.id,
@@ -1800,7 +1807,12 @@ impl View for NumericInputView {
     ) -> ViewNewRenderElements {
         let (eh, new_elements) = match self.eh {
             Some(ref x) => {
-                // TODO: reflect changes
+                ctx.ht_manager.get_data_mut(x.ht_root).cursor_shape = if x.key_input_enabled.get() {
+                    CursorShape::IBeam
+                } else {
+                    CursorShape::ResizeVertical
+                };
+
                 (x, ViewNewRenderElements::EMPTY)
             }
             None => {
@@ -1822,6 +1834,7 @@ impl View for NumericInputView {
                         self.rect.clone(),
                         kf_token,
                         self.id,
+                        ht_root,
                         self.value.clone(),
                     ),
                     value: self.value.clone(),
@@ -1831,8 +1844,7 @@ impl View for NumericInputView {
                 });
                 ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
-                // sink some events to base impl
-                self_instance.bind_event_handler(&eh.core.eh);
+                self_instance.bind_event_handler(&eh);
 
                 let r = ViewNewRenderElements {
                     composite_tree: Some(eh.core.eh.ct_root),
@@ -1880,11 +1892,17 @@ struct NumericInputViewEventHandler {
     ht_root: HitTestTreeRef,
     key_input_enabled: Cell<bool>,
 }
+impl ViewEventHandler for NumericInputViewEventHandler {
+    fn update(&self, context: &mut ViewUpdateContext) {
+        self.core.entity().update(context);
+    }
+}
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
         self.confirm_direct_input(
             context.system_link,
             context.ht_manager,
+            context.view_render_queue,
             &mut context.application,
         );
     }
@@ -1896,12 +1914,14 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
                 self.confirm_direct_input(
                     context.system_link,
                     context.ht_manager,
+                    context.view_render_queue,
                     &mut context.application,
                 );
             } else {
                 self.begin_direct_input(
                     context.system_link,
                     context.ht_manager,
+                    context.view_render_queue,
                     &context.application,
                 );
             }
@@ -1914,6 +1934,7 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
             self.cancel_direct_input(
                 context.system_link,
                 context.ht_manager,
+                context.view_render_queue,
                 &context.application,
             );
             return;
@@ -2048,6 +2069,7 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         self.begin_direct_input(
             context.system_link,
             context.ht_manager,
+            context.view_render_queue,
             &context.application,
         );
 
@@ -2059,6 +2081,7 @@ impl NumericInputViewEventHandler {
         &self,
         syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
+        view_render_queue: &mut ViewRenderQueue,
         application: &Application,
     ) {
         if self.key_input_enabled.replace(true) {
@@ -2080,12 +2103,14 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView {
             id: self.core.eh.delegated_view_id,
         });
+        view_render_queue.schedule(self.core.eh.delegated_view_id);
     }
 
     fn confirm_direct_input(
         &self,
         syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
+        view_render_queue: &mut ViewRenderQueue,
         application: &mut ApplicationMutation,
     ) {
         if !self.key_input_enabled.replace(false) {
@@ -2112,14 +2137,18 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView {
             id: self.core.eh.delegated_view_id,
         });
+        view_render_queue.schedule(self.core.eh.delegated_view_id);
     }
 
     fn cancel_direct_input(
         &self,
         syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
+        view_render_queue: &mut ViewRenderQueue,
         application: &Application,
     ) {
+        self.key_input_enabled.set(false);
+
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.core.eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
@@ -2135,6 +2164,7 @@ impl NumericInputViewEventHandler {
         syslink.dispatch_event(Event::UpdateView {
             id: self.core.eh.delegated_view_id,
         });
+        view_render_queue.schedule(self.core.eh.delegated_view_id);
     }
 }
 
@@ -3555,33 +3585,31 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
             .iter()
             .map(|x| x.left + self.content_h_offset.get())
             .min_by(f32::total_cmp)
-            .unwrap_or(0.0)
-            * self.render_scale.get();
+            .unwrap_or(0.0);
         let y_min = rects
             .iter()
             .map(|x| x.top + self.content_v_offset.get())
             .min_by(f32::total_cmp)
-            .unwrap_or(0.0)
-            * self.render_scale.get();
+            .unwrap_or(0.0);
         let x_max = rects
             .iter()
             .map(|x| x.right() + self.content_h_offset.get())
             .max_by(f32::total_cmp)
-            .unwrap_or(0.0)
-            * self.render_scale.get();
+            .unwrap_or(0.0);
         let y_max = rects
             .iter()
             .map(|x| x.bottom() + self.content_v_offset.get())
             .max_by(f32::total_cmp)
-            .unwrap_or(0.0)
-            * self.render_scale.get();
+            .unwrap_or(0.0);
 
+        // TODO: RenderScale(DPI)どうやってとるか
+        let render_scale = 1.0;
         req.LayoutBounds()?
             .SetTextBounds(windows::Foundation::Rect {
-                X: r.left as f32 + x_min,
-                Y: r.top as f32 + y_min,
-                Width: x_max - x_min,
-                Height: y_max - y_min,
+                X: r.left as f32 + x_min * render_scale,
+                Y: r.top as f32 + y_min * render_scale,
+                Width: (x_max - x_min) * render_scale,
+                Height: (y_max - y_min) * render_scale,
             })?;
         req.LayoutBounds()?
             .SetControlBounds(windows::Foundation::Rect {

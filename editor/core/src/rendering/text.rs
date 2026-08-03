@@ -111,6 +111,8 @@ pub struct FontSet {
     ui_default: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
     #[cfg(windows)]
     ui_title_project_name: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
+    #[cfg(windows)]
+    ui_form_lifted_label: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
 }
 #[cfg(any(target_os = "macos", feature = "freetype"))]
 unsafe impl Sync for FontSet {}
@@ -176,11 +178,24 @@ impl FontSet {
             )
             .expect("dwrite.textformat.create.ui_title_project_name")
         };
+        let ui_form_lifted_label = unsafe {
+            dw.CreateTextFormat(
+                windows_core::w!("Inter Display"),
+                None,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
+                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
+                8.0,
+                windows_core::PCWSTR(locale_name.as_ptr()),
+            )
+            .expect("dwrite.textformat.create.ui_form_lifted_label")
+        };
 
         Self {
             dw_factory: dw,
             ui_default,
             ui_title_project_name,
+            ui_form_lifted_label,
         }
     }
 
@@ -416,6 +431,7 @@ impl FontSet {
         match category {
             FontID::UIDefault => &self.ui_default,
             FontID::UITitleProjectName => &self.ui_title_project_name,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
         }
     }
 }
@@ -2008,13 +2024,26 @@ impl TextLayout {
 
     pub fn size(&self) -> Size<LogicalUnit> {
         #[cfg(feature = "harfbuzz")]
-        Size::new_logical(
+        return Size::new_logical(
             self.lines
                 .iter()
                 .map(|x| x.width_with_trailing_whitespace)
                 .fold(0.0, f32::max),
             self.height,
-        )
+        );
+
+        #[cfg(windows)]
+        let mut metrics = core::mem::MaybeUninit::uninit();
+        #[cfg(windows)]
+        unsafe {
+            self.layout
+                .GetMetrics(metrics.as_mut_ptr())
+                .expect("layout.GetMetrics");
+        }
+        #[cfg(windows)]
+        let metrics = unsafe { metrics.assume_init_ref() };
+        #[cfg(windows)]
+        return Size::new_logical(metrics.width, metrics.height);
     }
 
     pub fn visual_width(&self, font_set: &FontSet) -> f32 {

@@ -91,7 +91,7 @@ use crate::{
     Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
     WindowGeometryState, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
-    graphics::{VulkanDevice, VulkanSurface},
+    graphics::{Graphics, VulkanSurface},
     input::{
         InputEventContext, KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         ModifierKey, PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit,
@@ -241,6 +241,31 @@ impl WindowHandle {
         Point::new_pixels(
             extended_frame_bounds.left as _,
             extended_frame_bounds.top as _,
+        )
+    }
+
+    pub fn screen_rect(&self) -> Rect<PixelsUnit> {
+        let mut extended_frame_bounds = core::mem::MaybeUninit::<RECT>::uninit();
+        unsafe {
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                extended_frame_bounds.as_mut_ptr().cast(),
+                core::mem::size_of::<RECT>() as _,
+            )
+            .expect("DwmGetWindowAttribute")
+        }
+        let extended_frame_bounds = unsafe { extended_frame_bounds.assume_init_ref() };
+
+        Rect::from_lt_size(
+            Point::new_pixels(
+                extended_frame_bounds.left as _,
+                extended_frame_bounds.top as _,
+            ),
+            Size::new_pixels(
+                (extended_frame_bounds.right - extended_frame_bounds.left) as _,
+                (extended_frame_bounds.bottom - extended_frame_bounds.top) as _,
+            ),
         )
     }
 
@@ -541,13 +566,13 @@ impl NativeWindow {
     }
 
     #[inline(always)]
-    fn create_vk_surface<'d, 'fs>(&self, device: &'d VulkanDevice<'fs>) -> VulkanSurface<'d, 'fs> {
-        VulkanSurface::new(device, unsafe {
+    fn create_vk_surface<'d, 'fs>(&self, gfx: &'d Graphics<'fs>) -> VulkanSurface<'d, 'fs> {
+        VulkanSurface::new(gfx, unsafe {
             br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(self.hinstance),
                 core::mem::transmute(self.hwnd),
             )
-            .execute(device.instance(), None)
+            .execute(gfx.instance(), None)
             .expect("vk_surface.create")
         })
     }
@@ -698,7 +723,7 @@ impl WindowEventHandler {
     }
 
     #[tracing::instrument(skip(self))]
-    fn mouse_move(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
+    fn mouse_move(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>, key_modifiers: u32) {
         if unsafe { &*self.app_context }.pane_dragging.get() {
             // in pane dragging
             let mut cursor_pos = core::mem::MaybeUninit::uninit();
@@ -737,66 +762,118 @@ impl WindowEventHandler {
             return;
         }
 
+        let mut key_modifier = ModifierKey::empty();
+        if (key_modifiers & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (key_modifiers & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
+
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
+            key_modifier,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn left_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
+    fn left_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>, key_modifiers: u32) {
+        let mut key_modifier = ModifierKey::empty();
+        if (key_modifiers & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (key_modifiers & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
+
         // move then down
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
+            key_modifier,
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Primary,
+            key_modifier,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn left_button_up(&mut self, hwnd: HWND) {
+    fn left_button_up(&mut self, hwnd: HWND, key_modifiers: u32) {
         if self.try_perform_confirm_drag(hwnd) {
             return;
         }
+
+        let mut key_modifier = ModifierKey::empty();
+        if (key_modifiers & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (key_modifiers & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
 
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Primary,
+            key_modifier,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn right_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
+    fn right_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>, key_modifiers: u32) {
+        let mut key_modifier = ModifierKey::empty();
+        if (key_modifiers & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (key_modifiers & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
+
         // move then down
         self.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(hwnd),
             client_pos: client_pos.to_logical(self.state.content_scale),
+            key_modifier,
         });
         self.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
+            key_modifier,
         });
     }
 
     #[tracing::instrument(skip(self))]
-    fn right_button_up(&mut self, hwnd: HWND) {
+    fn right_button_up(&mut self, hwnd: HWND, key_modifiers: u32) {
         if self.try_perform_confirm_drag(hwnd) {
             return;
         }
+
+        let mut key_modifier = ModifierKey::empty();
+        if (key_modifiers & MK_SHIFT.0) != 0 {
+            key_modifier.insert(ModifierKey::SHIFT);
+        }
+        if (key_modifiers & MK_CONTROL.0) != 0 {
+            key_modifier.insert(ModifierKey::CONTROL);
+        }
+        // TODO: alt?
 
         self.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(hwnd),
             pointer_id: PointerID(),
             button: PointerButton::Secondary,
+            key_modifier,
         });
     }
 
@@ -1279,6 +1356,7 @@ impl WindowEventHandler {
                     (lparam.0 & 0xffff) as i16 as _,
                     ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 ),
+                wparam.0 as _,
             );
 
             return LRESULT(0);
@@ -1295,14 +1373,18 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(hwnd), &mut p);
             }
 
-            Self::get_for_window(hwnd).left_button_down(hwnd, Point::new_pixels(p[0].x, p[0].y));
+            Self::get_for_window(hwnd).left_button_down(
+                hwnd,
+                Point::new_pixels(p[0].x, p[0].y),
+                wparam.0 as _,
+            );
             return LRESULT(0);
         }
 
         if msg == WM_LBUTTONUP
             || (msg == WM_NCLBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
         {
-            Self::get_for_window(hwnd).left_button_up(hwnd);
+            Self::get_for_window(hwnd).left_button_up(hwnd, wparam.0 as _);
             return LRESULT(0);
         }
 
@@ -1313,6 +1395,7 @@ impl WindowEventHandler {
                     (lparam.0 & 0xffff) as i16 as _,
                     ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 ),
+                wparam.0 as _,
             );
 
             return LRESULT(0);
@@ -1329,14 +1412,18 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(hwnd), &mut p);
             }
 
-            Self::get_for_window(hwnd).right_button_down(hwnd, Point::new_pixels(p[0].x, p[0].y));
+            Self::get_for_window(hwnd).right_button_down(
+                hwnd,
+                Point::new_pixels(p[0].x, p[0].y),
+                wparam.0 as _,
+            );
             return LRESULT(0);
         }
 
         if msg == WM_RBUTTONUP
             || (msg == WM_NCRBUTTONUP && Self::is_application_handled_hittest(wparam.0 as _))
         {
-            Self::get_for_window(hwnd).right_button_up(hwnd);
+            Self::get_for_window(hwnd).right_button_up(hwnd, wparam.0 as _);
             return LRESULT(0);
         }
 
@@ -1357,6 +1444,7 @@ impl WindowEventHandler {
                     (lparam.0 & 0xffff) as i16 as _,
                     ((lparam.0 >> 16) & 0xffff) as i16 as _,
                 ),
+                wparam.0 as _,
             );
 
             return LRESULT(0);
@@ -1382,7 +1470,11 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(hwnd), &mut p);
             }
 
-            Self::get_for_window(hwnd).mouse_move(hwnd, Point::new_pixels(p[0].x, p[0].y));
+            Self::get_for_window(hwnd).mouse_move(
+                hwnd,
+                Point::new_pixels(p[0].x, p[0].y),
+                wparam.0 as _,
+            );
             // Note: NCMOUSEMOVEはデフォルト動作もさせる
         }
 
@@ -1761,7 +1853,7 @@ impl DxContext {
 
 pub struct SystemLink<'sys> {
     pub font_set: *const FontSet,
-    pub vk_device: *const VulkanDevice<'sys>,
+    pub gfx: *const Graphics<'sys>,
     pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context: &'sys ApplicationContext,
@@ -1869,7 +1961,7 @@ impl SystemLink<'_> {
         let h = w.make_handle();
         ht_manager.get_data_mut(ht).root_of_window = Some(h);
 
-        let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
+        let vk_surface = w.create_vk_surface(unsafe { &*self.gfx });
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
             key: h,
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
@@ -1980,7 +2072,7 @@ impl SystemLink<'_> {
         let h = w.make_handle();
         hit_tree.get_data_mut(ht).root_of_window = Some(h);
 
-        let vk_surface = w.create_vk_surface(unsafe { &*self.vk_device });
+        let vk_surface = w.create_vk_surface(unsafe { &*self.gfx });
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
             key: h,
             vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),

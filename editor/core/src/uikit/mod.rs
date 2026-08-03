@@ -6,8 +6,6 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use libc::grantpt;
-
 use crate::{
     Application, SyncEvent, SystemLink,
     input::{
