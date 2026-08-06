@@ -13,7 +13,9 @@ use crate::{
     },
     uikit::{
         RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewInitContext, ViewInstanceModifier, ViewNewRenderElements, ViewRegistry,
+        ViewInitContext, ViewInstanceModifier, ViewInstanceStore, ViewNewRenderElements,
+        ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, render_view_recursive,
+        teardown_view_recursive, view_instance, view_instance_mut,
     },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
@@ -39,7 +41,7 @@ pub trait Popup {
     /// ポップアップが閉じられるときに呼ばれる
     fn close(
         &mut self,
-        view_registry: &mut ViewRegistry,
+        context: &mut PopupCloseContext,
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
@@ -47,6 +49,21 @@ pub trait Popup {
 
     /// ポップアップのクローズアニメーションが終わって、インスタンスが破棄されるときに呼ばれる
     fn teardown(&mut self, ctx: &mut TeardownContext);
+}
+
+pub struct PopupCloseContext<'env> {
+    pub view_instance_store: &'env mut ViewInstanceStore,
+}
+impl PopupCloseContext<'_> {
+    #[inline(always)]
+    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        view_instance(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
+    }
 }
 
 pub struct PopupManager {
@@ -69,13 +86,7 @@ impl PopupManager {
         let id = PopupID::new();
         let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
         let instance = ctor(id, ctx);
-        let (view_registry, mut rc) = ctx.make_render_context2();
-        view_registry.render_recursive(
-            instance.root_view_id(),
-            &mut rc,
-            &window,
-            popup_focus_group,
-        );
+        ctx.render_view_recursive(instance.root_view_id(), &window, popup_focus_group);
         self.instance_by_id
             .insert(id, (Box::new(instance), window, popup_focus_group));
 
@@ -98,17 +109,20 @@ impl PopupManager {
     pub fn close(
         &mut self,
         id: PopupID,
-        registry: &mut ViewRegistry,
+        view_instance_store: &mut ViewInstanceStore,
+        view_render_queue: &mut ViewRenderQueue,
         ctx: &mut RenderContext,
     ) -> bool {
         if let Some((instance, w, g)) = self.instance_by_id.get_mut(&id) {
             instance.close(
-                registry,
+                &mut PopupCloseContext {
+                    view_instance_store,
+                },
                 ctx.composite_tree,
                 ctx.ht_manager,
                 ctx.current_sec,
             );
-            registry.render_recursive(instance.root_view_id(), ctx, w, *g);
+            view_render_queue.schedule(instance.root_view_id());
             true
         } else {
             false
@@ -118,15 +132,23 @@ impl PopupManager {
     #[inline(always)]
     pub fn teardown(
         &mut self,
-        registry: &mut ViewRegistry,
-        ctx: &mut TeardownContext,
         id: PopupID,
+        view_instance_store: &mut ViewInstanceStore,
+        view_tree_relation_store: &mut ViewTreeRelationStore,
+        view_render_state_store: &mut ViewRenderStateStore,
+        ctx: &mut TeardownContext,
     ) -> bool {
         if let Some((mut instance, mut w, g)) = self.instance_by_id.remove(&id) {
             w.keyboard_focus_state_mut().pop_tab_stop_group();
             ctx.mount_context.keyboard_focus_registry.release_group(g);
             instance.teardown(ctx);
-            registry.teardown_recursive(instance.root_view_id(), ctx);
+            teardown_view_recursive(
+                instance.root_view_id(),
+                ctx,
+                view_instance_store,
+                view_tree_relation_store,
+                view_render_state_store,
+            );
             true
         } else {
             false

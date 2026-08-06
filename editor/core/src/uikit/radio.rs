@@ -220,20 +220,18 @@ impl HitTestTreeActionHandler for RadioButtonEventHandler {
     ) -> EventContinueControl {
         // 自分自身をtrueにする(ViewGroupに属していないViewの場合これをしないとONにならない)
         context
-            .view_registry
-            .instance_mut::<RadioButtonView>(self.view_id)
+            .view_instance_mut::<RadioButtonView>(self.view_id)
             .expect("query failed")
             .selected_changes = Some(true);
         context.view_render_queue.schedule(self.view_id);
 
         // 他をOFFに
         let other_participants = context
-            .view_registry
-            .iter_self_group_parcitipants(self.view_id)
+            .view_iter_self_group_parcitipants(self.view_id)
             .filter(|&x| x != self.view_id)
             .collect::<Vec<_>>();
         for x in other_participants {
-            if let Some(inst) = context.view_registry.instance_mut::<RadioButtonView>(x) {
+            if let Some(inst) = context.view_instance_mut::<RadioButtonView>(x) {
                 inst.selected_changes = Some(false);
                 context.view_render_queue.schedule(x);
             }

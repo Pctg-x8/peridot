@@ -21,8 +21,9 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        MountContext, MountTarget, RawMountTarget, TeardownContext, ViewEventHandler,
-        ViewIdentifier, ViewInitContext, ViewUpdateContext,
+        MountContext, MountTarget, RawMountTarget, TeardownContext, View, ViewEventHandler,
+        ViewIdentifier, ViewInitContext, ViewInstanceStore, ViewRenderQueue, ViewUpdateContext,
+        view_instance, view_instance_mut,
     },
     utils::{LogicalUnit, Point, Rect, SafeF32, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -72,12 +73,29 @@ pub trait PaneContentPresenter {
     /// サイズ変更
     #[allow(unused_variables)]
     #[inline(always)]
-    fn resize(
-        &self,
-        new_size: &Size<LogicalUnit>,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
+    fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {}
+}
+
+pub struct PaneContentResizeContext<'env, 'h> {
+    pub view_instance_store: &'env mut ViewInstanceStore,
+    pub view_render_queue: &'env mut ViewRenderQueue,
+    pub composite_tree: &'env mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'env mut HitTestTreeManager<'h>,
+}
+impl PaneContentResizeContext<'_, '_> {
+    #[inline(always)]
+    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        view_instance(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    pub fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target);
     }
 }
 
@@ -456,6 +474,7 @@ pub enum UndockResult {
 
 pub struct RedockingContext<'a, 'h> {
     pub view_init_ctx: ViewInitContext<'a, 'h>,
+    pub view_render_queue: &'a mut ViewRenderQueue,
 }
 impl<'a, 'h> RedockingContext<'a, 'h> {
     fn make_teardown_context(&mut self) -> TeardownContext<'_, 'h> {
@@ -477,10 +496,11 @@ pub struct DockingManager {
     root_id: DockID,
 }
 impl DockingManager {
-    #[tracing::instrument(skip(bound_window, ctx, store, dock_ctor))]
+    #[tracing::instrument(skip(bound_window, ctx, view_render_queue, store, dock_ctor))]
     pub fn new(
         bound_window: WindowHandle,
         ctx: &mut ViewInitContext,
+        view_render_queue: &mut ViewRenderQueue,
         max_rect: Rect<LogicalUnit>,
         store: &mut DockStore,
         dock_ctor: impl FnOnce(&mut ViewInitContext, &mut DockStore) -> DockID,
@@ -491,8 +511,12 @@ impl DockingManager {
             root_id,
             store,
             max_rect,
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
+            &mut PaneContentResizeContext {
+                view_instance_store: ctx.view_instance_store,
+                view_render_queue,
+                composite_tree: ctx.mount_context.composite_tree,
+                ht_manager: ctx.mount_context.ht_manager,
+            },
         );
 
         Self { root_id }
@@ -503,10 +527,9 @@ impl DockingManager {
         &self,
         new_rect: Rect<LogicalUnit>,
         store: &mut DockStore,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
+        context: &mut PaneContentResizeContext,
     ) {
-        relayout_dock(self.root_id, store, new_rect, composite_tree, ht_manager);
+        relayout_dock(self.root_id, store, new_rect, context);
     }
 
     #[tracing::instrument(skip(self, store, ctx, mount_target))]
@@ -603,6 +626,7 @@ fn mount_recursive(
 fn split_new(
     store: &mut DockStore,
     view_init_ctx: &mut ViewInitContext,
+    view_render_queue: &mut ViewRenderQueue,
     mount_target: &(impl MountTarget + ?Sized),
     new_rest: DockID,
     content: Box<dyn PaneContentPresenter>,
@@ -642,17 +666,29 @@ fn split_new(
         onto,
         store,
         relayout_base_rect,
-        view_init_ctx.mount_context.composite_tree,
-        view_init_ctx.mount_context.ht_manager,
+        &mut PaneContentResizeContext {
+            view_instance_store: view_init_ctx.view_instance_store,
+            view_render_queue,
+            composite_tree: view_init_ctx.mount_context.composite_tree,
+            ht_manager: view_init_ctx.mount_context.ht_manager,
+        },
     );
 }
 
 /// Dockを外す
-#[tracing::instrument(skip(dbg_dump_root, store, teardown_ctx))]
+#[tracing::instrument(skip(
+    dbg_dump_root,
+    store,
+    view_instance_store,
+    view_render_queue,
+    teardown_ctx
+))]
 fn undock(
     dbg_dump_root: DockID,
     target: DockID,
     store: &mut DockStore,
+    view_instance_store: &mut ViewInstanceStore,
+    view_render_queue: &mut ViewRenderQueue,
     teardown_ctx: &mut TeardownContext,
 ) -> UndockResult {
     store.dump(dbg_dump_root);
@@ -702,8 +738,12 @@ fn undock(
                 relayout_base,
                 store,
                 relayout_base_rect,
-                teardown_ctx.mount_context.composite_tree,
-                teardown_ctx.mount_context.ht_manager,
+                &mut PaneContentResizeContext {
+                    view_instance_store,
+                    view_render_queue,
+                    composite_tree: teardown_ctx.mount_context.composite_tree,
+                    ht_manager: teardown_ctx.mount_context.ht_manager,
+                },
             );
         }
         _ => todo!(),
@@ -757,8 +797,12 @@ fn redock(
                 target,
                 store,
                 target_rect,
-                ctx.view_init_ctx.mount_context.composite_tree,
-                ctx.view_init_ctx.mount_context.ht_manager,
+                &mut PaneContentResizeContext {
+                    view_instance_store: ctx.view_init_ctx.view_instance_store,
+                    view_render_queue: ctx.view_render_queue,
+                    composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
+                    ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
+                },
             );
             None
         }
@@ -782,8 +826,12 @@ fn redock(
                 target,
                 store,
                 target_rect,
-                ctx.view_init_ctx.mount_context.composite_tree,
-                ctx.view_init_ctx.mount_context.ht_manager,
+                &mut PaneContentResizeContext {
+                    view_instance_store: ctx.view_init_ctx.view_instance_store,
+                    view_render_queue: ctx.view_render_queue,
+                    composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
+                    ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
+                },
             );
             None
         }
@@ -791,6 +839,7 @@ fn redock(
             split_new(
                 store,
                 &mut ctx.view_init_ctx,
+                ctx.view_render_queue,
                 mount_target,
                 target,
                 content,
@@ -802,6 +851,7 @@ fn redock(
             split_new(
                 store,
                 &mut ctx.view_init_ctx,
+                ctx.view_render_queue,
                 mount_target,
                 target,
                 content,
@@ -813,6 +863,7 @@ fn redock(
             split_new(
                 store,
                 &mut ctx.view_init_ctx,
+                ctx.view_render_queue,
                 mount_target,
                 target,
                 content,
@@ -824,6 +875,7 @@ fn redock(
             split_new(
                 store,
                 &mut ctx.view_init_ctx,
+                ctx.view_render_queue,
                 mount_target,
                 target,
                 content,
@@ -838,7 +890,22 @@ fn redock(
             dbg_dump_root,
             source,
             store,
-            &mut ctx.make_teardown_context(),
+            ctx.view_init_ctx.view_instance_store,
+            ctx.view_render_queue,
+            &mut TeardownContext {
+                mount_context: MountContext {
+                    composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
+                    ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
+                    keyboard_focus_registry: ctx
+                        .view_init_ctx
+                        .mount_context
+                        .keyboard_focus_registry,
+                    current_sec: ctx.view_init_ctx.mount_context.current_sec,
+                },
+                view_feedback_subscription_delayed_ops: ctx
+                    .view_init_ctx
+                    .view_feedback_subscription_delayed_ops,
+            },
         )
     } else {
         UndockResult::Success
@@ -852,8 +919,7 @@ pub fn move_splitter(
     target: DockID,
     store: &mut DockStore,
     new_splitter_client_pos: f32,
-    composite_tree: &mut CompositeTree<SyncEvent>,
-    ht_manager: &mut HitTestTreeManager,
+    context: &mut PaneContentResizeContext,
 ) {
     let self_rect = &store.get_computed_state(target).rect;
     match store.get(target) {
@@ -898,7 +964,7 @@ pub fn move_splitter(
     }
 
     let self_rect = self_rect.clone();
-    relayout_dock(target, store, self_rect, composite_tree, ht_manager);
+    relayout_dock(target, store, self_rect, context);
 }
 
 /// Dockのレイアウトを再帰的に再計算する
@@ -906,18 +972,13 @@ fn relayout_dock(
     target: DockID,
     store: &mut DockStore,
     available_rect: Rect<LogicalUnit>,
-    composite_tree: &mut CompositeTree<SyncEvent>,
-    ht_manager: &mut HitTestTreeManager,
+    context: &mut PaneContentResizeContext,
 ) {
     store.get_computed_state_mut(target).rect = available_rect.clone();
 
     match store.get(target) {
-        &Dock::RootContainer { content } => {
-            relayout_dock(content, store, available_rect, composite_tree, ht_manager)
-        }
-        &Dock::Fill { ref group_view, .. } => {
-            group_view.set_rect(available_rect, composite_tree, ht_manager)
-        }
+        &Dock::RootContainer { content } => relayout_dock(content, store, available_rect, context),
+        &Dock::Fill { ref group_view, .. } => group_view.set_rect(available_rect, context),
         &Dock::Splitted {
             docked,
             rest,
@@ -927,9 +988,9 @@ fn relayout_dock(
         } => {
             let (docked_rect, rest_rect, splitter_rect) = direction.split_rect(&available_rect);
 
-            splitter.resize(splitter_rect, composite_tree, ht_manager);
-            relayout_dock(docked, store, docked_rect, composite_tree, ht_manager);
-            relayout_dock(rest, store, rest_rect, composite_tree, ht_manager);
+            splitter.resize(splitter_rect, context.composite_tree, context.ht_manager);
+            relayout_dock(docked, store, docked_rect, context);
+            relayout_dock(rest, store, rest_rect, context);
         }
     }
 }
@@ -1340,7 +1401,7 @@ impl DockedPaneSplitterView {
         });
 
         let eh = Rc::new(DockedPaneSplitterEventHandler {
-            view_id: ctx.view_registry.alloc_id_only(),
+            view_id: ctx.alloc_view_id_without_instance(),
             dir,
             controlling_dock: Cell::new(controlling_dock),
             ct_root,
@@ -1350,7 +1411,7 @@ impl DockedPaneSplitterView {
             drag_delta: Cell::new(0.0),
         });
         ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-        ctx.view_registry.set_event_handler(eh.view_id, &eh);
+        ctx.set_view_event_handler(eh.view_id, &eh);
 
         Self(eh)
     }
@@ -1574,7 +1635,7 @@ impl PaneGroupView {
 
         let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let controller = Rc::new_cyclic(|wgc| PaneGroupViewController {
-            view_id: ctx.view_registry.alloc_id_only(),
+            view_id: ctx.alloc_view_id_without_instance(),
             ct_root,
             ht_root,
             ct_content_root,
@@ -1594,8 +1655,7 @@ impl PaneGroupView {
             pending_active_changes: Cell::new(None),
             pending_set_rect: Cell::new(None),
         });
-        ctx.view_registry
-            .set_event_handler(controller.view_id, &controller);
+        ctx.set_view_event_handler(controller.view_id, &controller);
 
         Self::relocate_tabs(
             controller.contents.borrow().iter().map(|(_, t)| t),
@@ -1639,14 +1699,8 @@ impl PaneGroupView {
 
     /// 矩形を設定する
     #[inline(always)]
-    pub fn set_rect(
-        &self,
-        rect: Rect<LogicalUnit>,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        self.controller
-            .perform_set_rect(rect, composite_tree, ht_manager);
+    pub fn set_rect(&self, rect: Rect<LogicalUnit>, context: &mut PaneContentResizeContext) {
+        self.controller.perform_set_rect(rect, context);
     }
 
     /// このグループが乗っているDockを変更する
@@ -1828,8 +1882,12 @@ impl ViewEventHandler for PaneGroupViewController {
         if let Some(rect) = self.pending_set_rect.take() {
             self.perform_set_rect(
                 rect,
-                context.mount_context.composite_tree,
-                context.mount_context.ht_manager,
+                &mut PaneContentResizeContext {
+                    view_instance_store: context.view_instance_store,
+                    view_render_queue: context.view_render_queue,
+                    composite_tree: context.mount_context.composite_tree,
+                    ht_manager: context.mount_context.ht_manager,
+                },
             );
         }
     }
@@ -1885,25 +1943,21 @@ impl PaneGroupViewController {
     }
 
     /// コンテンツのリサイズを実行する
-    fn perform_set_rect(
-        &self,
-        rect: Rect<LogicalUnit>,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        composite_tree
+    fn perform_set_rect(&self, rect: Rect<LogicalUnit>, context: &mut PaneContentResizeContext) {
+        context
+            .composite_tree
             .begin_mod_chain(self.ct_root)
             .offset_imm(rect.left, rect.top)
             .size_imm(rect.width, rect.height)
             .apply();
-        ht_manager.get_data_mut(self.ht_root).left = rect.left;
-        ht_manager.get_data_mut(self.ht_root).top = rect.top;
-        ht_manager.get_data_mut(self.ht_root).width = rect.width;
-        ht_manager.get_data_mut(self.ht_root).height = rect.height;
+        context.ht_manager.get_data_mut(self.ht_root).left = rect.left;
+        context.ht_manager.get_data_mut(self.ht_root).top = rect.top;
+        context.ht_manager.get_data_mut(self.ht_root).width = rect.width;
+        context.ht_manager.get_data_mut(self.ht_root).height = rect.height;
 
         let content_size = Size::new_logical(rect.width, rect.height - DESIGN_METRICS.tab_height());
         for (c, _) in self.contents.borrow().iter() {
-            c.resize(&content_size, composite_tree, ht_manager);
+            c.resize(&content_size, context);
         }
     }
 }

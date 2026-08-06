@@ -16,9 +16,9 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        MountContext, MountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
-        ViewEventHandler, ViewIdentifier, ViewInitContext, ViewInstanceModifier,
-        ViewNewRenderElements, ViewUpdateContext,
+        MountContext, MountTarget, RawMountTarget, RenderChildScheduler, RenderContext,
+        TeardownContext, View, ViewEventHandler, ViewIdentifier, ViewInitContext,
+        ViewInstanceModifier, ViewNewRenderElements, ViewUpdateContext,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -63,12 +63,12 @@ const SCROLL_THUMB_ACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate = &FloatAnimati
 const SCROLL_THUMB_DEACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate =
     &SCROLL_THUMB_ACTIVATE_OFFSET_ANIM.flip(AnimationCurve::Linear);
 
-pub struct ScrollContainer {
+/// Mount-Unmount方式(Dock)からRender-Teradown方式(ScrollContainer)に一度に書き換えるのが厳しそうなので間となるクッション要素を挟む
+pub struct ScrollContainerTemp {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    eh: Rc<ScrollContainerEventHandler>,
 }
-impl ScrollContainer {
+impl ScrollContainerTemp {
     pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
         let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -76,187 +76,18 @@ impl ScrollContainer {
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
             ],
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
-            has_bitmap: false,
-            // composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-            //     1.0, 1.0, 1.0, 0.0625,
-            // ])),
-            clip_child: Some(ClipConfig {
-                left_softness: SafeF32::ZERO,
-                top_softness: SafeF32::ZERO,
-                right_softness: SafeF32::ZERO,
-                bottom_softness: SafeF32::ZERO,
-            }),
+            relative_size_adjustment: [1.0, 1.0],
             ..Default::default()
         });
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             left: rect.left,
             top: rect.top,
-            width: rect.width,
-            height: rect.height,
-            clip_children: true,
-            ..Default::default()
-        });
-        let ct_content_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
-            size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
-            ..Default::default()
-        });
-        let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
-            left: 0.0,
-            top: 0.0,
-            width: rect.width,
-            height: rect.height,
-            ..Default::default()
-        });
-
-        let ct_scroll_bar_vert = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
-                AnimatableFloat::Value(0.0),
-            ],
-            relative_offset_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
-                AnimatableFloat::Value(0.0),
-            ],
-            relative_size_adjustment: [0.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                0.75, 0.75, 0.75, 0.5,
-            ])),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_scroll_thumb_vert = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(-SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS),
-                AnimatableFloat::Value(SCROLL_THUMB_SPACING),
-            ],
-            relative_offset_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
-                AnimatableFloat::Value(rect.height - SCROLL_THUMB_SPACING * 2.0),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value(INACTIVE_THUMB_COLOR)),
-            corner_radius: CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ht_scroll_bar_vert = ctx.ht_manager.create(HitTestTreeData {
-            left: -ACTIVE_SCROLL_BAR_THICKNESS,
-            top: 0.0,
-            left_adjustment_factor: 1.0,
-            width: ACTIVE_SCROLL_BAR_THICKNESS,
+            width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
             ..Default::default()
         });
-        let ht_scroll_thumb_vert = ctx.ht_manager.create(HitTestTreeData {
-            left: -ACTIVE_SCROLL_BAR_THICKNESS,
-            top: 0.0,
-            left_adjustment_factor: 1.0,
-            width: ACTIVE_SCROLL_BAR_THICKNESS,
-            height: rect.height,
-            ..Default::default()
-        });
 
-        let ct_scroll_bar_horz = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
-            ],
-            relative_offset_adjustment: [0.0, 1.0],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
-            ],
-            relative_size_adjustment: [1.0, 0.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                0.75, 0.75, 0.75, 0.5,
-            ])),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_scroll_thumb_horz = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(SCROLL_THUMB_SPACING),
-                AnimatableFloat::Value(-SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS),
-            ],
-            relative_offset_adjustment: [0.0, 1.0],
-            size: [
-                AnimatableFloat::Value(rect.height - SCROLL_THUMB_SPACING * 2.0),
-                AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value(INACTIVE_THUMB_COLOR)),
-            corner_radius: CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ht_scroll_bar_horz = ctx.ht_manager.create(HitTestTreeData {
-            left: 0.0,
-            top: -ACTIVE_SCROLL_BAR_THICKNESS,
-            top_adjustment_factor: 1.0,
-            width_adjustment_factor: 1.0,
-            height: ACTIVE_SCROLL_BAR_THICKNESS,
-            ..Default::default()
-        });
-        let ht_scroll_thumb_horz = ctx.ht_manager.create(HitTestTreeData {
-            left: 0.0,
-            top: -ACTIVE_SCROLL_BAR_THICKNESS,
-            top_adjustment_factor: 1.0,
-            width: rect.height,
-            height: ACTIVE_SCROLL_BAR_THICKNESS,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_content_root);
-        ctx.ht_manager.add_child(ht_root, ht_content_root);
-
-        let view_id = ctx.view_registry.alloc_id_only();
-        let eh = Rc::new(ScrollContainerEventHandler {
-            view_id,
-            ct_content_root,
-            ht_content_root,
-            ct_scroll_thumb_vert,
-            ht_scroll_thumb_vert,
-            ht_scroll_bar_vert,
-            ct_scroll_bar_vert,
-            ct_scroll_thumb_horz,
-            ht_scroll_thumb_horz,
-            ht_scroll_bar_horz,
-            ct_scroll_bar_horz,
-            viewport_size: Size::new_logical_interior_mutable(rect.width, rect.height),
-            content_size: Size::new_logical_interior_mutable(0.0, 0.0),
-            content_offset: Point::new_logical_interior_mutable(0.0, 0.0),
-            pointer_grab_state: core::cell::Cell::new(ScrollContainerPointerGrabState::None),
-            bar_active: core::cell::Cell::new(false),
-            bar_active_horz: core::cell::Cell::new(false),
-            should_scroll_vert: core::cell::Cell::new(false),
-            should_scroll_horz: core::cell::Cell::new(false),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-        ctx.ht_manager.set_action_handler(ht_scroll_bar_vert, &eh);
-        ctx.ht_manager.set_action_handler(ht_scroll_thumb_vert, &eh);
-        ctx.ht_manager.set_action_handler(ht_scroll_bar_horz, &eh);
-        ctx.ht_manager.set_action_handler(ht_scroll_thumb_horz, &eh);
-        ctx.view_registry.set_event_handler(view_id, &eh);
-
-        Self {
-            ct_root,
-            ht_root,
-            eh,
-        }
+        Self { ct_root, ht_root }
     }
 
     pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
@@ -268,158 +99,328 @@ impl ScrollContainer {
         ctx.composite_tree.remove_child(self.ct_root);
         ctx.ht_manager.remove_child(self.ht_root);
     }
-
-    pub fn resize<E>(
-        &self,
-        size: Size<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        self.eh.viewport_size.width.set(size.width);
-        self.eh.viewport_size.height.set(size.height);
-
-        composite_tree
-            .begin_mod_chain(self.ct_root)
-            .size_imm(size.width, size.height)
-            .apply();
-        ht_manager.get_data_mut(self.ht_root).width = size.width;
-        ht_manager.get_data_mut(self.ht_root).height = size.height;
-
-        // mount/dismount scroll bars only if needed
-        let should_scroll_vert =
-            self.eh.viewport_size.height.get() < self.eh.content_size.height.get();
-        let should_scroll_horz =
-            self.eh.viewport_size.width.get() < self.eh.content_size.width.get();
-        if self.eh.should_scroll_vert.replace(should_scroll_vert) != should_scroll_vert {
-            if should_scroll_vert {
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_vert);
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_vert);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_vert);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_vert);
-            } else {
-                composite_tree.remove_child(self.eh.ct_scroll_bar_vert);
-                composite_tree.remove_child(self.eh.ct_scroll_thumb_vert);
-                ht_manager.remove_child(self.eh.ht_scroll_bar_vert);
-                ht_manager.remove_child(self.eh.ht_scroll_thumb_vert);
-            }
-        }
-        if self.eh.should_scroll_horz.replace(should_scroll_horz) != should_scroll_horz {
-            if should_scroll_horz {
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_horz);
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_horz);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_horz);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_horz);
-            } else {
-                composite_tree.remove_child(self.eh.ct_scroll_bar_horz);
-                composite_tree.remove_child(self.eh.ct_scroll_thumb_horz);
-                ht_manager.remove_child(self.eh.ht_scroll_bar_horz);
-                ht_manager.remove_child(self.eh.ht_scroll_thumb_horz);
-            }
-        }
-
-        self.eh.content_offset.x.update(|x| {
-            x.clamp(
-                0.0,
-                (self.eh.content_size.width.get() - self.eh.viewport_size.width.get()).max(0.0),
-            )
-        });
-        self.eh.content_offset.y.update(|x| {
-            x.clamp(
-                0.0,
-                (self.eh.content_size.height.get() - self.eh.viewport_size.height.get()).max(0.0),
-            )
-        });
-        let offset_x = self.eh.content_offset.x.get();
-        let offset_y = self.eh.content_offset.y.get();
-        composite_tree
-            .begin_mod_chain(self.eh.ct_content_root)
-            .offset_imm(-offset_x, -offset_y)
-            .apply();
-        ht_manager.get_data_mut(self.eh.ht_content_root).left = -offset_x;
-        ht_manager.get_data_mut(self.eh.ht_content_root).top = -offset_y;
-
-        self.eh.update_thumb_position(composite_tree, ht_manager);
-    }
-
-    pub fn set_content_size<E>(
-        &self,
-        size: Size<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        self.eh.content_size.width.set(size.width);
-        self.eh.content_size.height.set(size.height);
-
-        // mount/dismount scroll bars only if needed
-        let should_scroll_vert =
-            self.eh.viewport_size.height.get() < self.eh.content_size.height.get();
-        let should_scroll_horz =
-            self.eh.viewport_size.width.get() < self.eh.content_size.width.get();
-        if self.eh.should_scroll_vert.replace(should_scroll_vert) != should_scroll_vert {
-            if should_scroll_vert {
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_vert);
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_vert);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_vert);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_vert);
-            } else {
-                composite_tree.remove_child(self.eh.ct_scroll_bar_vert);
-                composite_tree.remove_child(self.eh.ct_scroll_thumb_vert);
-                ht_manager.remove_child(self.eh.ht_scroll_bar_vert);
-                ht_manager.remove_child(self.eh.ht_scroll_thumb_vert);
-            }
-        }
-        if self.eh.should_scroll_horz.replace(should_scroll_horz) != should_scroll_horz {
-            if should_scroll_horz {
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_bar_horz);
-                composite_tree.add_child(self.ct_root, self.eh.ct_scroll_thumb_horz);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_bar_horz);
-                ht_manager.add_child(self.ht_root, self.eh.ht_scroll_thumb_horz);
-            } else {
-                composite_tree.remove_child(self.eh.ct_scroll_bar_horz);
-                composite_tree.remove_child(self.eh.ct_scroll_thumb_horz);
-                ht_manager.remove_child(self.eh.ht_scroll_bar_horz);
-                ht_manager.remove_child(self.eh.ht_scroll_thumb_horz);
-            }
-        }
-
-        self.eh.content_offset.x.update(|x| {
-            x.clamp(
-                0.0,
-                (self.eh.content_size.width.get() - self.eh.viewport_size.width.get()).max(0.0),
-            )
-        });
-        self.eh.content_offset.y.update(|x| {
-            x.clamp(
-                0.0,
-                (self.eh.content_size.height.get() - self.eh.viewport_size.height.get()).max(0.0),
-            )
-        });
-        let offset_x = self.eh.content_offset.x.get();
-        let offset_y = self.eh.content_offset.y.get();
-        composite_tree
-            .begin_mod_chain(self.eh.ct_content_root)
-            .offset_imm(-offset_x, -offset_y)
-            .apply();
-        ht_manager.get_data_mut(self.eh.ht_content_root).left = -offset_x;
-        ht_manager.get_data_mut(self.eh.ht_content_root).top = -offset_y;
-
-        self.eh.update_thumb_position(composite_tree, ht_manager);
-    }
 }
-impl MountTarget for ScrollContainer {
+impl MountTarget for ScrollContainerTemp {
     #[inline(always)]
     fn ct_root(&self) -> CompositeTreeRef {
-        self.eh.ct_content_root
+        self.ct_root
     }
 
     #[inline(always)]
     fn ht_root(&self) -> HitTestTreeRef {
-        self.eh.ht_content_root
+        self.ht_root
+    }
+}
+
+pub struct ScrollContainer {
+    id: ViewIdentifier,
+    eh: Option<Rc<ScrollContainerEventHandler>>,
+    offset: Point<LogicalUnit>,
+    viewport_size_changes: Option<Size<LogicalUnit>>,
+    content_size_changes: Option<Size<LogicalUnit>>,
+}
+impl ScrollContainer {
+    pub fn new(id: ViewIdentifier, rect: Rect<LogicalUnit>) -> Self {
+        Self {
+            id,
+            eh: None,
+            offset: rect.left_top(),
+            viewport_size_changes: Some(rect.size()),
+            content_size_changes: Some(Size::new_logical(0.0, 0.0)),
+        }
+    }
+
+    pub fn resize(&mut self, size: Size<LogicalUnit>) {
+        self.viewport_size_changes = Some(size);
+    }
+
+    pub fn set_content_size(&mut self, size: Size<LogicalUnit>) {
+        self.content_size_changes = Some(size);
+    }
+}
+impl View for ScrollContainer {
+    fn render(
+        &mut self,
+        self_instance: &mut ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
+        match self.eh {
+            Some(ref eh) => {
+                let mut recompute_scroll_bars = false;
+                if let Some(viewport_size) = self.viewport_size_changes.take() {
+                    eh.viewport_size.width.set(viewport_size.width);
+                    eh.viewport_size.height.set(viewport_size.height);
+
+                    ctx.composite_tree
+                        .begin_mod_chain(eh.ct_root)
+                        .size_imm(viewport_size.width, viewport_size.height)
+                        .apply();
+                    ctx.ht_manager.get_data_mut(eh.ht_root).width = viewport_size.width;
+                    ctx.ht_manager.get_data_mut(eh.ht_root).height = viewport_size.height;
+
+                    recompute_scroll_bars = true;
+                }
+
+                if let Some(content_size) = self.content_size_changes.take() {
+                    eh.content_size.width.set(content_size.width);
+                    eh.content_size.height.set(content_size.height);
+
+                    recompute_scroll_bars = true;
+                }
+
+                if recompute_scroll_bars {
+                    // mount/dismount scroll bars only if needed
+                    eh.recompute_scroll_bars(ctx);
+                }
+
+                sched.schedule_render_children(RawMountTarget {
+                    ct_root: eh.ct_content_root,
+                    ht_root: eh.ht_content_root,
+                });
+                ViewNewRenderElements::EMPTY
+            }
+            None => {
+                // first render
+                let init_viewport_size =
+                    self.viewport_size_changes.take().expect("not initialized");
+                let init_content_size = self.content_size_changes.take().expect("not initialized");
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(self.offset.x),
+                        AnimatableFloat::Value(self.offset.y),
+                    ],
+                    size: [
+                        AnimatableFloat::Value(init_viewport_size.width),
+                        AnimatableFloat::Value(init_viewport_size.height),
+                    ],
+                    has_bitmap: false,
+                    // composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                    //     1.0, 1.0, 1.0, 0.0625,
+                    // ])),
+                    clip_child: Some(ClipConfig {
+                        left_softness: SafeF32::ZERO,
+                        top_softness: SafeF32::ZERO,
+                        right_softness: SafeF32::ZERO,
+                        bottom_softness: SafeF32::ZERO,
+                    }),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: self.offset.x,
+                    top: self.offset.y,
+                    width: init_viewport_size.width,
+                    height: init_viewport_size.height,
+                    clip_children: true,
+                    ..Default::default()
+                });
+                let ct_content_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
+                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
+                    ..Default::default()
+                });
+                let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: 0.0,
+                    top: 0.0,
+                    width: init_viewport_size.width,
+                    height: init_viewport_size.height,
+                    ..Default::default()
+                });
+
+                let ct_scroll_bar_vert = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
+                        AnimatableFloat::Value(0.0),
+                    ],
+                    relative_offset_adjustment: [1.0, 0.0],
+                    size: [
+                        AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
+                        AnimatableFloat::Value(0.0),
+                    ],
+                    relative_size_adjustment: [0.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        0.75, 0.75, 0.75, 0.5,
+                    ])),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ct_scroll_thumb_vert = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(
+                            -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
+                        ),
+                        AnimatableFloat::Value(SCROLL_THUMB_SPACING),
+                    ],
+                    relative_offset_adjustment: [1.0, 0.0],
+                    size: [
+                        AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
+                        AnimatableFloat::Value(
+                            init_viewport_size.height - SCROLL_THUMB_SPACING * 2.0,
+                        ),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value(
+                        INACTIVE_THUMB_COLOR,
+                    )),
+                    corner_radius: CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ht_scroll_bar_vert = ctx.ht_manager.create(HitTestTreeData {
+                    left: -ACTIVE_SCROLL_BAR_THICKNESS,
+                    top: 0.0,
+                    left_adjustment_factor: 1.0,
+                    width: ACTIVE_SCROLL_BAR_THICKNESS,
+                    height_adjustment_factor: 1.0,
+                    ..Default::default()
+                });
+                let ht_scroll_thumb_vert = ctx.ht_manager.create(HitTestTreeData {
+                    left: -ACTIVE_SCROLL_BAR_THICKNESS,
+                    top: 0.0,
+                    left_adjustment_factor: 1.0,
+                    width: ACTIVE_SCROLL_BAR_THICKNESS,
+                    height: init_viewport_size.height,
+                    ..Default::default()
+                });
+
+                let ct_scroll_bar_horz = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(0.0),
+                        AnimatableFloat::Value(-ACTIVE_SCROLL_BAR_THICKNESS),
+                    ],
+                    relative_offset_adjustment: [0.0, 1.0],
+                    size: [
+                        AnimatableFloat::Value(0.0),
+                        AnimatableFloat::Value(ACTIVE_SCROLL_BAR_THICKNESS),
+                    ],
+                    relative_size_adjustment: [1.0, 0.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        0.75, 0.75, 0.75, 0.5,
+                    ])),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ct_scroll_thumb_horz = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(SCROLL_THUMB_SPACING),
+                        AnimatableFloat::Value(
+                            -SCROLL_THUMB_SPACING - DEFAULT_SCROLL_BAR_THICKNESS,
+                        ),
+                    ],
+                    relative_offset_adjustment: [0.0, 1.0],
+                    size: [
+                        AnimatableFloat::Value(
+                            init_viewport_size.width - SCROLL_THUMB_SPACING * 2.0,
+                        ),
+                        AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value(
+                        INACTIVE_THUMB_COLOR,
+                    )),
+                    corner_radius: CornerRadius::all(DEFAULT_SCROLL_BAR_THICKNESS * 0.5),
+                    opacity: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ht_scroll_bar_horz = ctx.ht_manager.create(HitTestTreeData {
+                    left: 0.0,
+                    top: -ACTIVE_SCROLL_BAR_THICKNESS,
+                    top_adjustment_factor: 1.0,
+                    width_adjustment_factor: 1.0,
+                    height: ACTIVE_SCROLL_BAR_THICKNESS,
+                    ..Default::default()
+                });
+                let ht_scroll_thumb_horz = ctx.ht_manager.create(HitTestTreeData {
+                    left: 0.0,
+                    top: -ACTIVE_SCROLL_BAR_THICKNESS,
+                    top_adjustment_factor: 1.0,
+                    width: init_viewport_size.width,
+                    height: ACTIVE_SCROLL_BAR_THICKNESS,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_content_root);
+                ctx.ht_manager.add_child(ht_root, ht_content_root);
+
+                let eh = Rc::new(ScrollContainerEventHandler {
+                    view_id: self.id,
+                    ct_root,
+                    ht_root,
+                    ct_content_root,
+                    ht_content_root,
+                    ct_scroll_thumb_vert,
+                    ht_scroll_thumb_vert,
+                    ht_scroll_bar_vert,
+                    ct_scroll_bar_vert,
+                    ct_scroll_thumb_horz,
+                    ht_scroll_thumb_horz,
+                    ht_scroll_bar_horz,
+                    ct_scroll_bar_horz,
+                    viewport_size: Size::new_logical_interior_mutable(
+                        init_viewport_size.width,
+                        init_viewport_size.height,
+                    ),
+                    content_size: Size::new_logical_interior_mutable(
+                        init_content_size.width,
+                        init_content_size.height,
+                    ),
+                    content_offset: Point::new_logical_interior_mutable(0.0, 0.0),
+                    pointer_grab_state: core::cell::Cell::new(
+                        ScrollContainerPointerGrabState::None,
+                    ),
+                    bar_active: core::cell::Cell::new(false),
+                    bar_active_horz: core::cell::Cell::new(false),
+                    should_scroll_vert: core::cell::Cell::new(false),
+                    should_scroll_horz: core::cell::Cell::new(false),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+                ctx.ht_manager.set_action_handler(ht_scroll_bar_vert, &eh);
+                ctx.ht_manager.set_action_handler(ht_scroll_thumb_vert, &eh);
+                ctx.ht_manager.set_action_handler(ht_scroll_bar_horz, &eh);
+                ctx.ht_manager.set_action_handler(ht_scroll_thumb_horz, &eh);
+                self_instance.bind_event_handler(&eh);
+
+                // initial setup for scroll bars
+                eh.recompute_scroll_bars(ctx);
+
+                self.eh = Some(eh);
+                sched.schedule_render_children(RawMountTarget {
+                    ct_root: ct_content_root,
+                    ht_root: ht_content_root,
+                });
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..ViewNewRenderElements::EMPTY
+                }
+            }
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.eh.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
 }
 
 struct ScrollContainerEventHandler {
     view_id: ViewIdentifier,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
     ct_content_root: CompositeTreeRef,
     ht_content_root: HitTestTreeRef,
     ht_scroll_thumb_vert: HitTestTreeRef,
@@ -865,6 +866,69 @@ impl ViewEventHandler for ScrollContainerEventHandler {
     }
 }
 impl ScrollContainerEventHandler {
+    fn recompute_scroll_bars(&self, ctx: &mut RenderContext) {
+        let should_scroll_vert = self.viewport_size.height.get() < self.content_size.height.get();
+        let should_scroll_horz = self.viewport_size.width.get() < self.content_size.width.get();
+
+        if self.should_scroll_vert.replace(should_scroll_vert) != should_scroll_vert {
+            if should_scroll_vert {
+                ctx.composite_tree
+                    .add_child(self.ct_root, self.ct_scroll_bar_vert);
+                ctx.composite_tree
+                    .add_child(self.ct_root, self.ct_scroll_thumb_vert);
+                ctx.ht_manager
+                    .add_child(self.ht_root, self.ht_scroll_bar_vert);
+                ctx.ht_manager
+                    .add_child(self.ht_root, self.ht_scroll_thumb_vert);
+            } else {
+                ctx.composite_tree.remove_child(self.ct_scroll_bar_vert);
+                ctx.composite_tree.remove_child(self.ct_scroll_thumb_vert);
+                ctx.ht_manager.remove_child(self.ht_scroll_bar_vert);
+                ctx.ht_manager.remove_child(self.ht_scroll_thumb_vert);
+            }
+        }
+        if self.should_scroll_horz.replace(should_scroll_horz) != should_scroll_horz {
+            if should_scroll_horz {
+                ctx.composite_tree
+                    .add_child(self.ct_root, self.ct_scroll_bar_horz);
+                ctx.composite_tree
+                    .add_child(self.ct_root, self.ct_scroll_thumb_horz);
+                ctx.ht_manager
+                    .add_child(self.ht_root, self.ht_scroll_bar_horz);
+                ctx.ht_manager
+                    .add_child(self.ht_root, self.ht_scroll_thumb_horz);
+            } else {
+                ctx.composite_tree.remove_child(self.ct_scroll_bar_horz);
+                ctx.composite_tree.remove_child(self.ct_scroll_thumb_horz);
+                ctx.ht_manager.remove_child(self.ht_scroll_bar_horz);
+                ctx.ht_manager.remove_child(self.ht_scroll_thumb_horz);
+            }
+        }
+
+        self.content_offset.x.update(|x| {
+            x.clamp(
+                0.0,
+                (self.content_size.width.get() - self.viewport_size.width.get()).max(0.0),
+            )
+        });
+        self.content_offset.y.update(|x| {
+            x.clamp(
+                0.0,
+                (self.content_size.height.get() - self.viewport_size.height.get()).max(0.0),
+            )
+        });
+        let offset_x = self.content_offset.x.get();
+        let offset_y = self.content_offset.y.get();
+        ctx.composite_tree
+            .begin_mod_chain(self.ct_content_root)
+            .offset_imm(-offset_x, -offset_y)
+            .apply();
+        ctx.ht_manager.get_data_mut(self.ht_content_root).left = -offset_x;
+        ctx.ht_manager.get_data_mut(self.ht_content_root).top = -offset_y;
+
+        self.update_thumb_position(ctx.composite_tree, ctx.ht_manager);
+    }
+
     fn update_thumb_position<E>(
         &self,
         composite_tree: &mut CompositeTree<E>,

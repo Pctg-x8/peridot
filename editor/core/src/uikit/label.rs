@@ -52,6 +52,10 @@ impl StaticTextView {
         self.allow_wrapping = true;
     }
 
+    pub fn set_text(&mut self, content: String) {
+        self.content = content;
+    }
+
     pub fn set_horizontal_alignment(&mut self, alignment: CompositeRectTextHorizontalAlignment) {
         self.horizontal_alignment = alignment;
     }

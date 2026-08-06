@@ -7,14 +7,16 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    Application, ApplicationMutation, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink,
-    WindowHandle,
+    ApplicationMutation, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     rendering::composite::CompositeTree,
-    uikit::{ViewRegistry, ViewRenderQueue},
+    uikit::{
+        View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceStore, ViewRenderQueue,
+        view_instance, view_instance_mut, view_iter_self_group_participants,
+    },
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
@@ -31,9 +33,29 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
     pub ht_manager: &'env HitTestTreeManager<'h>,
-    pub view_registry: &'env mut ViewRegistry,
     pub application: ApplicationMutation<'env>,
+    pub view_instance_store: &'env mut ViewInstanceStore,
+    pub view_group_relation_store: &'env ViewGroupRelationStore,
     pub view_render_queue: &'env mut ViewRenderQueue,
+}
+impl InputEventContext<'_, '_, '_> {
+    #[inline(always)]
+    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        view_instance(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    pub fn view_iter_self_group_parcitipants(
+        &self,
+        id: ViewIdentifier,
+    ) -> impl Iterator<Item = ViewIdentifier> {
+        view_iter_self_group_participants(id, self.view_group_relation_store)
+    }
 }
 
 bitflags! {

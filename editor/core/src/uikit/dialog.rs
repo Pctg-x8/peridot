@@ -9,7 +9,7 @@ use crate::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
         SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView, TeardownContext,
         ViewElementSize, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
-        ViewRegistry,
+        popup::PopupCloseContext,
     },
     utils::{Point, Size},
 };
@@ -42,48 +42,53 @@ impl AlertDialogPresenter {
             .max(64.0)
             .min(owner_window.client_size().width * 0.8);
 
-        let mask = OverlayPopupBasicMaskView::new();
-        let frame = OverlayPopupBasicFrameView::new(Size::new_logical(
-            text_width + Self::AROUND_PADDING * 2.0,
-            tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
-        ));
+        let mask = ctx.construct_view(|_| Box::new(OverlayPopupBasicMaskView::new()));
+        let frame = ctx.construct_view(|_| {
+            Box::new(OverlayPopupBasicFrameView::new(Size::new_logical(
+                text_width + Self::AROUND_PADDING * 2.0,
+                tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
+            )))
+        });
 
-        let confirm_button = SimpleButtonView::new(
-            "OK".into(),
-            ViewPlacement {
-                location: ViewLocation {
-                    parent_anchor: [0.5, 1.0],
-                    anchor: [0.5, 1.0],
-                    offset: Point::new_logical(0.0, -Self::AROUND_PADDING),
+        let msg = ctx.construct_view(|_| {
+            let mut v = Box::new(StaticTextView::new(
+                message,
+                ViewPlacement {
+                    location: ViewLocation {
+                        offset: Point::new_logical(0.0, Self::AROUND_PADDING),
+                        anchor: [0.5, 0.0],
+                        parent_anchor: [0.5, 0.0],
+                    },
+                    size: ViewElementSize::Fixed(Size::new_logical(text_width, 16.0)),
+                    size_anchor: [0.0, 0.0],
                 },
-                size: ViewElementSize::Fixed(Size::new_logical(64.0, 24.0)),
-            },
-            Some(Box::new(SimpleButtonConstantEventHandler(
-                Event::PopupClose { id: popup_id },
-            ))),
-        );
+            ));
+            v.allow_wrapping();
+            v.set_horizontal_alignment(CompositeRectTextHorizontalAlignment::Middle);
+            v
+        });
 
-        let mut msg = StaticTextView::new(
-            message,
-            ViewPlacement {
-                location: ViewLocation {
-                    offset: Point::new_logical(0.0, Self::AROUND_PADDING),
-                    anchor: [0.5, 0.0],
-                    parent_anchor: [0.5, 0.0],
+        let confirm_button = ctx.construct_view(|_| {
+            Box::new(SimpleButtonView::new(
+                "OK".into(),
+                ViewPlacement {
+                    location: ViewLocation {
+                        parent_anchor: [0.5, 1.0],
+                        anchor: [0.5, 1.0],
+                        offset: Point::new_logical(0.0, -Self::AROUND_PADDING),
+                    },
+                    size: ViewElementSize::Fixed(Size::new_logical(64.0, 24.0)),
+                    size_anchor: [0.0, 0.0],
                 },
-                size: ViewElementSize::Fixed(Size::new_logical(text_width, 16.0)),
-            },
-        );
-        msg.allow_wrapping();
-        msg.set_horizontal_alignment(CompositeRectTextHorizontalAlignment::Middle);
+                Some(Box::new(SimpleButtonConstantEventHandler(
+                    Event::PopupClose { id: popup_id },
+                ))),
+            ))
+        });
 
-        let mask = ctx.view_registry.alloc(Box::new(mask));
-        let frame = ctx.view_registry.alloc(Box::new(frame));
-        let msg = ctx.view_registry.alloc(Box::new(msg));
-        let confirm_button = ctx.view_registry.alloc(Box::new(confirm_button));
-        ctx.view_registry.set_parent(frame, mask);
-        ctx.view_registry.set_parent(msg, frame);
-        ctx.view_registry.set_parent(confirm_button, frame);
+        ctx.view_set_parent(msg, frame);
+        ctx.view_set_parent(confirm_button, frame);
+        ctx.view_set_parent(frame, mask);
 
         Self {
             id: popup_id,
@@ -100,23 +105,23 @@ impl Popup for AlertDialogPresenter {
 
     fn close(
         &mut self,
-        view_registry: &mut ViewRegistry,
+        context: &mut PopupCloseContext,
         composite_tree: &mut CompositeTree<SyncEvent>,
         _ht_manager: &mut HitTestTreeManager,
         current_sec: f32,
     ) {
         // disable button interaction while animating
-        view_registry
-            .instance_mut::<SimpleButtonView>(self.confirm_button)
+        context
+            .view_instance_mut::<SimpleButtonView>(self.confirm_button)
             .expect("query failed")
             .set_interactive(false);
 
-        view_registry
-            .instance::<OverlayPopupBasicMaskView>(self.root_view_id)
+        context
+            .view_instance::<OverlayPopupBasicMaskView>(self.root_view_id)
             .expect("query failed")
             .play_close_animation(composite_tree, current_sec);
-        view_registry
-            .instance::<OverlayPopupBasicFrameView>(self.frame)
+        context
+            .view_instance::<OverlayPopupBasicFrameView>(self.frame)
             .expect("query failed")
             .play_close_animation(
                 composite_tree,
