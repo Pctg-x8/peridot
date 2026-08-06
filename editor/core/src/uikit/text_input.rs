@@ -461,7 +461,6 @@ impl TextInputViewCore {
     pub fn new(
         ctx: &mut RenderContext,
         rect: Rect<LogicalUnit>,
-        keyboard_focus_token: FocusTargetToken,
         delegated_view_id: ViewIdentifier,
         ht_root: HitTestTreeRef,
         io: std::rc::Weak<dyn TextInputViewIO>,
@@ -1819,7 +1818,6 @@ impl View for TextInputView {
                     core: TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
-                        kf_token,
                         self.id,
                         ht_root,
                         self.io.clone() as _,
@@ -1942,7 +1940,6 @@ impl View for NumericInputView {
                     core: TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
-                        kf_token,
                         self.id,
                         ht_root,
                         self.value.clone(),

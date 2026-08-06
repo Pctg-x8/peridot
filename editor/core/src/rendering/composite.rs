@@ -797,6 +797,7 @@ pub enum CompositeRectScaleFactor {
 
 #[derive(Debug, Clone)]
 pub struct CompositeRect<Event> {
+    pub active: bool,
     // transform
     pub scale_factor: CompositeRectScaleFactor,
     pub offset: [AnimatableFloat<Event>; 2],
@@ -824,6 +825,7 @@ pub struct CompositeRect<Event> {
 impl<Event> Default for CompositeRect<Event> {
     fn default() -> Self {
         Self {
+            active: true,
             has_bitmap: false,
             scale_factor: CompositeRectScaleFactor::NoScale,
             corner_radius: CornerRadius::default(),
@@ -894,6 +896,18 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         }
 
         core::mem::forget(self);
+    }
+
+    pub fn activate(mut self) -> Self {
+        unsafe { &mut *self.target }.active = true;
+        self.dirty = true;
+        self
+    }
+
+    pub fn deactivate(mut self) -> Self {
+        unsafe { &mut *self.target }.active = false;
+        self.dirty = true;
+        self
     }
 
     pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self {
@@ -2206,6 +2220,11 @@ impl<Event> CompositeTreeRender<Event> {
             let cache = &mut self.caches[p.r.0];
             let r = &mut self.rects[p.r.0];
             self.dirty_flags[p.r.0].dirty = false;
+
+            if !r.active {
+                // skip inactive rects and its children(=hide entire tree)
+                continue;
+            }
 
             let scale_factor = match r.scale_factor {
                 CompositeRectScaleFactor::NoScale => 1.0,

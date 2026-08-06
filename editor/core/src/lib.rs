@@ -1865,7 +1865,6 @@ impl View for ColorPickerHexTextInputView {
                     core: uikit::TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
-                        kf_token,
                         self.id,
                         ht_root,
                         eh.clone() as _,

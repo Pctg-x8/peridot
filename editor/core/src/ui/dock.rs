@@ -185,22 +185,6 @@ impl DockStore {
         )
     }
 
-    // pub fn replace_by(&mut self, id: DockID, f: impl FnOnce(Dock) -> Dock) {
-    //     let x = unsafe {
-    //         core::ptr::read(
-    //             self.docks[id.store_index()]
-    //                 .as_ref()
-    //                 .expect("already freed?"),
-    //         )
-    //     };
-    //     core::mem::forget(core::mem::replace(
-    //         self.docks[id.store_index()]
-    //             .as_mut()
-    //             .expect("already freed?"),
-    //         f(x),
-    //     ));
-    // }
-
     fn get(&self, id: DockID) -> &Dock {
         self.docks[id.store_index()]
             .as_ref()
