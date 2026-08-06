@@ -1,5 +1,5 @@
 use std::{
-    cell::{Cell, Ref, RefCell},
+    cell::{Cell, RefCell},
     rc::Rc,
 };
 
@@ -38,6 +38,419 @@ use crate::{
 pub trait TextInputViewIO {
     fn text(&self, requester: ViewIdentifier, app: &Application) -> String;
     fn set_text(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, text: String);
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct SingleLineTextDirtyFlags : u8 {
+        const CONTENT = 1 << 0;
+        const CURSOR = 1 << 1;
+        const PREEDIT = 1 << 2;
+    }
+}
+
+pub struct SingleLineTextEditState {
+    content: String,
+    cursor_pos_byte: usize,
+    selection_anchor_byte: Option<usize>,
+    preedit_start_byte: usize,
+    preedit_end_byte: usize,
+}
+impl SingleLineTextEditState {
+    pub fn new(init_content: String) -> Self {
+        Self {
+            content: init_content,
+            cursor_pos_byte: 0,
+            selection_anchor_byte: None,
+            preedit_start_byte: 0,
+            preedit_end_byte: 0,
+        }
+    }
+
+    pub const fn is_compositioning(&self) -> bool {
+        self.preedit_start_byte != self.preedit_end_byte
+    }
+
+    pub fn selection_range(&self) -> core::range::Range<usize> {
+        let range_anchor = self.selection_anchor_byte.unwrap_or(self.cursor_pos_byte);
+        let range_target = self.cursor_pos_byte;
+
+        (range_anchor.min(range_target)..range_anchor.max(range_target)).into()
+    }
+
+    #[cfg(windows)]
+    pub fn selection_range_win32_acp(&self) -> core::range::Range<i32> {
+        let cursor_acp = self
+            .content
+            .char_indices()
+            .take_while(|&(i, _)| i < self.cursor_pos_byte)
+            .count() as i32;
+        let selection_anchor_acp = self.selection_anchor_byte.map_or(cursor_acp, |n| {
+            self.content
+                .char_indices()
+                .take_while(|&(i, _)| i < n)
+                .count() as i32
+        });
+
+        (cursor_acp.min(selection_anchor_acp)..cursor_acp.max(selection_anchor_acp)).into()
+    }
+
+    pub fn set_content(&mut self, content: String) -> SingleLineTextDirtyFlags {
+        assert!(
+            !self.is_compositioning(),
+            "setting new text while compositioning is not allowed"
+        );
+
+        self.content = content;
+        self.cursor_pos_byte = self.cursor_pos_byte.min(self.content.len());
+        self.selection_anchor_byte = None;
+
+        SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR
+    }
+
+    pub fn cursor_move_at(&mut self, at: usize, select: bool) -> SingleLineTextDirtyFlags {
+        if select && self.selection_anchor_byte.is_none() {
+            // first time selection
+            self.selection_anchor_byte = Some(self.cursor_pos_byte);
+        }
+        if !select {
+            // deselect
+            self.selection_anchor_byte = None;
+        }
+
+        self.cursor_pos_byte = at;
+        SingleLineTextDirtyFlags::CURSOR
+    }
+
+    pub fn cursor_move_left(&mut self, select: bool) -> SingleLineTextDirtyFlags {
+        self.cursor_move_at(prev_char_byte(&self.content, self.cursor_pos_byte), select)
+    }
+
+    pub fn cursor_move_right(&mut self, select: bool) -> SingleLineTextDirtyFlags {
+        self.cursor_move_at(next_char_byte(&self.content, self.cursor_pos_byte), select)
+    }
+
+    pub fn cursor_move_to_home(&mut self, select: bool) -> SingleLineTextDirtyFlags {
+        self.cursor_move_at(0, select)
+    }
+
+    pub fn cursor_move_to_end(&mut self, select: bool) -> SingleLineTextDirtyFlags {
+        self.cursor_move_at(self.content.len(), select)
+    }
+
+    pub fn delete_backward(&mut self) -> SingleLineTextDirtyFlags {
+        let range_anchor = self.selection_anchor_byte.unwrap_or(self.cursor_pos_byte);
+        let range_target = self.cursor_pos_byte;
+        if range_anchor == range_target {
+            // no selection: simply delete the previous character
+            let delete_range = core::range::Range::from(
+                prev_char_byte(&self.content, self.cursor_pos_byte)..self.cursor_pos_byte,
+            );
+            if delete_range.is_empty() {
+                // no char will be deleted
+                return SingleLineTextDirtyFlags::empty();
+            }
+
+            self.content.replace_range(delete_range, "");
+            self.cursor_pos_byte = delete_range.start;
+            return SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR;
+        }
+
+        let range = core::range::Range::from(
+            range_anchor.min(range_target)..range_anchor.max(range_target),
+        );
+        self.content.replace_range(range, "");
+        self.selection_anchor_byte = None;
+        self.cursor_pos_byte = range.start;
+        SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR
+    }
+
+    pub fn delete_forward(&mut self) -> SingleLineTextDirtyFlags {
+        let range_anchor = self.selection_anchor_byte.unwrap_or(self.cursor_pos_byte);
+        let range_target = self.cursor_pos_byte;
+        if range_anchor == range_target {
+            // no selection: simply delete the previous character
+            let delete_range = core::range::Range::from(
+                self.cursor_pos_byte..next_char_byte(&self.content, self.cursor_pos_byte),
+            );
+            if delete_range.is_empty() {
+                // no char will be deleted
+                return SingleLineTextDirtyFlags::empty();
+            }
+
+            self.content.replace_range(delete_range, "");
+            // カーソルは同じ位置にとどまる
+            return SingleLineTextDirtyFlags::CONTENT;
+        }
+
+        let range = core::range::Range::from(
+            range_anchor.min(range_target)..range_anchor.max(range_target),
+        );
+        self.content.replace_range(range, "");
+        self.selection_anchor_byte = None;
+        self.cursor_pos_byte = range.start;
+        SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR
+    }
+
+    pub fn insert_char(&mut self, ch: char) -> SingleLineTextDirtyFlags {
+        let mut dirty_flags = SingleLineTextDirtyFlags::empty();
+
+        if self.preedit_start_byte != self.preedit_end_byte {
+            // preeditがある場合は先に消す
+            // TODO: waylandはこの挙動で良さそうだけどほかも問題ないか？
+            self.content
+                .replace_range(self.preedit_start_byte..self.preedit_end_byte, "");
+            self.preedit_end_byte = self.preedit_start_byte;
+
+            dirty_flags |= SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::PREEDIT;
+        }
+
+        let range_anchor = self.selection_anchor_byte.unwrap_or(self.cursor_pos_byte);
+        let range_target = self.cursor_pos_byte;
+        if range_anchor != range_target {
+            // remove selection first
+            let range = core::range::Range::from(
+                range_anchor.min(range_target)..range_anchor.max(range_target),
+            );
+            self.content.replace_range(range, "");
+            self.selection_anchor_byte = None;
+            self.cursor_pos_byte = range.start;
+
+            dirty_flags |= SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR;
+        }
+
+        self.content.insert(self.cursor_pos_byte, ch);
+        self.cursor_pos_byte += ch.len_utf8();
+        dirty_flags | SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR
+    }
+
+    pub fn select_word_at_cursor(&mut self) -> SingleLineTextDirtyFlags {
+        if self.content.is_empty() {
+            return self.cursor_move_to_home(false);
+        }
+
+        let cursor_pos_bytes = self.cursor_pos_byte;
+
+        #[cfg(windows)]
+        {
+            let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
+                .expect("globalization_preferences.languages")
+                .First()
+                .expect("vector_view.first")
+                .Current()
+                .expect("iterator.current");
+            let word_segmenter =
+                windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
+                    .expect("words_segmenter.create");
+
+            let start_index = self
+                .content
+                .char_indices()
+                .take_while(|&(i, _)| i < cursor_pos_bytes)
+                .count()
+                .min(self.content.chars().count() - 1);
+            let ws = word_segmenter
+                .GetTokenAt(
+                    &windows_core::HSTRING::from_wide(&{
+                        let mut u16s = Vec::new();
+                        for c in self.content.chars() {
+                            let mut b = [0; 2];
+                            u16s.extend_from_slice(c.encode_utf16(&mut b));
+                        }
+                        u16s
+                    }),
+                    start_index as _,
+                )
+                .expect("word_segmenter.get_token_at");
+            let text_segment = ws
+                .SourceTextSegment()
+                .expect("word_segment.source_text_segment");
+
+            let start = self
+                .content
+                .chars()
+                .take(text_segment.StartPosition as _)
+                .map(|c| c.len_utf8())
+                .sum();
+            let end = self
+                .content
+                .chars()
+                .take((text_segment.StartPosition + text_segment.Length) as _)
+                .map(|c| c.len_utf8())
+                .sum();
+
+            self.selection_anchor_byte = Some(start);
+            self.cursor_pos_byte = end;
+            return SingleLineTextDirtyFlags::CURSOR;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            let mut start = core::mem::MaybeUninit::uninit();
+            let mut end = core::mem::MaybeUninit::uninit();
+
+            let at_utf16 = content[..cursor_pos_bytes]
+                .encode_utf16()
+                .count()
+                .min(content.encode_utf16().count() - 1);
+            unsafe {
+                crate::platform::mac::bridge::ni_query_range_for_word_at(
+                    content.as_ptr(),
+                    content.len() as _,
+                    at_utf16 as _,
+                    start.as_mut_ptr(),
+                    end.as_mut_ptr(),
+                );
+            }
+
+            let start_bytes = unsafe {
+                std::char::decode_utf16(content.encode_utf16().take(start.assume_init() as _))
+                    .map(|x| x.expect("invalid char?").len_utf8())
+                    .sum()
+            };
+            let end_bytes = unsafe {
+                std::char::decode_utf16(content.encode_utf16().take(end.assume_init() as _))
+                    .map(|x| x.expect("invalid char?").len_utf8())
+                    .sum()
+            };
+
+            self.select_range(start_bytes..end_bytes)
+        }
+
+        #[cfg(not(any(windows, target_os = "macos")))]
+        {
+            // generic fallback
+
+            let content = self.content.borrow();
+            let words = crate::utils::text::generic_word_segments(&content);
+            tracing::debug!(?words, "double click");
+
+            // TODO: LTR前提 最適化はあとで
+            let select_range = words
+                .into_iter()
+                // wordのbyte rangeを生成
+                .scan(0, |range_start, w| {
+                    let r = *range_start..(*range_start + w.len());
+                    *range_start += w.len();
+                    Some(r)
+                })
+                // cursor_pos_bytesを含むものを探す
+                .find(|r| r.contains(&cursor_pos_bytes))
+                // なければ全体
+                .unwrap_or(0..content.len());
+            return self.select_range(select_range);
+        }
+    }
+
+    pub fn select_all(&mut self) -> SingleLineTextDirtyFlags {
+        self.selection_anchor_byte = Some(0);
+        self.cursor_pos_byte = self.content.len();
+
+        SingleLineTextDirtyFlags::CURSOR
+    }
+
+    pub fn deselect(&mut self) -> SingleLineTextDirtyFlags {
+        self.selection_anchor_byte = None;
+        SingleLineTextDirtyFlags::CURSOR
+    }
+
+    #[cfg(windows)]
+    pub fn winct_update_text(
+        &mut self,
+        replace_range_acp: &windows::UI::Text::Core::CoreTextRange,
+        replace_to: &str,
+        new_selection_range_acp: &windows::UI::Text::Core::CoreTextRange,
+    ) -> SingleLineTextDirtyFlags {
+        let replace_start_bytes = self
+            .content
+            .chars()
+            .take(replace_range_acp.StartCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+        let replace_end_bytes = self
+            .content
+            .chars()
+            .take(replace_range_acp.EndCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+
+        self.content
+            .replace_range(replace_start_bytes..replace_end_bytes, replace_to);
+
+        let new_cursor_start_bytes = self
+            .content
+            .chars()
+            .take(new_selection_range_acp.StartCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+        let new_cursor_end_bytes = self
+            .content
+            .chars()
+            .take(new_selection_range_acp.EndCaretPosition as _)
+            .fold(0, |a, c| a + c.len_utf8());
+
+        if new_cursor_start_bytes == new_cursor_end_bytes {
+            // no selection
+            self.selection_anchor_byte = None;
+            self.cursor_pos_byte = new_cursor_start_bytes;
+        } else {
+            self.selection_anchor_byte = Some(new_cursor_start_bytes);
+            self.cursor_pos_byte = new_cursor_end_bytes;
+        }
+
+        SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR
+    }
+
+    #[cfg(windows)]
+    pub fn winct_update_format(
+        &mut self,
+        underline_type: windows::UI::Text::UnderlineType,
+        range: &windows::UI::Text::Core::CoreTextRange,
+    ) -> SingleLineTextDirtyFlags {
+        // TODO: Windowsの場合は複数下線要素ができる場合がある（部分的に変換する場合など）
+        if underline_type == windows::UI::Text::UnderlineType::None {
+            self.preedit_start_byte = 0;
+            self.preedit_end_byte = 0;
+        } else {
+            self.preedit_start_byte = self
+                .content
+                .chars()
+                .take(range.StartCaretPosition as _)
+                .map(|x| x.len_utf8())
+                .sum();
+            self.preedit_end_byte = self
+                .content
+                .chars()
+                .take(range.EndCaretPosition as _)
+                .map(|x| x.len_utf8())
+                .sum();
+        }
+
+        SingleLineTextDirtyFlags::PREEDIT
+    }
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct TextInputViewUpdateMask : u32 {
+        const TEXT = 1 << 0;
+        const CURSOR = 1 << 1;
+        const PREEDIT = 1 << 2;
+        const FOCUS = 1 << 3;
+    }
+}
+impl TextInputViewUpdateMask {
+    fn translate(v: SingleLineTextDirtyFlags) -> Self {
+        let mut flags = Self::empty();
+        if v.contains(SingleLineTextDirtyFlags::CONTENT) {
+            flags |= Self::TEXT;
+        }
+        if v.contains(SingleLineTextDirtyFlags::CURSOR) {
+            flags |= Self::CURSOR;
+        }
+        if v.contains(SingleLineTextDirtyFlags::PREEDIT) {
+            flags |= Self::PREEDIT;
+        }
+
+        flags
+    }
 }
 
 pub struct TextInputViewCore {
@@ -134,11 +547,12 @@ impl TextInputViewCore {
             has_focus: core::cell::Cell::new(false),
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
-            content: core::cell::RefCell::new(String::new()),
-            cursor_pos_bytes: core::cell::Cell::new(0),
-            preedit_range_start_bytes: core::cell::Cell::new(0),
-            preedit_range_end_bytes: core::cell::Cell::new(0),
-            selection_begin_bytes: core::cell::Cell::new(0),
+            text_edit_state: RefCell::new(SingleLineTextEditState::new(String::new())),
+            // content: core::cell::RefCell::new(String::new()),
+            // cursor_pos_bytes: core::cell::Cell::new(0),
+            // preedit_range_start_bytes: core::cell::Cell::new(0),
+            // preedit_range_end_bytes: core::cell::Cell::new(0),
+            // selection_begin_bytes: core::cell::Cell::new(0),
             #[cfg(windows)]
             native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
                 ctx.system_link,
@@ -181,11 +595,12 @@ pub struct TextInputViewCoreEventHandler {
     has_focus: core::cell::Cell<bool>,
     content_h_offset: core::cell::Cell<f32>,
     content_visible_width: f32,
-    content: core::cell::RefCell<String>,
-    cursor_pos_bytes: core::cell::Cell<usize>,
-    preedit_range_start_bytes: core::cell::Cell<usize>,
-    preedit_range_end_bytes: core::cell::Cell<usize>,
-    selection_begin_bytes: core::cell::Cell<usize>,
+    text_edit_state: RefCell<SingleLineTextEditState>,
+    // content: core::cell::RefCell<String>,
+    // cursor_pos_bytes: core::cell::Cell<usize>,
+    // preedit_range_start_bytes: core::cell::Cell<usize>,
+    // preedit_range_end_bytes: core::cell::Cell<usize>,
+    // selection_begin_bytes: core::cell::Cell<usize>,
     #[cfg(windows)]
     native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
@@ -341,8 +756,12 @@ impl HitTestTreeActionHandler for TextInputViewCoreEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        let update_mask = TextInputViewUpdateMask::translate(
+            self.text_edit_state.borrow_mut().select_word_at_cursor(),
+        );
+
         self.update_views(
-            self.select_word_at_cursor(),
+            update_mask,
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -393,24 +812,37 @@ impl TextInputViewCoreEventHandler {
     ) {
         tracing::debug!(?code, "keydown");
 
-        let mut update_mask = self.clear_preedit();
-        update_mask |= match code {
+        let update_mask = match code {
             // cursor operations
-            KeyInputCode::LeftArrow => {
-                self.move_cursor_to_left(modifier.contains(ModifierKey::SHIFT))
-            }
-            KeyInputCode::RightArrow => {
-                self.move_cursor_to_right(modifier.contains(ModifierKey::SHIFT))
-            }
-            KeyInputCode::Home => self.jump_to_beginning_of_line(),
-            KeyInputCode::End => self.jump_to_end_of_line(),
+            KeyInputCode::LeftArrow => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_left(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            KeyInputCode::RightArrow => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_right(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            KeyInputCode::Home => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_to_home(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            KeyInputCode::End => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_to_end(modifier.contains(ModifierKey::SHIFT)),
+            ),
             // TODO: insert mode
             KeyInputCode::Insert => TextInputViewUpdateMask::empty(),
             // deletions
-            KeyInputCode::Backspace if !self.has_selection() => self.delete_prev_char(),
-            KeyInputCode::Backspace => self.clear_selection(),
-            KeyInputCode::Delete if !self.has_selection() => self.delete_next_char(),
-            KeyInputCode::Delete => self.clear_selection(),
+            KeyInputCode::Backspace => TextInputViewUpdateMask::translate(
+                self.text_edit_state.borrow_mut().delete_backward(),
+            ),
+            KeyInputCode::Delete => TextInputViewUpdateMask::translate(
+                self.text_edit_state.borrow_mut().delete_forward(),
+            ),
             _ => TextInputViewUpdateMask::empty(),
         };
 
@@ -430,9 +862,8 @@ impl TextInputViewCoreEventHandler {
             return;
         }
 
-        let mut update_mask = self.clear_preedit();
-        update_mask |= self.insert_char_at_cursor(ch);
-
+        let update_mask =
+            TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().insert_char(ch));
         self.update_views(
             update_mask,
             context.composite_tree,
@@ -513,33 +944,34 @@ impl TextInputViewCoreEventHandler {
             .end_text_input();
 
         // clear selection
-        let update_mask = self.deselect();
+        let update_mask =
+            TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().deselect());
 
         update_mask | TextInputViewUpdateMask::FOCUS
     }
 
-    pub fn set_content_lazy(&self, content: String) {
-        self.pending_update_mask
-            .update(|x| x | self.set_content(content));
-    }
+    // pub fn set_content_lazy(&self, content: String) {
+    //     self.pending_update_mask
+    //         .update(|x| x | self.set_content(content));
+    // }
 
-    pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
-        let mut update_mask = TextInputViewUpdateMask::empty();
-        if self.cursor_pos_bytes.get() > content.len() {
-            self.cursor_pos_bytes.set(content.len());
-            update_mask |= TextInputViewUpdateMask::CURSOR;
-        }
-        if self.selection_begin_bytes.get() > content.len() {
-            self.selection_begin_bytes.set(content.len());
-            update_mask |= TextInputViewUpdateMask::CURSOR;
-        }
-        *self.content.borrow_mut() = content;
-        update_mask | TextInputViewUpdateMask::TEXT
-    }
+    // pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
+    //     let mut update_mask = TextInputViewUpdateMask::empty();
+    //     if self.cursor_pos_bytes.get() > content.len() {
+    //         self.cursor_pos_bytes.set(content.len());
+    //         update_mask |= TextInputViewUpdateMask::CURSOR;
+    //     }
+    //     if self.selection_begin_bytes.get() > content.len() {
+    //         self.selection_begin_bytes.set(content.len());
+    //         update_mask |= TextInputViewUpdateMask::CURSOR;
+    //     }
+    //     *self.content.borrow_mut() = content;
+    //     update_mask | TextInputViewUpdateMask::TEXT
+    // }
 
-    pub fn content<'a>(&'a self) -> Ref<'a, String> {
-        self.content.borrow()
-    }
+    // pub fn content<'a>(&'a self) -> Ref<'a, String> {
+    //     self.content.borrow()
+    // }
 
     #[cfg(feature = "wayland")]
     fn perform_wl_ime_state_changes(
@@ -573,28 +1005,6 @@ impl TextInputViewCoreEventHandler {
         update_mask
     }
 
-    fn clear_preedit(&self) -> TextInputViewUpdateMask {
-        let current_preedit_range =
-            self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
-        if current_preedit_range.is_empty() {
-            // not in preediting
-            return TextInputViewUpdateMask::empty();
-        }
-
-        tracing::trace!(?current_preedit_range, "clear preedit");
-
-        self.content
-            .borrow_mut()
-            .replace_range(current_preedit_range.clone(), "");
-
-        self.preedit_range_end_bytes
-            .set(current_preedit_range.start);
-
-        TextInputViewUpdateMask::TEXT
-            | TextInputViewUpdateMask::PREEDIT
-            | self.move_cursor(current_preedit_range.start)
-    }
-
     pub fn move_cursor_by_point(
         &self,
         point: Point<LogicalUnit>,
@@ -603,12 +1013,16 @@ impl TextInputViewCoreEventHandler {
         let bytes = TextLayout::find_nearest_bytes(
             point.x - 2.0 - self.content_h_offset.get(),
             0.0,
-            &self.content.borrow(),
+            &self.text_edit_state.borrow().content,
             FontID::UIDefault,
             font_set,
         );
 
-        self.move_cursor(bytes)
+        TextInputViewUpdateMask::translate(
+            self.text_edit_state
+                .borrow_mut()
+                .cursor_move_at(bytes, false),
+        )
     }
 
     pub fn move_cursor_by_point_keep_selection(
@@ -619,126 +1033,16 @@ impl TextInputViewCoreEventHandler {
         let bytes = TextLayout::find_nearest_bytes(
             point.x - 2.0 - self.content_h_offset.get(),
             0.0,
-            &self.content.borrow(),
+            &self.text_edit_state.borrow().content,
             FontID::UIDefault,
             font_set,
         );
 
-        self.move_cursor_keep_selection(bytes)
-    }
-
-    pub fn select_word_at_cursor(&self) -> TextInputViewUpdateMask {
-        let content = self.content.borrow();
-        if content.is_empty() {
-            return self.move_cursor(0);
-        }
-
-        let cursor_pos_bytes = self.cursor_pos_bytes.get();
-
-        #[cfg(windows)]
-        {
-            let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
-                .expect("globalization_preferences.languages")
-                .First()
-                .expect("vector_view.first")
-                .Current()
-                .expect("iterator.current");
-            let word_segmenter =
-                windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
-                    .expect("words_segmenter.create");
-
-            let start_index = content
-                .char_indices()
-                .take_while(|&(i, _)| i < cursor_pos_bytes)
-                .count()
-                .min(content.chars().count() - 1);
-            let ws = word_segmenter
-                .GetTokenAt(
-                    &windows_core::HSTRING::from_wide(&{
-                        let mut u16s = Vec::new();
-                        for c in content.chars() {
-                            let mut b = [0; 2];
-                            u16s.extend_from_slice(c.encode_utf16(&mut b));
-                        }
-                        u16s
-                    }),
-                    start_index as _,
-                )
-                .expect("word_segmenter.get_token_at");
-            let text_segment = ws
-                .SourceTextSegment()
-                .expect("word_segment.source_text_segment");
-
-            let start = content
-                .chars()
-                .take(text_segment.StartPosition as _)
-                .map(|c| c.len_utf8())
-                .sum();
-            let end = content
-                .chars()
-                .take((text_segment.StartPosition + text_segment.Length) as _)
-                .map(|c| c.len_utf8())
-                .sum();
-
-            self.select_range(start..end)
-        }
-
-        #[cfg(target_os = "macos")]
-        {
-            let mut start = core::mem::MaybeUninit::uninit();
-            let mut end = core::mem::MaybeUninit::uninit();
-
-            let at_utf16 = content[..cursor_pos_bytes]
-                .encode_utf16()
-                .count()
-                .min(content.encode_utf16().count() - 1);
-            unsafe {
-                crate::platform::mac::bridge::ni_query_range_for_word_at(
-                    content.as_ptr(),
-                    content.len() as _,
-                    at_utf16 as _,
-                    start.as_mut_ptr(),
-                    end.as_mut_ptr(),
-                );
-            }
-
-            let start_bytes = unsafe {
-                std::char::decode_utf16(content.encode_utf16().take(start.assume_init() as _))
-                    .map(|x| x.expect("invalid char?").len_utf8())
-                    .sum()
-            };
-            let end_bytes = unsafe {
-                std::char::decode_utf16(content.encode_utf16().take(end.assume_init() as _))
-                    .map(|x| x.expect("invalid char?").len_utf8())
-                    .sum()
-            };
-
-            self.select_range(start_bytes..end_bytes)
-        }
-
-        #[cfg(not(any(windows, target_os = "macos")))]
-        {
-            // generic fallback
-
-            let content = self.content.borrow();
-            let words = crate::utils::text::generic_word_segments(&content);
-            tracing::debug!(?words, "double click");
-
-            // TODO: LTR前提 最適化はあとで
-            let select_range = words
-                .into_iter()
-                // wordのbyte rangeを生成
-                .scan(0, |range_start, w| {
-                    let r = *range_start..(*range_start + w.len());
-                    *range_start += w.len();
-                    Some(r)
-                })
-                // cursor_pos_bytesを含むものを探す
-                .find(|r| r.contains(&cursor_pos_bytes))
-                // なければ全体
-                .unwrap_or(0..content.len());
-            return self.select_range(select_range);
-        }
+        TextInputViewUpdateMask::translate(
+            self.text_edit_state
+                .borrow_mut()
+                .cursor_move_at(bytes, true),
+        )
     }
 
     fn update_focus<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
@@ -779,7 +1083,7 @@ impl TextInputViewCoreEventHandler {
         composite_tree
             .begin_mod_chain(self.ct_text)
             .text_run(CompositeRectTextRun {
-                content: self.content.borrow().clone(),
+                content: self.text_edit_state.borrow().content.clone(),
                 color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                 ..Default::default()
             })
@@ -791,33 +1095,34 @@ impl TextInputViewCoreEventHandler {
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
     ) {
-        let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[..self.cursor_pos_bytes.get()],
+        let state = self.text_edit_state.borrow();
+        let cursor_x_global = TextLayout::measure_total_advances(
+            &state.content[..state.cursor_pos_byte],
             FontID::UIDefault,
             system_link.font_set(),
         );
 
         let mut text_scroll_occured = false;
-        let mut cursor_display_x = tw + self.content_h_offset.get();
-        if cursor_display_x < 0.0 {
+        let mut cursor_x_display = cursor_x_global + self.content_h_offset.get();
+        if cursor_x_display < 0.0 {
             // 範囲外になる(左すぎ cursor_display_xが0になるようにスクロール量を調整)
             self.content_h_offset
-                .set(self.content_h_offset.get() - cursor_display_x);
+                .set(self.content_h_offset.get() - cursor_x_display);
             text_scroll_occured = true;
-            cursor_display_x = 0.0;
-        } else if self.content_visible_width - 2.0 < cursor_display_x {
+            cursor_x_display = 0.0;
+        } else if self.content_visible_width - 2.0 < cursor_x_display {
             // 範囲外になる(右すぎ cursor_display_xがcontent_visible_widthになるようにスクロール量を調整)
             self.content_h_offset.set(
                 self.content_h_offset.get()
-                    - (cursor_display_x - (self.content_visible_width - 2.0)),
+                    - (cursor_x_display - (self.content_visible_width - 2.0)),
             );
             text_scroll_occured = true;
-            cursor_display_x = self.content_visible_width - 2.0;
+            cursor_x_display = self.content_visible_width - 2.0;
         }
 
         composite_tree
             .begin_mod_chain(self.ct_cursor)
-            .x_imm(cursor_display_x)
+            .x_imm(cursor_x_display)
             .apply();
 
         if text_scroll_occured {
@@ -836,62 +1141,64 @@ impl TextInputViewCoreEventHandler {
         composite_tree: &mut CompositeTree<E>,
         system_link: &SystemLink,
     ) {
-        let preedit_range =
-            self.preedit_range_start_bytes.get()..self.preedit_range_end_bytes.get();
-        if preedit_range.is_empty() {
+        let state = self.text_edit_state.borrow();
+        if !state.is_compositioning() {
             // no preedit
             composite_tree
                 .begin_mod_chain(self.ct_preedit_underline)
                 .opacity_imm(0.0)
                 .apply();
+
             return;
         }
 
-        let o = TextLayout::measure_total_advances(
-            &self.content.borrow()[..preedit_range.start],
+        let x1 = TextLayout::measure_total_advances(
+            &state.content[..state.preedit_start_byte],
             FontID::UIDefault,
             system_link.font_set(),
         );
-        let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[..preedit_range.end],
+        let x2 = TextLayout::measure_total_advances(
+            &state.content[..state.preedit_end_byte],
             FontID::UIDefault,
             system_link.font_set(),
         );
 
         composite_tree
             .begin_mod_chain(self.ct_preedit_underline)
-            .x_imm(o + self.content_h_offset.get())
-            .width_imm(tw - o)
+            .x_imm(x1 + self.content_h_offset.get())
+            .width_imm(x2 - x1)
             .opacity_imm(1.0)
             .apply();
     }
 
     fn update_selection<E>(&self, composite_tree: &mut CompositeTree<E>, system_link: &SystemLink) {
-        let selection_range = self.selection_range();
+        let state = self.text_edit_state.borrow();
+        let selection_range = state.selection_range();
         if selection_range.is_empty() {
             // no selection
             composite_tree
                 .begin_mod_chain(self.ct_selection_bg)
                 .width_imm(0.0)
                 .apply();
+
             return;
         }
 
-        let o = TextLayout::measure_total_advances(
-            &self.content.borrow()[..selection_range.start],
+        let x1 = TextLayout::measure_total_advances(
+            &state.content[..selection_range.start],
             FontID::UIDefault,
             system_link.font_set(),
         );
-        let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[..selection_range.end],
+        let x2 = TextLayout::measure_total_advances(
+            &state.content[..selection_range.end],
             FontID::UIDefault,
             system_link.font_set(),
         );
 
         composite_tree
             .begin_mod_chain(self.ct_selection_bg)
-            .x_imm(o + self.content_h_offset.get())
-            .width_imm(tw - o)
+            .x_imm(x1 + self.content_h_offset.get())
+            .width_imm(x2 - x1)
             .apply();
     }
 
@@ -987,29 +1294,13 @@ impl TextInputViewCoreEventHandler {
     }
 
     fn sync_selection_native(&self, ht_manager: &HitTestTreeManager, system_link: &SystemLink) {
+        let state = self.text_edit_state.borrow();
+
         #[cfg(windows)]
-        let selection_begin_bytes = self.selection_begin_bytes.get();
+        let selection_range_acp = state.selection_range_win32_acp();
         #[cfg(windows)]
-        let cursor_pos_bytes = self.cursor_pos_bytes.get();
-        #[cfg(windows)]
-        let selection_begin_acp = self
-            .content
-            .borrow()
-            .char_indices()
-            .take_while(|&(i, _)| i < selection_begin_bytes)
-            .count();
-        #[cfg(windows)]
-        let cursor_pos_acp = self
-            .content
-            .borrow()
-            .char_indices()
-            .take_while(|&(i, _)| i < cursor_pos_bytes)
-            .count();
-        #[cfg(windows)]
-        self.native_text_input_context.notify_selection_changed(
-            selection_begin_acp.min(cursor_pos_acp) as _,
-            selection_begin_acp.max(cursor_pos_acp) as _,
-        );
+        self.native_text_input_context
+            .notify_selection_changed(selection_range_acp.start, selection_range_acp.end);
 
         #[cfg(feature = "wayland")]
         let cursor_display_x = TextLayout::measure_total_advances(
@@ -1039,154 +1330,24 @@ impl TextInputViewCoreEventHandler {
     }
 
     #[inline(always)]
-    fn has_selection(&self) -> bool {
-        self.selection_begin_bytes.get() != self.cursor_pos_bytes.get()
-    }
-
-    fn selection_range(&self) -> core::ops::Range<usize> {
-        match (
-            self.cursor_pos_bytes.get(),
-            self.selection_begin_bytes.get(),
-        ) {
-            (a, b) if a <= b => a..b,
-            (a, b) => b..a,
-        }
+    pub fn perform_ops_and_schedule_update(
+        &self,
+        syslink: &SystemLink,
+        mut op: impl FnMut(&Self) -> TextInputViewUpdateMask,
+    ) {
+        let update_mask = op(self);
+        self.pending_update_mask.set(update_mask);
+        syslink.dispatch_event(Event::UpdateView {
+            id: self.delegated_view_id,
+        });
     }
 
     #[inline(always)]
-    pub fn select_all(&self) -> TextInputViewUpdateMask {
-        self.select_range(0..self.content.borrow().len())
-    }
-
-    fn move_cursor(&self, pos_bytes: usize) -> TextInputViewUpdateMask {
-        self.cursor_pos_bytes.set(pos_bytes);
-        self.selection_begin_bytes.set(pos_bytes);
-
-        TextInputViewUpdateMask::CURSOR
-    }
-
-    fn move_cursor_keep_selection(&self, pos_bytes: usize) -> TextInputViewUpdateMask {
-        self.cursor_pos_bytes.set(pos_bytes);
-
-        TextInputViewUpdateMask::CURSOR
-    }
-
-    fn deselect(&self) -> TextInputViewUpdateMask {
-        self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-
-        TextInputViewUpdateMask::CURSOR
-    }
-
-    fn select_range(&self, range: core::ops::Range<usize>) -> TextInputViewUpdateMask {
-        self.selection_begin_bytes.set(range.start);
-        self.cursor_pos_bytes.set(range.end);
-
-        TextInputViewUpdateMask::CURSOR
-    }
-
-    fn insert_char_at_cursor(&self, c: char) -> TextInputViewUpdateMask {
-        let mut update_mask = self.clear_selection();
-        let insert_at = self.cursor_pos_bytes.get();
-        self.content.borrow_mut().insert(insert_at, c);
-        update_mask |= TextInputViewUpdateMask::TEXT;
-        update_mask |= self.move_cursor(insert_at + c.len_utf8());
-
-        update_mask
-    }
-
-    fn insert_str_at_cursor(&self, text: &str) -> TextInputViewUpdateMask {
-        let cursor_pos = self.cursor_pos_bytes.get();
-        tracing::trace!(?text, cursor_pos, "insert str");
-
-        // insert committed
-        self.content.borrow_mut().insert_str(cursor_pos, text);
-
-        TextInputViewUpdateMask::TEXT | self.move_cursor(cursor_pos + text.len())
-    }
-
-    fn delete_prev_char(&self) -> TextInputViewUpdateMask {
-        let remove_from = self.cursor_pos_bytes.get();
-        let remove_to = prev_char_byte(&*self.content.borrow(), remove_from);
-        if remove_from == remove_to {
-            // no deletion
-            return TextInputViewUpdateMask::empty();
-        }
-
-        debug_assert!(remove_to < remove_from);
-        self.content
-            .borrow_mut()
-            .replace_range(remove_to..remove_from, "");
-
-        TextInputViewUpdateMask::TEXT | self.move_cursor(remove_to)
-    }
-
-    fn delete_next_char(&self) -> TextInputViewUpdateMask {
-        let remove_from = self.cursor_pos_bytes.get();
-        let remove_to = next_char_byte(&self.content.borrow(), remove_from);
-        if remove_from == remove_to {
-            // no deletion
-            return TextInputViewUpdateMask::empty();
-        }
-
-        debug_assert!(remove_from < remove_to);
-        self.content
-            .borrow_mut()
-            .replace_range(remove_from..remove_to, "");
-        // no cursor updates here
-
-        TextInputViewUpdateMask::TEXT
-    }
-
-    fn clear_selection(&self) -> TextInputViewUpdateMask {
-        let selection_range = self.selection_range();
-        if selection_range.is_empty() {
-            // no selection
-            return TextInputViewUpdateMask::empty();
-        }
-
-        self.content
-            .borrow_mut()
-            .replace_range(selection_range.clone(), "");
-
-        TextInputViewUpdateMask::TEXT | self.move_cursor(selection_range.start)
-    }
-
-    fn jump_to_beginning_of_line(&self) -> TextInputViewUpdateMask {
-        self.move_cursor(0)
-    }
-
-    fn jump_to_end_of_line(&self) -> TextInputViewUpdateMask {
-        self.move_cursor(self.content.borrow().len())
-    }
-
-    fn move_cursor_to_left(&self, with_selection: bool) -> TextInputViewUpdateMask {
-        if with_selection && !self.has_selection() {
-            // 初めて選択状態になった
-            self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-        }
-
-        let new_cursor_pos = prev_char_byte(&*self.content.borrow(), self.cursor_pos_bytes.get());
-
-        if with_selection {
-            self.move_cursor_keep_selection(new_cursor_pos)
-        } else {
-            self.move_cursor(new_cursor_pos)
-        }
-    }
-
-    fn move_cursor_to_right(&self, with_selection: bool) -> TextInputViewUpdateMask {
-        if with_selection && !self.has_selection() {
-            // 初めて選択状態になった
-            self.selection_begin_bytes.set(self.cursor_pos_bytes.get());
-        }
-
-        let new_cursor_pos = next_char_byte(&*self.content.borrow(), self.cursor_pos_bytes.get());
-
-        if with_selection {
-            self.move_cursor_keep_selection(new_cursor_pos)
-        } else {
-            self.move_cursor(new_cursor_pos)
-        }
+    pub fn perform_external_state_update(
+        &self,
+        mut updater: impl FnMut(&mut SingleLineTextEditState) -> SingleLineTextDirtyFlags,
+    ) -> TextInputViewUpdateMask {
+        TextInputViewUpdateMask::translate(updater(&mut self.text_edit_state.borrow_mut()))
     }
 }
 #[cfg(windows)]
@@ -1197,8 +1358,9 @@ impl crate::platform::windows::TextProvider for TextInputViewCoreEventHandler {
     ) -> windows_core::Result<windows_core::HSTRING> {
         let mut u16s = Vec::with_capacity((range.EndCaretPosition - range.StartCaretPosition) as _);
         for c in self
-            .content
+            .text_edit_state
             .borrow()
+            .content
             .chars()
             .skip(range.StartCaretPosition as _)
             .take((range.EndCaretPosition - range.StartCaretPosition) as _)
@@ -1213,24 +1375,11 @@ impl crate::platform::windows::TextProvider for TextInputViewCoreEventHandler {
         &self,
         req: &windows::UI::Text::Core::CoreTextSelectionRequest,
     ) -> windows_core::Result<()> {
-        let selection_begin_bytes = self.selection_begin_bytes.get();
-        let cursor_pos_bytes = self.cursor_pos_bytes.get();
-        let selection_begin_acp = self
-            .content
-            .borrow()
-            .char_indices()
-            .take_while(|&(i, _)| i < selection_begin_bytes)
-            .count();
-        let cursor_pos_acp = self
-            .content
-            .borrow()
-            .char_indices()
-            .take_while(|&(i, _)| i < cursor_pos_bytes)
-            .count();
+        let range = self.text_edit_state.borrow().selection_range_win32_acp();
 
         req.SetSelection(windows::UI::Text::Core::CoreTextRange {
-            StartCaretPosition: selection_begin_acp.min(cursor_pos_acp) as _,
-            EndCaretPosition: selection_begin_acp.max(cursor_pos_acp) as _,
+            StartCaretPosition: range.start,
+            EndCaretPosition: range.end,
         })
     }
 }
@@ -1249,12 +1398,14 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             "edit_context.layout_requested"
         );
 
-        let content = self.content.borrow();
-        let start_bytes = content
+        let state = self.text_edit_state.borrow();
+        let start_bytes = state
+            .content
             .chars()
             .take(range.StartCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
-        let end_bytes = content
+        let end_bytes = state
+            .content
             .chars()
             .take(range.EndCaretPosition as _)
             .fold(0, |a, c| a + c.len_utf8());
@@ -1267,12 +1418,12 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             Size::new_logical(r.width - 4.0, r.height - 4.0).to_pixels_ceil(render_scale),
         );
         let o = TextLayout::measure_total_advances(
-            &content[..start_bytes],
+            &state.content[..start_bytes],
             FontID::UIDefault,
             ctx.system_link.font_set(),
         );
         let w = TextLayout::measure_total_advances(
-            &content[start_bytes..end_bytes],
+            &state.content[start_bytes..end_bytes],
             FontID::UIDefault,
             ctx.system_link.font_set(),
         );
@@ -1308,34 +1459,15 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             ?new_selection,
             ?range,
             ?text,
-            current = &self.content.borrow() as &str,
+            current = &self.text_edit_state.borrow().content,
             "edit_context.text_updating"
         );
-        let mut content = self.content.borrow_mut();
 
-        let replace_start_bytes = content
-            .chars()
-            .take(range.StartCaretPosition as _)
-            .fold(0, |a, c| a + c.len_utf8());
-        let replace_end_bytes = content
-            .chars()
-            .take(range.EndCaretPosition as _)
-            .fold(0, |a, c| a + c.len_utf8());
-
-        content.replace_range(replace_start_bytes..replace_end_bytes, &text);
-
-        let new_cursor_start_bytes = content
-            .chars()
-            .take(new_selection.StartCaretPosition as _)
-            .fold(0, |a, c| a + c.len_utf8());
-        let new_cursor_end_bytes = content
-            .chars()
-            .take(new_selection.EndCaretPosition as _)
-            .fold(0, |a, c| a + c.len_utf8());
-
-        drop(content);
-        let update_mask = self.select_range(new_cursor_start_bytes..new_cursor_end_bytes)
-            | TextInputViewUpdateMask::TEXT;
+        let update_mask = TextInputViewUpdateMask::translate(
+            self.text_edit_state
+                .borrow_mut()
+                .winct_update_text(&range, &text, &new_selection),
+        );
 
         self.update_views(
             update_mask,
@@ -1367,30 +1499,18 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             "edit_context.format_updating"
         );
 
-        // TODO: Windowsの場合は複数下線要素ができる場合がある（部分的に変換する場合など）
-        if underline_type == windows::UI::Text::UnderlineType::None {
-            self.preedit_range_start_bytes.set(0);
-            self.preedit_range_end_bytes.set(0);
-        } else {
-            self.preedit_range_start_bytes.set(
-                self.content
-                    .borrow()
-                    .chars()
-                    .take(range.StartCaretPosition as _)
-                    .map(|x| x.len_utf8())
-                    .sum(),
-            );
-            self.preedit_range_end_bytes.set(
-                self.content
-                    .borrow()
-                    .chars()
-                    .take(range.EndCaretPosition as _)
-                    .map(|x| x.len_utf8())
-                    .sum(),
-            );
-        }
-
-        self.update_preedit_underline(ctx.composite_tree, ctx.system_link);
+        let update_mask = TextInputViewUpdateMask::translate(
+            self.text_edit_state
+                .borrow_mut()
+                .winct_update_format(underline_type, &range),
+        );
+        self.update_views(
+            update_mask,
+            ctx.composite_tree,
+            ctx.system_link,
+            ctx.ht_manager,
+            ctx.current_sec,
+        );
         Ok(())
     }
 }
@@ -1651,16 +1771,6 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
     }
 }
 
-bitflags! {
-    #[derive(Debug, Clone, Copy)]
-    pub struct TextInputViewUpdateMask : u32 {
-        const TEXT = 1 << 0;
-        const CURSOR = 1 << 1;
-        const PREEDIT = 1 << 2;
-        const FOCUS = 1 << 3;
-    }
-}
-
 pub struct TextInputView {
     id: ViewIdentifier,
     eh: Option<Rc<TextInputViewEventHandler>>,
@@ -1857,12 +1967,14 @@ impl View for NumericInputView {
 
         if self.should_revalidate_on_next_render.replace(false) {
             eh.core.eh.update_views(
-                eh.core.eh.set_content(
-                    eh.value
-                        .upgrade()
-                        .expect("NumericInputView has defunct")
-                        .text(self.id, ctx.application),
-                ),
+                eh.core.eh.perform_external_state_update(|st| {
+                    st.set_content(
+                        eh.value
+                            .upgrade()
+                            .expect("NumericInputView has defunct")
+                            .text(self.id, ctx.application),
+                    )
+                }),
                 ctx.composite_tree,
                 ctx.system_link,
                 ctx.ht_manager,
@@ -2002,9 +2114,9 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
             -args.delta.y,
         );
         self.core.eh.update_views(
-            self.core
-                .eh
-                .set_content(value.text(self.core.eh.delegated_view_id, &context.application)),
+            self.core.eh.perform_external_state_update(|st| {
+                st.set_content(value.text(self.core.eh.delegated_view_id, &context.application))
+            }),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2045,9 +2157,9 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
             args.amount,
         );
         self.core.eh.update_views(
-            self.core
-                .eh
-                .set_content(value.text(self.core.eh.delegated_view_id, &context.application)),
+            self.core.eh.perform_external_state_update(|st| {
+                st.set_content(value.text(self.core.eh.delegated_view_id, &context.application))
+            }),
             context.composite_tree,
             context.system_link,
             context.ht_manager,
@@ -2090,16 +2202,18 @@ impl NumericInputViewEventHandler {
         }
 
         // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
-        let update_mask = self.core.eh.set_content(
-            self.value
-                .upgrade()
-                .expect("NumericInputView has defunct")
-                .text(self.core.eh.delegated_view_id, application),
-        );
+        let update_mask = self.core.eh.perform_external_state_update(|st| {
+            st.set_content(
+                self.value
+                    .upgrade()
+                    .expect("NumericInputView has defunct")
+                    .text(self.core.eh.delegated_view_id, application),
+            ) | st.select_all()
+        });
         self.core
             .eh
             .pending_update_mask
-            .set(self.core.eh.set_focus(ht_manager) | self.core.eh.select_all() | update_mask);
+            .set(self.core.eh.set_focus(ht_manager) | update_mask);
         syslink.dispatch_event(Event::UpdateView {
             id: self.core.eh.delegated_view_id,
         });
@@ -2122,16 +2236,15 @@ impl NumericInputViewEventHandler {
         value.set_text(
             self.core.eh.delegated_view_id,
             application,
-            self.core.eh.content().clone(),
+            self.core.eh.text_edit_state.borrow().content.clone(),
         );
 
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.core.eh.release_focus(ht_manager);
-        update_mask |= self
-            .core
-            .eh
-            .set_content(value.text(self.core.eh.delegated_view_id, application));
-        update_mask |= self.core.eh.move_cursor(0);
+        update_mask |= self.core.eh.perform_external_state_update(|st| {
+            st.set_content(value.text(self.core.eh.delegated_view_id, application))
+                | st.cursor_move_to_home(false)
+        });
 
         self.core.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView {
@@ -2152,13 +2265,14 @@ impl NumericInputViewEventHandler {
         // HitTestTreeへの変更がはいるので遅延させる
         let mut update_mask = self.core.eh.release_focus(ht_manager);
         // キャンセル時はもとにもどす
-        update_mask |= self.core.eh.set_content(
-            self.value
-                .upgrade()
-                .expect("NumericInputView has defunct")
-                .text(self.core.eh.delegated_view_id, application),
-        );
-        update_mask |= self.core.eh.move_cursor(0);
+        update_mask |= self.core.eh.perform_external_state_update(|st| {
+            st.set_content(
+                self.value
+                    .upgrade()
+                    .expect("NumericInputView has defunct")
+                    .text(self.core.eh.delegated_view_id, application),
+            ) | st.cursor_move_to_home(false)
+        });
 
         self.core.eh.pending_update_mask.set(update_mask);
         syslink.dispatch_event(Event::UpdateView {
