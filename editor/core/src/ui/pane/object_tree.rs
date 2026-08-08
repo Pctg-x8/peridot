@@ -378,9 +378,9 @@ struct ObjectRowEventHandler {
 impl HitTestTreeActionHandler for ObjectRowEventHandler {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> EventContinueControl {
         context
             .composite_tree
@@ -399,9 +399,9 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
 
     fn on_pointer_leave(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> EventContinueControl {
         context
             .composite_tree
@@ -420,7 +420,7 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
 
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
