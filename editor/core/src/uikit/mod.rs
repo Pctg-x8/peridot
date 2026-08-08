@@ -50,6 +50,7 @@ pub struct RenderContext<'env, 'h> {
     pub system_link: &'env SystemLink<'env>,
     pub main_thread_texture_id_issuer: &'env mut MainThreadTextureIDIssuer,
     pub application: &'env Application,
+    pub view_feedback_subscription_delayed_ops: &'env mut VecDeque<ViewFeedbackRegistryDelayedOps>,
 }
 impl<'h> RenderContext<'_, 'h> {
     pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env, 'h> {
@@ -59,6 +60,22 @@ impl<'h> RenderContext<'_, 'h> {
             keyboard_focus_registry: self.keyboard_focus_registry,
             current_sec: self.current_sec,
         }
+    }
+
+    pub fn subscribe_view_feedback<T: 'static>(
+        &mut self,
+        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
+    ) {
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::subscribe(handler));
+    }
+
+    pub fn unsubscribe_view_feedback<T: 'static>(
+        &mut self,
+        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
+    ) {
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
     }
 }
 
@@ -173,6 +190,7 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
                 system_link: self.system_link,
                 main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
                 application: self.application,
+                view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
             },
             mount_on,
             keyboard_focus_group,
@@ -236,6 +254,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             system_link: self.system_link,
             main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
             application: self.application,
+            view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
         }
     }
 

@@ -4250,6 +4250,7 @@ async fn run<'sys>(
             system_link: &system_link,
             main_thread_texture_id_issuer: &mut texture_id_issuer,
             application: &application,
+            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
         },
         &mut view_instance_store,
         &view_tree_relation_store,
@@ -4524,6 +4525,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -4644,6 +4647,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -4757,6 +4762,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -4908,6 +4915,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -4989,6 +4998,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5069,6 +5080,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5149,6 +5162,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5221,6 +5236,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5290,6 +5307,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5365,6 +5384,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5450,6 +5471,8 @@ async fn run<'sys>(
                             system_link: &system_link,
                             main_thread_texture_id_issuer: &mut texture_id_issuer,
                             application: &application,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
@@ -5528,6 +5551,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5605,6 +5630,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5682,6 +5709,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5759,6 +5788,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5858,6 +5889,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -5882,6 +5915,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                 ) {
                     view_render_queue.perform(
@@ -5893,6 +5928,8 @@ async fn run<'sys>(
                             system_link: &system_link,
                             main_thread_texture_id_issuer: &mut texture_id_issuer,
                             application: &application,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
@@ -6278,6 +6315,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6359,6 +6398,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6442,6 +6483,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6514,6 +6557,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6630,6 +6675,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6692,6 +6739,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6727,6 +6776,8 @@ async fn run<'sys>(
                         system_link: &system_link,
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
@@ -6943,6 +6994,8 @@ async fn run<'sys>(
                             system_link: &system_link,
                             main_thread_texture_id_issuer: &mut texture_id_issuer,
                             application: &application,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
@@ -7149,6 +7202,8 @@ async fn run<'sys>(
                                 system_link: &system_link,
                                 main_thread_texture_id_issuer: &mut texture_id_issuer,
                                 application: &application,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
@@ -7244,6 +7299,8 @@ async fn run<'sys>(
                                 system_link: &system_link,
                                 main_thread_texture_id_issuer: &mut texture_id_issuer,
                                 application: &application,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
@@ -7339,6 +7396,8 @@ async fn run<'sys>(
                                 system_link: &system_link,
                                 main_thread_texture_id_issuer: &mut texture_id_issuer,
                                 application: &application,
+                                view_feedback_subscription_delayed_ops:
+                                    &mut view_feedback_registry_delayed_ops,
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,

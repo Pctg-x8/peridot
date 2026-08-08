@@ -40,12 +40,10 @@ impl Presenter {
         let eh = Rc::new(ObjectTreePaneEventHandler {
             root_view_id,
             object_tree_changed: Cell::new(false),
-            object_selection_changed: Cell::new(false),
             row_views: RefCell::new(Vec::new()),
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
-        ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
 
         Self { eh, root_view_id }
     }
@@ -66,7 +64,6 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
         ctx.unsubscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
-        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&self.eh);
     }
 }
 
@@ -187,7 +184,6 @@ impl HitTestTreeActionHandler for ViewEntity {
 struct ObjectTreePaneEventHandler {
     root_view_id: ViewIdentifier,
     object_tree_changed: Cell<bool>,
-    object_selection_changed: Cell<bool>,
     row_views: RefCell<Vec<ViewIdentifier>>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandler {
@@ -197,7 +193,6 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         let object_tree_changed = self.object_tree_changed.replace(false);
-        let object_selection_changed = self.object_selection_changed.replace(false);
 
         if object_tree_changed {
             let mut row_views = self.row_views.borrow_mut();
@@ -207,12 +202,12 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
             }
             for (n, &x) in context.application.root_objects.iter().enumerate() {
                 let o = context.application.object(x);
-                let rv = context.view_init_context.construct_view(|_| {
+                let rv = context.view_init_context.construct_view(|id| {
                     Box::new(ObjectRowView::new(
+                        id,
                         x,
                         o.name.clone(),
                         n as f32 * ObjectRowView::ITEM_HEIGHT,
-                        context.application.object_is_selected(x),
                     ))
                 });
                 context.view_set_parent(rv, self.root_view_id);
@@ -220,21 +215,6 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
             }
 
             context.schedule_render(self.root_view_id);
-        }
-
-        if object_selection_changed {
-            for &x in self.row_views.borrow().iter() {
-                let o = context
-                    .view_instance::<ObjectRowView>(x)
-                    .expect("query failed")
-                    .assigned_object;
-                let selected = context.application.object_is_selected(o);
-                context
-                    .view_instance_mut::<ObjectRowView>(x)
-                    .expect("query failed")
-                    .selected = selected;
-                context.schedule_render(x);
-            }
         }
     }
 }
@@ -247,38 +227,24 @@ impl ViewFeedbackHandler<ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventH
         self.object_tree_changed.set(true);
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectTreePaneEventHandler {
-    fn accept_feedback<'a, 'h>(
-        &self,
-        _feedback: &ViewFeedbackObjectSelectionChanged,
-        _context: &mut ViewFeedbackContext<'a, 'h>,
-    ) {
-        self.object_selection_changed.set(true);
-    }
-}
 
 struct ObjectRowView {
+    id: ViewIdentifier,
     assigned_object: ObjectID,
-    eh: Option<Rc<ObjectTreeObjectRowEventHandler>>,
+    eh: Option<Rc<ObjectRowEventHandler>>,
     label: String,
     y: f32,
-    selected: bool,
 }
 impl ObjectRowView {
     const ITEM_HEIGHT: f32 = 20.0;
 
-    fn new(
-        assigned_object: ObjectID,
-        init_label: String,
-        init_y: f32,
-        init_selected: bool,
-    ) -> Self {
+    fn new(id: ViewIdentifier, assigned_object: ObjectID, init_label: String, init_y: f32) -> Self {
         Self {
+            id,
             assigned_object,
             eh: None,
             label: init_label,
             y: init_y,
-            selected: init_selected,
         }
     }
 }
@@ -289,12 +255,14 @@ impl crate::uikit::View for ObjectRowView {
         ctx: &mut crate::uikit::RenderContext,
         _sched: &mut crate::uikit::RenderChildScheduler,
     ) -> ViewNewRenderElements {
+        let selected = ctx.application.object_is_selected(self.assigned_object);
+
         match self.eh {
             // TODO: reflect state changes
             Some(ref e) => {
-                if e.selection_lit.replace(self.selected) != self.selected {
+                if e.selection_lit.replace(selected) != selected {
                     // selected changed
-                    if self.selected {
+                    if selected {
                         ctx.composite_tree
                             .begin_mod_chain(e.ct_root)
                             .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
@@ -336,7 +304,7 @@ impl crate::uikit::View for ObjectRowView {
                         0.0,
                         0.25,
                         1.0,
-                        if self.selected { 1.0 } else { 0.0 },
+                        if selected { 1.0 } else { 0.0 },
                     ])),
                     ..Default::default()
                 });
@@ -364,16 +332,18 @@ impl crate::uikit::View for ObjectRowView {
                     ..Default::default()
                 });
 
-                let eh = Rc::new(ObjectTreeObjectRowEventHandler {
+                ctx.composite_tree.add_child(ct_root, ct_label_hover);
+
+                let eh = Rc::new(ObjectRowEventHandler {
+                    view_id: self.id,
                     assigned_object: self.assigned_object,
-                    selection_lit: Cell::new(self.selected),
+                    selection_lit: Cell::new(selected),
                     ct_root,
                     ct_label_hover,
                     ht_root,
                 });
-                ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-
-                ctx.composite_tree.add_child(eh.ct_root, eh.ct_label_hover);
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+                ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
 
                 self.eh = Some(eh);
                 ViewNewRenderElements {
@@ -391,19 +361,21 @@ impl crate::uikit::View for ObjectRowView {
             return;
         };
 
+        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&entity);
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
 }
 
-struct ObjectTreeObjectRowEventHandler {
+struct ObjectRowEventHandler {
+    view_id: ViewIdentifier,
     assigned_object: ObjectID,
     selection_lit: Cell<bool>,
     ct_root: CompositeTreeRef,
     ct_label_hover: CompositeTreeRef,
     ht_root: HitTestTreeRef,
 }
-impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
+impl HitTestTreeActionHandler for ObjectRowEventHandler {
     fn on_pointer_enter(
         &self,
         sender: HitTestTreeRef,
@@ -465,5 +437,14 @@ impl HitTestTreeActionHandler for ObjectTreeObjectRowEventHandler {
         }
 
         EventContinueControl::empty()
+    }
+}
+impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackObjectSelectionChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        context.schedule_render(self.view_id);
     }
 }
