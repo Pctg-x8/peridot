@@ -2663,7 +2663,12 @@ impl<Event> CompositeTree<Event> {
     }
 
     pub fn free(&mut self, index: CompositeTreeRef) {
+        // unlink relations
         self.remove_child(index);
+        for x in self.rects[index.0].children.drain(..).collect::<Vec<_>>() {
+            self.rects[x].parent = None;
+        }
+
         self.unused.insert(index.0);
         self.dirty_rects.insert(index.0, DirtyRect::Deleted);
     }

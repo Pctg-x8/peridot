@@ -1970,8 +1970,8 @@ impl View for PaneGroupContainerView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.mount_context.composite_tree.free(entity.ct_root);
+        ctx.mount_context.ht_manager.free(entity.ht_root);
     }
 }
 
@@ -2077,8 +2077,8 @@ impl View for PaneGroupTabStripView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.mount_context.composite_tree.free(entity.ct_root);
+        ctx.mount_context.ht_manager.free(entity.ht_root);
     }
 }
 
@@ -2323,29 +2323,25 @@ impl PaneGroupViewController {
                  + ?Sized
              ),
     ) -> Box<dyn PaneContentPresenter> {
-        let is_active = self.current_active_tab_view == self.contents[index].tab_view;
         let content_set = self.contents.remove(index);
-        if is_active {
-            if !self.contents.is_empty() {
-                let new_active = index.clamp(0, self.contents.len() - 1);
-                let new_active_tab = self.contents[new_active].tab_view;
-                env.view_instance_mut::<PaneGroupTabView>(new_active_tab)
-                    .expect("query failed")
-                    .set_active(true);
-                env.schedule_view_render(new_active_tab);
-                env.view_set_visibility(self.contents[new_active].presenter.root_view_id(), true);
-                env.schedule_view_render(self.contents[new_active].presenter.root_view_id());
-
-                self.current_active_tab_view = new_active_tab;
-            }
-        }
-
         env.teardown_view_recursive(content_set.tab_view);
         env.free_view(content_set.tab_view);
         env.view_detach_parent(content_set.presenter.root_view_id());
 
-        Self::relocate_tabs(self.contents.iter().map(|x| (x.tab_view, x.tab_width)), env);
+        if self.current_active_tab_view == content_set.tab_view && !self.contents.is_empty() {
+            // activate another content
+            let new_active = index.clamp(0, self.contents.len() - 1);
+            env.view_instance_mut::<PaneGroupTabView>(self.contents[new_active].tab_view)
+                .expect("query failed")
+                .set_active(true);
+            env.schedule_view_render(self.contents[new_active].tab_view);
+            env.view_set_visibility(self.contents[new_active].presenter.root_view_id(), true);
+            env.schedule_view_render(self.contents[new_active].presenter.root_view_id());
 
+            self.current_active_tab_view = self.contents[new_active].tab_view;
+        }
+
+        Self::relocate_tabs(self.contents.iter().map(|x| (x.tab_view, x.tab_width)), env);
         content_set.presenter
     }
 
