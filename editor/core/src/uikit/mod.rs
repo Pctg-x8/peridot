@@ -20,7 +20,7 @@ use crate::{
 };
 
 pub trait SystemLinkAccess {
-    fn system_link(&self) -> &SystemLink;
+    fn system_link<'a>(&'a self) -> &'a SystemLink<'a>;
 }
 
 pub trait CompositeTreeMutableAccess<Event> {
@@ -151,6 +151,33 @@ impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
         view_instance_mut(id, self.view_instance_store)
     }
 }
+impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
+    fn render_view_recursive(
+        &mut self,
+        id: ViewIdentifier,
+        mount_on: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
+        render_view_recursive(
+            id,
+            &mut RenderContext {
+                composite_tree: &mut self.mount_context.composite_tree,
+                ht_manager: &mut self.mount_context.ht_manager,
+                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+                current_sec: self.mount_context.current_sec,
+                system_link: self.system_link,
+                main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
+                application: self.application,
+            },
+            mount_on,
+            keyboard_focus_group,
+            self.view_instance_store,
+            self.view_event_handler_store,
+            self.view_tree_relation_store,
+            self.view_render_state_store,
+        )
+    }
+}
 impl<'a, 'h> ViewInitContext<'a, 'h> {
     #[deprecated = "use render-teardown based view lifecycle"]
     pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
@@ -180,32 +207,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         handler: &Rc<impl ViewEventHandler + 'static>,
     ) {
         set_view_event_handler(id, handler, self.view_event_handler_store)
-    }
-
-    pub fn render_view_recursive(
-        &mut self,
-        id: ViewIdentifier,
-        mount_on: &(impl MountTarget + ?Sized),
-        keyboard_focus_group: KeyboardFocusGroupRef,
-    ) {
-        render_view_recursive(
-            id,
-            &mut RenderContext {
-                composite_tree: &mut self.mount_context.composite_tree,
-                ht_manager: &mut self.mount_context.ht_manager,
-                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-                current_sec: self.mount_context.current_sec,
-                system_link: self.system_link,
-                main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
-                application: self.application,
-            },
-            mount_on,
-            keyboard_focus_group,
-            self.view_instance_store,
-            self.view_event_handler_store,
-            self.view_tree_relation_store,
-            self.view_render_state_store,
-        )
     }
 
     pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2, 'h> {

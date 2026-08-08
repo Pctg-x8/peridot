@@ -13,9 +13,9 @@ use crate::{
     },
     uikit::{
         RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewInitContext, ViewInstanceModifier, ViewInstanceStore, ViewNewRenderElements,
-        ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, render_view_recursive,
-        teardown_view_recursive, view_instance, view_instance_mut,
+        ViewImmediateRenderable, ViewInitContext, ViewInstanceModifier, ViewInstanceStore,
+        ViewNewRenderElements, ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore,
+        render_view_recursive, teardown_view_recursive, view_instance, view_instance_mut,
     },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };

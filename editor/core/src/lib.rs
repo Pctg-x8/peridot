@@ -59,10 +59,10 @@ use crate::{
         StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize,
         ViewEventHandler, ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler,
         ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewInitContext, ViewInstanceQueryableMut,
-        ViewInstanceStore, ViewLocation, ViewPlacement, ViewRegisterable, ViewRelationControllable,
-        ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
-        ViewUpdateContext, call_view_update,
+        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLocation, ViewPlacement, ViewRegisterable,
+        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer,
+        ViewTreeRelationStore, ViewUpdateContext, call_view_update,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -8597,18 +8597,19 @@ impl DockState {
                             ui::dock::DockDirection::ToBottom(Cell::new(w))
                         }
                     },
-                    splitter: ui::dock::DockedPaneSplitterView::new(
-                        create_context.view_init_context,
-                        match direction {
-                            DockDirection::Left(_) | DockDirection::Right(_) => {
-                                ui::dock::DockedPaneSplitDirection::Horizontal
-                            }
-                            DockDirection::Top(_) | DockDirection::Bottom(_) => {
-                                ui::dock::DockedPaneSplitDirection::Vertical
-                            }
-                        },
-                        parent1,
-                    ),
+                    splitter: create_context.construct_view(|_| {
+                        Box::new(ui::dock::DockedPaneSplitterView::new(
+                            match direction {
+                                DockDirection::Left(_) | DockDirection::Right(_) => {
+                                    ui::dock::DockedPaneSplitDirection::Horizontal
+                                }
+                                DockDirection::Top(_) | DockDirection::Bottom(_) => {
+                                    ui::dock::DockedPaneSplitDirection::Vertical
+                                }
+                            },
+                            parent1,
+                        ))
+                    }),
                     docked: rec(
                         content,
                         root_keyboard_focus_group,
