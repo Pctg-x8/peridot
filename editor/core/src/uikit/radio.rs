@@ -15,7 +15,8 @@ use crate::{
     },
     uikit::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewIdentifier, ViewInstanceModifier, ViewNewRenderElements, ViewPlacement,
+        ViewIdentifier, ViewInstanceModifier, ViewInstanceQueryableMut, ViewNewRenderElements,
+        ViewPlacement,
     },
     utils::{Point, Size},
 };

@@ -13,9 +13,11 @@ use crate::{
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     rendering::composite::CompositeTree,
+    ui::dock::DockStore,
     uikit::{
-        View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceStore, ViewRenderQueue,
-        view_instance, view_instance_mut, view_iter_self_group_participants,
+        View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewRenderQueue, ViewRenderer, view_instance,
+        view_instance_mut, view_iter_self_group_participants,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -33,6 +35,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
     pub ht_manager: &'env HitTestTreeManager<'h>,
+    pub dock_store: &'env mut DockStore,
     pub application: ApplicationMutation<'env>,
     pub view_instance_store: &'env mut ViewInstanceStore,
     pub view_group_relation_store: &'env ViewGroupRelationStore,
@@ -40,21 +43,34 @@ pub struct InputEventContext<'env, 'sys, 'h> {
 }
 impl InputEventContext<'_, '_, '_> {
     #[inline(always)]
-    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_instance_store)
-    }
-
-    #[inline(always)]
-    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_instance_store)
-    }
-
-    #[inline(always)]
     pub fn view_iter_self_group_parcitipants(
         &self,
         id: ViewIdentifier,
     ) -> impl Iterator<Item = ViewIdentifier> {
         view_iter_self_group_participants(id, self.view_group_relation_store)
+    }
+}
+impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        crate::uikit::view_instance(id, self.view_instance_store)
+    }
+}
+impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        crate::uikit::view_instance_mut(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
+    }
+}
+impl ViewRenderer for InputEventContext<'_, '_, '_> {
+    #[inline(always)]
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target);
     }
 }
 

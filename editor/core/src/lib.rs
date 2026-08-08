@@ -59,10 +59,11 @@ use crate::{
         StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize,
         ViewEventHandler, ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler,
         ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLocation, ViewPlacement, ViewRegisterable,
-        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer,
-        ViewTreeRelationStore, ViewUpdateContext, call_view_update,
+        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
+        ViewLocation, ViewPlacement, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
+        ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore, ViewUpdateContext,
+        call_view_update,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -2373,7 +2374,6 @@ impl TextInputViewIO for UIKitPreviewTextInputValueStore {
 crate::perf_section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
 pub struct UIKitPreviewPanePresenter {
     kf_group: KeyboardFocusGroupRef,
-    scroll_container_tmp: ScrollContainerTemp,
     scroll_container: ViewIdentifier,
     text_input_backing_store1: Rc<UIKitPreviewTextInputValueStore>,
     text_input_backing_store2: Rc<UIKitPreviewTextInputValueStore>,
@@ -2389,14 +2389,6 @@ impl UIKitPreviewPanePresenter {
 
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
-
-        let scroll_container_tmp = ScrollContainerTemp::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(0.0, 0.0),
-                Size::new_logical(128.0, 128.0),
-            ),
-        );
 
         let scroll_container = ctx.construct_view(|id| {
             Box::new(ScrollContainer::new(
@@ -2723,11 +2715,9 @@ impl UIKitPreviewPanePresenter {
         ctx.view_instance_mut::<ScrollContainer>(scroll_container)
             .expect("query failed")
             .set_content_size(Size::new_logical(content_width, ytop + 8.0));
-        ctx.render_view_recursive(scroll_container, &scroll_container_tmp, kf_group);
 
         Self {
             kf_group,
-            scroll_container_tmp,
             scroll_container,
             text_input_backing_store1,
             text_input_backing_store2,
@@ -2746,15 +2736,9 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
         "uikit on stage".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        self.scroll_container_tmp.mount(ctx, target);
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.scroll_container
     }
-
-    fn unmount(&self, ctx: &mut MountContext) {
-        self.scroll_container_tmp.unmount(ctx);
-    }
-
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
         context
@@ -2765,9 +2749,32 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
     }
 }
 
-struct TimelinePanePresenter {}
+/// なにもしないView
+struct EmptyView;
+impl View for EmptyView {
+    fn render(
+        &mut self,
+        _self_instance: &mut uikit::ViewInstanceModifier,
+        _ctx: &mut RenderContext,
+        _sched: &mut RenderChildScheduler,
+    ) -> uikit::ViewNewRenderElements {
+        uikit::ViewNewRenderElements::EMPTY
+    }
+
+    fn teardown(&mut self, _ctx: &mut TeardownContext) {}
+}
+
+struct TimelinePanePresenter {
+    root_view_id: ViewIdentifier,
+}
 impl TimelinePanePresenter {
     const ID: &str = internal_pane_identifier!("Timeline");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        Self {
+            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+        }
+    }
 }
 impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
     fn id(&self) -> String {
@@ -2778,14 +2785,15 @@ impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
         "Timeline".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
-
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
+    }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
 struct ObjectTreePanePresenter {
+    root_view_id: ViewIdentifier,
     eh: Rc<ObjectTreePaneEventHandler>,
 }
 impl ObjectTreePanePresenter {
@@ -2825,7 +2833,10 @@ impl ObjectTreePanePresenter {
         ctx.ht_manager
             .add_child(eh.ht_root, eh.ht_context_menu_receiver);
 
-        Self { eh }
+        Self {
+            eh,
+            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+        }
     }
 }
 impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
@@ -2837,16 +2848,20 @@ impl ui::dock::PaneContentPresenter for ObjectTreePanePresenter {
         "Object Tree".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
     }
 
-    fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.eh.ct_root);
-        ctx.ht_manager.remove_child(self.eh.ht_root);
-    }
+    // fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+    //     ctx.composite_tree
+    //         .add_child(target.ct_root(), self.eh.ct_root);
+    //     ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
+    // }
+
+    // fn unmount(&self, ctx: &mut MountContext) {
+    //     ctx.composite_tree.remove_child(self.eh.ct_root);
+    //     ctx.ht_manager.remove_child(self.eh.ht_root);
+    // }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
@@ -3517,12 +3532,8 @@ impl ui::dock::PaneContentPresenter for InspectorPanePresenter {
         "Inspector".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        self.eh.root_container_view_tmp.mount(ctx, target);
-    }
-
-    fn unmount(&self, ctx: &mut MountContext) {
-        self.eh.root_container_view_tmp.unmount(ctx);
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.eh.root_container_view
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
@@ -3811,9 +3822,17 @@ impl NumericInputViewBackingStore for InspectorPaneEventHandler {
     }
 }
 
-struct AssetExplorerPanePresenter {}
+struct AssetExplorerPanePresenter {
+    root_view_id: ViewIdentifier,
+}
 impl AssetExplorerPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetExplorer");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        Self {
+            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+        }
+    }
 }
 impl ui::dock::PaneContentPresenter for AssetExplorerPanePresenter {
     fn id(&self) -> String {
@@ -3824,16 +3843,24 @@ impl ui::dock::PaneContentPresenter for AssetExplorerPanePresenter {
         "Asset Explorer".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
-
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
+    }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
-struct ProjectSettingsPanePresenter {}
+struct ProjectSettingsPanePresenter {
+    root_view_id: ViewIdentifier,
+}
 impl ProjectSettingsPanePresenter {
     const ID: &str = internal_pane_identifier!("ProjectSettings");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        Self {
+            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+        }
+    }
 }
 impl ui::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
     fn id(&self) -> String {
@@ -3844,16 +3871,24 @@ impl ui::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
         "Project Settings".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
-
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
+    }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
-struct AssetPreviewPanePresenter {}
+struct AssetPreviewPanePresenter {
+    root_view_id: ViewIdentifier,
+}
 impl AssetPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetPreview");
+
+    pub fn new(ctx: &mut ViewInitContext) -> Self {
+        Self {
+            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+        }
+    }
 }
 impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
     fn id(&self) -> String {
@@ -3864,9 +3899,9 @@ impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
         "Asset Preview".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {}
-
-    fn unmount(&self, ctx: &mut MountContext) {}
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
+    }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
@@ -4499,12 +4534,18 @@ async fn run<'sys>(
                         InspectorPanePresenter::ID => {
                             Box::new(InspectorPanePresenter::new(view_init_ctx))
                         }
-                        AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
-                        ProjectSettingsPanePresenter::ID => {
-                            Box::new(ProjectSettingsPanePresenter {})
+                        AssetExplorerPanePresenter::ID => {
+                            Box::new(AssetExplorerPanePresenter::new(view_init_ctx))
                         }
-                        TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
-                        AssetPreviewPanePresenter::ID => Box::new(AssetPreviewPanePresenter {}),
+                        ProjectSettingsPanePresenter::ID => {
+                            Box::new(ProjectSettingsPanePresenter::new(view_init_ctx))
+                        }
+                        TimelinePanePresenter::ID => {
+                            Box::new(TimelinePanePresenter::new(view_init_ctx))
+                        }
+                        AssetPreviewPanePresenter::ID => {
+                            Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
+                        }
                         PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
                             view_init_ctx,
                             &mut preview_input_state,
@@ -4597,16 +4638,16 @@ async fn run<'sys>(
                                             Box::new(InspectorPanePresenter::new(view_init_ctx))
                                         }
                                         AssetExplorerPanePresenter::ID => {
-                                            Box::new(AssetExplorerPanePresenter {})
+                                            Box::new(AssetExplorerPanePresenter::new(view_init_ctx))
                                         }
-                                        ProjectSettingsPanePresenter::ID => {
-                                            Box::new(ProjectSettingsPanePresenter {})
-                                        }
+                                        ProjectSettingsPanePresenter::ID => Box::new(
+                                            ProjectSettingsPanePresenter::new(view_init_ctx),
+                                        ),
                                         TimelinePanePresenter::ID => {
-                                            Box::new(TimelinePanePresenter {})
+                                            Box::new(TimelinePanePresenter::new(view_init_ctx))
                                         }
                                         AssetPreviewPanePresenter::ID => {
-                                            Box::new(AssetPreviewPanePresenter {})
+                                            Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
                                         }
                                         PreviewPanePresenter::ID => {
                                             Box::new(PreviewPanePresenter::new(
@@ -4803,9 +4844,82 @@ async fn run<'sys>(
         match e {
             Event::Quit => break,
             Event::SubWindowClose { mut window } => {
-                unsafe {
-                    drop(window.take_extra_data::<PerWindowData>());
+                let wd = unsafe { window.take_extra_data::<PerWindowData>() };
+                struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
+                impl ViewImmediateTeardownable for LocalContext<'_, '_> {
+                    fn teardown_view_recursive(&mut self, target: ViewIdentifier) {
+                        crate::uikit::teardown_view_recursive(
+                            target,
+                            &mut TeardownContext {
+                                mount_context: MountContext {
+                                    composite_tree: &mut self.0.mount_context.composite_tree,
+                                    ht_manager: &mut self.0.mount_context.ht_manager,
+                                    keyboard_focus_registry: &mut self
+                                        .0
+                                        .mount_context
+                                        .keyboard_focus_registry,
+                                    current_sec: self.0.mount_context.current_sec,
+                                },
+                                view_feedback_subscription_delayed_ops: &mut self
+                                    .0
+                                    .view_feedback_subscription_delayed_ops,
+                            },
+                            self.0.view_instance_store,
+                            self.0.view_tree_relation_store,
+                            self.0.view_render_state_store,
+                        );
+                    }
                 }
+                impl ViewRegisterable for LocalContext<'_, '_> {
+                    fn construct_view(
+                        &mut self,
+                        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+                    ) -> ViewIdentifier {
+                        crate::uikit::construct_view(
+                            ctor,
+                            self.0.view_allocator,
+                            self.0.view_instance_store,
+                            self.0.view_event_handler_store,
+                            self.0.view_tree_relation_store,
+                            self.0.view_group_relation_store,
+                            self.0.view_render_state_store,
+                        )
+                    }
+
+                    fn free_view(&mut self, id: ViewIdentifier) {
+                        crate::uikit::free_view(
+                            id,
+                            self.0.view_allocator,
+                            self.0.view_instance_store,
+                            self.0.view_event_handler_store,
+                            self.0.view_tree_relation_store,
+                            self.0.view_group_relation_store,
+                            self.0.view_render_state_store,
+                        );
+                    }
+                }
+                wd.docking_manager.teardown(
+                    &mut dock_store,
+                    &mut LocalContext(ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                        },
+                        view_allocator: &mut view_allocator,
+                        view_instance_store: &mut view_instance_store,
+                        view_tree_relation_store: &mut view_tree_relation_store,
+                        view_event_handler_store: &mut view_event_handler_store,
+                        view_group_relation_store: &mut view_group_relation_store,
+                        view_render_state_store: &mut view_render_state_store,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    }),
+                );
                 sub_windows.remove(&window);
                 system_link.close_window(
                     window,
@@ -4861,6 +4975,7 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    dock_store: &mut dock_store,
                     view_instance_store: &mut view_instance_store,
                     view_group_relation_store: &view_group_relation_store,
                     view_render_queue: &mut view_render_queue,
@@ -4990,6 +5105,7 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    dock_store: &mut dock_store,
                     view_instance_store: &mut view_instance_store,
                     view_group_relation_store: &view_group_relation_store,
                     view_render_queue: &mut view_render_queue,
@@ -5162,6 +5278,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5245,6 +5362,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5325,6 +5443,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5401,6 +5520,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5475,6 +5595,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5544,6 +5665,7 @@ async fn run<'sys>(
                     current_sec: global_time_base.elapsed().as_secs_f32(),
                     system_link: &mut system_link,
                     ht_manager: &ht_manager,
+                    dock_store: &mut dock_store,
                     view_instance_store: &mut view_instance_store,
                     view_group_relation_store: &view_group_relation_store,
                     view_render_queue: &mut view_render_queue,
@@ -5617,6 +5739,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5700,6 +5823,7 @@ async fn run<'sys>(
                             current_sec: global_time_base.elapsed().as_secs_f32(),
                             system_link: &mut system_link,
                             ht_manager: &ht_manager,
+                            dock_store: &mut dock_store,
                             view_instance_store: &mut view_instance_store,
                             view_group_relation_store: &view_group_relation_store,
                             view_render_queue: &mut view_render_queue,
@@ -5777,6 +5901,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5853,6 +5978,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -5929,6 +6055,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -6005,6 +6132,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -6103,6 +6231,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -6519,6 +6648,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -6602,6 +6732,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -6682,6 +6813,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -6756,6 +6888,7 @@ async fn run<'sys>(
                         current_sec: global_time_base.elapsed().as_secs_f32(),
                         system_link: &mut system_link,
                         ht_manager: &ht_manager,
+                        dock_store: &mut dock_store,
                         view_instance_store: &mut view_instance_store,
                         view_group_relation_store: &view_group_relation_store,
                         view_render_queue: &mut view_render_queue,
@@ -7071,7 +7204,6 @@ async fn run<'sys>(
                 client_pos_in_dest,
             } => {
                 if let Some(state) = docking_preview_state.take() {
-                    let mount_target = destination_window;
                     let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
                         .docking_manager;
 
@@ -7086,7 +7218,6 @@ async fn run<'sys>(
                         ui::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(
                         source_dock,
-                        source_window.keyboard_focus_group(),
                         &mut dock_store,
                         tab_index,
                         op,
@@ -7113,7 +7244,6 @@ async fn run<'sys>(
                             },
                             view_render_queue: &mut view_render_queue,
                         },
-                        &mount_target,
                     );
 
                     match undock_result {
@@ -7214,7 +7344,6 @@ async fn run<'sys>(
                                             store.alloc_root(|root_id, store| {
                                                 store.alloc_fill(
                                                     root_id,
-                                                    w.keyboard_focus_group(),
                                                     &mut PaneGroupCreateContext {
                                                         view_init_context: view_init_ctx,
                                                         view_render_queue,
@@ -7380,6 +7509,7 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
                                 ht_manager: &ht_manager,
+                                dock_store: &mut dock_store,
                                 view_instance_store: &mut view_instance_store,
                                 view_group_relation_store: &view_group_relation_store,
                                 view_render_queue: &mut view_render_queue,
@@ -7474,6 +7604,7 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
                                 ht_manager: &ht_manager,
+                                dock_store: &mut dock_store,
                                 view_instance_store: &mut view_instance_store,
                                 view_group_relation_store: &view_group_relation_store,
                                 view_render_queue: &mut view_render_queue,
@@ -7568,6 +7699,7 @@ async fn run<'sys>(
                                 current_sec: global_time_base.elapsed().as_secs_f32(),
                                 system_link: &mut system_link,
                                 ht_manager: &ht_manager,
+                                dock_store: &mut dock_store,
                                 view_instance_store: &mut view_instance_store,
                                 view_group_relation_store: &view_group_relation_store,
                                 view_render_queue: &mut view_render_queue,
@@ -8573,7 +8705,6 @@ impl DockState {
                     active_index,
                 } => store.alloc_fill(
                     parent,
-                    root_keyboard_focus_group,
                     create_context,
                     |view_init_ctx| {
                         content_ids
@@ -9036,6 +9167,7 @@ struct PreviewInputState {
 }
 
 pub struct PreviewPanePresenter {
+    root_view_id: ViewIdentifier,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     kf_token: FocusTargetToken,
@@ -9065,6 +9197,7 @@ impl PreviewPanePresenter {
             .set_event_handler(kf_token, &input_handler);
 
         Self {
+            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
             ct_root,
             ht_root,
             kf_token,
@@ -9081,19 +9214,23 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         "Preview".into()
     }
 
-    fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-        ctx.composite_tree.add_child(target.ct_root, self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root, self.ht_root);
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view_id
     }
+
+    // fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
+    //     ctx.composite_tree.add_child(target.ct_root, self.ct_root);
+    //     ctx.ht_manager.add_child(target.ht_root, self.ht_root);
+    // }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, _context: &mut PaneContentResizeContext) {
         unsafe { &mut *self.input_handler.input_state }.new_viewport_size = Some(new_size.clone());
     }
 
-    fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.ct_root);
-        ctx.ht_manager.remove_child(self.ht_root);
-    }
+    // fn unmount(&self, ctx: &mut MountContext) {
+    //     ctx.composite_tree.remove_child(self.ct_root);
+    //     ctx.ht_manager.remove_child(self.ht_root);
+    // }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.mount_context.composite_tree.free(self.ct_root);

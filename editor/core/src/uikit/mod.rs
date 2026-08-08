@@ -150,6 +150,11 @@ impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
     fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         view_instance_mut(id, self.view_instance_store)
     }
+
+    #[inline(always)]
+    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
+    }
 }
 impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
     fn render_view_recursive(
@@ -303,6 +308,11 @@ impl ViewInstanceQueryableMut for ViewUpdateContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         view_instance_mut(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
     }
 }
 impl ViewRenderer for ViewUpdateContext<'_, '_> {
@@ -540,7 +550,7 @@ impl ViewRenderQueue {
                 let Some(p) = tree_relation_store.relations[target.into_array_index()].parent
                 else {
                     // root
-                    match render_state_store.current_mounted_on[target.into_array_index()] {
+                    match render_state_store.0[target.into_array_index()].current_mounted_on {
                         None => {
                             panic!("unable to re-render root, which haven't rendered yet");
                         }
@@ -555,7 +565,7 @@ impl ViewRenderQueue {
                     continue;
                 }
 
-                match render_state_store.current_mounted_on[target.into_array_index()] {
+                match render_state_store.0[target.into_array_index()].current_mounted_on {
                     None => {
                         // 親がわからないので親からrenderする
                         target = p;
@@ -567,24 +577,18 @@ impl ViewRenderQueue {
             let mut scheduled_renders = VecDeque::new();
             scheduled_renders.push_back((mount_target, target));
             while let Some((mt, v)) = scheduled_renders.pop_front() {
-                let Some(Some(instance)) = instance_store.instances.get_mut(v.into_array_index())
-                else {
-                    // no instance associated
-                    continue;
-                };
-
                 let mut sched = RenderChildScheduler::new();
-                instance
-                    .render(
-                        &mut ViewInstanceModifier {
-                            event_handler_ref: &mut event_handler_store.event_handler
-                                [v.into_array_index()],
-                        },
-                        ctx,
-                        &mut sched,
-                    )
-                    .mount_on(&mt, kf_group, &mut ctx.make_mount_context());
-                render_state_store.current_mounted_on[v.into_array_index()] = Some((mt, kf_group));
+                render_view_instance1(
+                    v,
+                    ctx,
+                    &mut sched,
+                    mt,
+                    kf_group,
+                    instance_store,
+                    event_handler_store,
+                    render_state_store,
+                );
+
                 // もうrenderしたので次のループからはRenderしない
                 self.pending.remove(&v);
                 if let Some(mt) = sched.mount_on {
@@ -617,8 +621,13 @@ impl ViewIdentifierAllocator {
     }
 }
 
+struct ViewInstanceCell {
+    instance: Option<Box<dyn View>>,
+    active: bool,
+}
+
 pub struct ViewInstanceStore {
-    instances: Vec<Option<Box<dyn View>>>,
+    instances: Vec<ViewInstanceCell>,
 }
 impl ViewInstanceStore {
     pub fn new() -> Self {
@@ -654,14 +663,25 @@ impl ViewTreeRelationStore {
     }
 }
 
-pub struct ViewRenderStateStore {
-    current_mounted_on: Vec<Option<(RawMountTarget, KeyboardFocusGroupRef)>>,
+struct ViewRenderState {
+    current_mounted_on: Option<(RawMountTarget, KeyboardFocusGroupRef)>,
+    active_render_element_ct: Option<CompositeTreeRef>,
+    active_render_element_ht: Option<HitTestTreeRef>,
+    visible: Option<bool>,
 }
+impl ViewRenderState {
+    const EMPTY: Self = Self {
+        current_mounted_on: None,
+        active_render_element_ct: None,
+        active_render_element_ht: None,
+        visible: None,
+    };
+}
+
+pub struct ViewRenderStateStore(Vec<ViewRenderState>);
 impl ViewRenderStateStore {
     pub fn new() -> Self {
-        Self {
-            current_mounted_on: Vec::new(),
-        }
+        Self(Vec::new())
     }
 }
 
@@ -689,7 +709,10 @@ pub fn alloc_view_id_without_instance(
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
         // reuse
-        instance_store.instances[id.into_array_index()] = None;
+        instance_store.instances[id.into_array_index()] = ViewInstanceCell {
+            instance: None,
+            active: true,
+        };
         event_handler_store.event_handler[id.into_array_index()] =
             Weak::<EmptyViewEventHandler>::new();
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
@@ -697,7 +720,7 @@ pub fn alloc_view_id_without_instance(
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
-        render_state_store.current_mounted_on[id.into_array_index()] = None;
+        render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
     }
@@ -707,7 +730,10 @@ pub fn alloc_view_id_without_instance(
         .last_free_identifier
         .checked_add(1)
         .expect("too many views!");
-    instance_store.instances.push(None);
+    instance_store.instances.push(ViewInstanceCell {
+        instance: None,
+        active: true,
+    });
     event_handler_store
         .event_handler
         .push(Weak::<EmptyViewEventHandler>::new());
@@ -716,7 +742,7 @@ pub fn alloc_view_id_without_instance(
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
-    render_state_store.current_mounted_on.push(None);
+    render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
 
@@ -731,7 +757,10 @@ pub fn construct_view(
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
         // reuse
-        instance_store.instances[id.into_array_index()] = Some(ctor(id));
+        instance_store.instances[id.into_array_index()] = ViewInstanceCell {
+            instance: Some(ctor(id)),
+            active: true,
+        };
         event_handler_store.event_handler[id.into_array_index()] =
             Weak::<EmptyViewEventHandler>::new();
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
@@ -739,7 +768,7 @@ pub fn construct_view(
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
-        render_state_store.current_mounted_on[id.into_array_index()] = None;
+        render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
     }
@@ -749,7 +778,10 @@ pub fn construct_view(
         .last_free_identifier
         .checked_add(1)
         .expect("too many views!");
-    instance_store.instances.push(Some(ctor(id)));
+    instance_store.instances.push(ViewInstanceCell {
+        instance: Some(ctor(id)),
+        active: true,
+    });
     event_handler_store
         .event_handler
         .push(Weak::<EmptyViewEventHandler>::new());
@@ -758,7 +790,7 @@ pub fn construct_view(
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
-    render_state_store.current_mounted_on.push(None);
+    render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
 
@@ -782,14 +814,14 @@ pub fn free_view(
         event_handler_store.event_handler.pop();
         tree_relation_store.relations.pop();
         group_relation_store.joining_group.pop();
-        render_state_store.current_mounted_on.pop();
+        render_state_store.0.pop();
 
         return;
     }
 
     allocator.free_identifier.insert(id);
     // clear heap references
-    instance_store.instances[id.into_array_index()] = None;
+    instance_store.instances[id.into_array_index()].instance = None;
     event_handler_store.event_handler[id.into_array_index()] = Weak::<EmptyViewEventHandler>::new();
 }
 
@@ -939,23 +971,18 @@ pub fn render_view_recursive(
     let mut scheduled_renders = VecDeque::new();
     scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), target));
     while let Some((mt, v)) = scheduled_renders.pop_front() {
-        let Some(Some(instance)) = instance_store.instances.get_mut(v.into_array_index()) else {
-            // no instance associated
-            continue;
-        };
-
         let mut sched = RenderChildScheduler::new();
-        instance
-            .render(
-                &mut ViewInstanceModifier {
-                    event_handler_ref: &mut event_handler_store.event_handler[v.into_array_index()],
-                },
-                ctx,
-                &mut sched,
-            )
-            .mount_on(&mt, keyboard_focus_group, &mut ctx.make_mount_context());
-        render_state_store.current_mounted_on[v.into_array_index()] =
-            Some((mt, keyboard_focus_group));
+        render_view_instance1(
+            v,
+            ctx,
+            &mut sched,
+            mt,
+            keyboard_focus_group,
+            instance_store,
+            event_handler_store,
+            render_state_store,
+        );
+
         if let Some(mt) = sched.mount_on {
             // schedule render children to mount on
             scheduled_renders.extend(
@@ -964,6 +991,100 @@ pub fn render_view_recursive(
                     .iter()
                     .map(|&x| (mt.clone(), x)),
             );
+        }
+    }
+}
+
+fn render_view_instance1(
+    target: ViewIdentifier,
+    ctx: &mut RenderContext,
+    sched: &mut RenderChildScheduler,
+    mount_to: RawMountTarget,
+    kf_group: KeyboardFocusGroupRef,
+    instance_store: &mut ViewInstanceStore,
+    event_handler_store: &mut ViewEventHandlerStore,
+    render_state_store: &mut ViewRenderStateStore,
+) {
+    let Some(&mut ViewInstanceCell {
+        instance: Some(ref mut instance),
+        active,
+    }) = instance_store.instances.get_mut(target.into_array_index())
+    else {
+        // no instance associated
+        return;
+    };
+
+    let new_render_elements = instance.render(
+        &mut ViewInstanceModifier {
+            event_handler_ref: &mut event_handler_store.event_handler[target.into_array_index()],
+        },
+        ctx,
+        sched,
+    );
+
+    let render_state = &mut render_state_store.0[target.into_array_index()];
+    // update render elements relations
+    if render_state
+        .current_mounted_on
+        .as_ref()
+        .map(|x| x.0.ct_root)
+        != Some(mount_to.ct_root)
+    {
+        // parent changed
+        let ct = new_render_elements
+            .composite_tree
+            .or(render_state.active_render_element_ct);
+        if let Some(ct) = ct {
+            ctx.composite_tree.add_child(mount_to.ct_root, ct);
+            render_state.active_render_element_ct = Some(ct);
+        }
+    } else if let Some(new_ct) = new_render_elements.composite_tree
+        && Some(new_ct) != render_state.active_render_element_ct
+    {
+        // different object rendered
+        ctx.composite_tree.add_child(mount_to.ct_root, new_ct);
+        render_state.active_render_element_ct = Some(new_ct);
+    }
+
+    if render_state
+        .current_mounted_on
+        .as_ref()
+        .map(|x| x.0.ht_root)
+        != Some(mount_to.ht_root)
+    {
+        // parent changed
+        let ht = new_render_elements
+            .hit_tree
+            .or(render_state.active_render_element_ht);
+        if let Some(ht) = ht {
+            ctx.ht_manager.add_child(mount_to.ht_root, ht);
+            render_state.active_render_element_ht = Some(ht);
+        }
+    } else if let Some(new_ht) = new_render_elements.hit_tree
+        && Some(new_ht) != render_state.active_render_element_ht
+    {
+        // different object rendered
+        ctx.ht_manager.add_child(mount_to.ht_root, new_ht);
+        render_state.active_render_element_ht = Some(new_ht);
+    }
+
+    if let Some(kf) = new_render_elements.keyboard_focus {
+        ctx.keyboard_focus_registry.join_group(kf_group, kf);
+    }
+
+    render_state.current_mounted_on = Some((mount_to, kf_group));
+
+    if render_state.visible.replace(active) != Some(active) {
+        // visible state changed
+        if let Some(ct) = render_state.active_render_element_ct {
+            ctx.composite_tree
+                .begin_mod_chain(ct)
+                .set_active(active)
+                .apply();
+        }
+
+        if let Some(ht) = render_state.active_render_element_ht {
+            ctx.ht_manager.get_data_mut(ht).active = active;
         }
     }
 }
@@ -991,10 +1112,14 @@ pub fn teardown_view_recursive(
     }
 
     for v in scheduled_teardowns {
-        if let Some(ref mut instance) = instance_store.instances[v.into_array_index()] {
+        if let ViewInstanceCell {
+            instance: Some(ref mut instance),
+            ..
+        } = instance_store.instances[v.into_array_index()]
+        {
             instance.teardown(ctx);
         }
-        render_state_store.current_mounted_on[v.into_array_index()] = None;
+        render_state_store.0[v.into_array_index()] = ViewRenderState::EMPTY;
     }
 }
 
@@ -1005,6 +1130,7 @@ pub fn view_instance<T: View + 'static>(
     (instance_store
         .instances
         .get(id.into_array_index())?
+        .instance
         .as_ref()?
         .as_ref() as &dyn core::any::Any)
         .downcast_ref::<T>()
@@ -1017,9 +1143,22 @@ pub fn view_instance_mut<T: View + 'static>(
     (instance_store
         .instances
         .get_mut(id.into_array_index())?
+        .instance
         .as_mut()?
         .as_mut() as &mut dyn core::any::Any)
         .downcast_mut::<T>()
+}
+
+pub fn view_set_visibility(
+    id: ViewIdentifier,
+    visible: bool,
+    instance_store: &mut ViewInstanceStore,
+) {
+    let Some(instance) = instance_store.instances.get_mut(id.into_array_index()) else {
+        return;
+    };
+
+    instance.active = visible;
 }
 
 pub trait ViewRegisterable {
@@ -1040,6 +1179,7 @@ pub trait ViewInstanceQueryable {
 }
 pub trait ViewInstanceQueryableMut {
     fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T>;
+    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool);
 }
 
 pub trait ViewRelationControllable {

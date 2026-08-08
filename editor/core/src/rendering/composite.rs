@@ -898,6 +898,11 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         core::mem::forget(self);
     }
 
+    pub fn set_active(mut self, a: bool) -> Self {
+        self.dirty = core::mem::replace(&mut unsafe { &mut *self.target }.active, a) != a;
+        self
+    }
+
     pub fn activate(mut self) -> Self {
         unsafe { &mut *self.target }.active = true;
         self.dirty = true;
