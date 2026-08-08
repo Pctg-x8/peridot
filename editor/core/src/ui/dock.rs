@@ -2,9 +2,9 @@ use core::cell::{Cell, RefCell};
 use std::{collections::BTreeSet, rc::Rc};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, WindowHandle,
+    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowHandle,
     input::{
-        EventContinueControl, InputEventContext, PointerInputUnit,
+        EventContinueControl, InputEventContext, KeyboardFocusGroupRef, PointerInputUnit,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
             HitTestTreeRef, PointerActionArgs, PointerButton, PointerButtonActionArgs,
@@ -18,12 +18,18 @@ use crate::{
             CompositeRectTextVerticalAlignment, CompositeTree, CompositeTreeRef, CornerRadius,
             FloatAnimationTemplate, Gradient, GradientRef,
         },
-        text::{FontID, TextLayout},
+        text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MountContext, MountTarget, RawMountTarget, TeardownContext, View, ViewEventHandler,
-        ViewIdentifier, ViewInitContext, ViewInstanceStore, ViewRenderQueue, ViewUpdateContext,
-        view_instance, view_instance_mut,
+        CompositeTreeMutableAccess, DeriveTeardownContext, HitTestTreeMutableAccess, MountContext,
+        MountTarget, RawMountTarget, RenderChildScheduler, RenderContext, SystemLinkAccess,
+        TeardownContext, View, ViewEventHandler, ViewEventHandlerStore, ViewGroupRelationStore,
+        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceModifier, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewNewRenderElements, ViewRegisterable,
+        ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
+        ViewUpdateContext, construct_view, free_view, render_view_recursive,
+        teardown_view_recursive, view_instance, view_instance_mut,
     },
     utils::{LogicalUnit, Point, Rect, SafeF32, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -82,21 +88,29 @@ pub struct PaneContentResizeContext<'env, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub ht_manager: &'env mut HitTestTreeManager<'h>,
 }
-impl PaneContentResizeContext<'_, '_> {
+impl ViewInstanceQueryable for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
-    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_instance_store)
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        crate::uikit::view_instance(id, self.view_instance_store)
     }
-
+}
+impl ViewInstanceQueryableMut for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
-    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_instance_store)
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        crate::uikit::view_instance_mut(id, self.view_instance_store)
     }
-
+}
+impl ViewRenderer for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
-    pub fn schedule_view_render(&mut self, target: ViewIdentifier) {
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
     }
+}
+
+pub trait DerivePaneContentResizeContext<'h> {
+    fn derive_pane_content_resize_context<'env2>(
+        &'env2 mut self,
+    ) -> PaneContentResizeContext<'env2, 'h>;
 }
 
 #[repr(transparent)]
@@ -214,15 +228,22 @@ impl DockStore {
     pub fn alloc_fill(
         &mut self,
         parent: DockID,
-        view_init_ctx: &mut ViewInitContext,
+        parent_keyboard_focus_group: KeyboardFocusGroupRef,
+        init_ctx: &mut PaneGroupCreateContext,
         contents: impl FnOnce(&mut ViewInitContext) -> Vec<Box<dyn PaneContentPresenter>>,
         initial_active_index: usize,
     ) -> DockID {
         self.alloc(move |id| {
-            let contents = contents(view_init_ctx);
+            let contents = contents(init_ctx.view_init_context);
 
             Dock::Fill {
-                group_view: PaneGroupView::new(view_init_ctx, contents, id, initial_active_index),
+                group_view: PaneGroupView::new(
+                    init_ctx,
+                    parent_keyboard_focus_group,
+                    contents,
+                    id,
+                    initial_active_index,
+                ),
                 parent,
             }
         })
@@ -378,11 +399,23 @@ impl core::fmt::Debug for Dock {
     }
 }
 impl Dock {
-    fn teardown(self, ctx: &mut TeardownContext) {
+    fn teardown<'h>(
+        self,
+        env: &mut (
+                 impl ViewRegisterable
+                 + ViewImmediateTeardownable
+                 + DeriveTeardownContext<'h>
+                 + CompositeTreeMutableAccess<SyncEvent>
+                 + HitTestTreeMutableAccess<'h>
+                 + ?Sized
+             ),
+    ) {
         match self {
             Self::RootContainer { .. } => {}
-            Self::Fill { group_view, .. } => group_view.teardown(ctx),
-            Self::Splitted { splitter, .. } => splitter.teardown(ctx),
+            Self::Fill { group_view, .. } => group_view.teardown(env),
+            Self::Splitted { splitter, .. } => {
+                splitter.teardown(&mut env.derive_teardown_context())
+            }
         }
     }
 
@@ -460,8 +493,89 @@ pub struct RedockingContext<'a, 'h> {
     pub view_init_ctx: ViewInitContext<'a, 'h>,
     pub view_render_queue: &'a mut ViewRenderQueue,
 }
-impl<'a, 'h> RedockingContext<'a, 'h> {
-    fn make_teardown_context(&mut self) -> TeardownContext<'_, 'h> {
+impl ViewRegisterable for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn construct_view(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier {
+        self.view_init_ctx.construct_view(ctor)
+    }
+
+    #[inline(always)]
+    fn free_view(&mut self, id: ViewIdentifier) {
+        self.view_init_ctx.free_view(id)
+    }
+}
+impl ViewRenderer for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target);
+    }
+}
+impl ViewImmediateRenderable for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn render_view_recursive(
+        &mut self,
+        target: ViewIdentifier,
+        mount_on: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
+        self.view_init_ctx
+            .render_view_recursive(target, mount_on, keyboard_focus_group)
+    }
+}
+impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn teardown_view_recursive(&mut self, target: ViewIdentifier) {
+        crate::uikit::teardown_view_recursive(
+            target,
+            &mut TeardownContext {
+                mount_context: MountContext {
+                    composite_tree: self.view_init_ctx.mount_context.composite_tree,
+                    ht_manager: self.view_init_ctx.mount_context.ht_manager,
+                    keyboard_focus_registry: self
+                        .view_init_ctx
+                        .mount_context
+                        .keyboard_focus_registry,
+                    current_sec: self.view_init_ctx.mount_context.current_sec,
+                },
+                view_feedback_subscription_delayed_ops: self
+                    .view_init_ctx
+                    .view_feedback_subscription_delayed_ops,
+            },
+            self.view_init_ctx.view_instance_store,
+            self.view_init_ctx.view_tree_relation_store,
+            self.view_init_ctx.view_render_state_store,
+        );
+    }
+}
+impl ViewInstanceQueryable for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        crate::uikit::view_instance(id, self.view_init_ctx.view_instance_store)
+    }
+}
+impl ViewInstanceQueryableMut for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        crate::uikit::view_instance_mut(id, self.view_init_ctx.view_instance_store)
+    }
+}
+impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h> {
+    fn derive_pane_content_resize_context<'env2>(
+        &'env2 mut self,
+    ) -> PaneContentResizeContext<'env2, 'h> {
+        PaneContentResizeContext {
+            view_instance_store: self.view_init_ctx.view_instance_store,
+            view_render_queue: self.view_render_queue,
+            composite_tree: self.view_init_ctx.mount_context.composite_tree,
+            ht_manager: self.view_init_ctx.mount_context.ht_manager,
+        }
+    }
+}
+impl<'h> DeriveTeardownContext<'h> for RedockingContext<'_, 'h> {
+    fn derive_teardown_context<'env>(&'env mut self) -> TeardownContext<'env, 'h> {
         TeardownContext {
             mount_context: MountContext {
                 composite_tree: self.view_init_ctx.mount_context.composite_tree,
@@ -473,6 +587,38 @@ impl<'a, 'h> RedockingContext<'a, 'h> {
                 .view_init_ctx
                 .view_feedback_subscription_delayed_ops,
         }
+    }
+}
+impl SystemLinkAccess for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn system_link(&self) -> &SystemLink {
+        self.view_init_ctx.system_link
+    }
+}
+impl CompositeTreeMutableAccess<SyncEvent> for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn composite_tree_mut(&mut self) -> &mut CompositeTree<SyncEvent> {
+        self.view_init_ctx.mount_context.composite_tree
+    }
+}
+impl<'h> HitTestTreeMutableAccess<'h> for RedockingContext<'_, 'h> {
+    #[inline(always)]
+    fn hit_test_tree_mut(&mut self) -> &mut HitTestTreeManager<'h> {
+        self.view_init_ctx.mount_context.ht_manager
+    }
+}
+impl<'a, 'h> core::ops::Deref for RedockingContext<'a, 'h> {
+    type Target = MountContext<'a, 'h>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.view_init_ctx.mount_context
+    }
+}
+impl<'a, 'h> core::ops::DerefMut for RedockingContext<'a, 'h> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.view_init_ctx.mount_context
     }
 }
 
@@ -487,9 +633,9 @@ impl DockingManager {
         view_render_queue: &mut ViewRenderQueue,
         max_rect: Rect<LogicalUnit>,
         store: &mut DockStore,
-        dock_ctor: impl FnOnce(&mut ViewInitContext, &mut DockStore) -> DockID,
+        dock_ctor: impl FnOnce(&mut ViewInitContext, &mut ViewRenderQueue, &mut DockStore) -> DockID,
     ) -> Self {
-        let root_id = dock_ctor(ctx, store);
+        let root_id = dock_ctor(ctx, view_render_queue, store);
         mount_recursive(root_id, store, ctx, &bound_window);
         relayout_dock(
             root_id,
@@ -520,6 +666,7 @@ impl DockingManager {
     pub fn redock(
         &self,
         source: DockID,
+        root_keyboard_focus_group: KeyboardFocusGroupRef,
         store: &mut DockStore,
         index: usize,
         op: DockingOperation,
@@ -530,6 +677,7 @@ impl DockingManager {
         store.dump(self.root_id);
         let r = redock(
             self.root_id,
+            root_keyboard_focus_group,
             store,
             source,
             index,
@@ -553,7 +701,7 @@ impl DockingManager {
                         .contents
                         .borrow()
                         .iter()
-                        .map(|c| c.0.id())
+                        .map(|c| c.presenter.id())
                         .collect(),
                     active_index: group_view.controller.current_active_index.get(),
                 },
@@ -608,6 +756,7 @@ fn mount_recursive(
 
 /// Dockを新規に分割する
 fn split_new(
+    root_keyboard_focus_group: KeyboardFocusGroupRef,
     store: &mut DockStore,
     view_init_ctx: &mut ViewInitContext,
     view_render_queue: &mut ViewRenderQueue,
@@ -623,7 +772,16 @@ fn split_new(
             docked: store.alloc(|id| {
                 let d = Dock::Fill {
                     parent: parent_id,
-                    group_view: PaneGroupView::new(view_init_ctx, vec![content], id, 0),
+                    group_view: PaneGroupView::new(
+                        &mut PaneGroupCreateContext {
+                            view_init_context: view_init_ctx,
+                            view_render_queue,
+                        },
+                        root_keyboard_focus_group,
+                        vec![content],
+                        id,
+                        0,
+                    ),
                 };
                 d.mount(view_init_ctx, mount_target);
                 d
@@ -660,27 +818,27 @@ fn split_new(
 }
 
 /// Dockを外す
-#[tracing::instrument(skip(
-    dbg_dump_root,
-    store,
-    view_instance_store,
-    view_render_queue,
-    teardown_ctx
-))]
-fn undock(
+#[tracing::instrument(skip(dbg_dump_root, store, env))]
+fn undock<'h>(
     dbg_dump_root: DockID,
     target: DockID,
     store: &mut DockStore,
-    view_instance_store: &mut ViewInstanceStore,
-    view_render_queue: &mut ViewRenderQueue,
-    teardown_ctx: &mut TeardownContext,
+    env: &mut (
+             impl ViewRegisterable
+             + ViewImmediateTeardownable
+             + CompositeTreeMutableAccess<SyncEvent>
+             + HitTestTreeMutableAccess<'h>
+             + DeriveTeardownContext<'h>
+             + DerivePaneContentResizeContext<'h>
+             + ?Sized
+         ),
 ) -> UndockResult {
     store.dump(dbg_dump_root);
 
     match store.free(target) {
         Dock::RootContainer { .. } => unreachable!("undocking root container"),
         Dock::Fill { parent, group_view } => {
-            group_view.teardown(teardown_ctx);
+            group_view.teardown(env);
             let (remain_dock, parent_parent) = match store.get(parent) {
                 Dock::RootContainer { .. } => {
                     // ルートにつながるDockをundockしようとしている => 何もなくなる
@@ -715,19 +873,14 @@ fn undock(
                     store.get_mut(rest).reparent(parent);
                 }
             }
-            store.replace(parent, remain).teardown(teardown_ctx);
+            store.replace(parent, remain).teardown(env);
             let relayout_base = parent_parent;
             let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
             relayout_dock(
                 relayout_base,
                 store,
                 relayout_base_rect,
-                &mut PaneContentResizeContext {
-                    view_instance_store,
-                    view_render_queue,
-                    composite_tree: teardown_ctx.mount_context.composite_tree,
-                    ht_manager: teardown_ctx.mount_context.ht_manager,
-                },
+                &mut env.derive_pane_content_resize_context(),
             );
         }
         _ => todo!(),
@@ -740,6 +893,7 @@ fn undock(
 /// Dockを移動させる
 fn redock(
     dbg_dump_root: DockID,
+    root_keyboard_focus_group: KeyboardFocusGroupRef,
     store: &mut DockStore,
     source: DockID,
     index: usize,
@@ -755,7 +909,7 @@ fn redock(
     else {
         unreachable!("merge from non-fill dock");
     };
-    let content = source_group_view.remove_content(index, &mut ctx.make_teardown_context());
+    let content = source_group_view.remove_content(index, ctx);
     let mut should_undock_source = !source_group_view.has_contents();
 
     let diverged_contents = match op {
@@ -775,7 +929,7 @@ fn redock(
                 unreachable!("merge into non-fill dock");
             };
 
-            target_group_view.add_content(content, &mut ctx.view_init_ctx, true);
+            target_group_view.add_content(content, true, ctx);
             let target_rect = store.get_computed_state(target).rect.clone();
             relayout_dock(
                 target,
@@ -804,7 +958,7 @@ fn redock(
                 unreachable!("merge into non-fill dock");
             };
 
-            target_group_view.insert_content(content, index, &mut ctx.view_init_ctx, true);
+            target_group_view.insert_content(content, index, true, ctx);
             let target_rect = store.get_computed_state(target).rect.clone();
             relayout_dock(
                 target,
@@ -821,6 +975,7 @@ fn redock(
         }
         DockingOperation::SplitToLeft(target) => {
             split_new(
+                root_keyboard_focus_group,
                 store,
                 &mut ctx.view_init_ctx,
                 ctx.view_render_queue,
@@ -833,6 +988,7 @@ fn redock(
         }
         DockingOperation::SplitToRight(target) => {
             split_new(
+                root_keyboard_focus_group,
                 store,
                 &mut ctx.view_init_ctx,
                 ctx.view_render_queue,
@@ -845,6 +1001,7 @@ fn redock(
         }
         DockingOperation::SplitToTop(target) => {
             split_new(
+                root_keyboard_focus_group,
                 store,
                 &mut ctx.view_init_ctx,
                 ctx.view_render_queue,
@@ -857,6 +1014,7 @@ fn redock(
         }
         DockingOperation::SplitToBottom(target) => {
             split_new(
+                root_keyboard_focus_group,
                 store,
                 &mut ctx.view_init_ctx,
                 ctx.view_render_queue,
@@ -870,27 +1028,7 @@ fn redock(
     };
 
     let undock_result = if should_undock_source {
-        undock(
-            dbg_dump_root,
-            source,
-            store,
-            ctx.view_init_ctx.view_instance_store,
-            ctx.view_render_queue,
-            &mut TeardownContext {
-                mount_context: MountContext {
-                    composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
-                    ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
-                    keyboard_focus_registry: ctx
-                        .view_init_ctx
-                        .mount_context
-                        .keyboard_focus_registry,
-                    current_sec: ctx.view_init_ctx.mount_context.current_sec,
-                },
-                view_feedback_subscription_delayed_ops: ctx
-                    .view_init_ctx
-                    .view_feedback_subscription_delayed_ops,
-            },
-        )
+        undock(dbg_dump_root, source, store, ctx)
     } else {
         UndockResult::Success
     };
@@ -1566,6 +1704,87 @@ fn pane_group_tab_active_gradient<E>(composite_tree: &mut CompositeTree<E>) -> G
     })
 }
 
+pub struct PaneGroupCreateContext<'env, 'a, 'h> {
+    pub view_init_context: &'env mut ViewInitContext<'a, 'h>,
+    pub view_render_queue: &'env mut ViewRenderQueue,
+}
+impl ViewRegisterable for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn construct_view(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier {
+        self.view_init_context.construct_view(ctor)
+    }
+
+    #[inline(always)]
+    fn free_view(&mut self, id: ViewIdentifier) {
+        self.view_init_context.free_view(id)
+    }
+}
+impl ViewImmediateRenderable for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn render_view_recursive(
+        &mut self,
+        target: ViewIdentifier,
+        mount_on: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
+        self.view_init_context
+            .render_view_recursive(target, mount_on, keyboard_focus_group)
+    }
+}
+impl ViewRenderer for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target);
+    }
+}
+impl ViewInstanceQueryable for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        self.view_init_context.view_instance(id)
+    }
+}
+impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        self.view_init_context.view_instance_mut(id)
+    }
+}
+impl<'a, 'h> core::ops::Deref for PaneGroupCreateContext<'_, 'a, 'h> {
+    type Target = MountContext<'a, 'h>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.view_init_context.mount_context
+    }
+}
+impl<'a, 'h> core::ops::DerefMut for PaneGroupCreateContext<'_, 'a, 'h> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.view_init_context.mount_context
+    }
+}
+impl CompositeTreeMutableAccess<SyncEvent> for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn composite_tree_mut(&mut self) -> &mut CompositeTree<SyncEvent> {
+        self.view_init_context.mount_context.composite_tree
+    }
+}
+impl<'h> HitTestTreeMutableAccess<'h> for PaneGroupCreateContext<'_, '_, 'h> {
+    #[inline(always)]
+    fn hit_test_tree_mut(&mut self) -> &mut HitTestTreeManager<'h> {
+        self.view_init_context.mount_context.ht_manager
+    }
+}
+impl SystemLinkAccess for PaneGroupCreateContext<'_, '_, '_> {
+    #[inline(always)]
+    fn system_link(&self) -> &SystemLink {
+        self.view_init_context.system_link
+    }
+}
+
 /// Paneのグループ
 #[repr(transparent)]
 pub struct PaneGroupView {
@@ -1575,21 +1794,22 @@ pub struct PaneGroupView {
 impl PaneGroupView {
     /// 生成
     pub fn new(
-        ctx: &mut ViewInitContext,
+        ctx: &mut PaneGroupCreateContext,
+        parent_keyboard_focus_group: KeyboardFocusGroupRef,
         contents: Vec<Box<dyn PaneContentPresenter>>,
         dock: DockID,
         initial_active_index: usize,
     ) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
+        let ct_root = ctx.composite_tree_mut().create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             clip_child: Some(ClipConfig::HARD),
             ..Default::default()
         });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+        let ht_root = ctx.hit_test_tree_mut().create(HitTestTreeData {
             ..Default::default()
         });
 
-        let ct_content_root = ctx.composite_tree.create(CompositeRect {
+        let ct_content_root = ctx.composite_tree_mut().create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             relative_size_adjustment: [1.0, 1.0],
             offset: [
@@ -1606,7 +1826,7 @@ impl PaneGroupView {
             ])),
             ..Default::default()
         });
-        let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
+        let ht_content_root = ctx.hit_test_tree_mut().create(HitTestTreeData {
             top: DESIGN_METRICS.tab_height(),
             height: -DESIGN_METRICS.tab_height(),
             width_adjustment_factor: 1.0,
@@ -1614,12 +1834,13 @@ impl PaneGroupView {
             ..Default::default()
         });
 
-        ctx.composite_tree.add_child(ct_root, ct_content_root);
-        ctx.ht_manager.add_child(ht_root, ht_content_root);
+        ctx.composite_tree_mut().add_child(ct_root, ct_content_root);
+        ctx.hit_test_tree_mut().add_child(ht_root, ht_content_root);
 
         let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let controller = Rc::new_cyclic(|wgc| PaneGroupViewController {
-            view_id: ctx.alloc_view_id_without_instance(),
+            view_id: ctx.view_init_context.alloc_view_id_without_instance(),
+            root_keyboard_focus_group: parent_keyboard_focus_group,
             ct_root,
             ht_root,
             ct_content_root,
@@ -1629,9 +1850,23 @@ impl PaneGroupView {
                 contents
                     .into_iter()
                     .map(|c| {
-                        let tv = PaneGroupTabView::new(ctx, c.name(), wgc.clone());
-                        tv.mount(ctx, &RawMountTarget { ct_root, ht_root });
-                        (c, tv)
+                        let tab_name = c.name();
+                        let tab_width =
+                            PaneGroupTabView::compute_width(&tab_name, ctx.system_link());
+                        let tv = ctx.construct_view(|id| {
+                            Box::new(PaneGroupTabView::new(id, tab_name, wgc.clone(), false))
+                        });
+                        ctx.render_view_recursive(
+                            tv,
+                            &RawMountTarget { ct_root, ht_root },
+                            parent_keyboard_focus_group,
+                        );
+
+                        PaneGroupContent {
+                            presenter: c,
+                            tab_view: tv,
+                            tab_width,
+                        }
                     })
                     .collect(),
             ),
@@ -1639,12 +1874,16 @@ impl PaneGroupView {
             pending_active_changes: Cell::new(None),
             pending_set_rect: Cell::new(None),
         });
-        ctx.set_view_event_handler(controller.view_id, &controller);
+        ctx.view_init_context
+            .set_view_event_handler(controller.view_id, &controller);
 
         Self::relocate_tabs(
-            controller.contents.borrow().iter().map(|(_, t)| t),
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
+            controller
+                .contents
+                .borrow()
+                .iter()
+                .map(|x| (x.tab_view, x.tab_width)),
+            ctx,
         );
         controller.activate(initial_active_index, ctx);
 
@@ -1652,24 +1891,30 @@ impl PaneGroupView {
     }
 
     /// 後始末
-    fn teardown(self, ctx: &mut TeardownContext) {
-        ctx.mount_context
-            .composite_tree
+    fn teardown<'h>(
+        self,
+        env: &mut (
+                 impl ViewRegisterable
+                 + ViewImmediateTeardownable
+                 + DeriveTeardownContext<'h>
+                 + CompositeTreeMutableAccess<SyncEvent>
+                 + HitTestTreeMutableAccess<'h>
+                 + ?Sized
+             ),
+    ) {
+        env.composite_tree_mut()
             .remove_child(self.controller.ct_root);
-        ctx.mount_context
-            .ht_manager
+        env.hit_test_tree_mut()
             .remove_child(self.controller.ht_root);
 
-        ctx.mount_context
-            .composite_tree
-            .free_all(self.controller.ct_root);
-        ctx.mount_context
-            .ht_manager
-            .free_all(self.controller.ht_root);
+        env.composite_tree_mut().free_all(self.controller.ct_root);
+        env.hit_test_tree_mut().free_all(self.controller.ht_root);
 
-        for (mut c, t) in self.controller.contents.borrow_mut().drain(..) {
-            t.teardown(ctx);
-            c.teardown(ctx);
+        for mut x in self.controller.contents.borrow_mut().drain(..) {
+            env.teardown_view_recursive(x.tab_view);
+            env.free_view(x.tab_view);
+
+            x.presenter.teardown(&mut env.derive_teardown_context());
         }
     }
 
@@ -1700,11 +1945,11 @@ impl PaneGroupView {
         }
 
         let mut leftmost = 0.0;
-        for (index, (_, tv)) in self.controller.contents.borrow().iter().enumerate() {
-            if leftmost <= pos.x && pos.x <= leftmost + tv.size.width {
+        for (index, x) in self.controller.contents.borrow().iter().enumerate() {
+            if leftmost <= pos.x && pos.x <= leftmost + x.tab_width {
                 return (index, Point::new_logical(leftmost, 0.0));
             }
-            leftmost += tv.size.width;
+            leftmost += x.tab_width;
         }
 
         (
@@ -1714,80 +1959,137 @@ impl PaneGroupView {
     }
 
     /// コンテンツを追加する
-    fn add_content(
+    fn add_content<'a, 'h: 'a>(
         &self,
         content: Box<dyn PaneContentPresenter>,
-        ctx: &mut ViewInitContext,
         with_activate: bool,
+        env: &mut (
+                 impl ViewRegisterable
+                 + ViewRenderer
+                 + ViewImmediateRenderable
+                 + ViewInstanceQueryableMut
+                 + core::ops::DerefMut<Target = MountContext<'a, 'h>>
+                 + SystemLinkAccess
+                 + ?Sized
+             ),
     ) {
-        let tab_view = PaneGroupTabView::new(ctx, content.name(), Rc::downgrade(&self.controller));
-        tab_view.mount(
-            ctx,
+        let tab_name = content.name();
+        let tab_width = PaneGroupTabView::compute_width(&tab_name, env.system_link());
+        let tab_view = env.construct_view(|id| {
+            Box::new(PaneGroupTabView::new(
+                id,
+                tab_name,
+                Rc::downgrade(&self.controller),
+                with_activate,
+            ))
+        });
+        env.render_view_recursive(
+            tab_view,
             &RawMountTarget {
                 ct_root: self.controller.ct_root,
                 ht_root: self.controller.ht_root,
             },
+            self.controller.root_keyboard_focus_group,
         );
         self.controller
             .contents
             .borrow_mut()
-            .push((content, tab_view));
+            .push(PaneGroupContent {
+                presenter: content,
+                tab_view,
+                tab_width,
+            });
         Self::relocate_tabs(
-            self.controller.contents.borrow().iter().map(|(_, t)| t),
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
+            self.controller
+                .contents
+                .borrow()
+                .iter()
+                .map(|x| (x.tab_view, x.tab_width)),
+            env,
         );
 
         if with_activate {
             self.controller
-                .perform_change_active(self.controller.contents.borrow().len() - 1, ctx);
+                .perform_change_active(self.controller.contents.borrow().len() - 1, env);
         }
     }
 
     /// コンテンツを挿入する
-    fn insert_content(
+    fn insert_content<'a, 'h: 'a>(
         &self,
         content: Box<dyn PaneContentPresenter>,
         index: usize,
-        ctx: &mut ViewInitContext,
         with_activate: bool,
+        env: &mut (
+                 impl ViewRegisterable
+                 + ViewRenderer
+                 + ViewImmediateRenderable
+                 + ViewInstanceQueryableMut
+                 + core::ops::DerefMut<Target = MountContext<'a, 'h>>
+                 + SystemLinkAccess
+                 + ?Sized
+             ),
     ) {
-        let tab_view = PaneGroupTabView::new(ctx, content.name(), Rc::downgrade(&self.controller));
-        tab_view.mount(
-            ctx,
+        let tab_name = content.name();
+        let tab_width = PaneGroupTabView::compute_width(&tab_name, env.system_link());
+        let tab_view = env.construct_view(|id| {
+            Box::new(PaneGroupTabView::new(
+                id,
+                tab_name,
+                Rc::downgrade(&self.controller),
+                with_activate,
+            ))
+        });
+        env.render_view_recursive(
+            tab_view,
             &RawMountTarget {
                 ct_root: self.controller.ct_root,
                 ht_root: self.controller.ht_root,
             },
+            self.controller.root_keyboard_focus_group,
         );
-        self.controller
-            .contents
-            .borrow_mut()
-            .insert(index, (content, tab_view));
+        self.controller.contents.borrow_mut().insert(
+            index,
+            PaneGroupContent {
+                presenter: content,
+                tab_view,
+                tab_width,
+            },
+        );
         self.controller
             .current_active_index
             .update(|x| if x >= index { x + 1 } else { x });
         Self::relocate_tabs(
-            self.controller.contents.borrow().iter().map(|(_, t)| t),
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
+            self.controller
+                .contents
+                .borrow()
+                .iter()
+                .map(|x| (x.tab_view, x.tab_width)),
+            env,
         );
 
         if with_activate {
-            self.controller.perform_change_active(index, ctx);
+            self.controller.perform_change_active(index, env);
         }
     }
 
     /// コンテンツを削除する
-    fn remove_content(
+    fn remove_content<'a, 'h: 'a>(
         &self,
         index: usize,
-        ctx: &mut TeardownContext,
+        env: &mut (
+                 impl ViewRenderer
+                 + ViewInstanceQueryableMut
+                 + ViewRegisterable
+                 + ViewImmediateTeardownable
+                 + core::ops::DerefMut<Target = MountContext<'a, 'h>>
+                 + ?Sized
+             ),
     ) -> Box<dyn PaneContentPresenter> {
         let is_active = self.controller.current_active_index.get() == index;
-        let (content, tab) = self.controller.contents.borrow_mut().remove(index);
+        let content_set = self.controller.contents.borrow_mut().remove(index);
         if is_active {
-            content.unmount(&mut ctx.mount_context);
+            content_set.presenter.unmount(env);
 
             if !self.controller.contents.borrow().is_empty() {
                 let new_active = self
@@ -1795,19 +2097,24 @@ impl PaneGroupView {
                     .current_active_index
                     .get()
                     .clamp(0, self.controller.contents.borrow().len() - 1);
-                self.controller.activate(new_active, &mut ctx.mount_context);
+                self.controller.activate(new_active, env);
                 self.controller.current_active_index.set(new_active);
             }
         }
 
+        env.teardown_view_recursive(content_set.tab_view);
+        env.free_view(content_set.tab_view);
+
         Self::relocate_tabs(
-            self.controller.contents.borrow().iter().map(|(_, t)| t),
-            ctx.mount_context.composite_tree,
-            ctx.mount_context.ht_manager,
+            self.controller
+                .contents
+                .borrow()
+                .iter()
+                .map(|x| (x.tab_view, x.tab_width)),
+            env,
         );
 
-        tab.teardown(ctx);
-        content
+        content_set.presenter
     }
 
     /// コンテンツが一つ以上存在するかどうかを返す
@@ -1817,27 +2124,158 @@ impl PaneGroupView {
     }
 
     /// タブを再配置する
-    fn relocate_tabs<'t, E>(
-        tabs: impl Iterator<Item = &'t PaneGroupTabView>,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
+    fn relocate_tabs<'t>(
+        tab_views_with_width: impl Iterator<Item = (ViewIdentifier, f32)>,
+        env: &mut (impl ViewInstanceQueryableMut + ViewRenderer + ?Sized),
     ) {
         let mut left_offset = 0.0;
-        for t in tabs {
-            t.place(
-                Point::new_logical(left_offset, 0.0),
-                composite_tree,
-                ht_manager,
-            );
-            left_offset += t.size.width;
+        for (t, w) in tab_views_with_width {
+            env.view_instance_mut::<PaneGroupTabView>(t)
+                .expect("query failed")
+                .place(Point::new_logical(left_offset, 0.0));
+            env.schedule_view_render(t);
+            left_offset += w;
         }
     }
+}
+
+pub struct ContentAddContext<'env, 'h> {
+    pub view_init_ctx: &'env mut ViewInitContext<'env, 'h>,
+    pub view_render_queue: &'env mut ViewRenderQueue,
+}
+impl ViewRegisterable for ContentAddContext<'_, '_> {
+    #[inline(always)]
+    fn construct_view(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier {
+        self.view_init_ctx.construct_view(ctor)
+    }
+
+    #[inline(always)]
+    fn free_view(&mut self, id: ViewIdentifier) {
+        self.view_init_ctx.free_view(id)
+    }
+}
+impl ViewImmediateRenderable for ContentAddContext<'_, '_> {
+    #[inline(always)]
+    fn render_view_recursive(
+        &mut self,
+        target: ViewIdentifier,
+        mount_on: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    ) {
+        self.view_init_ctx
+            .render_view_recursive(target, mount_on, keyboard_focus_group)
+    }
+}
+impl ViewRenderer for ContentAddContext<'_, '_> {
+    #[inline(always)]
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target)
+    }
+}
+impl ViewInstanceQueryable for ContentAddContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        self.view_init_ctx.view_instance(id)
+    }
+}
+impl ViewInstanceQueryableMut for ContentAddContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        self.view_init_ctx.view_instance_mut(id)
+    }
+}
+impl<'a, 'h> core::ops::Deref for ContentAddContext<'a, 'h> {
+    type Target = MountContext<'a, 'h>;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.view_init_ctx.mount_context
+    }
+}
+impl<'a, 'h> core::ops::DerefMut for ContentAddContext<'a, 'h> {
+    #[inline(always)]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.view_init_ctx.mount_context
+    }
+}
+impl SystemLinkAccess for ContentAddContext<'_, '_> {
+    #[inline(always)]
+    fn system_link(&self) -> &SystemLink {
+        self.view_init_ctx.system_link
+    }
+}
+
+pub struct ViewFullControl<'env> {
+    view_allocator: &'env mut ViewIdentifierAllocator,
+    view_instance_store: &'env mut ViewInstanceStore,
+    view_tree_relation_store: &'env mut ViewTreeRelationStore,
+    view_event_handler_store: &'env mut ViewEventHandlerStore,
+    view_group_relation_store: &'env mut ViewGroupRelationStore,
+    view_render_state_store: &'env mut ViewRenderStateStore,
+    view_render_queue: &'env mut ViewRenderQueue,
+}
+impl ViewRegisterable for ViewFullControl<'_> {
+    #[inline(always)]
+    fn construct_view(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier {
+        construct_view(
+            ctor,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_event_handler_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_render_state_store,
+        )
+    }
+
+    #[inline(always)]
+    fn free_view(&mut self, id: ViewIdentifier) {
+        free_view(
+            id,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_event_handler_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_render_state_store,
+        );
+    }
+}
+impl ViewInstanceQueryableMut for ViewFullControl<'_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
+    }
+}
+impl ViewRenderer for ViewFullControl<'_> {
+    #[inline(always)]
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target);
+    }
+}
+
+/// PaneGroupのコンテンツごとの情報
+struct PaneGroupContent {
+    /// Presenter
+    presenter: Box<dyn PaneContentPresenter>,
+    /// タブViewのID
+    tab_view: ViewIdentifier,
+    /// タブViewの幅
+    tab_width: f32,
 }
 
 /// PaneGroupViewのコントローラ
 struct PaneGroupViewController {
     /// View ID
     view_id: ViewIdentifier,
+    /// キーボードフォーカスグループ ルート
+    root_keyboard_focus_group: KeyboardFocusGroupRef,
     /// ビジュアルツリー ルート
     ct_root: CompositeTreeRef,
     /// 入力ツリー ルート
@@ -1849,7 +2287,7 @@ struct PaneGroupViewController {
     /// 所属Dock
     dock: Cell<DockID>,
     /// 内容物とそのタブViewのリスト
-    contents: RefCell<Vec<(Box<dyn PaneContentPresenter>, PaneGroupTabView)>>,
+    contents: RefCell<Vec<PaneGroupContent>>,
     /// 現在アクティブなコンテンツのインデックス
     current_active_index: Cell<usize>,
     /// アクティブなコンテンツの変更待ちインデックス
@@ -1877,18 +2315,18 @@ impl ViewEventHandler for PaneGroupViewController {
     }
 }
 impl PaneGroupViewController {
-    /// タブViewのインスタンス参照からインデックスを計算する
+    /// タブViewのIDからインデックスを計算する
     #[inline(always)]
-    fn tab_index(&self, tab: &PaneGroupTabEventHandler) -> Option<usize> {
+    fn tab_index(&self, tab: ViewIdentifier) -> Option<usize> {
         self.contents
             .borrow()
             .iter()
-            .position(|x| core::ptr::addr_eq(x.1.as_ref(), tab))
+            .position(|x| x.tab_view == tab)
     }
 
     /// タブを選択する
     fn select_tab(&self, tab: &PaneGroupTabEventHandler, e: &LogicFiberEventDispatcher) {
-        let Some(index) = self.tab_index(tab) else {
+        let Some(index) = self.tab_index(tab.view_id) else {
             tracing::warn!("no tab found");
             return;
         };
@@ -1898,32 +2336,52 @@ impl PaneGroupViewController {
     }
 
     /// アクティブなコンテンツを変更する
-    fn perform_change_active(&self, new_active_index: usize, ctx: &mut MountContext) {
+    fn perform_change_active<'a, 'h: 'a>(
+        &self,
+        new_active_index: usize,
+        env: &mut (
+                 impl ViewRenderer
+                 + ViewInstanceQueryableMut
+                 + core::ops::DerefMut<Target = MountContext<'a, 'h>>
+                 + ?Sized
+             ),
+    ) {
         let old_active = self.current_active_index.replace(new_active_index);
         if old_active != new_active_index {
             let old_active = &self.contents.borrow()[old_active];
-            old_active.0.unmount(ctx);
-            old_active
-                .1
-                .set_active(false, ctx.composite_tree, ctx.current_sec);
+            old_active.presenter.unmount(env);
+            env.view_instance_mut::<PaneGroupTabView>(old_active.tab_view)
+                .expect("query failed")
+                .set_active(false);
+            env.schedule_view_render(old_active.tab_view);
 
-            self.activate(new_active_index, ctx);
+            self.activate(new_active_index, env);
         }
     }
 
     /// コンテンツをアクティブ状態にする
-    fn activate(&self, index: usize, context: &mut MountContext) {
+    fn activate<'a, 'h: 'a>(
+        &self,
+        index: usize,
+        env: &mut (
+                 impl ViewRenderer
+                 + ViewInstanceQueryableMut
+                 + core::ops::DerefMut<Target = MountContext<'a, 'h>>
+                 + ?Sized
+             ),
+    ) {
         let target = &self.contents.borrow()[index];
-        target.0.mount(
-            context,
+        target.presenter.mount(
+            env,
             &RawMountTarget {
                 ct_root: self.ct_content_root,
                 ht_root: self.ht_content_root,
             },
         );
-        target
-            .1
-            .set_active(true, context.composite_tree, context.current_sec);
+        env.view_instance_mut::<PaneGroupTabView>(target.tab_view)
+            .expect("query failed")
+            .set_active(true);
+        env.schedule_view_render(target.tab_view);
     }
 
     /// コンテンツのリサイズを実行する
@@ -1940,137 +2398,240 @@ impl PaneGroupViewController {
         context.ht_manager.get_data_mut(self.ht_root).height = rect.height;
 
         let content_size = Size::new_logical(rect.width, rect.height - DESIGN_METRICS.tab_height());
-        for (c, _) in self.contents.borrow().iter() {
-            c.resize(&content_size, context);
+        for x in self.contents.borrow().iter() {
+            x.presenter.resize(&content_size, context);
         }
     }
 }
 
-/// タブView
-#[repr(transparent)]
-struct PaneGroupTabView(Rc<PaneGroupTabEventHandler>);
-impl core::ops::Deref for PaneGroupTabView {
-    type Target = Rc<PaneGroupTabEventHandler>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+/// タブ
+struct PaneGroupTabView {
+    id: ViewIdentifier,
+    entity: Option<Rc<PaneGroupTabEventHandler>>,
+    label: String,
+    group_controller: std::rc::Weak<PaneGroupViewController>,
+    place: Point<LogicalUnit>,
+    active: bool,
 }
 impl PaneGroupTabView {
+    fn compute_width(label: &str, syslink: &SystemLink) -> f32 {
+        TextLayout::measure_visual_width(label, FontID::UIDefault, syslink.font_set())
+            + DESIGN_METRICS.tab_padding_x * 2.0
+    }
+
     /// 生成
     fn new(
-        ctx: &mut ViewInitContext,
+        id: ViewIdentifier,
         label: String,
         group_controller: std::rc::Weak<PaneGroupViewController>,
+        initial_active: bool,
     ) -> Self {
-        let active_gradient = pane_group_tab_active_gradient(ctx.composite_tree);
-        let tw =
-            TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
-        let size = Size::new_logical(
-            tw + DESIGN_METRICS.tab_padding_x * 2.0,
-            DESIGN_METRICS.tab_height(),
-        );
-
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(size.width),
-                AnimatableFloat::Value(size.height),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: label,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_active = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.0])),
-            corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
-            ..Default::default()
-        });
-        let ct_underline = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            relative_offset_adjustment: [0.0, 0.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillLinearGradient(active_gradient),
-            corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
-            scale_x: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width: size.width,
-            height: size.height,
-            cursor_shape: CursorShape::Pointer,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_active);
-        ctx.composite_tree.add_child(ct_root, ct_underline);
-
-        let eh = Rc::new(PaneGroupTabEventHandler {
-            ct_root,
-            ct_active,
-            ct_underline,
-            ht_root,
-            size,
-            active: Cell::new(false),
+        Self {
+            id,
+            entity: None,
+            label,
             group_controller,
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self(eh)
-    }
-
-    /// 後始末
-    fn teardown(self, ctx: &mut TeardownContext) {
-        ctx.mount_context
-            .composite_tree
-            .remove_child(self.0.ct_root);
-        ctx.mount_context.ht_manager.remove_child(self.ht_root);
-
-        ctx.mount_context.composite_tree.free_all(self.0.ct_root);
-        ctx.mount_context.ht_manager.free_all(self.ht_root);
-    }
-
-    /// マウント
-    fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.0.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
+            place: Point::new_logical(0.0, 0.0),
+            active: initial_active,
+        }
     }
 
     /// 配置
-    fn place<E>(
-        &self,
-        pos: Point<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
-        composite_tree
-            .begin_mod_chain(self.0.ct_root)
-            .offset_imm(pos.x, pos.y)
-            .apply();
-        ht_manager.get_data_mut(self.ht_root).left = pos.x;
-        ht_manager.get_data_mut(self.ht_root).top = pos.y;
+    fn place(&mut self, pos: Point<LogicalUnit>) {
+        self.place = pos;
+    }
+
+    /// アクティブ表示の切り替え
+    fn set_active(&mut self, active: bool) {
+        self.active = active;
+    }
+
+    const UNDERLINE_ACTIVATE_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.0,
+        to_value: 1.0,
+        curve: AnimationCurve::Linear,
+        duration: 0.1,
+    };
+    const UNDERLINE_ACTIVATE_SCALEX_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
+        from_value: 0.0,
+        to_value: 1.0,
+        curve: AnimationCurve::EASE_OUT_HARD,
+        duration: 0.2,
+    };
+    const UNDERLINE_DEACTIVATE_SCALEX_ANIM: FloatAnimationTemplate =
+        Self::UNDERLINE_ACTIVATE_SCALEX_ANIM.flip(AnimationCurve::EASE_IN);
+}
+impl View for PaneGroupTabView {
+    fn render(
+        &mut self,
+        _self_instance: &mut ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        _sched: &mut RenderChildScheduler,
+    ) -> ViewNewRenderElements {
+        match self.entity {
+            Some(ref e) => {
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(self.place.x, self.place.y)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = self.place.x;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = self.place.y;
+
+                if e.active.replace(self.active) != self.active {
+                    if self.active {
+                        ctx.composite_tree
+                            .begin_mod_chain(e.ct_underline)
+                            .scale_x_animated_from_template(
+                                &Self::UNDERLINE_ACTIVATE_SCALEX_ANIM,
+                                ctx.current_sec,
+                            )
+                            .opacity_animated_from_template(
+                                &Self::UNDERLINE_ACTIVATE_ANIM,
+                                ctx.current_sec,
+                            )
+                            .apply();
+                        ctx.composite_tree
+                            .begin_mod_chain(e.ct_active)
+                            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                                from_value: [1.0, 1.0, 1.0, 0.0],
+                                to_value: [1.0, 1.0, 1.0, 0.1],
+                                sec_duration: (ctx.current_sec..ctx.current_sec + 0.2).into(),
+                                curve: AnimationCurve::Linear,
+                                event_on_complete: None,
+                            }))
+                            .apply();
+                    } else {
+                        ctx.composite_tree
+                            .begin_mod_chain(e.ct_underline)
+                            .scale_x_animated_from_template(
+                                &Self::UNDERLINE_DEACTIVATE_SCALEX_ANIM,
+                                ctx.current_sec,
+                            )
+                            .apply();
+                        ctx.composite_tree
+                            .begin_mod_chain(e.ct_active)
+                            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                                from_value: [1.0, 1.0, 1.0, 0.1],
+                                to_value: [1.0, 1.0, 1.0, 0.0],
+                                sec_duration: (ctx.current_sec..ctx.current_sec + 0.2).into(),
+                                curve: AnimationCurve::Linear,
+                                event_on_complete: None,
+                            }))
+                            .apply();
+                    }
+                }
+
+                ViewNewRenderElements::EMPTY
+            }
+            None => {
+                // first render
+                let active_gradient = pane_group_tab_active_gradient(ctx.composite_tree);
+                let size = Size::new_logical(
+                    Self::compute_width(&self.label, ctx.system_link),
+                    DESIGN_METRICS.tab_height(),
+                );
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(self.place.x),
+                        AnimatableFloat::Value(self.place.y),
+                    ],
+                    size: [
+                        AnimatableFloat::Value(size.width),
+                        AnimatableFloat::Value(size.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: self.label.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_active = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
+                    ..Default::default()
+                });
+                let ct_underline = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    relative_offset_adjustment: [0.0, 0.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillLinearGradient(active_gradient),
+                    corner_radius: CornerRadius::all(DESIGN_METRICS.tab_rounding),
+                    scale_x: AnimatableFloat::Value(0.0),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: self.place.x,
+                    top: self.place.y,
+                    width: size.width,
+                    height: size.height,
+                    cursor_shape: CursorShape::Pointer,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_active);
+                ctx.composite_tree.add_child(ct_root, ct_underline);
+
+                let eh = Rc::new(PaneGroupTabEventHandler {
+                    view_id: self.id,
+                    ct_root,
+                    ct_active,
+                    ct_underline,
+                    ht_root,
+                    size,
+                    active: Cell::new(false),
+                    group_controller: self.group_controller.clone(),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+
+                self.entity = Some(eh);
+                ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..ViewNewRenderElements::EMPTY
+                }
+            }
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context
+            .composite_tree
+            .remove_child(entity.ct_root);
+        ctx.mount_context.ht_manager.remove_child(entity.ht_root);
+
+        ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
 }
 
 /// タブViewのイベントハンドラ
 struct PaneGroupTabEventHandler {
+    /// このタブViewのID
+    view_id: ViewIdentifier,
     /// ビジュアルツリー ルート
     ct_root: CompositeTreeRef,
     /// ビジュアルツリー アクティブ表示
@@ -2204,70 +2765,10 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                 tab_size: self.size.clone(),
                 client_pos: args.client_pos,
                 source_dock: gc.dock.get(),
-                tab_index: gc.tab_index(self).expect("not in any group"),
+                tab_index: gc.tab_index(self.view_id).expect("not in any group"),
             });
         }
 
         EventContinueControl::STOP_PROPAGATION
-    }
-}
-impl PaneGroupTabEventHandler {
-    const UNDERLINE_ACTIVATE_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
-        from_value: 0.0,
-        to_value: 1.0,
-        curve: AnimationCurve::Linear,
-        duration: 0.1,
-    };
-    const UNDERLINE_ACTIVATE_SCALEX_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
-        from_value: 0.0,
-        to_value: 1.0,
-        curve: AnimationCurve::EASE_OUT_HARD,
-        duration: 0.2,
-    };
-    const UNDERLINE_DEACTIVATE_SCALEX_ANIM: FloatAnimationTemplate =
-        Self::UNDERLINE_ACTIVATE_SCALEX_ANIM.flip(AnimationCurve::EASE_IN);
-
-    /// アクティブ状態の切り替え
-    fn set_active<E>(&self, active: bool, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        if self.active.replace(active) == active {
-            // active not changed
-            return;
-        }
-
-        if active {
-            composite_tree
-                .begin_mod_chain(self.ct_underline)
-                .scale_x_animated_from_template(&Self::UNDERLINE_ACTIVATE_SCALEX_ANIM, current_sec)
-                .opacity_animated_from_template(&Self::UNDERLINE_ACTIVATE_ANIM, current_sec)
-                .apply();
-            composite_tree
-                .begin_mod_chain(self.ct_active)
-                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
-                    from_value: [1.0, 1.0, 1.0, 0.0],
-                    to_value: [1.0, 1.0, 1.0, 0.1],
-                    sec_duration: (current_sec..current_sec + 0.2).into(),
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                }))
-                .apply();
-        } else {
-            composite_tree
-                .begin_mod_chain(self.ct_underline)
-                .scale_x_animated_from_template(
-                    &Self::UNDERLINE_DEACTIVATE_SCALEX_ANIM,
-                    current_sec,
-                )
-                .apply();
-            composite_tree
-                .begin_mod_chain(self.ct_active)
-                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
-                    from_value: [1.0, 1.0, 1.0, 0.1],
-                    to_value: [1.0, 1.0, 1.0, 0.0],
-                    sec_duration: (current_sec..current_sec + 0.2).into(),
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                }))
-                .apply();
-        }
     }
 }

@@ -50,7 +50,7 @@ use crate::{
         },
         text::{FontID, FontSet},
     },
-    ui::dock::PaneContentResizeContext,
+    ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
         MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
@@ -59,8 +59,9 @@ use crate::{
         StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize,
         ViewEventHandler, ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler,
         ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewInitContext, ViewInstanceStore, ViewLocation,
-        ViewPlacement, ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore,
+        ViewIdentifier, ViewIdentifierAllocator, ViewInitContext, ViewInstanceQueryableMut,
+        ViewInstanceStore, ViewLocation, ViewPlacement, ViewRegisterable, ViewRelationControllable,
+        ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
         ViewUpdateContext, call_view_update,
     },
     utils::{
@@ -4475,32 +4476,42 @@ async fn run<'sys>(
                 ),
             ),
             &mut dock_store,
-            |view_init_ctx, store| {
+            |view_init_ctx, view_render_queue, store| {
                 match last_window_state {
                     None => &initial_dock_state,
                     Some(ref x) => &x.main.dock,
                 }
-                .construct(view_init_ctx, store, |id, view_init_ctx| match id {
-                    // TODO: このへんうまい具合にRegistryつくりたい
-                    UIKitPreviewPanePresenter::ID => {
-                        Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
-                    }
-                    ObjectTreePanePresenter::ID => {
-                        Box::new(ObjectTreePanePresenter::new(view_init_ctx))
-                    }
-                    InspectorPanePresenter::ID => {
-                        Box::new(InspectorPanePresenter::new(view_init_ctx))
-                    }
-                    AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
-                    ProjectSettingsPanePresenter::ID => Box::new(ProjectSettingsPanePresenter {}),
-                    TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
-                    AssetPreviewPanePresenter::ID => Box::new(AssetPreviewPanePresenter {}),
-                    PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
-                        view_init_ctx,
-                        &mut preview_input_state,
-                    )),
-                    id => todo!("generic pane id handling: {id:?}"),
-                })
+                .construct(
+                    main_window.keyboard_focus_group(),
+                    &mut PaneGroupCreateContext {
+                        view_init_context: view_init_ctx,
+                        view_render_queue,
+                    },
+                    store,
+                    |id, view_init_ctx| match id {
+                        // TODO: このへんうまい具合にRegistryつくりたい
+                        UIKitPreviewPanePresenter::ID => {
+                            Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
+                        }
+                        ObjectTreePanePresenter::ID => {
+                            Box::new(ObjectTreePanePresenter::new(view_init_ctx))
+                        }
+                        InspectorPanePresenter::ID => {
+                            Box::new(InspectorPanePresenter::new(view_init_ctx))
+                        }
+                        AssetExplorerPanePresenter::ID => Box::new(AssetExplorerPanePresenter {}),
+                        ProjectSettingsPanePresenter::ID => {
+                            Box::new(ProjectSettingsPanePresenter {})
+                        }
+                        TimelinePanePresenter::ID => Box::new(TimelinePanePresenter {}),
+                        AssetPreviewPanePresenter::ID => Box::new(AssetPreviewPanePresenter {}),
+                        PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
+                            view_init_ctx,
+                            &mut preview_input_state,
+                        )),
+                        id => todo!("generic pane id handling: {id:?}"),
+                    },
+                )
             },
         ),
     }));
@@ -4566,9 +4577,15 @@ async fn run<'sys>(
                                 Size::new_logical(320.0, 240.0),
                             ),
                             &mut dock_store,
-                            |view_init_ctx, store| {
-                                sub.dock
-                                    .construct(view_init_ctx, store, |id, view_init_ctx| match id {
+                            |view_init_ctx, view_render_queue, store| {
+                                sub.dock.construct(
+                                    w.keyboard_focus_group(),
+                                    &mut PaneGroupCreateContext {
+                                        view_init_context: view_init_ctx,
+                                        view_render_queue,
+                                    },
+                                    store,
+                                    |id, view_init_ctx| match id {
                                         // TODO: このへんうまい具合にRegistryつくりたい
                                         UIKitPreviewPanePresenter::ID => {
                                             Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
@@ -4598,7 +4615,8 @@ async fn run<'sys>(
                                             ))
                                         }
                                         id => todo!("generic pane id handling: {id:?}"),
-                                    })
+                                    },
+                                )
                             },
                         ),
                     }));
@@ -6958,6 +6976,22 @@ async fn run<'sys>(
                     &mut view_event_handler_store,
                 );
 
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &mut view_render_state_store,
+                    &mut view_event_handler_store,
+                );
+
                 composite_tree
                     .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
@@ -6975,6 +7009,22 @@ async fn run<'sys>(
                         composite_tree: &mut composite_tree,
                         ht_manager: &mut ht_manager,
                     },
+                );
+
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &mut view_render_state_store,
+                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -7036,6 +7086,7 @@ async fn run<'sys>(
                         ui::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
                     let (diverged_content, undock_result) = dm.redock(
                         source_dock,
+                        source_window.keyboard_focus_group(),
                         &mut dock_store,
                         tab_index,
                         op,
@@ -7159,11 +7210,15 @@ async fn run<'sys>(
                                             suggested_rect.size(),
                                         ),
                                         &mut dock_store,
-                                        |view_init_ctx, store| {
+                                        |view_init_ctx, view_render_queue, store| {
                                             store.alloc_root(|root_id, store| {
                                                 store.alloc_fill(
                                                     root_id,
-                                                    view_init_ctx,
+                                                    w.keyboard_focus_group(),
+                                                    &mut PaneGroupCreateContext {
+                                                        view_init_context: view_init_ctx,
+                                                        view_render_queue,
+                                                    },
                                                     |_| vec![content],
                                                     0,
                                                 )
@@ -8493,7 +8548,8 @@ impl DockState {
 
     pub fn construct(
         &self,
-        view_init_ctx: &mut ViewInitContext,
+        root_keyboard_focus_group: KeyboardFocusGroupRef,
+        create_context: &mut PaneGroupCreateContext,
         store: &mut ui::dock::DockStore,
         mut pane_constructor: impl FnMut(
             &str,
@@ -8502,7 +8558,8 @@ impl DockState {
     ) -> ui::dock::DockID {
         fn rec(
             this: &DockState,
-            view_init_ctx: &mut ViewInitContext,
+            root_keyboard_focus_group: KeyboardFocusGroupRef,
+            create_context: &mut PaneGroupCreateContext,
             store: &mut ui::dock::DockStore,
             parent: ui::dock::DockID,
             pane_constructor: &mut impl FnMut(
@@ -8516,7 +8573,8 @@ impl DockState {
                     active_index,
                 } => store.alloc_fill(
                     parent,
-                    view_init_ctx,
+                    root_keyboard_focus_group,
+                    create_context,
                     |view_init_ctx| {
                         content_ids
                             .iter()
@@ -8540,7 +8598,7 @@ impl DockState {
                         }
                     },
                     splitter: ui::dock::DockedPaneSplitterView::new(
-                        view_init_ctx,
+                        create_context.view_init_context,
                         match direction {
                             DockDirection::Left(_) | DockDirection::Right(_) => {
                                 ui::dock::DockedPaneSplitDirection::Horizontal
@@ -8551,14 +8609,35 @@ impl DockState {
                         },
                         parent1,
                     ),
-                    docked: rec(content, view_init_ctx, store, parent1, pane_constructor),
-                    rest: rec(rest, view_init_ctx, store, parent1, pane_constructor),
+                    docked: rec(
+                        content,
+                        root_keyboard_focus_group,
+                        create_context,
+                        store,
+                        parent1,
+                        pane_constructor,
+                    ),
+                    rest: rec(
+                        rest,
+                        root_keyboard_focus_group,
+                        create_context,
+                        store,
+                        parent1,
+                        pane_constructor,
+                    ),
                 }),
             }
         }
 
         store.alloc_root(|parent, store| {
-            rec(self, view_init_ctx, store, parent, &mut pane_constructor)
+            rec(
+                self,
+                root_keyboard_focus_group,
+                create_context,
+                store,
+                parent,
+                &mut pane_constructor,
+            )
         })
     }
 }

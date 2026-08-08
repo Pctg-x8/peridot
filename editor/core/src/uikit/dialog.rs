@@ -9,7 +9,7 @@ use crate::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
         SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView, TeardownContext,
         ViewElementSize, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
-        popup::PopupCloseContext,
+        ViewRegisterable, ViewRelationControllable, popup::PopupCloseContext,
     },
     utils::{Point, Size},
 };

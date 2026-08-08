@@ -19,11 +19,27 @@ use crate::{
     utils::{LogicalUnit, Point, Size},
 };
 
+pub trait SystemLinkAccess {
+    fn system_link(&self) -> &SystemLink;
+}
+
+pub trait CompositeTreeMutableAccess<Event> {
+    fn composite_tree_mut(&mut self) -> &mut CompositeTree<Event>;
+}
+
+pub trait HitTestTreeMutableAccess<'h> {
+    fn hit_test_tree_mut(&mut self) -> &mut HitTestTreeManager<'h>;
+}
+
 pub struct MountContext<'a, 'h> {
     pub composite_tree: &'a mut CompositeTree<SyncEvent>,
     pub ht_manager: &'a mut HitTestTreeManager<'h>,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
+}
+
+pub trait DeriveMountContext<'h> {
+    fn derive_mount_context<'env2>(&'env2 mut self) -> MountContext<'env2, 'h>;
 }
 
 pub struct RenderContext<'env, 'h> {
@@ -86,20 +102,8 @@ impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
         &mut self.mount_context
     }
 }
-impl<'a, 'h> ViewInitContext<'a, 'h> {
-    #[deprecated = "use render-teardown based view lifecycle"]
-    pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
-        alloc_view_id_without_instance(
-            self.view_allocator,
-            self.view_instance_store,
-            self.view_event_handler_store,
-            self.view_tree_relation_store,
-            self.view_group_relation_store,
-            self.view_render_state_store,
-        )
-    }
-
-    pub fn construct_view(
+impl ViewRegisterable for ViewInitContext<'_, '_> {
+    fn construct_view(
         &mut self,
         ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
     ) -> ViewIdentifier {
@@ -114,8 +118,50 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         )
     }
 
-    pub fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
+    fn free_view(&mut self, id: ViewIdentifier) {
+        free_view(
+            id,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_event_handler_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_render_state_store,
+        )
+    }
+}
+impl ViewRelationControllable for ViewInitContext<'_, '_> {
+    fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         view_set_parent(id, parent, self.view_tree_relation_store)
+    }
+
+    fn view_detach_parent(&mut self, id: ViewIdentifier) {
+        view_detach_parent(id, self.view_tree_relation_store);
+    }
+}
+impl ViewInstanceQueryable for ViewInitContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        view_instance(id, self.view_instance_store)
+    }
+}
+impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
+    }
+}
+impl<'a, 'h> ViewInitContext<'a, 'h> {
+    #[deprecated = "use render-teardown based view lifecycle"]
+    pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
+        alloc_view_id_without_instance(
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_event_handler_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_render_state_store,
+        )
     }
 
     #[inline(always)]
@@ -134,16 +180,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         handler: &Rc<impl ViewEventHandler + 'static>,
     ) {
         set_view_event_handler(id, handler, self.view_event_handler_store)
-    }
-
-    #[inline(always)]
-    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_instance_store)
-    }
-
-    #[inline(always)]
-    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_instance_store)
     }
 
     pub fn render_view_recursive(
@@ -256,6 +292,34 @@ impl<'a, 'h> core::ops::DerefMut for ViewUpdateContext<'a, 'h> {
         &mut self.mount_context
     }
 }
+impl ViewInstanceQueryable for ViewUpdateContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        view_instance(id, self.view_instance_store)
+    }
+}
+impl ViewInstanceQueryableMut for ViewUpdateContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
+    }
+}
+impl ViewRenderer for ViewUpdateContext<'_, '_> {
+    #[inline(always)]
+    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target);
+    }
+}
+impl<'h> DeriveMountContext<'h> for ViewUpdateContext<'_, 'h> {
+    fn derive_mount_context<'env2>(&'env2 mut self) -> MountContext<'env2, 'h> {
+        MountContext {
+            composite_tree: &mut self.mount_context.composite_tree,
+            ht_manager: &mut self.mount_context.ht_manager,
+            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+            current_sec: self.mount_context.current_sec,
+        }
+    }
+}
 
 pub struct TeardownContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
@@ -277,6 +341,10 @@ impl<'a, 'h> TeardownContext<'a, 'h> {
         self.view_feedback_subscription_delayed_ops
             .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
     }
+}
+
+pub trait DeriveTeardownContext<'h> {
+    fn derive_teardown_context<'env>(&'env mut self) -> TeardownContext<'env, 'h>;
 }
 
 pub trait MountTarget {
@@ -951,6 +1019,48 @@ pub fn view_instance_mut<T: View + 'static>(
         .as_mut()?
         .as_mut() as &mut dyn core::any::Any)
         .downcast_mut::<T>()
+}
+
+pub trait ViewRegisterable {
+    fn construct_view(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier;
+    fn free_view(&mut self, id: ViewIdentifier);
+}
+
+pub trait ViewGroupRegisterable {
+    fn create_view_group(&mut self) -> ViewGroupID;
+    fn destroy_view_group(&mut self, id: ViewGroupID);
+}
+
+pub trait ViewInstanceQueryable {
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T>;
+}
+pub trait ViewInstanceQueryableMut {
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T>;
+}
+
+pub trait ViewRelationControllable {
+    fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier);
+    fn view_detach_parent(&mut self, id: ViewIdentifier);
+}
+
+pub trait ViewImmediateRenderable {
+    fn render_view_recursive(
+        &mut self,
+        target: ViewIdentifier,
+        mount_on: &(impl MountTarget + ?Sized),
+        keyboard_focus_group: KeyboardFocusGroupRef,
+    );
+}
+
+pub trait ViewRenderer {
+    fn schedule_view_render(&mut self, target: ViewIdentifier);
+}
+
+pub trait ViewImmediateTeardownable {
+    fn teardown_view_recursive(&mut self, target: ViewIdentifier);
 }
 
 pub trait ViewEventHandler {
