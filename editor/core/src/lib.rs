@@ -55,15 +55,14 @@ use crate::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
         MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
         PopupManager, RadioButtonView, RawMountTarget, RenderChildScheduler, RenderContext,
-        ScrollContainer, ScrollContainerTemp, SimpleButtonEventHandler, SimpleButtonView,
-        StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize,
-        ViewEventHandler, ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLocation, ViewPlacement, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore, ViewUpdateContext,
-        call_view_update,
+        ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
+        TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize, ViewEventHandler,
+        ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
+        ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore, ViewIdentifier,
+        ViewIdentifierAllocator, ViewImmediateRenderable, ViewImmediateTeardownable,
+        ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore, ViewLocation, ViewPlacement,
+        ViewRegisterable, ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore,
+        ViewRenderer, ViewTreeRelationStore, ViewUpdateContext, call_view_update,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -3206,14 +3205,6 @@ impl InspectorPanePresenter {
         // TODO: PaneのKeyboardFocusGroupどうするか
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
 
-        let root_container_view_tmp = ScrollContainerTemp::new(
-            ctx,
-            Rect::from_lt_size(
-                Point::new_logical(0.0, 0.0),
-                Size::new_logical(128.0, 128.0),
-            ),
-        );
-
         let root_container_view = ctx.construct_view(|id| {
             Box::new(ScrollContainer::new(
                 id,
@@ -3487,7 +3478,6 @@ impl InspectorPanePresenter {
             InspectorPaneEventHandler {
                 object_selection_changed: Cell::new(false),
                 items_container_mounted: Cell::new(false),
-                root_container_view_tmp,
                 root_container_view,
                 selected_object_label,
                 selected_object_name_label,
@@ -3503,9 +3493,6 @@ impl InspectorPanePresenter {
                     local_scale_y_input_view,
                     local_scale_z_input_view,
                 ],
-                checkboxes: RefCell::new(vec![render_checkbox]),
-                dropdowns: RefCell::new(vec![shape_selector]),
-                keyboard_focus_group: kf_group,
             }
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
@@ -3514,11 +3501,6 @@ impl InspectorPanePresenter {
         ctx.view_instance_mut::<ScrollContainer>(eh.root_container_view)
             .expect("query failed")
             .set_content_size(Size::new_logical(128.0, 8.0 + 12.0));
-        ctx.render_view_recursive(
-            eh.root_container_view,
-            &eh.root_container_view_tmp,
-            kf_group,
-        );
 
         Self { eh }
     }
@@ -3560,15 +3542,11 @@ impl ui::dock::PaneContentPresenter for InspectorPanePresenter {
 struct InspectorPaneEventHandler {
     object_selection_changed: Cell<bool>,
     items_container_mounted: Cell<bool>,
-    root_container_view_tmp: ScrollContainerTemp,
     root_container_view: ViewIdentifier,
     selected_object_label: ViewIdentifier,
     selected_object_name_label: ViewIdentifier,
     items_container_view: ViewIdentifier,
     numeric_input_view_ids: Vec<ViewIdentifier>,
-    checkboxes: RefCell<Vec<ViewIdentifier>>,
-    dropdowns: RefCell<Vec<ViewIdentifier>>,
-    keyboard_focus_group: KeyboardFocusGroupRef,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for InspectorPaneEventHandler {
     fn accept_feedback<'a, 'h>(

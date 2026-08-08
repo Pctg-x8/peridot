@@ -16,9 +16,9 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        MountContext, MountTarget, RawMountTarget, RenderChildScheduler, RenderContext,
-        TeardownContext, View, ViewEventHandler, ViewIdentifier, ViewInitContext,
-        ViewInstanceModifier, ViewNewRenderElements, ViewUpdateContext,
+        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
+        ViewEventHandler, ViewIdentifier, ViewInstanceModifier, ViewNewRenderElements,
+        ViewUpdateContext,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -62,55 +62,6 @@ const SCROLL_THUMB_ACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate = &FloatAnimati
 };
 const SCROLL_THUMB_DEACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate =
     &SCROLL_THUMB_ACTIVATE_OFFSET_ANIM.flip(AnimationCurve::Linear);
-
-/// Mount-Unmount方式(Dock)からRender-Teradown方式(ScrollContainer)に一度に書き換えるのが厳しそうなので間となるクッション要素を挟む
-pub struct ScrollContainerTemp {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-}
-impl ScrollContainerTemp {
-    pub fn new(ctx: &mut ViewInitContext, rect: Rect<LogicalUnit>) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: rect.left,
-            top: rect.top,
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
-
-        Self { ct_root, ht_root }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    pub fn unmount(&self, ctx: &mut MountContext) {
-        ctx.composite_tree.remove_child(self.ct_root);
-        ctx.ht_manager.remove_child(self.ht_root);
-    }
-}
-impl MountTarget for ScrollContainerTemp {
-    #[inline(always)]
-    fn ct_root(&self) -> CompositeTreeRef {
-        self.ct_root
-    }
-
-    #[inline(always)]
-    fn ht_root(&self) -> HitTestTreeRef {
-        self.ht_root
-    }
-}
 
 pub struct ScrollContainer {
     id: ViewIdentifier,

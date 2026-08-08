@@ -15,7 +15,7 @@ use crate::{
         RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
         ViewImmediateRenderable, ViewInitContext, ViewInstanceModifier, ViewInstanceStore,
         ViewNewRenderElements, ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore,
-        render_view_recursive, teardown_view_recursive, view_instance, view_instance_mut,
+        teardown_view_recursive, view_instance, view_instance_mut,
     },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
@@ -113,7 +113,7 @@ impl PopupManager {
         view_render_queue: &mut ViewRenderQueue,
         ctx: &mut RenderContext,
     ) -> bool {
-        if let Some((instance, w, g)) = self.instance_by_id.get_mut(&id) {
+        if let Some((instance, _, _)) = self.instance_by_id.get_mut(&id) {
             instance.close(
                 &mut PopupCloseContext {
                     view_instance_store,
