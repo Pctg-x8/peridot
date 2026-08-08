@@ -686,6 +686,7 @@ struct ViewRenderState {
     current_mounted_on: Option<(RawMountTarget, KeyboardFocusGroupRef)>,
     active_render_element_ct: Option<CompositeTreeRef>,
     active_render_element_ht: Option<HitTestTreeRef>,
+    active_keyboard_focus_token: Option<FocusTargetToken>,
     visible: Option<bool>,
 }
 impl ViewRenderState {
@@ -693,6 +694,7 @@ impl ViewRenderState {
         current_mounted_on: None,
         active_render_element_ct: None,
         active_render_element_ht: None,
+        active_keyboard_focus_token: None,
         visible: None,
     };
 }
@@ -1087,8 +1089,21 @@ fn render_view_instance1(
         render_state.active_render_element_ht = Some(new_ht);
     }
 
-    if let Some(kf) = new_render_elements.keyboard_focus {
+    let new_active_keyboard_focus_token = new_render_elements
+        .keyboard_focus
+        .or(render_state.active_keyboard_focus_token);
+    if Some(kf_group) != render_state.current_mounted_on.as_ref().map(|x| x.1) {
+        // group changed
+        if let Some(kf) = new_active_keyboard_focus_token {
+            ctx.keyboard_focus_registry.join_group(kf_group, kf);
+            render_state.active_keyboard_focus_token = Some(kf);
+        }
+    } else if let Some(kf) = new_active_keyboard_focus_token
+        && Some(kf) != render_state.active_keyboard_focus_token
+    {
+        // different token issued
         ctx.keyboard_focus_registry.join_group(kf_group, kf);
+        render_state.active_keyboard_focus_token = Some(kf);
     }
 
     render_state.current_mounted_on = Some((mount_to, kf_group));

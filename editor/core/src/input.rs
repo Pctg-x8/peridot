@@ -1869,6 +1869,7 @@ impl KeyboardFocusTokenRegistry {
             return;
         };
 
+        // TODO: リンク組み替えるときにdata_indexを更新してないのかエラーになることがあるので直す
         if data_index == self.groups[group.0].first_order_index {
             if data_index == self.groups[group.0].last_order_index {
                 // removed all
