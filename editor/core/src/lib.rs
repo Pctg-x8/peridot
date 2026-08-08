@@ -1061,6 +1061,12 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 1;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 2;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 3;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
+
 pub struct ColorPickerSharedResources {
     ring_tex_id: TextureID,
     alpha_slider_bg_tex_id: TextureID,
