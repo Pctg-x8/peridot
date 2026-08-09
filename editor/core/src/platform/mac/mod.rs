@@ -683,13 +683,16 @@ impl WindowDispatcher {
         x: f64,
         y: f64,
         button: self::bridge::MouseButton,
+        modifier_flags: u32,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let key_modifier = translate_event_modifier_key(modifier_flags);
 
         this.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(window),
             client_pos: Point::new_logical(x as _, y as _),
+            key_modifier,
         });
         this.event_dispatcher.dispatch(Event::PointerDown {
             window: WindowHandle(window),
@@ -698,6 +701,7 @@ impl WindowDispatcher {
                 self::bridge::MouseButton::Right => PointerButton::Secondary,
             },
             pointer_id: PointerID(),
+            key_modifier,
         });
     }
 
@@ -706,13 +710,16 @@ impl WindowDispatcher {
         window: *mut crate::platform::mac::bridge::WindowLink,
         x: f64,
         y: f64,
+        modifier_flags: u32,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let key_modifier = translate_event_modifier_key(modifier_flags);
 
         this.event_dispatcher.dispatch(Event::PointerMove {
             pointer_id: PointerID(),
             window: WindowHandle(window),
             client_pos: Point::new_logical(x as _, y as _),
+            key_modifier,
         });
     }
 
@@ -721,6 +728,7 @@ impl WindowDispatcher {
         window: *mut crate::platform::mac::bridge::WindowLink,
         dx: f64,
         dy: f64,
+        _modifier_flags: u32,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
@@ -735,8 +743,10 @@ impl WindowDispatcher {
         caller_context: *mut core::ffi::c_void,
         window: *mut crate::platform::mac::bridge::WindowLink,
         button: self::bridge::MouseButton,
+        modifier_flags: u32,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let key_modifier = translate_event_modifier_key(modifier_flags);
 
         this.event_dispatcher.dispatch(Event::PointerUp {
             window: WindowHandle(window),
@@ -745,6 +755,7 @@ impl WindowDispatcher {
                 self::bridge::MouseButton::Right => PointerButton::Secondary,
             },
             pointer_id: PointerID(),
+            key_modifier,
         });
     }
 
@@ -1024,6 +1035,24 @@ impl WindowDispatcher {
     }
 }
 
+pub(self) fn translate_event_modifier_key(mk: u32) -> ModifierKey {
+    let mut modifier = ModifierKey::empty();
+    if (mk & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
+        modifier |= ModifierKey::SHIFT;
+    }
+    if (mk & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
+        modifier |= ModifierKey::CONTROL;
+    }
+    if (mk & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
+        modifier |= ModifierKey::ALT;
+    }
+    if (mk & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
+        modifier |= ModifierKey::SUPER;
+    }
+
+    modifier
+}
+
 pub struct WindowState {
     wlink: *mut self::bridge::WindowLink,
     extra_data: *mut core::ffi::c_void,
@@ -1047,4 +1076,21 @@ pub fn ak_spacing_inline_start() -> &'static apple_sdk_port::foundation::String 
             &*self::bridge::ni_ak_spacing_inline_start(),
         )
     }
+}
+
+pub fn query_range_for_word_at(input: &str, at_utf16: usize) -> core::range::Range<u64> {
+    let mut start = core::mem::MaybeUninit::uninit();
+    let mut end = core::mem::MaybeUninit::uninit();
+
+    unsafe {
+        self::bridge::ni_query_range_for_word_at(
+            input.as_ptr(),
+            input.len() as _,
+            at_utf16 as _,
+            start.as_mut_ptr(),
+            end.as_mut_ptr(),
+        );
+    }
+
+    unsafe { (start.assume_init()..end.assume_init()).into() }
 }

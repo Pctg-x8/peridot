@@ -25,13 +25,28 @@ pub struct WindowLinkCallbacks {
         x: f64,
         y: f64,
         button: MouseButton,
+        modifier_flags: u32,
     ),
-    pub on_pointer_move:
-        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
-    pub on_pointer_delta_move:
-        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, x: f64, y: f64),
-    pub on_pointer_up:
-        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink, button: MouseButton),
+    pub on_pointer_move: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        x: f64,
+        y: f64,
+        modifier_flags: u32,
+    ),
+    pub on_pointer_delta_move: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        x: f64,
+        y: f64,
+        modifier_flags: u32,
+    ),
+    pub on_pointer_up: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        button: MouseButton,
+        modifier_flags: u32,
+    ),
     pub on_key_down: extern "C" fn(
         caller_context: *mut c_void,
         window: *mut WindowLink,
@@ -75,10 +90,17 @@ pub struct ContextMenuSurface(
 );
 #[repr(C)]
 pub struct ContextMenuSurfaceCallbacks {
-    pub on_pointer_down:
-        extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64, button: MouseButton),
-    pub on_pointer_move: extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64),
-    pub on_pointer_up: extern "C" fn(sender: *mut ContextMenuSurface, button: MouseButton),
+    pub on_pointer_down: extern "C" fn(
+        sender: *mut ContextMenuSurface,
+        x: f64,
+        y: f64,
+        button: MouseButton,
+        modifier_flags: u32,
+    ),
+    pub on_pointer_move:
+        extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64, modifier_flags: u32),
+    pub on_pointer_up:
+        extern "C" fn(sender: *mut ContextMenuSurface, button: MouseButton, modifier_flags: u32),
     pub on_pointer_leave: extern "C" fn(sender: *mut ContextMenuSurface),
 }
 

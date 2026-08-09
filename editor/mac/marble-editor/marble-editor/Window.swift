@@ -150,20 +150,20 @@ final class WindowLink : NSWindow {
             self.funcs.pointee.onResize(self.ctx, self.windowLinkPointer, width, height)
         }
         
-        func notifyPointerDown(_ x: Double, _ y: Double, _ button: UInt8) {
-            self.funcs.pointee.onPointerDown(self.ctx, self.windowLinkPointer, x, y, button)
+        func notifyPointerDown(_ x: Double, _ y: Double, _ button: UInt8, _ modifierFlags: NSEvent.ModifierFlags) {
+            self.funcs.pointee.onPointerDown(self.ctx, self.windowLinkPointer, x, y, button, UInt32(modifierFlags.rawValue))
         }
         
-        func notifyPointerMove(_ x: Double, _ y: Double) {
-            self.funcs.pointee.onPointerMove(self.ctx, self.windowLinkPointer, x, y)
+        func notifyPointerMove(_ x: Double, _ y: Double, _ modifierFlags: NSEvent.ModifierFlags) {
+            self.funcs.pointee.onPointerMove(self.ctx, self.windowLinkPointer, x, y, UInt32(modifierFlags.rawValue))
         }
         
-        func notifyPointerDeltaMove(_ x: Double, _ y: Double) {
-            self.funcs.pointee.onPointerDeltaMove(self.ctx, self.windowLinkPointer, x, y)
+        func notifyPointerDeltaMove(_ x: Double, _ y: Double, _ modifierFlags: NSEvent.ModifierFlags) {
+            self.funcs.pointee.onPointerDeltaMove(self.ctx, self.windowLinkPointer, x, y, UInt32(modifierFlags.rawValue))
         }
         
-        func notifyPointerUp(_ button: UInt8) {
-            self.funcs.pointee.onPointerUp(self.ctx, self.windowLinkPointer, button)
+        func notifyPointerUp(_ button: UInt8, _ modifierFlags: NSEvent.ModifierFlags) {
+            self.funcs.pointee.onPointerUp(self.ctx, self.windowLinkPointer, button, UInt32(modifierFlags.rawValue))
         }
         
         func notifyKeyDown(_ code: UInt16, _ modifierFlags: NSEvent.ModifierFlags) {
@@ -284,21 +284,21 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
     private func processMouseMoveEvents(_ event: NSEvent) {
         if mouseAndMouseCursorAssociated {
             let p = event.locationInWindow
-            self.windowLinkCallbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y))
+            self.windowLinkCallbacks?.notifyPointerMove(Double(p.x), Double(self.frame.height - p.y), event.modifierFlags)
         } else {
-            self.windowLinkCallbacks?.notifyPointerDeltaMove(Double(event.deltaX), Double(event.deltaY))
+            self.windowLinkCallbacks?.notifyPointerDeltaMove(Double(event.deltaX), Double(event.deltaY), event.modifierFlags)
         }
     }
     
     override func mouseDown(with event: NSEvent) {
         self.lastMouseDownEvent = event
         let p = event.locationInWindow
-        self.windowLinkCallbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonLeft)
+        self.windowLinkCallbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonLeft, event.modifierFlags)
     }
     
     override func rightMouseDown(with event: NSEvent) {
         let p = event.locationInWindow
-        self.windowLinkCallbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonRight)
+        self.windowLinkCallbacks?.notifyPointerDown(Double(p.x), Double(self.frame.height - p.y), MouseButtonRight, event.modifierFlags)
     }
     
     override func mouseMoved(with event: NSEvent) {
@@ -315,11 +315,11 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
             return
         }
         
-        self.windowLinkCallbacks?.notifyPointerUp(MouseButtonLeft)
+        self.windowLinkCallbacks?.notifyPointerUp(MouseButtonLeft, event.modifierFlags)
     }
     
     override func rightMouseUp(with event: NSEvent) {
-        self.windowLinkCallbacks?.notifyPointerUp(MouseButtonRight)
+        self.windowLinkCallbacks?.notifyPointerUp(MouseButtonRight, event.modifierFlags)
     }
     
     override func keyDown(with event: NSEvent) {

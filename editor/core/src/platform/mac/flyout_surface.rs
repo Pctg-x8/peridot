@@ -10,6 +10,7 @@ use crate::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
+    platform::mac::translate_event_modifier_key,
     rendering::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
@@ -201,14 +202,17 @@ impl Handle {
         x: f64,
         y: f64,
         button: super::bridge::MouseButton,
+        modifier_flags: u32,
     ) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
+        let key_modifier = translate_event_modifier_key(modifier_flags);
 
         // move then down
         h.instance_vars().dispatch_event(Event::MenuPointerMove {
             pointer_id: super::PointerID(),
             target: h,
             client_pos: Point::new_logical(x as _, y as _),
+            key_modifier,
         });
         h.instance_vars().dispatch_event(Event::MenuPointerDown {
             pointer_id: super::PointerID(),
@@ -217,24 +221,34 @@ impl Handle {
                 super::bridge::MouseButton::Left => PointerButton::Primary,
                 super::bridge::MouseButton::Right => PointerButton::Secondary,
             },
+            key_modifier,
         });
     }
 
-    extern "C" fn pointer_move(sender: *mut super::bridge::ContextMenuSurface, x: f64, y: f64) {
+    extern "C" fn pointer_move(
+        sender: *mut super::bridge::ContextMenuSurface,
+        x: f64,
+        y: f64,
+        modifier_flags: u32,
+    ) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
+        let key_modifier = translate_event_modifier_key(modifier_flags);
 
         h.instance_vars().dispatch_event(Event::MenuPointerMove {
             pointer_id: super::PointerID(),
             target: h,
             client_pos: Point::new_logical(x as _, y as _),
+            key_modifier,
         });
     }
 
     extern "C" fn pointer_up(
         sender: *mut super::bridge::ContextMenuSurface,
         button: super::bridge::MouseButton,
+        modifier_flags: u32,
     ) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
+        let key_modifier = translate_event_modifier_key(modifier_flags);
 
         h.instance_vars().dispatch_event(Event::MenuPointerUp {
             pointer_id: super::PointerID(),
@@ -243,6 +257,7 @@ impl Handle {
                 super::bridge::MouseButton::Left => PointerButton::Primary,
                 super::bridge::MouseButton::Right => PointerButton::Secondary,
             },
+            key_modifier,
         });
     }
 

@@ -12,10 +12,10 @@ typedef struct {
     void (*destructor)(void* callerContext);
     void (*onWindowClose)(void* callerContext, WindowLink window);
     void (*onResize)(void* callerContext, WindowLink window, double width, double height);
-    void (*onPointerDown)(void* callerContext, WindowLink window, double x, double y, uint8_t button);
-    void (*onPointerMove)(void* callerContext, WindowLink window, double x, double y);
-    void (*onPointerDeltaMove)(void* callerContext, WindowLink window, double x, double y);
-    void (*onPointerUp)(void* callerContext, WindowLink window, uint8_t button);
+    void (*onPointerDown)(void* callerContext, WindowLink window, double x, double y, uint8_t button, uint32_t modifierFlags);
+    void (*onPointerMove)(void* callerContext, WindowLink window, double x, double y, uint32_t modifierFlags);
+    void (*onPointerDeltaMove)(void* callerContext, WindowLink window, double x, double y, uint32_t modifierFlags);
+    void (*onPointerUp)(void* callerContext, WindowLink window, uint8_t button, uint32_t modifierFlags);
     void (*onKeyDown)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags);
     void (*onKeyDownWithChar)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags, uint32_t ch);
     void (*onKeyUp)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags);
@@ -26,9 +26,9 @@ typedef struct {
 
 typedef struct ContextMenuSurface_* ContextMenuSurface;
 typedef struct {
-    void (*onPointerDown)(ContextMenuSurface sender, double x, double y, uint8_t button);
-    void (*onPointerMove)(ContextMenuSurface sender, double x, double y);
-    void (*onPointerUp)(ContextMenuSurface sender, uint8_t button);
+    void (*onPointerDown)(ContextMenuSurface sender, double x, double y, uint8_t button, uint32_t modifierFlags);
+    void (*onPointerMove)(ContextMenuSurface sender, double x, double y, uint32_t modifierFlags);
+    void (*onPointerUp)(ContextMenuSurface sender, uint8_t button, uint32_t modifierFlags);
     void (*onPointerLeave)(ContextMenuSurface sender);
 } ContextMenuSurfaceCallbacks;
 

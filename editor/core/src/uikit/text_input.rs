@@ -286,35 +286,29 @@ impl SingleLineTextEditState {
 
         #[cfg(target_os = "macos")]
         {
-            let mut start = core::mem::MaybeUninit::uninit();
-            let mut end = core::mem::MaybeUninit::uninit();
-
-            let at_utf16 = content[..cursor_pos_bytes]
+            let at_utf16 = self.content[..cursor_pos_bytes]
                 .encode_utf16()
                 .count()
-                .min(content.encode_utf16().count() - 1);
-            unsafe {
-                crate::platform::mac::bridge::ni_query_range_for_word_at(
-                    content.as_ptr(),
-                    content.len() as _,
-                    at_utf16 as _,
-                    start.as_mut_ptr(),
-                    end.as_mut_ptr(),
-                );
-            }
+                .min(self.content.encode_utf16().count() - 1);
+            let word_range_utf16 =
+                crate::platform::mac::query_range_for_word_at(&self.content, at_utf16);
 
-            let start_bytes = unsafe {
-                std::char::decode_utf16(content.encode_utf16().take(start.assume_init() as _))
-                    .map(|x| x.expect("invalid char?").len_utf8())
-                    .sum()
-            };
-            let end_bytes = unsafe {
-                std::char::decode_utf16(content.encode_utf16().take(end.assume_init() as _))
-                    .map(|x| x.expect("invalid char?").len_utf8())
-                    .sum()
-            };
+            let start_bytes = std::char::decode_utf16(
+                self.content
+                    .encode_utf16()
+                    .take(word_range_utf16.start as _),
+            )
+            .map(|x| x.expect("invalid char?").len_utf8())
+            .sum();
+            let end_bytes = std::char::decode_utf16(
+                self.content.encode_utf16().take(word_range_utf16.end as _),
+            )
+            .map(|x| x.expect("invalid char?").len_utf8())
+            .sum();
 
-            self.select_range(start_bytes..end_bytes)
+            self.selection_anchor_byte = Some(start_bytes);
+            self.cursor_pos_byte = end_bytes;
+            return SingleLineTextDirtyFlags::CURSOR;
         }
 
         #[cfg(not(any(windows, target_os = "macos")))]
@@ -1516,25 +1510,30 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
 #[cfg(target_os = "macos")]
 impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCoreEventHandler {
     fn has_marked_text(&self) -> bool {
+        let state = self.text_edit_state.borrow();
+
         tracing::debug!(
-            start = self.preedit_range_start_bytes.get(),
-            end = self.preedit_range_end_bytes.get(),
+            start = state.preedit_start_byte,
+            end = state.preedit_end_byte,
             "hasMarkedText"
         );
-        self.preedit_range_start_bytes.get() != self.preedit_range_end_bytes.get()
+
+        state.preedit_start_byte != state.preedit_end_byte
     }
 
     fn marked_range(&self, out_location: *mut i64, out_length: *mut i64) -> bool {
-        let start = self.preedit_range_start_bytes.get();
-        let end = self.preedit_range_end_bytes.get();
+        let state = self.text_edit_state.borrow();
+
+        let start = state.preedit_start_byte;
+        let end = state.preedit_end_byte;
         tracing::debug!(start, end, "markedRange");
 
         if start == end {
             return false;
         }
 
-        let startc = self.content.borrow()[..start].chars().count();
-        let endc = self.content.borrow()[..end].chars().count();
+        let startc = state.content[..start].chars().count();
+        let endc = state.content[..end].chars().count();
 
         unsafe {
             out_location.write(startc as _);
@@ -1544,10 +1543,11 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
     }
 
     fn selected_range(&self, out_location: *mut i64, out_length: *mut i64) {
-        let r = self.selection_range();
+        let state = self.text_edit_state.borrow();
+        let r = state.selection_range();
 
-        let startc = self.content.borrow()[..r.start].chars().count();
-        let endc = self.content.borrow()[..r.end].chars().count();
+        let startc = state.content[..r.start].chars().count();
+        let endc = state.content[..r.end].chars().count();
 
         unsafe {
             out_location.write(startc as _);
@@ -1563,6 +1563,8 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
         replacement_location: i64,
         replacement_length: i64,
     ) {
+        let mut state = self.text_edit_state.borrow_mut();
+
         tracing::debug!(
             ?text,
             new_selection_location,
@@ -1573,21 +1575,21 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
         );
 
         // なんかreplacement系の範囲が信用できなさそうなので自前でどこを書き換えるか判定する
-        let preedit_start = self.preedit_range_start_bytes.get();
-        let preedit_end = self.preedit_range_end_bytes.get();
+        // （数値の解釈の方法の違いか？）
+        let preedit_start = state.preedit_start_byte;
+        let preedit_end = state.preedit_end_byte;
         if preedit_start == preedit_end {
             // non-preedit state
-            let r = self.selection_range();
+            let r = state.selection_range();
             let text = text.to_str().expect("invalid input str");
-            let mut content = self.content.borrow_mut();
-            content.replace_range(r.clone(), text);
-            drop(content);
+            state.content.replace_range(r.clone(), text);
+            state.deselect();
 
-            self.preedit_range_start_bytes.set(r.start);
-            self.preedit_range_end_bytes.set(r.start + text.len());
-            self.cursor_pos_bytes.set(r.start + text.len());
-            self.selection_begin_bytes.set(r.start + text.len());
+            state.preedit_start_byte = r.start;
+            state.preedit_end_byte = r.start + text.len();
+            state.cursor_pos_byte = r.start + text.len();
 
+            drop(state);
             self.pending_update_mask.update(|x| {
                 x | TextInputViewUpdateMask::TEXT
                     | TextInputViewUpdateMask::CURSOR
@@ -1598,14 +1600,14 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
             });
         } else {
             let text = text.to_str().expect("invalid input str");
-            let mut content = self.content.borrow_mut();
-            content.replace_range(preedit_start..preedit_end, text);
-            drop(content);
+            state
+                .content
+                .replace_range(preedit_start..preedit_end, text);
 
-            self.preedit_range_end_bytes.set(preedit_start + text.len());
-            self.cursor_pos_bytes.set(preedit_start + text.len());
-            self.selection_begin_bytes.set(preedit_start + text.len());
+            state.preedit_end_byte = preedit_start + text.len();
+            state.cursor_pos_byte = preedit_start + text.len();
 
+            drop(state);
             self.pending_update_mask.update(|x| {
                 x | TextInputViewUpdateMask::TEXT
                     | TextInputViewUpdateMask::CURSOR
@@ -1623,6 +1625,8 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
         replacement_location: i64,
         replacement_length: i64,
     ) {
+        let mut state = self.text_edit_state.borrow_mut();
+
         tracing::debug!(
             ?text,
             replacement_location,
@@ -1631,21 +1635,20 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
         );
 
         // なんかreplacement系の範囲が信用できなさそうなので自前でどこを書き換えるか判定する
-        let preedit_start = self.preedit_range_start_bytes.get();
-        let preedit_end = self.preedit_range_end_bytes.get();
+        let preedit_start = state.preedit_start_byte;
+        let preedit_end = state.preedit_end_byte;
         if preedit_start == preedit_end {
             // non-preedit state
-            let r = self.selection_range();
+            let r = state.selection_range();
             let text = text.to_str().expect("invalid input str");
-            let mut content = self.content.borrow_mut();
-            content.replace_range(r.clone(), text);
-            drop(content);
+            state.content.replace_range(r.clone(), text);
+            state.deselect();
 
-            self.preedit_range_start_bytes.set(r.start);
-            self.preedit_range_end_bytes.set(r.start);
-            self.cursor_pos_bytes.set(r.start + text.len());
-            self.selection_begin_bytes.set(r.start + text.len());
+            state.preedit_start_byte = 0;
+            state.preedit_end_byte = 0;
+            state.cursor_pos_byte = r.start + text.len();
 
+            drop(state);
             self.pending_update_mask.update(|x| {
                 x | TextInputViewUpdateMask::TEXT
                     | TextInputViewUpdateMask::CURSOR
@@ -1656,14 +1659,14 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
             });
         } else {
             let text = text.to_str().expect("invalid input str");
-            let mut content = self.content.borrow_mut();
-            content.replace_range(preedit_start..preedit_end, text);
-            drop(content);
+            state
+                .content
+                .replace_range(preedit_start..preedit_end, text);
 
-            self.preedit_range_end_bytes.set(preedit_start);
-            self.cursor_pos_bytes.set(preedit_start + text.len());
-            self.selection_begin_bytes.set(preedit_start + text.len());
+            state.preedit_end_byte = preedit_start;
+            state.cursor_pos_byte = preedit_start + text.len();
 
+            drop(state);
             self.pending_update_mask.update(|x| {
                 x | TextInputViewUpdateMask::TEXT
                     | TextInputViewUpdateMask::CURSOR
@@ -1684,26 +1687,25 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
         out_chars: *mut *const core::ffi::c_char,
         out_len: *mut u64,
     ) {
+        let state = self.text_edit_state.borrow();
         let location = location.unwrap_or(0);
-        let length = length.min(self.content.borrow().len() as i64);
+        let length = length.min(state.content.len() as i64);
 
-        let loc = self
+        let loc = state
             .content
-            .borrow()
             .chars()
             .take(location as _)
             .map(|x| x.len_utf8())
             .sum();
-        let endloc = self
+        let endloc = state
             .content
-            .borrow()
             .chars()
             .take((location + length) as _)
             .map(|x| x.len_utf8())
             .sum::<usize>();
 
         unsafe {
-            out_chars.write(self.content.borrow().as_ptr().add(loc).cast());
+            out_chars.write(state.content.as_ptr().add(loc).cast());
             out_len.write((endloc - loc) as _);
         }
 
@@ -1731,18 +1733,18 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
         width: *mut f32,
         height: *mut f32,
     ) {
+        let state = self.text_edit_state.borrow();
         tracing::debug!(location, length, "first rect");
 
-        let endloc = self
+        let endloc = state
             .content
-            .borrow()
             .chars()
             .take((location + length) as _)
             .map(|x| x.len_utf8())
             .sum();
 
         let tw = TextLayout::measure_total_advances(
-            &self.content.borrow()[..endloc],
+            &state.content[..endloc],
             FontID::UIDefault,
             unsafe { &*self.font_set_ptr },
         );

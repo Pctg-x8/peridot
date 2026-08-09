@@ -73,6 +73,7 @@ final class ContextMenuSurface : NSPanel, NSWindowDelegate {
             OpaquePointer(Unmanaged.passUnretained(self).toOpaque()),
             Double(p.x),
             Double(self.frame.height - p.y),
+            UInt32(event.modifierFlags.rawValue),
         )
     }
     
@@ -84,6 +85,7 @@ final class ContextMenuSurface : NSPanel, NSWindowDelegate {
             Double(p.x),
             Double(self.frame.height - p.y),
             MouseButtonLeft,
+            UInt32(event.modifierFlags.rawValue),
         )
     }
     
@@ -95,15 +97,16 @@ final class ContextMenuSurface : NSPanel, NSWindowDelegate {
             Double(p.x),
             Double(self.frame.height - p.y),
             MouseButtonRight,
+            UInt32(event.modifierFlags.rawValue),
         )
     }
     
     override func mouseUp(with event: NSEvent) {
-        self.callbacks.pointee.onPointerUp(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()), MouseButtonLeft)
+        self.callbacks.pointee.onPointerUp(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()), MouseButtonLeft, UInt32(event.modifierFlags.rawValue))
     }
     
     override func rightMouseUp(with event: NSEvent) {
-        self.callbacks.pointee.onPointerUp(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()), MouseButtonRight)
+        self.callbacks.pointee.onPointerUp(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()), MouseButtonRight, UInt32(event.modifierFlags.rawValue))
     }
 }
 

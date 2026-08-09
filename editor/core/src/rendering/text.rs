@@ -91,6 +91,8 @@ pub struct FontSet {
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(target_os = "macos")]
     ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
+    #[cfg(target_os = "macos")]
+    ui_form_lifted_label: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(feature = "freetype")]
     ui_default: FaceSet,
     #[cfg(feature = "freetype")]
@@ -380,10 +382,13 @@ impl FontSet {
             10.0,
             None,
         );
+        let ui_form_lifted_label =
+            apple_sdk_port::text::Font::new_ui(apple_sdk_port::text::UIFontType::System, 8.0, None);
 
         Self {
             ui_default,
             ui_title_project_name,
+            ui_form_lifted_label,
         }
     }
 
@@ -413,6 +418,7 @@ impl FontSet {
         match category {
             FontID::UIDefault => &self.ui_default,
             FontID::UITitleProjectName => &self.ui_title_project_name,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
         }
     }
 
@@ -2044,6 +2050,9 @@ impl TextLayout {
         let metrics = unsafe { metrics.assume_init_ref() };
         #[cfg(windows)]
         return Size::new_logical(metrics.width, metrics.height);
+
+        #[cfg(target_os = "macos")]
+        return Size::new_logical(self.frame_size.width as _, self.frame_size.height as _);
     }
 
     pub fn visual_width(&self, font_set: &FontSet) -> f32 {
