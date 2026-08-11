@@ -229,58 +229,15 @@ impl SingleLineTextEditState {
             return self.cursor_move_to_home(false);
         }
 
-        let cursor_pos_bytes = self.cursor_pos_byte;
-
         #[cfg(windows)]
         {
-            let user_language = windows::System::UserProfile::GlobalizationPreferences::Languages()
-                .expect("globalization_preferences.languages")
-                .First()
-                .expect("vector_view.first")
-                .Current()
-                .expect("iterator.current");
-            let word_segmenter =
-                windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language)
-                    .expect("words_segmenter.create");
+            let word_segment = crate::utils::platform::windows::find_word_segment(
+                &self.content,
+                self.cursor_pos_byte,
+            );
 
-            let start_index = self
-                .content
-                .char_indices()
-                .take_while(|&(i, _)| i < cursor_pos_bytes)
-                .count()
-                .min(self.content.chars().count() - 1);
-            let ws = word_segmenter
-                .GetTokenAt(
-                    &windows_core::HSTRING::from_wide(&{
-                        let mut u16s = Vec::new();
-                        for c in self.content.chars() {
-                            let mut b = [0; 2];
-                            u16s.extend_from_slice(c.encode_utf16(&mut b));
-                        }
-                        u16s
-                    }),
-                    start_index as _,
-                )
-                .expect("word_segmenter.get_token_at");
-            let text_segment = ws
-                .SourceTextSegment()
-                .expect("word_segment.source_text_segment");
-
-            let start = self
-                .content
-                .chars()
-                .take(text_segment.StartPosition as _)
-                .map(|c| c.len_utf8())
-                .sum();
-            let end = self
-                .content
-                .chars()
-                .take((text_segment.StartPosition + text_segment.Length) as _)
-                .map(|c| c.len_utf8())
-                .sum();
-
-            self.selection_anchor_byte = Some(start);
-            self.cursor_pos_byte = end;
+            self.selection_anchor_byte = Some(word_segment.start);
+            self.cursor_pos_byte = word_segment.end;
             return SingleLineTextDirtyFlags::CURSOR;
         }
 
@@ -620,34 +577,93 @@ impl HitTestTreeScreenRepositionHandler for TextInputViewCoreEventHandler {
 impl ViewEventHandler for TextInputViewCoreEventHandler {
     #[inline(always)]
     fn update(&self, context: &mut ViewUpdateContext) {
-        self.fwd_view_update(context);
+        self.process_pending_updates_with_ht_mutation(
+            context.mount_context.composite_tree,
+            context.system_link,
+            context.mount_context.ht_manager,
+            context.mount_context.current_sec,
+        );
     }
 }
 impl KeyInputEventHandler for TextInputViewCoreEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.set_focus_lazy(context.ht_manager);
-        context.system_link.dispatch_event(Event::UpdateView {
-            id: self.delegated_view_id,
+        self.lazy_update_and_schedule(context.system_link, |this| {
+            this.set_focus(context.ht_manager)
         });
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.release_focus_lazy(context.ht_manager);
-        context.system_link.dispatch_event(Event::UpdateView {
-            id: self.delegated_view_id,
+        self.lazy_update_and_schedule(context.system_link, |this| {
+            this.release_focus(context.ht_manager)
         });
     }
 
     #[inline(always)]
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
-        self.fwd_keydown(context, code, modifier);
+        tracing::debug!(?code, "keydown");
+
+        let update_mask = match code {
+            // cursor operations
+            KeyInputCode::LeftArrow => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_left(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            KeyInputCode::RightArrow => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_right(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            KeyInputCode::Home => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_to_home(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            KeyInputCode::End => TextInputViewUpdateMask::translate(
+                self.text_edit_state
+                    .borrow_mut()
+                    .cursor_move_to_end(modifier.contains(ModifierKey::SHIFT)),
+            ),
+            // TODO: insert mode
+            KeyInputCode::Insert => TextInputViewUpdateMask::empty(),
+            // deletions
+            KeyInputCode::Backspace => TextInputViewUpdateMask::translate(
+                self.text_edit_state.borrow_mut().delete_backward(),
+            ),
+            KeyInputCode::Delete => TextInputViewUpdateMask::translate(
+                self.text_edit_state.borrow_mut().delete_forward(),
+            ),
+            _ => TextInputViewUpdateMask::empty(),
+        };
+
+        self.update_views(
+            update_mask,
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
     }
 
     #[inline(always)]
     fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
-        self.fwd_char(context, ch)
+        tracing::debug!(%ch, "char");
+
+        if ch.is_control() {
+            return;
+        }
+
+        let update_mask =
+            TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().insert_char(ch));
+        self.update_views(
+            update_mask,
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
     }
 
     #[inline(always)]
@@ -777,93 +793,30 @@ impl TextInputViewCoreEventHandler {
         self.ht_root
     }
 
-    pub fn set_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
-        self.pending_update_mask
-            .update(|x| x | self.set_focus(ht_manager));
-    }
-
-    pub fn release_focus_lazy(&self, ht_manager: &HitTestTreeManager) {
-        self.pending_update_mask
-            .update(|x| x | self.release_focus(ht_manager));
+    #[inline(always)]
+    pub fn lazy_update(&self, op: impl FnOnce(&Self) -> TextInputViewUpdateMask) {
+        let additional_flags = op(self);
+        self.pending_update_mask.update(|x| x | additional_flags);
     }
 
     #[inline(always)]
-    pub fn fwd_view_update(&self, context: &mut ViewUpdateContext) {
-        self.process_pending_updates_with_ht_mutation(
-            context.mount_context.composite_tree,
-            context.system_link,
-            context.mount_context.ht_manager,
-            context.mount_context.current_sec,
-        );
-    }
-
-    pub fn fwd_keydown(
+    pub fn lazy_update_and_schedule(
         &self,
-        context: &mut InputEventContext,
-        code: KeyInputCode,
-        modifier: ModifierKey,
+        syslink: &SystemLink,
+        op: impl FnOnce(&Self) -> TextInputViewUpdateMask,
     ) {
-        tracing::debug!(?code, "keydown");
-
-        let update_mask = match code {
-            // cursor operations
-            KeyInputCode::LeftArrow => TextInputViewUpdateMask::translate(
-                self.text_edit_state
-                    .borrow_mut()
-                    .cursor_move_left(modifier.contains(ModifierKey::SHIFT)),
-            ),
-            KeyInputCode::RightArrow => TextInputViewUpdateMask::translate(
-                self.text_edit_state
-                    .borrow_mut()
-                    .cursor_move_right(modifier.contains(ModifierKey::SHIFT)),
-            ),
-            KeyInputCode::Home => TextInputViewUpdateMask::translate(
-                self.text_edit_state
-                    .borrow_mut()
-                    .cursor_move_to_home(modifier.contains(ModifierKey::SHIFT)),
-            ),
-            KeyInputCode::End => TextInputViewUpdateMask::translate(
-                self.text_edit_state
-                    .borrow_mut()
-                    .cursor_move_to_end(modifier.contains(ModifierKey::SHIFT)),
-            ),
-            // TODO: insert mode
-            KeyInputCode::Insert => TextInputViewUpdateMask::empty(),
-            // deletions
-            KeyInputCode::Backspace => TextInputViewUpdateMask::translate(
-                self.text_edit_state.borrow_mut().delete_backward(),
-            ),
-            KeyInputCode::Delete => TextInputViewUpdateMask::translate(
-                self.text_edit_state.borrow_mut().delete_forward(),
-            ),
-            _ => TextInputViewUpdateMask::empty(),
-        };
-
-        self.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+        self.lazy_update(op);
+        syslink.dispatch_event(Event::UpdateView {
+            id: self.delegated_view_id,
+        });
     }
 
-    pub fn fwd_char(&self, context: &mut InputEventContext, ch: char) {
-        tracing::debug!(%ch, "char");
-
-        if ch.is_control() {
-            return;
-        }
-
-        let update_mask =
-            TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().insert_char(ch));
-        self.update_views(
-            update_mask,
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
+    #[inline(always)]
+    pub fn perform_external_state_update(
+        &self,
+        mut updater: impl FnMut(&mut SingleLineTextEditState) -> SingleLineTextDirtyFlags,
+    ) -> TextInputViewUpdateMask {
+        TextInputViewUpdateMask::translate(updater(&mut self.text_edit_state.borrow_mut()))
     }
 
     #[cfg(feature = "wayland")]
@@ -885,19 +838,9 @@ impl TextInputViewCoreEventHandler {
         );
     }
 
-    #[inline(always)]
-    pub fn fwd_pointer_down(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        self.on_pointer_down(sender, context, args)
-    }
-
     pub fn set_focus(
         &self,
-        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
+        #[allow(unused_variables)] ht_manager: &HitTestTreeManager,
     ) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus taken");
 
@@ -919,7 +862,7 @@ impl TextInputViewCoreEventHandler {
 
     pub fn release_focus(
         &self,
-        #[allow(dead_code)] ht_manager: &HitTestTreeManager,
+        #[allow(unused_variables)] ht_manager: &HitTestTreeManager,
     ) -> TextInputViewUpdateMask {
         tracing::debug!("text input focus released");
 
@@ -943,28 +886,10 @@ impl TextInputViewCoreEventHandler {
         update_mask | TextInputViewUpdateMask::FOCUS
     }
 
-    // pub fn set_content_lazy(&self, content: String) {
-    //     self.pending_update_mask
-    //         .update(|x| x | self.set_content(content));
-    // }
-
-    // pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
-    //     let mut update_mask = TextInputViewUpdateMask::empty();
-    //     if self.cursor_pos_bytes.get() > content.len() {
-    //         self.cursor_pos_bytes.set(content.len());
-    //         update_mask |= TextInputViewUpdateMask::CURSOR;
-    //     }
-    //     if self.selection_begin_bytes.get() > content.len() {
-    //         self.selection_begin_bytes.set(content.len());
-    //         update_mask |= TextInputViewUpdateMask::CURSOR;
-    //     }
-    //     *self.content.borrow_mut() = content;
-    //     update_mask | TextInputViewUpdateMask::TEXT
-    // }
-
-    // pub fn content<'a>(&'a self) -> Ref<'a, String> {
-    //     self.content.borrow()
-    // }
+    #[inline(always)]
+    pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
+        TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().set_content(content))
+    }
 
     #[cfg(feature = "wayland")]
     fn perform_wl_ime_state_changes(
@@ -1320,27 +1245,6 @@ impl TextInputViewCoreEventHandler {
         );
         #[cfg(feature = "wayland")]
         system_link.ime_commit();
-    }
-
-    #[inline(always)]
-    pub fn perform_ops_and_schedule_update(
-        &self,
-        syslink: &SystemLink,
-        mut op: impl FnMut(&Self) -> TextInputViewUpdateMask,
-    ) {
-        let update_mask = op(self);
-        self.pending_update_mask.set(update_mask);
-        syslink.dispatch_event(Event::UpdateView {
-            id: self.delegated_view_id,
-        });
-    }
-
-    #[inline(always)]
-    pub fn perform_external_state_update(
-        &self,
-        mut updater: impl FnMut(&mut SingleLineTextEditState) -> SingleLineTextDirtyFlags,
-    ) -> TextInputViewUpdateMask {
-        TextInputViewUpdateMask::translate(updater(&mut self.text_edit_state.borrow_mut()))
     }
 }
 #[cfg(windows)]
@@ -2239,15 +2143,12 @@ impl NumericInputViewEventHandler {
         );
 
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.core.eh.release_focus(ht_manager);
-        update_mask |= self.core.eh.perform_external_state_update(|st| {
-            st.set_content(value.text(self.core.eh.delegated_view_id, application))
-                | st.cursor_move_to_home(false)
-        });
+        self.core.eh.lazy_update_and_schedule(syslink, |e| {
+            let mut update_mask = e.release_focus(ht_manager);
+            update_mask |= e.set_content(value.text(e.delegated_view_id, application));
+            update_mask |= e.perform_external_state_update(|st| st.cursor_move_to_home(false));
 
-        self.core.eh.pending_update_mask.set(update_mask);
-        syslink.dispatch_event(Event::UpdateView {
-            id: self.core.eh.delegated_view_id,
+            update_mask
         });
         view_render_queue.schedule(self.core.eh.delegated_view_id);
     }
@@ -2262,20 +2163,18 @@ impl NumericInputViewEventHandler {
         self.key_input_enabled.set(false);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        let mut update_mask = self.core.eh.release_focus(ht_manager);
-        // キャンセル時はもとにもどす
-        update_mask |= self.core.eh.perform_external_state_update(|st| {
-            st.set_content(
+        self.core.eh.lazy_update_and_schedule(syslink, |e| {
+            let mut update_mask = e.release_focus(ht_manager);
+            // キャンセル時はもとにもどす
+            update_mask |= e.set_content(
                 self.value
                     .upgrade()
                     .expect("NumericInputView has defunct")
-                    .text(self.core.eh.delegated_view_id, application),
-            ) | st.cursor_move_to_home(false)
-        });
+                    .text(e.delegated_view_id, application),
+            );
+            update_mask |= e.perform_external_state_update(|st| st.cursor_move_to_home(false));
 
-        self.core.eh.pending_update_mask.set(update_mask);
-        syslink.dispatch_event(Event::UpdateView {
-            id: self.core.eh.delegated_view_id,
+            update_mask
         });
         view_render_queue.schedule(self.core.eh.delegated_view_id);
     }

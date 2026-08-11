@@ -10,22 +10,19 @@ use peridot_tp_freetype as ft;
 use peridot_tp_harfbuzz as hb;
 #[cfg(target_os = "linux")]
 use peridot_tp_icu as icu;
-#[cfg(windows)]
-use windows::Win32::Graphics::{Direct2D::Common::*, DirectWrite::*};
-#[cfg(windows)]
-use windows_core::*;
 
 use crate::{
     rendering::{
-        MaskTextureAtlasManager,
-        composite::CompositeRectTextHorizontalAlignment,
-        vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
+        MaskTextureAtlasManager, composite::CompositeRectTextHorizontalAlignment,
+        vg::VectorRasterizationState,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
 #[cfg(target_os = "macos")]
 mod darwin_coretext;
+#[cfg(windows)]
+mod dwrite;
 
 #[cfg(feature = "freetype")]
 pub struct FreeType(ft::Library);
@@ -537,7 +534,7 @@ pub struct TextLayout {
     #[cfg(target_os = "macos")]
     internal: darwin_coretext::CoreTextLayout,
     #[cfg(windows)]
-    layout: windows::Win32::Graphics::DirectWrite::IDWriteTextLayout,
+    internal: dwrite::TextLayout,
 }
 impl TextLayout {
     #[inline(always)]
@@ -568,6 +565,7 @@ impl TextLayout {
     ) -> Self {
         crate::perf_scope!(CREATE_TEXT_LAYOUT);
 
+        #[cfg(feature = "harfbuzz")]
         let (lb, ub) = text_runs.size_hint();
         #[cfg(feature = "harfbuzz")]
         let mut lines = vec![HarfbuzzLineLayout {
@@ -1103,122 +1101,6 @@ impl TextLayout {
             }
         }
 
-        #[cfg(windows)]
-        let mut run_str_utf16s = Vec::new();
-        #[cfg(windows)]
-        let mut run_parts = Vec::with_capacity(ub.unwrap_or(lb));
-        #[cfg(windows)]
-        for r in text_runs {
-            let start_pos = run_str_utf16s.len();
-            run_str_utf16s.extend(r.content.encode_utf16());
-            run_parts.push((
-                r.font,
-                r.spacing_inline_start,
-                windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_RANGE {
-                    startPosition: start_pos as _,
-                    length: (run_str_utf16s.len() - start_pos) as _,
-                },
-            ));
-        }
-        #[cfg(windows)]
-        let layout = unsafe {
-            font_set
-                .native_factory()
-                .CreateTextLayout(
-                    &run_str_utf16s,
-                    font_set.select(FontID::UIDefault),
-                    max_width.unwrap_or(f32::MAX),
-                    f32::MAX,
-                )
-                .expect("dwrite.layout.create")
-        };
-        #[cfg(windows)]
-        let mut inline_spacing_sum = 0.0;
-        #[cfg(windows)]
-        for (font_id, spacing_inline_start, range) in run_parts.into_iter() {
-            let font = font_set.select(font_id);
-            inline_spacing_sum += spacing_inline_start;
-
-            unsafe {
-                let mut family_name =
-                    Vec::with_capacity(font.GetFontFamilyNameLength() as usize + 1);
-                font.GetFontFamilyName(core::mem::transmute::<
-                    &mut [core::mem::MaybeUninit<_>],
-                    &mut [_],
-                >(family_name.spare_capacity_mut()))
-                    .expect("dwrite.format.get_font_family_name");
-                family_name.set_len(family_name.capacity());
-
-                layout
-                    .SetFontFamilyName(windows::core::PCWSTR(family_name.as_ptr()), range)
-                    .expect("dwrite.layout.set_font_family_name");
-                layout
-                    .SetFontSize(font.GetFontSize(), range)
-                    .expect("dwrite.layout.set_font_size");
-                layout
-                    .SetFontStretch(font.GetFontStretch(), range)
-                    .expect("dwrite.layout.set_font_stretch");
-                layout
-                    .SetFontStyle(font.GetFontStyle(), range)
-                    .expect("dwrite.layout.set_font_style");
-                layout
-                    .SetFontWeight(font.GetFontWeight(), range)
-                    .expect("dwrite.layout.set_font_weight");
-                layout
-                    .SetDrawingEffect(
-                        &IUnknown::from(DrawingEffect {
-                            font_id,
-                            offset_x: inline_spacing_sum,
-                        }),
-                        range,
-                    )
-                    .expect("dwrite.layout.set_drawing_effect");
-            }
-        }
-        #[cfg(windows)]
-        unsafe {
-            layout
-                .SetWordWrapping(
-                    windows::Win32::Graphics::DirectWrite::DWRITE_WORD_WRAPPING_EMERGENCY_BREAK,
-                )
-                .expect("dwrite.layout.set_word_wrapping");
-        }
-        #[cfg(windows)]
-        if alignment != CompositeRectTextHorizontalAlignment::Start {
-            // 頭揃えじゃないときはサイズ指定が必要なので一回測ってそれを適用する
-            let mut metrics = core::mem::MaybeUninit::uninit();
-            unsafe {
-                layout
-                    .GetMetrics(metrics.as_mut_ptr())
-                    .expect("dwrite.layout.get_metrics")
-            }
-            let metrics = unsafe { metrics.assume_init_ref() };
-            unsafe {
-                layout
-                    .SetMaxWidth(metrics.width)
-                    .expect("dwrite.layout.set_max_width");
-                layout
-                    .SetMaxHeight(metrics.height)
-                    .expect("dwrite.layout.set_max_height");
-            }
-        }
-        #[cfg(windows)]
-        unsafe {
-            layout
-                .SetTextAlignment(match alignment {
-                    CompositeRectTextHorizontalAlignment::Start => {
-                        windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_LEADING
-                    }
-                    CompositeRectTextHorizontalAlignment::Middle => {
-                        windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_CENTER
-                    }
-                    CompositeRectTextHorizontalAlignment::End => {
-                        windows::Win32::Graphics::DirectWrite::DWRITE_TEXT_ALIGNMENT_TRAILING
-                    }
-                })
-                .expect("dwrite.layout.set_text_alignment");
-        }
-
         Self {
             #[cfg(feature = "harfbuzz")]
             lines,
@@ -1229,20 +1111,20 @@ impl TextLayout {
                 text_runs, font_set, alignment, max_width,
             ),
             #[cfg(windows)]
-            layout,
+            internal: dwrite::TextLayout::new(text_runs, font_set, alignment, max_width),
         }
     }
 
     pub fn rasterize_and_place_glyphs(
         &self,
-        font_set: &FontSet,
+        #[allow(unused_variables)] font_set: &FontSet,
         vector_rasterization_state: &mut VectorRasterizationState,
         atlas: &mut MaskTextureAtlasManager,
         render_scale: f32,
     ) -> Vec<GlyphPlacementBox> {
         crate::perf_scope!(RASTERIZE_AND_PLACE_GLYPHS);
 
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         let mut boxes = Vec::new();
 
         #[cfg(feature = "harfbuzz")]
@@ -1375,6 +1257,9 @@ impl TextLayout {
             }
         }
 
+        #[cfg(not(any(target_os = "macos", windows)))]
+        return boxes;
+
         #[cfg(target_os = "macos")]
         return self.internal.rasterize_and_place_glyphs(
             vector_rasterization_state,
@@ -1383,337 +1268,11 @@ impl TextLayout {
         );
 
         #[cfg(windows)]
-        unsafe {
-            self.layout
-                .Draw(
-                    None,
-                    &IDWriteTextRenderer::from(TextLayoutRenderer {
-                        dip_to_pixels_scaling: render_scale,
-                        vector_raster_state: vector_rasterization_state,
-                        atlas,
-                        boxes: &mut boxes,
-                    }),
-                    0.0,
-                    0.0,
-                )
-                .expect("dwrite.layout.draw");
-        }
-
-        #[cfg(windows)]
-        #[implement(IDWriteTextRenderer)]
-        pub struct TextLayoutRenderer<'d> {
-            dip_to_pixels_scaling: f32,
-            vector_raster_state: *mut VectorRasterizationState,
-            atlas: *mut MaskTextureAtlasManager<'d>,
-            boxes: *mut Vec<GlyphPlacementBox>,
-        }
-        #[cfg(windows)]
-        impl IDWritePixelSnapping_Impl for TextLayoutRenderer_Impl<'_> {
-            fn GetCurrentTransform(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-                transform: *mut windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX,
-            ) -> windows_core::Result<()> {
-                unsafe {
-                    *transform = windows::Win32::Graphics::DirectWrite::DWRITE_MATRIX {
-                        m11: 1.0,
-                        m12: 0.0,
-                        m21: 0.0,
-                        m22: 1.0,
-                        dx: 0.0,
-                        dy: 0.0,
-                    };
-                }
-
-                Ok(())
-            }
-
-            fn GetPixelsPerDip(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-            ) -> windows_core::Result<f32> {
-                Ok(self.dip_to_pixels_scaling)
-            }
-
-            fn IsPixelSnappingDisabled(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-            ) -> windows_core::Result<windows_core::BOOL> {
-                Ok(BOOL(0))
-            }
-        }
-        #[cfg(windows)]
-        impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
-            fn DrawGlyphRun(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-                mut baselineoriginx: f32,
-                baselineoriginy: f32,
-                _measuringmode: windows::Win32::Graphics::DirectWrite::DWRITE_MEASURING_MODE,
-                glyphrun: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN,
-                _glyphrundescription: *const windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_RUN_DESCRIPTION,
-                clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-            ) -> windows_core::Result<()> {
-                use windows::Win32::Graphics::DirectWrite::DWRITE_GLYPH_METRICS;
-
-                let var = clientdrawingeffect
-                    .unwrap()
-                    .cast::<IAppDrawingEffect>()
-                    .expect("clientdrawingeffect.cast.appDrawingEffect");
-                // tracing::debug!(?var, fid = ?unsafe { var.font_id() }, baselineoriginx);
-
-                let glyphrun = unsafe { &*glyphrun };
-                let font_face = glyphrun.fontFace.as_ref().expect("no font face");
-                let mut font_metrics = core::mem::MaybeUninit::uninit();
-                unsafe { font_face.GetMetrics(font_metrics.as_mut_ptr()) };
-                let font_metrics = unsafe { font_metrics.assume_init_ref() };
-                let design_unit = font_metrics.designUnitsPerEm;
-                let mut glyph_metrics: Vec<DWRITE_GLYPH_METRICS> =
-                    Vec::with_capacity(glyphrun.glyphCount as _);
-                // tracing::debug!(count = glyphrun.glyphCount, "glyphrun");
-                unsafe {
-                    font_face
-                        .GetDesignGlyphMetrics(
-                            glyphrun.glyphIndices,
-                            glyphrun.glyphCount,
-                            glyph_metrics.spare_capacity_mut().as_mut_ptr() as _,
-                            glyphrun.isSideways.as_bool(),
-                        )
-                        .expect("GetDesignGlyphMetrics");
-                    glyph_metrics.set_len(glyphrun.glyphCount as _);
-                }
-                for n in 0..glyphrun.glyphCount as usize {
-                    let glyph_width = (glyph_metrics[n].advanceWidth as i32
-                        - glyph_metrics[n].leftSideBearing
-                        - glyph_metrics[n].rightSideBearing)
-                        as f32
-                        * glyphrun.fontEmSize
-                        * self.dip_to_pixels_scaling
-                        / design_unit as f32;
-                    let glyph_height = (glyph_metrics[n].advanceHeight as i32
-                        - glyph_metrics[n].topSideBearing
-                        - glyph_metrics[n].bottomSideBearing)
-                        as f32
-                        * glyphrun.fontEmSize
-                        * self.dip_to_pixels_scaling
-                        / design_unit as f32;
-
-                    let (r, is_new) = unsafe {
-                        (*self.atlas).acquire_for_glyph(
-                            (var.font_id() as _, *glyphrun.glyphIndices.add(n)),
-                            glyph_width.ceil() as _,
-                            glyph_height.ceil() as _,
-                        )
-                    };
-
-                    let glyph_placement_box = GlyphPlacementBox {
-                        left: ((baselineoriginx
-                            + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize
-                                / design_unit as f32)
-                            + unsafe { var.offset_x() })
-                            * self.dip_to_pixels_scaling,
-                        top: (baselineoriginy
-                            - (glyph_metrics[n].verticalOriginY as f32
-                                - glyph_metrics[n].topSideBearing as f32)
-                                * glyphrun.fontEmSize
-                                / design_unit as f32)
-                            * self.dip_to_pixels_scaling,
-                        tex_left: r.left,
-                        tex_top: r.top,
-                        width: r.width(),
-                        height: r.height(),
-                    };
-                    /*tracing::debug!(
-                        met = ?glyph_metrics[n],
-                        font_em_size = glyphrun.fontEmSize,
-                        design_unit,
-                        scaling = self.dip_to_pixels_scaling,
-                        ?glyph_placement_box,
-                        is_new
-                    );*/
-
-                    unsafe {
-                        (*self.boxes).push(glyph_placement_box);
-                    }
-                    if is_new {
-                        unsafe {
-                            (*self.vector_raster_state).updated_rects.push(r.vk_rect());
-                        }
-
-                        use windows::Win32::Graphics::Direct2D::Common::ID2D1SimplifiedGeometrySink;
-                        let mut vrender =
-                            VectorVertexRenderer::new(unsafe { &mut *self.vector_raster_state });
-                        let sink = ID2D1SimplifiedGeometrySink::from(GlyphOutlineSink {
-                            translate: windows_numerics::Vector2 {
-                                X: r.left as f32
-                                    - glyph_metrics[n].leftSideBearing as f32
-                                        * glyphrun.fontEmSize
-                                        * self.dip_to_pixels_scaling
-                                        / design_unit as f32,
-                                Y: -(r.top as f32)
-                                    - (glyph_metrics[n].verticalOriginY as f32
-                                        - glyph_metrics[n].topSideBearing as f32)
-                                        * glyphrun.fontEmSize
-                                        * self.dip_to_pixels_scaling
-                                        / design_unit as f32,
-                            },
-                            dip_to_pixels_scale: self.dip_to_pixels_scaling,
-                            vrender: &mut vrender,
-                        });
-                        unsafe {
-                            font_face
-                                .GetGlyphRunOutline(
-                                    glyphrun.fontEmSize,
-                                    glyphrun.glyphIndices.add(n),
-                                    None,
-                                    None,
-                                    1,
-                                    glyphrun.isSideways.as_bool(),
-                                    false,
-                                    &sink,
-                                )
-                                .expect("GetGlyphRunOutline");
-                        }
-                    }
-
-                    baselineoriginx += unsafe { *glyphrun.glyphAdvances.add(n) };
-                }
-
-                Ok(())
-            }
-
-            fn DrawInlineObject(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-                _originx: f32,
-                _originy: f32,
-                _inlineobject: windows_core::Ref<
-                    windows::Win32::Graphics::DirectWrite::IDWriteInlineObject,
-                >,
-                _issideways: windows_core::BOOL,
-                _isrighttoleft: windows_core::BOOL,
-                _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-            ) -> windows_core::Result<()> {
-                unimplemented!();
-            }
-
-            fn DrawStrikethrough(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-                _baselineoriginx: f32,
-                _baselineoriginy: f32,
-                _strikethrough: *const windows::Win32::Graphics::DirectWrite::DWRITE_STRIKETHROUGH,
-                _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-            ) -> windows_core::Result<()> {
-                unimplemented!();
-            }
-
-            fn DrawUnderline(
-                &self,
-                _clientdrawingcontext: *const core::ffi::c_void,
-                _baselineoriginx: f32,
-                _baselineoriginy: f32,
-                _underline: *const windows::Win32::Graphics::DirectWrite::DWRITE_UNDERLINE,
-                _clientdrawingeffect: windows_core::Ref<windows_core::IUnknown>,
-            ) -> windows_core::Result<()> {
-                unimplemented!();
-            }
-        }
-        #[cfg(windows)]
-        #[implement(ID2D1SimplifiedGeometrySink)]
-        struct GlyphOutlineSink<'a> {
-            translate: windows_numerics::Vector2,
-            dip_to_pixels_scale: f32,
-            vrender: *mut VectorVertexRenderer<'a>,
-        }
-        #[cfg(windows)]
-        impl GlyphOutlineSink<'_> {
-            #[inline(always)]
-            const fn make_vg_point(
-                &self,
-                p: &windows_numerics::Vector2,
-            ) -> Point<VectorTextureUnit> {
-                Point::new_vector_texture(
-                    p.X * self.dip_to_pixels_scale + self.translate.X,
-                    -p.Y * self.dip_to_pixels_scale + self.translate.Y,
-                )
-            }
-        }
-        #[cfg(windows)]
-        impl ID2D1SimplifiedGeometrySink_Impl for GlyphOutlineSink_Impl<'_> {
-            fn BeginFigure(
-                &self,
-                startpoint: &windows_numerics::Vector2,
-                figurebegin: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN,
-            ) {
-                assert_eq!(
-                    figurebegin,
-                    windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_BEGIN_FILLED,
-                    "not filled figure"
-                );
-
-                unsafe { &mut *self.vrender }.move_to(self.make_vg_point(startpoint));
-            }
-
-            fn EndFigure(
-                &self,
-                figureend: windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END,
-            ) {
-                if figureend != windows::Win32::Graphics::Direct2D::Common::D2D1_FIGURE_END_CLOSED {
-                    tracing::warn!("figure end without D2D1_FIGURE_END_CLOSED?");
-                }
-
-                unsafe { &mut *self.vrender }.close();
-            }
-
-            fn AddLines(&self, points: *const windows_numerics::Vector2, pointscount: u32) {
-                for p in unsafe { core::slice::from_raw_parts(points, pointscount as _) } {
-                    unsafe { &mut *self.vrender }.line_to(self.make_vg_point(p));
-                }
-            }
-
-            fn AddBeziers(
-                &self,
-                beziers: *const windows::Win32::Graphics::Direct2D::Common::D2D1_BEZIER_SEGMENT,
-                bezierscount: u32,
-            ) {
-                for p in unsafe { core::slice::from_raw_parts(beziers, bezierscount as _) } {
-                    unsafe { &mut *self.vrender }.cubic_to(
-                        self.make_vg_point(&p.point1),
-                        self.make_vg_point(&p.point2),
-                        self.make_vg_point(&p.point3),
-                    );
-                }
-            }
-
-            fn Close(&self) -> windows_core::Result<()> {
-                #[cfg(debug_assertions)]
-                if !unsafe { &mut *self.vrender }.is_figure_opening() {
-                    return Err(windows::Win32::Foundation::E_ILLEGAL_STATE_CHANGE.into());
-                }
-
-                Ok(())
-            }
-
-            fn SetFillMode(
-                &self,
-                fillmode: windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE,
-            ) {
-                if fillmode != windows::Win32::Graphics::Direct2D::Common::D2D1_FILL_MODE_WINDING {
-                    tracing::warn!("not winding fill mode specified");
-                }
-            }
-
-            fn SetSegmentFlags(
-                &self,
-                vertexflags: windows::Win32::Graphics::Direct2D::Common::D2D1_PATH_SEGMENT,
-            ) {
-                unimplemented!("SetSegmentFlags {vertexflags:?}")
-            }
-        }
-
-        #[cfg(not(target_os = "macos"))]
-        boxes
+        return self.internal.rasterize_and_place_glyphs(
+            vector_rasterization_state,
+            atlas,
+            render_scale,
+        );
     }
 
     pub fn size(&self) -> Size<LogicalUnit> {
@@ -1727,17 +1286,7 @@ impl TextLayout {
         );
 
         #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            self.layout
-                .GetMetrics(metrics.as_mut_ptr())
-                .expect("layout.GetMetrics");
-        }
-        #[cfg(windows)]
-        let metrics = unsafe { metrics.assume_init_ref() };
-        #[cfg(windows)]
-        return Size::new_logical(metrics.width, metrics.height);
+        return self.internal.size();
 
         #[cfg(target_os = "macos")]
         return self.internal.size();
@@ -1745,15 +1294,7 @@ impl TextLayout {
 
     pub fn visual_width(&self, #[allow(unused_variables)] font_set: &FontSet) -> f32 {
         #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            self.layout
-                .GetMetrics(metrics.as_mut_ptr())
-                .expect("layout.GetMetrics");
-        }
-        #[cfg(windows)]
-        return unsafe { metrics.assume_init_ref() }.width;
+        return self.size().width;
 
         #[cfg(feature = "harfbuzz")]
         return self
@@ -1771,15 +1312,7 @@ impl TextLayout {
         return self.height;
 
         #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            self.layout
-                .GetMetrics(metrics.as_mut_ptr())
-                .expect("layout.GetMetrics")
-        };
-        #[cfg(windows)]
-        return unsafe { metrics.assume_init_ref() }.height;
+        return self.internal.size().height;
 
         #[cfg(target_os = "macos")]
         return self.internal.height();
@@ -1787,6 +1320,10 @@ impl TextLayout {
 
     #[tracing::instrument(skip(font_set))]
     pub fn measure_height(text: &str, font: FontID, font_set: &FontSet) -> f32 {
+        #[cfg(windows)]
+        return dwrite::TextLayout::measure_single_height(text, font, font_set);
+
+        #[cfg(not(windows))]
         // TODO: 最適化はあとで
         Self::new(
             core::iter::once(TextRun {
@@ -1849,31 +1386,7 @@ impl TextLayout {
         );
 
         #[cfg(windows)]
-        {
-            let mut x = core::mem::MaybeUninit::uninit();
-            let mut y = core::mem::MaybeUninit::uninit();
-            let mut metrics = core::mem::MaybeUninit::uninit();
-            unsafe {
-                layout
-                    .layout
-                    .HitTestTextPosition(
-                        text.len() as _,
-                        true,
-                        x.as_mut_ptr(),
-                        y.as_mut_ptr(),
-                        metrics.as_mut_ptr(),
-                    )
-                    .expect("layout.HitTestTextPosition");
-
-                Rect::from_lt_size(
-                    Point::new_logical(x.assume_init(), y.assume_init()),
-                    Size::new_logical(
-                        metrics.assume_init_ref().width,
-                        metrics.assume_init_ref().height,
-                    ),
-                )
-            }
-        }
+        return layout.internal.measure_cursor_rect_at_end();
 
         #[cfg(target_os = "macos")]
         {
@@ -1976,55 +1489,11 @@ impl TextLayout {
         return rects;
 
         #[cfg(windows)]
-        unsafe {
-            let start_char = text[..range.start].encode_utf16().count();
-            let count_char = text[range.clone()].encode_utf16().count();
-            let mut actual_metrics_count = core::mem::MaybeUninit::uninit();
-            match layout.layout.HitTestTextRange(
-                start_char as _,
-                count_char as _,
-                0.0,
-                0.0,
-                None,
-                actual_metrics_count.as_mut_ptr(),
-            ) {
-                Ok(_) => (),
-                // なんかどうやっても型が合わないので強制する
-                Err(e)
-                    if core::mem::transmute::<_, i32>(e.code())
-                        == windows_result::HRESULT::from_win32(
-                            windows::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER.0,
-                        )
-                        .0 =>
-                {
-                    ()
-                }
-                e => e.expect("layout.HitTestTextRange"),
-            };
-            let mut metrics = Vec::<windows::Win32::Graphics::DirectWrite::DWRITE_HIT_TEST_METRICS>::with_capacity(actual_metrics_count.assume_init() as _);
-            layout
-                .layout
-                .HitTestTextRange(
-                    start_char as _,
-                    count_char as _,
-                    0.0,
-                    0.0,
-                    Some(core::mem::transmute(metrics.spare_capacity_mut())),
-                    actual_metrics_count.as_mut_ptr(),
-                )
-                .expect("layout.HitTestTextRange");
-            let actual_metrics_count = actual_metrics_count.assume_init();
-            metrics.set_len(actual_metrics_count as _);
-            return metrics
-                .into_iter()
-                .map(|m| {
-                    Rect::from_lt_size(
-                        Point::new_logical(m.left, m.top),
-                        Size::new_logical(m.width, m.height),
-                    )
-                })
-                .collect();
-        }
+        return layout.internal.measure_line_rects(
+            (text[..range.start].encode_utf16().count() as u32
+                ..text[..range.end].encode_utf16().count() as u32)
+                .into(),
+        );
 
         #[cfg(target_os = "macos")]
         return layout.internal.compute_line_rects_for_range(
@@ -2073,16 +1542,7 @@ impl TextLayout {
         return layout.internal.measure_total_advances();
 
         #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            layout
-                .layout
-                .GetMetrics(metrics.as_mut_ptr())
-                .expect("layout.GetMetrics")
-        };
-        #[cfg(windows)]
-        return unsafe { metrics.assume_init_ref() }.widthIncludingTrailingWhitespace;
+        return layout.internal.width_with_trailing_whitespace();
     }
 
     #[tracing::instrument(skip(font_set))]
@@ -2214,41 +1674,11 @@ impl TextLayout {
         unreachable!();
 
         #[cfg(windows)]
-        let mut is_trailing_hit = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        let mut is_inside = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        let mut metrics = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
-        unsafe {
-            layout
-                .layout
-                .HitTestPoint(
-                    x,
-                    y,
-                    is_trailing_hit.as_mut_ptr(),
-                    is_inside.as_mut_ptr(),
-                    metrics.as_mut_ptr(),
-                )
-                .expect("layout.hittestpoint")
-        }
-        #[cfg(windows)]
-        let is_trailing_hit = unsafe { is_trailing_hit.assume_init().as_bool() };
-        #[cfg(windows)]
-        let metrics = unsafe { metrics.assume_init() };
-        #[cfg(windows)]
-        if is_trailing_hit {
-            // trailing hitの場合は次の文字を返す（そっちのが近い）
-            return text
-                .chars()
-                .take(metrics.textPosition as usize + 1)
-                .fold(0, |a, c| a + c.len_utf8());
-        } else {
-            return text
-                .chars()
-                .take(metrics.textPosition as _)
-                .fold(0, |a, c| a + c.len_utf8());
-        }
+        return text
+            .chars()
+            .take(layout.internal.find_nearest_text_pos(x, y) as _)
+            .map(char::len_utf8)
+            .sum::<usize>();
 
         #[cfg(target_os = "macos")]
         {
@@ -2304,31 +1734,5 @@ impl GlyphPlacementBox {
     #[inline(always)]
     pub const fn bottom(&self) -> f32 {
         self.top + self.height as f32
-    }
-}
-
-// Note: windows_core::interfaceがcfg(windows)をうまく処理してくれないらしいのでこうややこしい感じになってる
-#[cfg_attr(not(windows), cfg(windows))]
-#[cfg_attr(windows, interface("317f101a-1c78-488b-b1d5-39fedc987e05"))]
-unsafe trait IAppDrawingEffect: IUnknown {
-    fn font_id(&self) -> FontID;
-    fn offset_x(&self) -> f32;
-}
-#[cfg(windows)]
-#[implement(IAppDrawingEffect)]
-pub struct DrawingEffect {
-    font_id: FontID,
-    offset_x: f32,
-}
-#[cfg(windows)]
-impl IAppDrawingEffect_Impl for DrawingEffect_Impl {
-    #[inline(always)]
-    unsafe fn font_id(&self) -> FontID {
-        self.font_id
-    }
-
-    #[inline(always)]
-    unsafe fn offset_x(&self) -> f32 {
-        self.offset_x
     }
 }

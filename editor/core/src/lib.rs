@@ -2037,11 +2037,9 @@ impl ColorPickerHexTextInputEventHandler {
         self.value.set(new_value);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.core
-            .entity()
-            .perform_ops_and_schedule_update(syslink, |e| {
-                e.perform_external_state_update(|st| st.set_content(Self::fmt(new_value)))
-            });
+        self.core.entity().lazy_update_and_schedule(syslink, |e| {
+            e.perform_external_state_update(|st| st.set_content(Self::fmt(new_value)))
+        });
 
         if current_value != new_value {
             // notify changed
@@ -2056,11 +2054,9 @@ impl ColorPickerHexTextInputEventHandler {
     }
 
     fn cancel_direct_input(&self, syslink: &SystemLink) {
-        self.core
-            .entity()
-            .perform_ops_and_schedule_update(syslink, |e| {
-                e.perform_external_state_update(|st| st.set_content(Self::fmt(self.value.get())))
-            });
+        self.core.entity().lazy_update_and_schedule(syslink, |e| {
+            e.perform_external_state_update(|st| st.set_content(Self::fmt(self.value.get())))
+        });
     }
 }
 

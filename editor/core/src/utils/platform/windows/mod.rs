@@ -18,7 +18,7 @@ use windows::{
     },
     core::PCSTR,
 };
-use windows_core::{BOOL, PCWSTR};
+use windows_core::{BOOL, HSTRING, PCWSTR};
 
 pub use self::log_writer::DebugOutputWriter;
 
@@ -210,4 +210,43 @@ impl WaitableTimer {
     pub const fn as_handle(&self) -> HANDLE {
         self.0
     }
+}
+
+pub fn user_language() -> HSTRING {
+    windows::System::UserProfile::GlobalizationPreferences::Languages()
+        .expect("globalization_preferences.languages")
+        .First()
+        .expect("vector_view.first")
+        .Current()
+        .expect("iterator.current")
+}
+
+pub fn find_word_segment(input: &str, byte_pos: usize) -> core::range::Range<usize> {
+    let text_pos = input
+        .char_indices()
+        .take_while(|&(i, _)| i < byte_pos)
+        .count();
+
+    let ws = windows::Data::Text::WordsSegmenter::CreateWithLanguage(&user_language())
+        .expect("words_segmenter.create")
+        .GetTokenAt(
+            &HSTRING::from_wide(&input.encode_utf16().collect::<Vec<_>>()),
+            text_pos as _,
+        )
+        .expect("word_segmenter.get_token_at");
+    let text_segment = ws
+        .SourceTextSegment()
+        .expect("word_segment.source_text_segment");
+
+    let start = input
+        .chars()
+        .take(text_segment.StartPosition as _)
+        .map(char::len_utf8)
+        .sum();
+    let end = input
+        .chars()
+        .take((text_segment.StartPosition + text_segment.Length) as _)
+        .map(char::len_utf8)
+        .sum();
+    (start..end).into()
 }
