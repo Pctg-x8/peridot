@@ -12,9 +12,8 @@ use peridot_math::{Camera, Matrix4, Matrix4F32};
 
 use crate::{
     graphics::{
-        BLEND_STATE_SINGLE_NONE, BLEND_STATE_SINGLE_PREMULTIPLIED, IA_STATE_TRILIST,
+        BLEND_STATE_SINGLE_NONE, BLEND_STATE_SINGLE_PREMULTIPLIED, Graphics, IA_STATE_TRILIST,
         IA_STATE_TRISTRIP, MS_STATE_EMPTY, RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
-        Graphics,
     },
     rendering::composite::CustomRenderContext,
     utils::{
@@ -341,6 +340,268 @@ const VS_ORIGIN_AXES: &[OriginAxesVertex] = &[
 pub struct HandleVertex {
     pos: [f32; 4],
     col: [f32; 4],
+}
+
+const TRANSLATE_HANDLE_BAR_LENGTH: f32 = 0.2;
+const TRANSLATE_HANDLE_ARROW_SIZE: f32 = 0.05;
+const TRANSLATE_HANDLE_BAR_RADIUS: f32 = 0.005;
+const TRANSLATE_HANDLE_ARROW_RADIUS: f32 = 0.02;
+const TRANSLATE_HANDLE_BAR_DIVISION: u32 = 6;
+const TRANSLATE_HANDLE_ARROW_DIVISION: u32 = 12;
+const TRANSLATE_HANDLE_VCOUNT: usize =
+    (TRANSLATE_HANDLE_BAR_DIVISION as usize * 2 + TRANSLATE_HANDLE_ARROW_DIVISION as usize + 1) * 3;
+const TRANSLATE_HANDLE_ICOUNT: usize = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+    + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+    + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3)
+    * 3;
+unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
+    let base_vindex_x = 0;
+    let base_vindex_y = base_vindex_x
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+        + 1
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
+    let base_vindex_z = base_vindex_y
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+        + 1
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
+    let mut iindex_x = 0;
+    let mut iindex_y = iindex_x
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+        + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
+    let mut iindex_z = iindex_y
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+        + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
+    for r in 0..TRANSLATE_HANDLE_BAR_DIVISION {
+        let (s, c) =
+            (core::f32::consts::TAU * r as f32 / TRANSLATE_HANDLE_BAR_DIVISION as f32).sin_cos();
+
+        unsafe {
+            vs.add(base_vindex_x + r as usize).write(HandleVertex {
+                pos: [
+                    0.0,
+                    TRANSLATE_HANDLE_BAR_RADIUS * s,
+                    TRANSLATE_HANDLE_BAR_RADIUS * c,
+                    1.0,
+                ],
+                col: [1.0, 0.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_x + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                .write(HandleVertex {
+                    pos: [
+                        TRANSLATE_HANDLE_BAR_LENGTH,
+                        TRANSLATE_HANDLE_BAR_RADIUS * s,
+                        TRANSLATE_HANDLE_BAR_RADIUS * c,
+                        1.0,
+                    ],
+                    col: [1.0, 0.0, 0.0, 1.0],
+                });
+            vs.add(base_vindex_y + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_RADIUS * s,
+                    0.0,
+                    TRANSLATE_HANDLE_BAR_RADIUS * c,
+                    1.0,
+                ],
+                col: [0.0, 1.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_y + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                .write(HandleVertex {
+                    pos: [
+                        TRANSLATE_HANDLE_BAR_RADIUS * s,
+                        TRANSLATE_HANDLE_BAR_LENGTH,
+                        TRANSLATE_HANDLE_BAR_RADIUS * c,
+                        1.0,
+                    ],
+                    col: [0.0, 1.0, 0.0, 1.0],
+                });
+            vs.add(base_vindex_z + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_RADIUS * s,
+                    TRANSLATE_HANDLE_BAR_RADIUS * c,
+                    0.0,
+                    1.0,
+                ],
+                col: [0.0, 0.0, 1.0, 1.0],
+            });
+            vs.add(base_vindex_z + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                .write(HandleVertex {
+                    pos: [
+                        TRANSLATE_HANDLE_BAR_RADIUS * s,
+                        TRANSLATE_HANDLE_BAR_RADIUS * c,
+                        TRANSLATE_HANDLE_BAR_LENGTH,
+                        1.0,
+                    ],
+                    col: [0.0, 0.0, 1.0, 1.0],
+                });
+        }
+
+        let prev_r = if r > 0 {
+            r as u16
+        } else {
+            TRANSLATE_HANDLE_BAR_DIVISION as u16
+        } - 1;
+
+        let a0 = base_vindex_x as u16 + prev_r;
+        let b0 = base_vindex_x as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        let a1 = base_vindex_x as u16 + r as u16;
+        let b1 = base_vindex_x as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        unsafe {
+            is.add(iindex_x + 0).write(a0);
+            is.add(iindex_x + 1).write(b0);
+            is.add(iindex_x + 2).write(a1);
+            is.add(iindex_x + 3).write(a1);
+            is.add(iindex_x + 4).write(b1);
+            is.add(iindex_x + 5).write(b0);
+        }
+        iindex_x += 6;
+
+        let a0 = base_vindex_y as u16 + prev_r;
+        let b0 = base_vindex_y as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        let a1 = base_vindex_y as u16 + r as u16;
+        let b1 = base_vindex_y as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        unsafe {
+            is.add(iindex_y + 0).write(a0);
+            is.add(iindex_y + 1).write(b0);
+            is.add(iindex_y + 2).write(a1);
+            is.add(iindex_y + 3).write(a1);
+            is.add(iindex_y + 4).write(b1);
+            is.add(iindex_y + 5).write(b0);
+        }
+        iindex_y += 6;
+
+        let a0 = base_vindex_z as u16 + prev_r;
+        let b0 = base_vindex_z as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        let a1 = base_vindex_z as u16 + r as u16;
+        let b1 = base_vindex_z as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        unsafe {
+            is.add(iindex_z + 0).write(a0);
+            is.add(iindex_z + 1).write(b0);
+            is.add(iindex_z + 2).write(a1);
+            is.add(iindex_z + 3).write(a1);
+            is.add(iindex_z + 4).write(b1);
+            is.add(iindex_z + 5).write(b0);
+        }
+        iindex_z += 6;
+    }
+    let arrow_top_vindex_x = base_vindex_x + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+    let arrow_top_vindex_y = base_vindex_y + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+    let arrow_top_vindex_z = base_vindex_z + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+    unsafe {
+        vs.add(arrow_top_vindex_x).write(HandleVertex {
+            pos: [
+                TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                0.0,
+                0.0,
+                1.0,
+            ],
+            col: [1.0, 0.0, 0.0, 1.0],
+        });
+        vs.add(arrow_top_vindex_y).write(HandleVertex {
+            pos: [
+                0.0,
+                TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                0.0,
+                1.0,
+            ],
+            col: [0.0, 1.0, 0.0, 1.0],
+        });
+        vs.add(arrow_top_vindex_z).write(HandleVertex {
+            pos: [
+                0.0,
+                0.0,
+                TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                1.0,
+            ],
+            col: [0.0, 0.0, 1.0, 1.0],
+        });
+    }
+    let base_vindex_x = arrow_top_vindex_x + 1;
+    let base_vindex_y = arrow_top_vindex_y + 1;
+    let base_vindex_z = arrow_top_vindex_z + 1;
+    for r in 0..TRANSLATE_HANDLE_ARROW_DIVISION {
+        let (s, c) =
+            (core::f32::consts::TAU * r as f32 / TRANSLATE_HANDLE_ARROW_DIVISION as f32).sin_cos();
+
+        unsafe {
+            vs.add(base_vindex_x + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_LENGTH,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                    1.0,
+                ],
+                col: [1.0, 0.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_y + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                    TRANSLATE_HANDLE_BAR_LENGTH,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                    1.0,
+                ],
+                col: [0.0, 1.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_z + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                    TRANSLATE_HANDLE_BAR_LENGTH,
+                    1.0,
+                ],
+                col: [0.0, 0.0, 1.0, 1.0],
+            });
+        }
+
+        let prev_r = if r > 0 {
+            r as u16
+        } else {
+            TRANSLATE_HANDLE_ARROW_DIVISION as u16
+        } - 1;
+        unsafe {
+            is.add(iindex_x + 0).write(arrow_top_vindex_x as u16);
+            is.add(iindex_x + 1).write(base_vindex_x as u16 + prev_r);
+            is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
+        }
+        iindex_x += 3;
+        unsafe {
+            is.add(iindex_y + 0).write(arrow_top_vindex_y as u16);
+            is.add(iindex_y + 1).write(base_vindex_y as u16 + prev_r);
+            is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
+        }
+        iindex_y += 3;
+        unsafe {
+            is.add(iindex_z + 0).write(arrow_top_vindex_z as u16);
+            is.add(iindex_z + 1).write(base_vindex_z as u16 + prev_r);
+            is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
+        }
+        iindex_z += 3;
+
+        if r > 1 {
+            unsafe {
+                is.add(iindex_x + 0).write(base_vindex_x as u16 + 0);
+                is.add(iindex_x + 1)
+                    .write(base_vindex_x as u16 + r as u16 - 1);
+                is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
+            }
+            iindex_x += 3;
+            unsafe {
+                is.add(iindex_y + 0).write(base_vindex_y as u16 + 0);
+                is.add(iindex_y + 1)
+                    .write(base_vindex_y as u16 + r as u16 - 1);
+                is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
+            }
+            iindex_y += 3;
+            unsafe {
+                is.add(iindex_z + 0).write(base_vindex_z as u16 + 0);
+                is.add(iindex_z + 1)
+                    .write(base_vindex_z as u16 + r as u16 - 1);
+                is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
+            }
+            iindex_z += 3;
+        }
+    }
 }
 
 struct ScratchStagingBuffer {
@@ -1066,29 +1327,14 @@ impl Renderer {
         let grid_shader = device.require_shader("preview/grid.spv");
         let unlit_colored_shader = device.require_shader("preview/unlit_colored.spv");
 
-        const TRANSLATE_HANDLE_BAR_LENGTH: f32 = 0.2;
-        const TRANSLATE_HANDLE_ARROW_SIZE: f32 = 0.05;
-        const TRANSLATE_HANDLE_BAR_RADIUS: f32 = 0.005;
-        const TRANSLATE_HANDLE_ARROW_RADIUS: f32 = 0.02;
-        const TRANSLATE_HANDLE_BAR_DIVISION: u32 = 6;
-        const TRANSLATE_HANDLE_ARROW_DIVISION: u32 = 12;
-        let translate_handle_vcount = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
-            + TRANSLATE_HANDLE_ARROW_DIVISION as usize
-            + 1)
-            * 3;
-        let translate_handle_icount = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
-            + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
-            + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3)
-            * 3;
-
         let origin_axes_vbuf_range = 0..size_of_val(VS_ORIGIN_AXES) as br::DeviceSize;
         let translate_handle_vbuf_range = range_from_len_u64(
             rup2_u64(origin_axes_vbuf_range.end, align_of::<HandleVertex>() as _),
-            (size_of::<HandleVertex>() * translate_handle_vcount) as _,
+            (size_of::<HandleVertex>() * TRANSLATE_HANDLE_VCOUNT) as _,
         );
         let translate_handle_ibuf_range = range_from_len_u64(
             rup2_u64(translate_handle_vbuf_range.end, align_of::<u16>() as _),
-            (size_of::<u16>() * translate_handle_icount) as _,
+            (size_of::<u16>() * TRANSLATE_HANDLE_ICOUNT) as _,
         );
         let mut internal_mesh_buffer = br::BufferObject::new(
             device,
@@ -1137,11 +1383,11 @@ impl Renderer {
             rup2(size_of::<UploadBufferData>(), align_of::<HandleVertex>());
         let translate_handle_ibuf_upload_offset = rup2(
             translate_handle_vbuf_upload_offset
-                + size_of::<UploadBufferData>() * translate_handle_vcount,
+                + size_of::<UploadBufferData>() * TRANSLATE_HANDLE_VCOUNT,
             align_of::<u16>(),
         );
         let upload_size =
-            translate_handle_ibuf_upload_offset + size_of::<u16>() * translate_handle_icount;
+            translate_handle_ibuf_upload_offset + size_of::<u16>() * TRANSLATE_HANDLE_ICOUNT;
         let mut upload_buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(upload_size as _, br::BufferUsage::TRANSFER_SRC),
@@ -1176,239 +1422,14 @@ impl Renderer {
                 CameraData::new(&init_state.main_camera, init_rt.aspect_wh()),
             );
 
-            let vs = ptr
-                .ptr()
-                .byte_add(translate_handle_vbuf_upload_offset)
-                .cast::<HandleVertex>();
-            let is = ptr
-                .ptr()
-                .byte_add(translate_handle_ibuf_upload_offset)
-                .cast::<u16>();
-            let base_vindex_x = 0;
-            let base_vindex_y = base_vindex_x
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
-                + 1
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
-            let base_vindex_z = base_vindex_y
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
-                + 1
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
-            let mut iindex_x = 0;
-            let mut iindex_y = iindex_x
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
-                + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
-            let mut iindex_z = iindex_y
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
-                + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
-            for r in 0..TRANSLATE_HANDLE_BAR_DIVISION {
-                let (s, c) = (core::f32::consts::TAU * r as f32
-                    / TRANSLATE_HANDLE_BAR_DIVISION as f32)
-                    .sin_cos();
-
-                vs.add(base_vindex_x + r as usize).write(HandleVertex {
-                    pos: [
-                        0.0,
-                        TRANSLATE_HANDLE_BAR_RADIUS * s,
-                        TRANSLATE_HANDLE_BAR_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [1.0, 0.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_x + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
-                    .write(HandleVertex {
-                        pos: [
-                            TRANSLATE_HANDLE_BAR_LENGTH,
-                            TRANSLATE_HANDLE_BAR_RADIUS * s,
-                            TRANSLATE_HANDLE_BAR_RADIUS * c,
-                            1.0,
-                        ],
-                        col: [1.0, 0.0, 0.0, 1.0],
-                    });
-                vs.add(base_vindex_y + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_BAR_RADIUS * s,
-                        0.0,
-                        TRANSLATE_HANDLE_BAR_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [0.0, 1.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_y + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
-                    .write(HandleVertex {
-                        pos: [
-                            TRANSLATE_HANDLE_BAR_RADIUS * s,
-                            TRANSLATE_HANDLE_BAR_LENGTH,
-                            TRANSLATE_HANDLE_BAR_RADIUS * c,
-                            1.0,
-                        ],
-                        col: [0.0, 1.0, 0.0, 1.0],
-                    });
-                vs.add(base_vindex_z + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_BAR_RADIUS * s,
-                        TRANSLATE_HANDLE_BAR_RADIUS * c,
-                        0.0,
-                        1.0,
-                    ],
-                    col: [0.0, 0.0, 1.0, 1.0],
-                });
-                vs.add(base_vindex_z + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
-                    .write(HandleVertex {
-                        pos: [
-                            TRANSLATE_HANDLE_BAR_RADIUS * s,
-                            TRANSLATE_HANDLE_BAR_RADIUS * c,
-                            TRANSLATE_HANDLE_BAR_LENGTH,
-                            1.0,
-                        ],
-                        col: [0.0, 0.0, 1.0, 1.0],
-                    });
-
-                let prev_r = if r > 0 {
-                    r as u16
-                } else {
-                    TRANSLATE_HANDLE_BAR_DIVISION as u16
-                } - 1;
-
-                let a0 = base_vindex_x as u16 + prev_r;
-                let b0 = base_vindex_x as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                let a1 = base_vindex_x as u16 + r as u16;
-                let b1 = base_vindex_x as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                is.add(iindex_x + 0).write(a0);
-                is.add(iindex_x + 1).write(b0);
-                is.add(iindex_x + 2).write(a1);
-                is.add(iindex_x + 3).write(a1);
-                is.add(iindex_x + 4).write(b1);
-                is.add(iindex_x + 5).write(b0);
-                iindex_x += 6;
-
-                let a0 = base_vindex_y as u16 + prev_r;
-                let b0 = base_vindex_y as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                let a1 = base_vindex_y as u16 + r as u16;
-                let b1 = base_vindex_y as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                is.add(iindex_y + 0).write(a0);
-                is.add(iindex_y + 1).write(b0);
-                is.add(iindex_y + 2).write(a1);
-                is.add(iindex_y + 3).write(a1);
-                is.add(iindex_y + 4).write(b1);
-                is.add(iindex_y + 5).write(b0);
-                iindex_y += 6;
-
-                let a0 = base_vindex_z as u16 + prev_r;
-                let b0 = base_vindex_z as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                let a1 = base_vindex_z as u16 + r as u16;
-                let b1 = base_vindex_z as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                is.add(iindex_z + 0).write(a0);
-                is.add(iindex_z + 1).write(b0);
-                is.add(iindex_z + 2).write(a1);
-                is.add(iindex_z + 3).write(a1);
-                is.add(iindex_z + 4).write(b1);
-                is.add(iindex_z + 5).write(b0);
-                iindex_z += 6;
-            }
-            let arrow_top_vindex_x = base_vindex_x + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
-            let arrow_top_vindex_y = base_vindex_y + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
-            let arrow_top_vindex_z = base_vindex_z + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
-            vs.add(arrow_top_vindex_x).write(HandleVertex {
-                pos: [
-                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
-                    0.0,
-                    0.0,
-                    1.0,
-                ],
-                col: [1.0, 0.0, 0.0, 1.0],
-            });
-            vs.add(arrow_top_vindex_y).write(HandleVertex {
-                pos: [
-                    0.0,
-                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
-                    0.0,
-                    1.0,
-                ],
-                col: [0.0, 1.0, 0.0, 1.0],
-            });
-            vs.add(arrow_top_vindex_z).write(HandleVertex {
-                pos: [
-                    0.0,
-                    0.0,
-                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
-                    1.0,
-                ],
-                col: [0.0, 0.0, 1.0, 1.0],
-            });
-            let base_vindex_x = arrow_top_vindex_x + 1;
-            let base_vindex_y = arrow_top_vindex_y + 1;
-            let base_vindex_z = arrow_top_vindex_z + 1;
-            for r in 0..TRANSLATE_HANDLE_ARROW_DIVISION {
-                let (s, c) = (core::f32::consts::TAU * r as f32
-                    / TRANSLATE_HANDLE_ARROW_DIVISION as f32)
-                    .sin_cos();
-
-                vs.add(base_vindex_x + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_BAR_LENGTH,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * s,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [1.0, 0.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_y + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_ARROW_RADIUS * s,
-                        TRANSLATE_HANDLE_BAR_LENGTH,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [0.0, 1.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_z + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_ARROW_RADIUS * s,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * c,
-                        TRANSLATE_HANDLE_BAR_LENGTH,
-                        1.0,
-                    ],
-                    col: [0.0, 0.0, 1.0, 1.0],
-                });
-
-                let prev_r = if r > 0 {
-                    r as u16
-                } else {
-                    TRANSLATE_HANDLE_ARROW_DIVISION as u16
-                } - 1;
-                is.add(iindex_x + 0).write(arrow_top_vindex_x as u16);
-                is.add(iindex_x + 1).write(base_vindex_x as u16 + prev_r);
-                is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
-                iindex_x += 3;
-                is.add(iindex_y + 0).write(arrow_top_vindex_y as u16);
-                is.add(iindex_y + 1).write(base_vindex_y as u16 + prev_r);
-                is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
-                iindex_y += 3;
-                is.add(iindex_z + 0).write(arrow_top_vindex_z as u16);
-                is.add(iindex_z + 1).write(base_vindex_z as u16 + prev_r);
-                is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
-                iindex_z += 3;
-
-                if r > 1 {
-                    is.add(iindex_x + 0).write(base_vindex_x as u16 + 0);
-                    is.add(iindex_x + 1)
-                        .write(base_vindex_x as u16 + r as u16 - 1);
-                    is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
-                    iindex_x += 3;
-                    is.add(iindex_y + 0).write(base_vindex_y as u16 + 0);
-                    is.add(iindex_y + 1)
-                        .write(base_vindex_y as u16 + r as u16 - 1);
-                    is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
-                    iindex_y += 3;
-                    is.add(iindex_z + 0).write(base_vindex_z as u16 + 0);
-                    is.add(iindex_z + 1)
-                        .write(base_vindex_z as u16 + r as u16 - 1);
-                    is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
-                    iindex_z += 3;
-                }
-            }
+            gen_translate_handle_mesh(
+                ptr.ptr()
+                    .byte_add(translate_handle_vbuf_upload_offset)
+                    .cast(),
+                ptr.ptr()
+                    .byte_add(translate_handle_ibuf_upload_offset)
+                    .cast(),
+            );
         }
         if should_flush {
             unsafe {
