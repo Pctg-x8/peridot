@@ -114,6 +114,7 @@ func vertMain(uint vindex: SV_VertexID, uint iindexOffset: SV_InstanceID,
   let posST = instanceDataArray[iindex].posSTStatic;
   let pos4 = mul(instanceDataArray[iindex].positionModifierMatrix,
                  float4(p * posST.xy + posST.zw, 0.0, 1.0));
+  // let pos4 = mul(instanceDataArray[iindex].positionModifierMatrix, float4(p, 0.0, 1.0));
 
   VertexOutput vo;
 

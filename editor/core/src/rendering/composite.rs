@@ -2236,34 +2236,31 @@ impl<Event> CompositeTreeRender<Event> {
                 CompositeRectScaleFactor::UI => ui_render_scale,
             };
 
-            let local_left =
-                r.offset[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
-            let local_top = r.offset[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
-            let local_width = r.size[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
-            let local_height =
-                r.size[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_left = (p.effective_width * r.relative_offset_adjustment[0])
+                + r.offset[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_top = (p.effective_height * r.relative_offset_adjustment[1])
+                + r.offset[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_width = (p.effective_width * r.relative_size_adjustment[0])
+                + r.size[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_height = (p.effective_height * r.relative_size_adjustment[1])
+                + r.size[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
 
-            let left = p.effective_base_left
-                + (p.effective_width * r.relative_offset_adjustment[0])
-                + local_left;
-            let top = p.effective_base_top
-                + (p.effective_height * r.relative_offset_adjustment[1])
-                + local_top;
-            let w = p.effective_width * r.relative_size_adjustment[0] + local_width;
-            let h = p.effective_height * r.relative_size_adjustment[1] + local_height;
+            let left = p.effective_base_left + local_left;
+            let top = p.effective_base_top + local_top;
+            let w = local_width;
+            let h = local_height;
 
             let opacity = p.parent_opacity * r.opacity.evaluate(current_sec, &self.parameter_store);
             let matrix = p.parent_matrix
-                * (Matrix4::translation(Vector3(
-                    left - p.effective_base_left + r.pivot[0] * w,
-                    top - p.effective_base_top + r.pivot[1] * h,
-                    0.0,
-                )) * Matrix4::scale(Vector4(
+                * Matrix4::translation(Vector3(local_left, local_top, 0.0))
+                * Matrix4::translation(Vector3(r.pivot[0] * w, r.pivot[1] * h, 0.0))
+                * Matrix4::scale(Vector4(
                     r.scale_x.evaluate(current_sec, &self.parameter_store),
                     r.scale_y.evaluate(current_sec, &self.parameter_store),
                     1.0,
                     1.0,
-                )) * Matrix4::translation(Vector3(-r.pivot[0] * w, -r.pivot[1] * h, 0.0)));
+                ))
+                * Matrix4::translation(Vector3(-r.pivot[0] * w, -r.pivot[1] * h, 0.0));
 
             let border_color = match r.border {
                 Some(ref b) => b.color.evaluate(current_sec, &self.parameter_store),
