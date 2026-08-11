@@ -1,5 +1,7 @@
 mod log_writer;
 
+use std::path::PathBuf;
+
 use windows::{
     Win32::{
         Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, RECT},
@@ -210,6 +212,13 @@ impl WaitableTimer {
     pub const fn as_handle(&self) -> HANDLE {
         self.0
     }
+}
+
+#[inline(always)]
+pub fn local_app_data_dir() -> PathBuf {
+    PathBuf::from(
+        std::env::var_os("LOCALAPPDATA").expect("no LOCALAPPDATA defined in the environment"),
+    )
 }
 
 pub fn user_language() -> HSTRING {

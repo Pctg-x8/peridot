@@ -43,10 +43,10 @@ use crate::{
         ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            CompositeTreeSyncBuffer, CornerRadius, Gradient, GradientRef, TextureMappingMode,
-            TextureType,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
+            GradientRef, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet},
     },
@@ -839,7 +839,7 @@ pub enum Event {
     OpenCustomViewFlyout {
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
-        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfaceViewConstructor>>>,
+        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfacePresenterConstructor>>>,
     },
     MenuOpen {
         parent: WindowHandle,
@@ -1061,10 +1061,11 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 1;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 2;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 3;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_PLANE: u64 = 1;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 2;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 3;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
 
 pub struct ColorPickerSharedResources {
@@ -2285,7 +2286,7 @@ impl EditableColorButtonPickerFlyoutView {
         Self(ctx.construct_view(|_| Box::new(v)))
     }
 }
-impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
+impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
     fn root_view_id(&self) -> ViewIdentifier {
         self.0
     }
@@ -2294,12 +2295,12 @@ impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
 pub struct EditableColorButtonPickerFlyoutViewConstructor {
     backing_store: std::rc::Weak<EditableColorButtonEventHandler>,
 }
-impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstructor {
+impl FlyoutSurfacePresenterConstructor for EditableColorButtonPickerFlyoutViewConstructor {
     fn size(&self) -> Size<LogicalUnit> {
         Size::new_logical(128.0 + 16.0, 128.0 + 32.0 + 16.0 + 20.0 + 16.0)
     }
 
-    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView> {
+    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter> {
         Box::new(EditableColorButtonPickerFlyoutView::new(
             ctx,
             &self.backing_store,
@@ -2875,6 +2876,7 @@ pub enum ViewFeedback {
     ObjectTreeChanged(ViewFeedbackObjectTreeChanged),
     ObjectSelectionChanged(ViewFeedbackObjectSelectionChanged),
     ObjectDataChanged(ViewFeedbackObjectDataChanged),
+    PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged),
 }
 impl ViewFeedback {
     pub const fn object_tree_changed() -> Self {
@@ -2889,11 +2891,16 @@ impl ViewFeedback {
         Self::ObjectDataChanged(ViewFeedbackObjectDataChanged(object_id))
     }
 
+    pub const fn preview_edit_tool_type_changed() -> Self {
+        Self::PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged)
+    }
+
     pub fn dispatch(self, registry: &ViewFeedbackRegistry, context: &mut ViewFeedbackContext) {
         match self {
             Self::ObjectTreeChanged(o) => registry.dispatch(o, context),
             Self::ObjectSelectionChanged(o) => registry.dispatch(o, context),
             Self::ObjectDataChanged(o) => registry.dispatch(o, context),
+            Self::PreviewEditToolTypeChanged(o) => registry.dispatch(o, context),
         }
     }
 }
@@ -2969,6 +2976,7 @@ pub struct Application {
     free_object_indices: BTreeSet<usize>,
     root_objects: Vec<ObjectID>,
     selected_objects: HashSet<ObjectID>,
+    preview_edit_tool_type: PreviewEditToolType,
 }
 impl Application {
     pub fn new() -> Self {
@@ -2977,7 +2985,16 @@ impl Application {
             free_object_indices: BTreeSet::new(),
             root_objects: Vec::new(),
             selected_objects: HashSet::new(),
+            preview_edit_tool_type: PreviewEditToolType::Translate,
         }
+    }
+
+    pub fn sync(&self, feedback_queue: &mut VecDeque<ViewFeedback>) {
+        feedback_queue.extend([
+            ViewFeedback::object_tree_changed(),
+            ViewFeedback::object_selection_changed(),
+            ViewFeedback::preview_edit_tool_type_changed(),
+        ]);
     }
 
     fn alloc_object(&mut self, o: Object) -> ObjectID {
@@ -3143,6 +3160,12 @@ impl ApplicationMutation<'_> {
         self.state.selected_objects.clear();
         self.view_feedbacks
             .push_back(ViewFeedback::object_selection_changed());
+    }
+
+    pub fn set_preview_edit_tool_type(&mut self, tool_type: PreviewEditToolType) {
+        self.state.preview_edit_tool_type = tool_type;
+        self.view_feedbacks
+            .push_back(ViewFeedback::preview_edit_tool_type_changed());
     }
 }
 
@@ -3631,6 +3654,39 @@ async fn run<'sys>(
             sub_windows.insert(new_window);
         }
     }
+
+    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
+
+    // initial sync model with view
+    application.sync(&mut view_feedback_store);
+    let mut fb_context = ViewFeedbackContext {
+        application: &application,
+        view_init_context: ViewInitContext {
+            mount_context: MountContext {
+                composite_tree: &mut composite_tree,
+                ht_manager: &mut ht_manager,
+                current_sec: global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut keyboard_focus_registry,
+            },
+            view_allocator: &mut view_allocator,
+            view_instance_store: &mut view_instance_store,
+            view_tree_relation_store: &mut view_tree_relation_store,
+            view_event_handler_store: &mut view_event_handler_store,
+            view_group_relation_store: &mut view_group_relation_store,
+            view_render_state_store: &mut view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+            system_link: &system_link,
+            main_thread_texture_id_issuer: &mut texture_id_issuer,
+            application: &application,
+        },
+        view_render_queue: &mut view_render_queue,
+    };
+
+    for x in view_feedback_store.drain(..) {
+        x.dispatch(&view_feedback_registry, &mut fb_context);
+    }
+
+    view_feedback_registry.perform_atomic(&mut fb_context);
 
     view_render_queue.perform(
         &mut RenderContext {
@@ -5358,7 +5414,7 @@ async fn run<'sys>(
                 view_constructor,
             } => {
                 let mut view_feedback_registry_delayed_ops = VecDeque::new();
-                custom_view_flyout_session = Some(CustomViewFlyoutSession::new(
+                custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
                     parent,
                     surface_pos,
                     view_constructor.0.0,
@@ -5986,6 +6042,13 @@ async fn run<'sys>(
                 }
 
                 match id {
+                    MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
+                        ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Plane".into());
+                    }
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
                         ApplicationMutation {
                             state: &mut application,
@@ -6021,7 +6084,9 @@ async fn run<'sys>(
                         }
                         .object_create("New Terrain".into());
                     }
-                    _ => (),
+                    _ => {
+                        tracing::warn!(id, "unhandled menu command");
+                    }
                 }
 
                 if !view_feedback_store.is_empty() {
@@ -6845,7 +6910,7 @@ async fn run<'sys>(
     }
 }
 
-pub trait FlyoutSurfaceView {
+pub trait FlyoutSurfacePresenter {
     fn root_view_id(&self) -> ViewIdentifier;
 
     #[allow(unused_variables)]
@@ -6858,24 +6923,25 @@ pub trait FlyoutSurfaceView {
     ) {
     }
 }
-pub trait FlyoutSurfaceViewConstructor {
+pub trait FlyoutSurfacePresenterConstructor {
     fn size(&self) -> Size<LogicalUnit>;
-    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView>;
+    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter>;
 }
+
 pub struct CustomViewFlyoutSurface {
     native_surface: FlyoutSurfaceHandle,
     kf_group: KeyboardFocusGroupRef,
-    view: Box<dyn FlyoutSurfaceView>,
+    view: Box<dyn FlyoutSurfacePresenter>,
 }
 pub struct CustomViewFlyoutSession {
     parent: WindowHandle,
     opening_surface: CustomViewFlyoutSurface,
 }
 impl CustomViewFlyoutSession {
-    pub fn new(
+    pub fn begin(
         parent: WindowHandle,
         pos: Point<LogicalUnit>,
-        view_constructor: Box<dyn FlyoutSurfaceViewConstructor>,
+        view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
         view_init_context: &mut ViewInitContext,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
@@ -7291,18 +7357,43 @@ impl MenuSession {
     }
 }
 
+/// Main Windowを開く方法
 pub enum MainWindowOpenMode {
+    /// 新規
     New,
+    /// 復元
     Restore(WindowGeometryState),
 }
 
+/// Sub Windowを開く方法
 pub enum SubWindowOpenMode {
+    /// ドックからポップする
     DockDiverge {
         rect: Rect<LogicalUnit>,
         position_ref_window: WindowHandle,
     },
+    /// 復元
     Restore(WindowGeometryState),
 }
+
+/// Windowの種類
+pub enum WindowType {
+    /// Main（起動時に必ず1つ存在するWindow 閉じるとアプリ終了）
+    Main {
+        #[cfg(target_os = "linux")]
+        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
+    },
+    /// Sub（Dockから外したり必要に応じて表示されるWindow）
+    Sub,
+}
+
+// platform-dependent constants
+pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
+    r: 16,
+    g: 176,
+    b: 255,
+    a: 16,
+};
 
 #[cfg(windows)]
 pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
@@ -7416,14 +7507,6 @@ impl SystemLink<'_> {
     }
 }
 
-pub enum WindowType {
-    Main {
-        #[cfg(target_os = "linux")]
-        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
-    },
-    Sub,
-}
-
 #[cfg(target_os = "macos")]
 pub use platform::mac::{
     DragPreviewPopoverHandle, PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
@@ -7522,14 +7605,6 @@ impl SyncEventBus {
         }
     }
 }
-
-// platform-dependent constants
-pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
-    r: 16,
-    g: 176,
-    b: 255,
-    a: 16,
-};
 
 #[derive(thiserror::Error, Debug)]
 pub enum PersistStateDeserializeError {
@@ -7787,13 +7862,13 @@ impl DockState {
     }
 }
 
-trait PersistStateFormat: Sized {
+trait PersistStateSerializable: Sized {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()>;
     fn deserialize(
         r: &mut (impl std::io::Read + ?Sized),
     ) -> Result<Self, PersistStateDeserializeError>;
 }
-impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
+impl PersistStateSerializable for Rect<crate::utils::LogicalUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&f32::to_ne_bytes(self.left))?;
         w.write_all(&f32::to_ne_bytes(self.top))?;
@@ -7824,7 +7899,7 @@ impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
         ))
     }
 }
-impl PersistStateFormat for Rect<crate::utils::PixelsUnit> {
+impl PersistStateSerializable for Rect<crate::utils::PixelsUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&i32::to_ne_bytes(self.left))?;
         w.write_all(&i32::to_ne_bytes(self.top))?;
@@ -7895,7 +7970,7 @@ impl WindowGeometryState {
                 Ok(Self::Maximized { monitor_index })
             }
             0x02 => {
-                let rect = PersistStateFormat::deserialize(r)?;
+                let rect = PersistStateSerializable::deserialize(r)?;
 
                 Ok(Self::Restored { rect })
             }
@@ -8035,19 +8110,18 @@ impl FileSystem {
 
         #[cfg(windows)]
         let appdata_base_path =
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.appdata_base_path.no_env"))
-                .join("peridot/.editor");
+            crate::utils::platform::windows::local_app_data_dir().join("peridot/.editor");
         #[cfg(windows)]
         let cache_base_path = appdata_base_path.join("cache");
         #[cfg(windows)]
         let persist_state_base_path = appdata_base_path.join("state");
 
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
-            tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
+            tracing::error!(path = ?cache_base_path, reason = %e, "fs.cache_base_path.create_dir_all");
         }
 
         if let Err(e) = std::fs::create_dir_all(&persist_state_base_path) {
-            tracing::error!(reason = %e, "fs.persist_state_base_path.create_dir_all");
+            tracing::error!(path = ?persist_state_base_path, reason = %e, "fs.persist_state_base_path.create_dir_all");
         }
 
         tracing::info!(
@@ -8179,15 +8253,339 @@ struct PreviewInputState {
     key_input: PreviewKeyInputState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewEditToolType {
+    Translate,
+    Rotate,
+    Scale,
+}
+
+pub struct ViewFeedbackPreviewEditToolTypeChanged;
+
+struct PreviewToolSelectorButtonView {
+    round_top: bool,
+    round_bottom: bool,
+    pos: Point<LogicalUnit>,
+    label: String,
+    bound_tool_type: PreviewEditToolType,
+    entity: Option<Rc<PreviewToolSelectorButtonViewEntity>>,
+    selecting: bool,
+}
+impl PreviewToolSelectorButtonView {
+    const SIZE: f32 = 24.0;
+    const ROUNDING: f32 = 8.0;
+    const SELECTING_COLOR: [f32; 4] = [0.25, 0.5, 1.0, 0.5];
+    const DESELECTING_COLOR: [f32; 4] = [0.25, 0.25, 0.25, 0.5];
+
+    fn new(
+        round_top: bool,
+        round_bottom: bool,
+        pos: Point<LogicalUnit>,
+        label: String,
+        bound_tool_type: PreviewEditToolType,
+    ) -> Self {
+        Self {
+            round_top,
+            round_bottom,
+            pos,
+            label,
+            bound_tool_type,
+            entity: None,
+            selecting: false,
+        }
+    }
+
+    fn set_selecting(&mut self, selecting: bool) {
+        self.selecting = selecting;
+    }
+}
+impl View for PreviewToolSelectorButtonView {
+    fn render(
+        &mut self,
+        _self_instance: &mut uikit::ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        _sched: &mut RenderChildScheduler,
+    ) -> uikit::ViewNewRenderElements {
+        match self.entity {
+            Some(ref e) => {
+                if self.selecting != e.selecting.replace(self.selecting) {
+                    // TODO: reflect selecting
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_root)
+                        .composite_mode(CompositeMode::FillColorBackdropBlur(
+                            AnimatableColor::Animated {
+                                from_value: if self.selecting {
+                                    Self::DESELECTING_COLOR
+                                } else {
+                                    Self::SELECTING_COLOR
+                                },
+                                to_value: if self.selecting {
+                                    Self::SELECTING_COLOR
+                                } else {
+                                    Self::DESELECTING_COLOR
+                                },
+                                curve: AnimationCurve::Linear,
+                                event_on_complete: None,
+                                sec_duration: (ctx.current_sec..ctx.current_sec + 0.1).into(),
+                            },
+                            AnimatableFloat::Value(3.0),
+                        ))
+                        .apply();
+                }
+
+                uikit::ViewNewRenderElements::EMPTY
+            }
+            None => {
+                // first render
+                let rounding = match (self.round_top, self.round_bottom) {
+                    (false, false) => CornerRadius::all(0.0),
+                    (true, false) => CornerRadius {
+                        left_top: [Self::ROUNDING, Self::ROUNDING],
+                        right_top: [Self::ROUNDING, Self::ROUNDING],
+                        left_bottom: [0.0, 0.0],
+                        right_bottom: [0.0, 0.0],
+                    },
+                    (false, true) => CornerRadius {
+                        left_top: [0.0, 0.0],
+                        right_top: [0.0, 0.0],
+                        left_bottom: [Self::ROUNDING, Self::ROUNDING],
+                        right_bottom: [Self::ROUNDING, Self::ROUNDING],
+                    },
+                    (true, true) => CornerRadius {
+                        left_top: [Self::ROUNDING, Self::ROUNDING],
+                        right_top: [Self::ROUNDING, Self::ROUNDING],
+                        left_bottom: [Self::ROUNDING, Self::ROUNDING],
+                        right_bottom: [Self::ROUNDING, Self::ROUNDING],
+                    },
+                };
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [
+                        AnimatableFloat::Value(Self::SIZE),
+                        AnimatableFloat::Value(Self::SIZE),
+                    ],
+                    offset: [
+                        AnimatableFloat::Value(self.pos.x),
+                        AnimatableFloat::Value(self.pos.y),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColorBackdropBlur(
+                        AnimatableColor::Value(if self.selecting {
+                            Self::SELECTING_COLOR
+                        } else {
+                            Self::DESELECTING_COLOR
+                        }),
+                        AnimatableFloat::Value(3.0),
+                    ),
+                    corner_radius: rounding.clone(),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: self.label.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_hover_lit = ctx.composite_tree.create(CompositeRect {
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    corner_radius: rounding,
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width: Self::SIZE,
+                    height: Self::SIZE,
+                    left: self.pos.x,
+                    top: self.pos.y,
+                    cursor_shape: CursorShape::Pointer,
+                    ..Default::default()
+                });
+                ctx.composite_tree.add_child(ct_root, ct_hover_lit);
+
+                let entity = Rc::new(PreviewToolSelectorButtonViewEntity {
+                    ct_root,
+                    ct_hover_lit,
+                    ht_root,
+                    bound_tool_type: self.bound_tool_type,
+                    selecting: Cell::new(self.selecting),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &entity);
+
+                self.entity = Some(entity);
+                uikit::ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    ..uikit::ViewNewRenderElements::EMPTY
+                }
+            }
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            // not rendering
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+}
+
+struct PreviewToolSelectorButtonViewEntity {
+    ct_root: CompositeTreeRef,
+    ct_hover_lit: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    bound_tool_type: PreviewEditToolType,
+    selecting: Cell<bool>,
+}
+impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_hover_lit)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.1],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_hover_lit)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.1],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_start(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        context
+            .application
+            .set_preview_edit_tool_type(self.bound_tool_type);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
 pub struct PreviewPanePresenter {
     root_view_id: ViewIdentifier,
+    feedback_receiver: Rc<PreviewPaneFeedbackReceiver>,
 }
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
     fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
+        let root_view = ctx.construct_view(|_| Box::new(PreviewView::new(input_state)));
+        let translate_control_button = ctx.construct_view(|_| {
+            Box::new(PreviewToolSelectorButtonView::new(
+                true,
+                false,
+                Point::new_logical(8.0, 8.0),
+                "T".into(),
+                PreviewEditToolType::Translate,
+            ))
+        });
+        let rotate_control_button = ctx.construct_view(|_| {
+            Box::new(PreviewToolSelectorButtonView::new(
+                false,
+                false,
+                Point::new_logical(8.0, 8.0 + 24.0 - 1.0),
+                "R".into(),
+                PreviewEditToolType::Rotate,
+            ))
+        });
+        let scale_control_button = ctx.construct_view(|_| {
+            Box::new(PreviewToolSelectorButtonView::new(
+                false,
+                true,
+                Point::new_logical(8.0, 8.0 + 48.0 - 2.0),
+                "S".into(),
+                PreviewEditToolType::Scale,
+            ))
+        });
+        ctx.view_set_parent(translate_control_button, root_view);
+        ctx.view_set_parent(rotate_control_button, root_view);
+        ctx.view_set_parent(scale_control_button, root_view);
+
+        let feedback_receiver = Rc::new(PreviewPaneFeedbackReceiver {
+            translate_tool_button_view_id: translate_control_button,
+            rotate_tool_button_view_id: rotate_control_button,
+            scale_tool_button_view_id: scale_control_button,
+        });
+        ctx.subscribe_view_feedback::<ViewFeedbackPreviewEditToolTypeChanged>(&feedback_receiver);
+
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(PreviewView::new(input_state))),
+            root_view_id: root_view,
+            feedback_receiver,
         }
     }
 }
@@ -8213,6 +8611,48 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         }
         .new_viewport_size = Some(new_size.clone());
     }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        ctx.unsubscribe_view_feedback::<ViewFeedbackPreviewEditToolTypeChanged>(
+            &self.feedback_receiver,
+        );
+    }
+}
+
+pub struct PreviewPaneFeedbackReceiver {
+    translate_tool_button_view_id: ViewIdentifier,
+    rotate_tool_button_view_id: ViewIdentifier,
+    scale_tool_button_view_id: ViewIdentifier,
+}
+impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPaneFeedbackReceiver {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        feedback: &ViewFeedbackPreviewEditToolTypeChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        let is_selecting =
+            context.application.preview_edit_tool_type == PreviewEditToolType::Translate;
+        context
+            .view_instance_mut::<PreviewToolSelectorButtonView>(self.translate_tool_button_view_id)
+            .expect("query failed")
+            .set_selecting(is_selecting);
+        context.schedule_render(self.translate_tool_button_view_id);
+
+        let is_selecting =
+            context.application.preview_edit_tool_type == PreviewEditToolType::Rotate;
+        context
+            .view_instance_mut::<PreviewToolSelectorButtonView>(self.rotate_tool_button_view_id)
+            .expect("query failed")
+            .set_selecting(is_selecting);
+        context.schedule_render(self.rotate_tool_button_view_id);
+
+        let is_selecting = context.application.preview_edit_tool_type == PreviewEditToolType::Scale;
+        context
+            .view_instance_mut::<PreviewToolSelectorButtonView>(self.scale_tool_button_view_id)
+            .expect("query failed")
+            .set_selecting(is_selecting);
+        context.schedule_render(self.scale_tool_button_view_id);
+    }
 }
 
 struct PreviewView {
@@ -8232,10 +8672,17 @@ impl View for PreviewView {
         &mut self,
         _self_instance: &mut uikit::ViewInstanceModifier,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
+        sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {
         match self.entity {
-            Some(_) => uikit::ViewNewRenderElements::EMPTY,
+            Some(ref e) => {
+                sched.schedule_render_children(RawMountTarget {
+                    ct_root: e.ct_root,
+                    ht_root: e.ht_root,
+                });
+
+                uikit::ViewNewRenderElements::EMPTY
+            }
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
@@ -8263,6 +8710,7 @@ impl View for PreviewView {
                     .set_event_handler(kf_token, &entity);
 
                 self.entity = Some(entity);
+                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
                 uikit::ViewNewRenderElements {
                     composite_tree: Some(ct_root),
                     hit_tree: Some(ht_root),

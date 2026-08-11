@@ -5,9 +5,9 @@ use std::{
 
 use crate::{
     Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
-    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN,
-    MENU_COMMAND_ID_OBJECT_CREATE_SPHERE, ObjectID, ViewFeedbackObjectSelectionChanged,
-    ViewFeedbackObjectTreeChanged,
+    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
+    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE, ObjectID,
+    ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -146,6 +146,10 @@ impl HitTestTreeActionHandler for ViewEntity {
                 items: vec![
                     MenuItem::Heading {
                         label: "Create Object".into(),
+                    },
+                    MenuItem::Command {
+                        label: "Plane".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
                     },
                     MenuItem::Command {
                         label: "Cube".into(),
