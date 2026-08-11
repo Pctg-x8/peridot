@@ -1188,14 +1188,18 @@ impl TextLayout {
                         vector_rasterization_state.updated_rects.push(r.vk_rect());
 
                         struct OutlineReceiver<'r> {
-                            vrender: VectorVertexRenderer<'r>,
+                            vrender: crate::rendering::vg::VectorVertexRenderer<'r>,
                             render_scale: f32,
                             offset_x: f32,
                             offset_y: f32,
                         }
                         impl OutlineReceiver<'_> {
                             #[inline(always)]
-                            const fn make_point(&self, v: &ft::Vector) -> Point<VectorTextureUnit> {
+                            const fn make_point(
+                                &self,
+                                v: &ft::Vector,
+                            ) -> Point<crate::rendering::vg::VectorTextureUnit>
+                            {
                                 Point::new_vector_texture(
                                     v.x as f32 / 64.0 * self.render_scale + self.offset_x,
                                     v.y as f32 / 64.0 * self.render_scale + self.offset_y,
@@ -1238,7 +1242,9 @@ impl TextLayout {
                             ft::outline_decompose(
                                 &mut (*(*font).glyph).outline,
                                 &mut OutlineReceiver {
-                                    vrender: VectorVertexRenderer::new(vector_rasterization_state),
+                                    vrender: crate::rendering::vg::VectorVertexRenderer::new(
+                                        vector_rasterization_state,
+                                    ),
                                     render_scale,
                                     offset_x: r.left as f32
                                         - metrics.horiBearingX as f32 / 64.0 * render_scale,

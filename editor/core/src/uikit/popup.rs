@@ -299,8 +299,8 @@ impl View for OverlayPopupBasicMaskView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(e.ct_root);
-        ctx.mount_context.ht_manager.free_all(e.ht_root);
+        ctx.mount_context.composite_tree.free(e.ct_root);
+        ctx.mount_context.ht_manager.free(e.ht_root);
     }
 }
 
@@ -494,16 +494,12 @@ impl View for OverlayPopupBasicFrameView {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        let Some(render_elements) = self.render_elements.take() else {
+        let Some(e) = self.render_elements.take() else {
             // not rendered
             return;
         };
 
-        ctx.mount_context
-            .composite_tree
-            .free_all(render_elements.ct_root);
-        ctx.mount_context
-            .ht_manager
-            .free_all(render_elements.ht_root);
+        ctx.mount_context.composite_tree.free(e.ct_root);
+        ctx.mount_context.ht_manager.free(e.ht_root);
     }
 }

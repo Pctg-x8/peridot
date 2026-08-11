@@ -5196,7 +5196,6 @@ async fn run<'sys>(
                 target_window,
                 message,
             } => {
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 let opened_id = popup_manager.open(
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -7054,9 +7053,7 @@ impl MenuSession {
             view_init_context,
             0,
             surface_pos,
-            |render_scale| {
-                crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set())
-            },
+            crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set()),
             delayed_render_messages,
             |layout, h, view_init_ctx| {
                 let views = crate::uikit::MenuItemLayout::instantiate(
@@ -7126,12 +7123,10 @@ impl MenuSession {
                         view_init_context,
                         depth + 1,
                         pos,
-                        |render_scale| {
-                            crate::uikit::MenuItemLayout::build(
-                                items.into_iter().cloned(),
-                                system_link.font_set(),
-                            )
-                        },
+                        crate::uikit::MenuItemLayout::build(
+                            items.into_iter().cloned(),
+                            system_link.font_set(),
+                        ),
                         delayed_render_messages,
                         |layout, h, view_init_ctx| {
                             let views = crate::uikit::MenuItemLayout::instantiate(
@@ -7212,12 +7207,7 @@ impl MenuSession {
             view_init_context,
             depth + 1,
             display_pos,
-            |render_scale| {
-                crate::uikit::MenuItemLayout::build(
-                    items.into_iter().cloned(),
-                    system_link.font_set(),
-                )
-            },
+            crate::uikit::MenuItemLayout::build(items.into_iter().cloned(), system_link.font_set()),
             delayed_render_messages,
             |layout, h, view_init_ctx| {
                 let views = crate::uikit::MenuItemLayout::instantiate(
@@ -7390,7 +7380,7 @@ impl SystemLink<'_> {
         view_init_context: &mut ViewInitContext,
         depth: usize,
         surface_pos: Point<LogicalUnit>,
-        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        layouted_items: Vec<MenuItemLayout>,
         delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
@@ -7402,7 +7392,6 @@ impl SystemLink<'_> {
         Rc<MenuBaseSurfaceEventHandler>,
         Vec<MenuItemView>,
     ) {
-        let layouted_items = layouted_items(view_init_context.ui_scale_factor);
         let width = MenuItemLayout::min_width(layouted_items.iter());
         let height = MenuItemLayout::height(layouted_items.iter());
         tracing::debug!(%width, %height, "pop context menu");

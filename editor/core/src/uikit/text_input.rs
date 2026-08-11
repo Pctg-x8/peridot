@@ -271,12 +271,10 @@ impl SingleLineTextEditState {
         #[cfg(not(any(windows, target_os = "macos")))]
         {
             // generic fallback
-
-            let content = self.content.borrow();
-            let words = crate::utils::text::generic_word_segments(&content);
+            let words = crate::utils::text::generic_word_segments(&self.content);
             tracing::debug!(?words, "double click");
 
-            // TODO: LTR前提 最適化はあとで
+            // TODO: 最適化はあとで
             let select_range = words
                 .into_iter()
                 // wordのbyte rangeを生成
@@ -286,10 +284,12 @@ impl SingleLineTextEditState {
                     Some(r)
                 })
                 // cursor_pos_bytesを含むものを探す
-                .find(|r| r.contains(&cursor_pos_bytes))
+                .find(|r| r.contains(&self.cursor_pos_byte))
                 // なければ全体
-                .unwrap_or(0..content.len());
-            return self.select_range(select_range);
+                .unwrap_or(0..self.content.len());
+            self.selection_anchor_byte = Some(select_range.start);
+            self.cursor_pos_byte = select_range.end;
+            return SingleLineTextDirtyFlags::CURSOR;
         }
     }
 
@@ -375,6 +375,63 @@ impl SingleLineTextEditState {
         }
 
         SingleLineTextDirtyFlags::PREEDIT
+    }
+
+    #[cfg(feature = "wayland")]
+    pub fn wl_perform_ime_state_changes(
+        &mut self,
+        committed_string: Option<&str>,
+        preedit_string: Option<&str>,
+    ) -> SingleLineTextDirtyFlags {
+        let mut update_mask = SingleLineTextDirtyFlags::empty();
+
+        // remove selection first(this is overwriting op)
+        if let Some(selection_anchor) = self.selection_anchor_byte.take() {
+            self.content
+                .replace_range(selection_anchor..self.cursor_pos_byte, "");
+            self.cursor_pos_byte = selection_anchor;
+
+            update_mask |= SingleLineTextDirtyFlags::CURSOR | SingleLineTextDirtyFlags::CONTENT;
+        }
+
+        // Note: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
+        if self.preedit_start_byte != self.preedit_end_byte {
+            // replace existing preedit with the cursor
+            self.content
+                .replace_range(self.preedit_start_byte..self.preedit_end_byte, "");
+            self.cursor_pos_byte = self.preedit_start_byte;
+            self.preedit_end_byte = self.preedit_start_byte;
+
+            update_mask |= SingleLineTextDirtyFlags::CONTENT
+                | SingleLineTextDirtyFlags::CURSOR
+                | SingleLineTextDirtyFlags::PREEDIT;
+        }
+
+        // TODO: remove surrounding text
+        if let Some(committed_string) = committed_string {
+            // insert commit string with the cursor at its end
+            self.content
+                .insert_str(self.cursor_pos_byte, committed_string);
+            self.cursor_pos_byte += committed_string.len();
+
+            update_mask |= SingleLineTextDirtyFlags::CONTENT | SingleLineTextDirtyFlags::CURSOR;
+        }
+
+        // TODO: compute new surrounding text
+        if let Some(preedit_string) = preedit_string {
+            // insert new preedit text in cursor position
+            self.content
+                .insert_str(self.cursor_pos_byte, preedit_string);
+            self.preedit_start_byte = self.cursor_pos_byte;
+            self.preedit_end_byte = self.cursor_pos_byte + preedit_string.len();
+            self.cursor_pos_byte = self.preedit_end_byte;
+
+            update_mask |= SingleLineTextDirtyFlags::CONTENT
+                | SingleLineTextDirtyFlags::CURSOR
+                | SingleLineTextDirtyFlags::PREEDIT;
+        }
+
+        update_mask
     }
 }
 
@@ -600,7 +657,6 @@ impl KeyInputEventHandler for TextInputViewCoreEventHandler {
         });
     }
 
-    #[inline(always)]
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         tracing::debug!(?code, "keydown");
 
@@ -647,7 +703,6 @@ impl KeyInputEventHandler for TextInputViewCoreEventHandler {
         );
     }
 
-    #[inline(always)]
     fn r#char(&self, context: &mut InputEventContext, ch: char, _modifier: ModifierKey) {
         tracing::debug!(%ch, "char");
 
@@ -666,15 +721,28 @@ impl KeyInputEventHandler for TextInputViewCoreEventHandler {
         );
     }
 
-    #[inline(always)]
     #[cfg(feature = "wayland")]
+    #[tracing::instrument(skip(self, context))]
     fn ime_state_changes(
         &self,
         context: &mut InputEventContext,
         new_committed_string: Option<&str>,
         new_preedit_string: Option<&str>,
     ) {
-        self.fwd_ime_state_changes(context, new_committed_string, new_preedit_string);
+        tracing::trace!("ime_state_changes");
+
+        let update_mask = TextInputViewUpdateMask::translate(
+            self.text_edit_state
+                .borrow_mut()
+                .wl_perform_ime_state_changes(new_committed_string, new_preedit_string),
+        );
+        self.update_views(
+            update_mask,
+            context.composite_tree,
+            context.system_link,
+            context.ht_manager,
+            context.current_sec,
+        );
     }
 }
 impl HitTestTreeActionHandler for TextInputViewCoreEventHandler {
@@ -819,25 +887,6 @@ impl TextInputViewCoreEventHandler {
         TextInputViewUpdateMask::translate(updater(&mut self.text_edit_state.borrow_mut()))
     }
 
-    #[cfg(feature = "wayland")]
-    #[tracing::instrument(skip(self, context))]
-    pub fn fwd_ime_state_changes(
-        &self,
-        context: &mut InputEventContext,
-        new_committed_string: Option<&str>,
-        new_preedit_string: Option<&str>,
-    ) {
-        tracing::trace!("ime_state_changes");
-
-        self.update_views(
-            self.perform_wl_ime_state_changes(new_committed_string, new_preedit_string),
-            context.composite_tree,
-            context.system_link,
-            context.ht_manager,
-            context.current_sec,
-        );
-    }
-
     pub fn set_focus(
         &self,
         #[allow(unused_variables)] ht_manager: &HitTestTreeManager,
@@ -889,38 +938,6 @@ impl TextInputViewCoreEventHandler {
     #[inline(always)]
     pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
         TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().set_content(content))
-    }
-
-    #[cfg(feature = "wayland")]
-    fn perform_wl_ime_state_changes(
-        &self,
-        committed_string: Option<&str>,
-        preedit_string: Option<&str>,
-    ) -> TextInputViewUpdateMask {
-        let mut update_mask = TextInputViewUpdateMask::empty();
-
-        // remove selection first(this is overwriting op)
-        update_mask |= self.clear_selection();
-
-        // Note: waylandのText Input v3はこの順序で処理しろと書いてある https://wayland.app/protocols/text-input-unstable-v3#zwp_text_input_v3:event:done
-        update_mask |= self.clear_preedit();
-        // TODO: remove surrounding text
-        if let Some(committed_string) = committed_string {
-            update_mask |= self.insert_str_at_cursor(committed_string);
-        }
-        // TODO: compute new surrounding text
-        if let Some(preedit_string) = preedit_string {
-            let preedit_begin = self.cursor_pos_bytes.get();
-            update_mask |= self.insert_str_at_cursor(preedit_string);
-
-            // update preedit range to cover preedit_string
-            self.preedit_range_start_bytes.set(preedit_begin);
-            self.preedit_range_end_bytes
-                .set(preedit_begin + preedit_string.len());
-            update_mask |= TextInputViewUpdateMask::PREEDIT;
-        }
-
-        update_mask
     }
 
     pub fn move_cursor_by_point(
@@ -1222,7 +1239,7 @@ impl TextInputViewCoreEventHandler {
 
         #[cfg(feature = "wayland")]
         let cursor_display_x = TextLayout::measure_total_advances(
-            &self.content.borrow()[..self.cursor_pos_bytes.get()],
+            &state.content[..state.cursor_pos_byte],
             FontID::UIDefault,
             system_link.font_set(),
         ) + self.content_h_offset.get();
@@ -1239,9 +1256,9 @@ impl TextInputViewCoreEventHandler {
         ));
         #[cfg(feature = "wayland")]
         system_link.ime_set_surrounding_text(
-            &self.content.borrow(),
-            self.cursor_pos_bytes.get(),
-            self.selection_begin_bytes.get(),
+            &state.content,
+            state.cursor_pos_byte,
+            state.selection_anchor_byte.unwrap_or(state.cursor_pos_byte),
         );
         #[cfg(feature = "wayland")]
         system_link.ime_commit();
