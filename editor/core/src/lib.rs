@@ -839,7 +839,7 @@ pub enum Event {
     OpenCustomViewFlyout {
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
-        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfaceViewConstructor>>>,
+        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfacePresenterConstructor>>>,
     },
     MenuOpen {
         parent: WindowHandle,
@@ -1061,10 +1061,11 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 1;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 2;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 3;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_PLANE: u64 = 1;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 2;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 3;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
 
 pub struct ColorPickerSharedResources {
@@ -2285,7 +2286,7 @@ impl EditableColorButtonPickerFlyoutView {
         Self(ctx.construct_view(|_| Box::new(v)))
     }
 }
-impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
+impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
     fn root_view_id(&self) -> ViewIdentifier {
         self.0
     }
@@ -2294,12 +2295,12 @@ impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
 pub struct EditableColorButtonPickerFlyoutViewConstructor {
     backing_store: std::rc::Weak<EditableColorButtonEventHandler>,
 }
-impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstructor {
+impl FlyoutSurfacePresenterConstructor for EditableColorButtonPickerFlyoutViewConstructor {
     fn size(&self) -> Size<LogicalUnit> {
         Size::new_logical(128.0 + 16.0, 128.0 + 32.0 + 16.0 + 20.0 + 16.0)
     }
 
-    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView> {
+    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter> {
         Box::new(EditableColorButtonPickerFlyoutView::new(
             ctx,
             &self.backing_store,
@@ -5358,7 +5359,7 @@ async fn run<'sys>(
                 view_constructor,
             } => {
                 let mut view_feedback_registry_delayed_ops = VecDeque::new();
-                custom_view_flyout_session = Some(CustomViewFlyoutSession::new(
+                custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
                     parent,
                     surface_pos,
                     view_constructor.0.0,
@@ -5986,6 +5987,13 @@ async fn run<'sys>(
                 }
 
                 match id {
+                    MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
+                        ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Plane".into());
+                    }
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
                         ApplicationMutation {
                             state: &mut application,
@@ -6021,7 +6029,9 @@ async fn run<'sys>(
                         }
                         .object_create("New Terrain".into());
                     }
-                    _ => (),
+                    _ => {
+                        tracing::warn!(id, "unhandled menu command");
+                    }
                 }
 
                 if !view_feedback_store.is_empty() {
@@ -6845,7 +6855,7 @@ async fn run<'sys>(
     }
 }
 
-pub trait FlyoutSurfaceView {
+pub trait FlyoutSurfacePresenter {
     fn root_view_id(&self) -> ViewIdentifier;
 
     #[allow(unused_variables)]
@@ -6858,24 +6868,25 @@ pub trait FlyoutSurfaceView {
     ) {
     }
 }
-pub trait FlyoutSurfaceViewConstructor {
+pub trait FlyoutSurfacePresenterConstructor {
     fn size(&self) -> Size<LogicalUnit>;
-    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView>;
+    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter>;
 }
+
 pub struct CustomViewFlyoutSurface {
     native_surface: FlyoutSurfaceHandle,
     kf_group: KeyboardFocusGroupRef,
-    view: Box<dyn FlyoutSurfaceView>,
+    view: Box<dyn FlyoutSurfacePresenter>,
 }
 pub struct CustomViewFlyoutSession {
     parent: WindowHandle,
     opening_surface: CustomViewFlyoutSurface,
 }
 impl CustomViewFlyoutSession {
-    pub fn new(
+    pub fn begin(
         parent: WindowHandle,
         pos: Point<LogicalUnit>,
-        view_constructor: Box<dyn FlyoutSurfaceViewConstructor>,
+        view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
         view_init_context: &mut ViewInitContext,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
@@ -7291,18 +7302,43 @@ impl MenuSession {
     }
 }
 
+/// Main Windowを開く方法
 pub enum MainWindowOpenMode {
+    /// 新規
     New,
+    /// 復元
     Restore(WindowGeometryState),
 }
 
+/// Sub Windowを開く方法
 pub enum SubWindowOpenMode {
+    /// ドックからポップする
     DockDiverge {
         rect: Rect<LogicalUnit>,
         position_ref_window: WindowHandle,
     },
+    /// 復元
     Restore(WindowGeometryState),
 }
+
+/// Windowの種類
+pub enum WindowType {
+    /// Main（起動時に必ず1つ存在するWindow 閉じるとアプリ終了）
+    Main {
+        #[cfg(target_os = "linux")]
+        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
+    },
+    /// Sub（Dockから外したり必要に応じて表示されるWindow）
+    Sub,
+}
+
+// platform-dependent constants
+pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
+    r: 16,
+    g: 176,
+    b: 255,
+    a: 16,
+};
 
 #[cfg(windows)]
 pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
@@ -7416,14 +7452,6 @@ impl SystemLink<'_> {
     }
 }
 
-pub enum WindowType {
-    Main {
-        #[cfg(target_os = "linux")]
-        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
-    },
-    Sub,
-}
-
 #[cfg(target_os = "macos")]
 pub use platform::mac::{
     DragPreviewPopoverHandle, PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
@@ -7522,14 +7550,6 @@ impl SyncEventBus {
         }
     }
 }
-
-// platform-dependent constants
-pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
-    r: 16,
-    g: 176,
-    b: 255,
-    a: 16,
-};
 
 #[derive(thiserror::Error, Debug)]
 pub enum PersistStateDeserializeError {
@@ -7787,13 +7807,13 @@ impl DockState {
     }
 }
 
-trait PersistStateFormat: Sized {
+trait PersistStateSerializable: Sized {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()>;
     fn deserialize(
         r: &mut (impl std::io::Read + ?Sized),
     ) -> Result<Self, PersistStateDeserializeError>;
 }
-impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
+impl PersistStateSerializable for Rect<crate::utils::LogicalUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&f32::to_ne_bytes(self.left))?;
         w.write_all(&f32::to_ne_bytes(self.top))?;
@@ -7824,7 +7844,7 @@ impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
         ))
     }
 }
-impl PersistStateFormat for Rect<crate::utils::PixelsUnit> {
+impl PersistStateSerializable for Rect<crate::utils::PixelsUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&i32::to_ne_bytes(self.left))?;
         w.write_all(&i32::to_ne_bytes(self.top))?;
@@ -7895,7 +7915,7 @@ impl WindowGeometryState {
                 Ok(Self::Maximized { monitor_index })
             }
             0x02 => {
-                let rect = PersistStateFormat::deserialize(r)?;
+                let rect = PersistStateSerializable::deserialize(r)?;
 
                 Ok(Self::Restored { rect })
             }
@@ -8035,19 +8055,18 @@ impl FileSystem {
 
         #[cfg(windows)]
         let appdata_base_path =
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.appdata_base_path.no_env"))
-                .join("peridot/.editor");
+            crate::utils::platform::windows::local_app_data_dir().join("peridot/.editor");
         #[cfg(windows)]
         let cache_base_path = appdata_base_path.join("cache");
         #[cfg(windows)]
         let persist_state_base_path = appdata_base_path.join("state");
 
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
-            tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
+            tracing::error!(path = ?cache_base_path, reason = %e, "fs.cache_base_path.create_dir_all");
         }
 
         if let Err(e) = std::fs::create_dir_all(&persist_state_base_path) {
-            tracing::error!(reason = %e, "fs.persist_state_base_path.create_dir_all");
+            tracing::error!(path = ?persist_state_base_path, reason = %e, "fs.persist_state_base_path.create_dir_all");
         }
 
         tracing::info!(
