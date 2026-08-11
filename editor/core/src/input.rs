@@ -1847,6 +1847,8 @@ impl KeyboardFocusTokenRegistry {
                 next: 0,
                 prev: 0,
             });
+            self.groups[group.0].first_order_index = 0;
+            self.groups[group.0].last_order_index = 0;
         } else {
             // link to last
             let new_last_order_index = self.groups[group.0].links.len();
@@ -1854,9 +1856,10 @@ impl KeyboardFocusTokenRegistry {
                 &mut self.groups[group.0].last_order_index,
                 new_last_order_index,
             );
+            let first_order_index = self.groups[group.0].first_order_index;
             self.groups[group.0].links.push(KeyboardFocusTabOrderData {
                 token,
-                next: 0,
+                next: first_order_index,
                 prev: prev_last_order_index,
             });
             self.groups[group.0].links[prev_last_order_index].next = new_last_order_index;
@@ -1869,38 +1872,70 @@ impl KeyboardFocusTokenRegistry {
             return;
         };
 
+        tracing::debug!(
+            first = self.groups[group.0].first_order_index,
+            last = self.groups[group.0].last_order_index,
+            links = ?self.groups[group.0].links.iter().map(|x| (x.prev, x.next)).collect::<Vec<_>>(),
+            data_index,
+            "leave group"
+        );
         // TODO: リンク組み替えるときにdata_indexを更新してないのかエラーになることがあるので直す
         if data_index == self.groups[group.0].first_order_index {
             if data_index == self.groups[group.0].last_order_index {
-                // removed all
+                // simply remove all
                 self.groups[group.0].links.clear();
                 self.groups[group.0].first_order_index = 0;
                 self.groups[group.0].last_order_index = 0;
-            } else {
-                // remove first
-                let removed_data = self.groups[group.0].links.swap_remove(data_index);
-                self.groups[group.0].first_order_index = removed_data.next;
-                // nextの戻り先だけ更新
-                let next_index = self.groups[group.0].links[data_index].next;
-                self.groups[group.0].links[next_index].prev = data_index;
+                return;
             }
+
+            // remove first
+            // last -> data_index -> next => last -> next
+            let last_index = self.groups[group.0].last_order_index;
+            let next_index = self.groups[group.0].links[data_index].next;
+            self.groups[group.0].links[last_index].next = next_index;
+            self.groups[group.0].links[next_index].prev = last_index;
+            self.groups[group.0].first_order_index = next_index;
         } else {
             if data_index == self.groups[group.0].last_order_index {
                 // remove last
-                let removed_data = self.groups[group.0].links.swap_remove(data_index);
-                self.groups[group.0].last_order_index = removed_data.prev;
-                // prevの次だけ更新
+                // prev -> data_index -> first => prev -> first
+                let first_index = self.groups[group.0].first_order_index;
                 let prev_index = self.groups[group.0].links[data_index].prev;
-                self.groups[group.0].links[prev_index].next = data_index;
+                self.groups[group.0].links[prev_index].next = first_index;
+                self.groups[group.0].links[first_index].prev = prev_index;
+                self.groups[group.0].last_order_index = prev_index;
             } else {
-                self.groups[group.0].links.swap_remove(data_index);
-
                 // 純粋につなぎ直し
+                // prev -> data_index -> next => prev -> next
                 let next_index = self.groups[group.0].links[data_index].next;
                 let prev_index = self.groups[group.0].links[data_index].prev;
-                self.groups[group.0].links[next_index].prev = data_index;
-                self.groups[group.0].links[prev_index].next = data_index;
+                self.groups[group.0].links[prev_index].next = next_index;
+                self.groups[group.0].links[next_index].prev = prev_index;
             }
+        }
+
+        let removing_last_cell = self.groups[group.0].links.len() - 1 == data_index;
+        let removed_data = self.groups[group.0].links.swap_remove(data_index);
+        self.token_data[removed_data.token.0].tab_order_group = None;
+        // maintain data index
+        if self.groups[group.0].first_order_index == self.groups[group.0].links.len() {
+            self.groups[group.0].first_order_index = data_index;
+        }
+        if self.groups[group.0].last_order_index == self.groups[group.0].links.len() {
+            self.groups[group.0].last_order_index = data_index;
+        }
+        if !removing_last_cell {
+            // not removing last cell: cell move occured
+            if let Some((_, ref mut new_data_index)) =
+                self.token_data[self.groups[group.0].links[data_index].token.0].tab_order_group
+            {
+                *new_data_index = data_index;
+            }
+            let prev_index = self.groups[group.0].links[data_index].prev;
+            let next_index = self.groups[group.0].links[data_index].next;
+            self.groups[group.0].links[prev_index].next = data_index;
+            self.groups[group.0].links[next_index].prev = data_index;
         }
     }
 
