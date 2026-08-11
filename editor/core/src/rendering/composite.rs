@@ -70,14 +70,32 @@ struct CompositePushConstants {
     screen_x_pixels: f32,
     screen_y_pixels: f32,
     _padding: [f32; 2],
-    rect_mask_left: f32,
-    rect_mask_top: f32,
-    rect_mask_right: f32,
-    rect_mask_bottom: f32,
-    rect_mask_left_softness: f32,
-    rect_mask_top_softness: f32,
-    rect_mask_right_softness: f32,
-    rect_mask_bottom_softness: f32,
+    rect_mask: ClipUVRect,
+}
+
+#[repr(C)]
+#[derive(Clone)]
+struct ClipUVRect {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left_softness: f32,
+    top_softness: f32,
+    right_softness: f32,
+    bottom_softness: f32,
+}
+impl ClipUVRect {
+    const CLEAR: Self = Self {
+        left: 0.0,
+        top: 0.0,
+        right: 1.0,
+        bottom: 1.0,
+        left_softness: 0.0,
+        top_softness: 0.0,
+        right_softness: 0.0,
+        bottom_softness: 0.0,
+    };
 }
 
 pub const COMPOSITE_PUSH_CONSTANT_RANGES: &'static [br::PushConstantRange] =
@@ -4174,6 +4192,7 @@ impl CompositeRenderer {
         let mut in_render_pass = false;
         let mut rpt_pointer = 0;
         let mut pipeline_bound = false;
+        let mut active_clip = ClipUVRect::CLEAR;
 
         #[inline]
         fn ensure_in_render_pass<'r>(
@@ -4244,6 +4263,7 @@ impl CompositeRenderer {
             render_data: &CompositeRenderingData,
             rpt_pointer: usize,
             rt_size: br::Extent2D,
+            active_clip: &ClipUVRect,
             rec: br::CmdRecord<'r>,
         ) -> br::CmdRecord<'r> {
             if *pipeline_bound {
@@ -4277,7 +4297,12 @@ impl CompositeRenderer {
                 br::VkHandleRef::from_raw_ref(&this.pipeline_layout),
                 br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
                 0,
-                &[rt_size.width as f32, rt_size.height as f32],
+                &CompositePushConstants {
+                    screen_x_pixels: rt_size.width as _,
+                    screen_y_pixels: rt_size.height as _,
+                    _padding: [0.0; 2],
+                    rect_mask: active_clip.clone(),
+                },
             )
             .bind_descriptor_sets(
                 br::PipelineBindPoint::Graphics,
@@ -4311,6 +4336,7 @@ impl CompositeRenderer {
                             render_data,
                             rpt_pointer,
                             rt_size,
+                            &active_clip,
                             rec,
                         )
                     })
@@ -4358,6 +4384,17 @@ impl CompositeRenderer {
                 &CompositeRenderingInstruction::SetClip {
                     ref shader_parameters,
                 } => {
+                    active_clip.left = shader_parameters[0].value() / rt_size.width as f32;
+                    active_clip.top = shader_parameters[1].value() / rt_size.height as f32;
+                    active_clip.right = shader_parameters[2].value() / rt_size.width as f32;
+                    active_clip.bottom = shader_parameters[3].value() / rt_size.height as f32;
+                    active_clip.left_softness = shader_parameters[4].value() / rt_size.width as f32;
+                    active_clip.top_softness = shader_parameters[5].value() / rt_size.height as f32;
+                    active_clip.right_softness =
+                        shader_parameters[6].value() / rt_size.width as f32;
+                    active_clip.bottom_softness =
+                        shader_parameters[7].value() / rt_size.height as f32;
+
                     rec = ensure_in_render_pass(
                         self,
                         gfx,
@@ -4375,26 +4412,20 @@ impl CompositeRenderer {
                             render_data,
                             rpt_pointer,
                             rt_size,
+                            &active_clip,
                             rec,
                         )
                     })
                     .push_constant(
                         br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
                         br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
-                        core::mem::offset_of!(CompositePushConstants, rect_mask_left) as _,
-                        &[
-                            shader_parameters[0].value() / rt_size.width as f32,
-                            shader_parameters[1].value() / rt_size.height as f32,
-                            shader_parameters[2].value() / rt_size.width as f32,
-                            shader_parameters[3].value() / rt_size.height as f32,
-                            shader_parameters[4].value() / rt_size.width as f32,
-                            shader_parameters[5].value() / rt_size.height as f32,
-                            shader_parameters[6].value() / rt_size.width as f32,
-                            shader_parameters[7].value() / rt_size.height as f32,
-                        ],
+                        core::mem::offset_of!(CompositePushConstants, rect_mask) as _,
+                        &active_clip,
                     );
                 }
                 &CompositeRenderingInstruction::ClearClip => {
+                    active_clip = ClipUVRect::CLEAR;
+
                     rec = ensure_in_render_pass(
                         self,
                         gfx,
@@ -4412,14 +4443,15 @@ impl CompositeRenderer {
                             render_data,
                             rpt_pointer,
                             rt_size,
+                            &active_clip,
                             rec,
                         )
                     })
                     .push_constant(
                         br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
                         br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
-                        core::mem::offset_of!(CompositePushConstants, rect_mask_left) as _,
-                        &[0.0f32, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                        core::mem::offset_of!(CompositePushConstants, rect_mask) as _,
+                        &active_clip,
                     );
                 }
                 CompositeRenderingInstruction::GrabBackdrop => {
