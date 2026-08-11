@@ -65,28 +65,28 @@ const SCROLL_THUMB_DEACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate =
 
 pub struct ScrollContainer {
     id: ViewIdentifier,
-    eh: Option<Rc<ScrollContainerEventHandler>>,
     offset: Point<LogicalUnit>,
-    viewport_size_changes: Option<Size<LogicalUnit>>,
-    content_size_changes: Option<Size<LogicalUnit>>,
+    eh: Option<Rc<ScrollContainerEventHandler>>,
+    viewport_size: Size<LogicalUnit>,
+    content_size: Size<LogicalUnit>,
 }
 impl ScrollContainer {
     pub fn new(id: ViewIdentifier, rect: Rect<LogicalUnit>) -> Self {
         Self {
             id,
-            eh: None,
             offset: rect.left_top(),
-            viewport_size_changes: Some(rect.size()),
-            content_size_changes: Some(Size::new_logical(0.0, 0.0)),
+            eh: None,
+            viewport_size: rect.size(),
+            content_size: Size::new_logical(0.0, 0.0),
         }
     }
 
     pub fn resize(&mut self, size: Size<LogicalUnit>) {
-        self.viewport_size_changes = Some(size);
+        self.viewport_size = size;
     }
 
     pub fn set_content_size(&mut self, size: Size<LogicalUnit>) {
-        self.content_size_changes = Some(size);
+        self.content_size = size;
     }
 }
 impl View for ScrollContainer {
@@ -99,23 +99,27 @@ impl View for ScrollContainer {
         match self.eh {
             Some(ref eh) => {
                 let mut recompute_scroll_bars = false;
-                if let Some(viewport_size) = self.viewport_size_changes.take() {
-                    eh.viewport_size.width.set(viewport_size.width);
-                    eh.viewport_size.height.set(viewport_size.height);
+                if self.viewport_size.width != eh.viewport_size.width.get()
+                    || self.viewport_size.height != eh.viewport_size.height.get()
+                {
+                    eh.viewport_size.width.set(self.viewport_size.width);
+                    eh.viewport_size.height.set(self.viewport_size.height);
 
                     ctx.composite_tree
                         .begin_mod_chain(eh.ct_root)
-                        .size_imm(viewport_size.width, viewport_size.height)
+                        .size_imm(self.viewport_size.width, self.viewport_size.height)
                         .apply();
-                    ctx.ht_manager.get_data_mut(eh.ht_root).width = viewport_size.width;
-                    ctx.ht_manager.get_data_mut(eh.ht_root).height = viewport_size.height;
+                    ctx.ht_manager.get_data_mut(eh.ht_root).width = self.viewport_size.width;
+                    ctx.ht_manager.get_data_mut(eh.ht_root).height = self.viewport_size.height;
 
                     recompute_scroll_bars = true;
                 }
 
-                if let Some(content_size) = self.content_size_changes.take() {
-                    eh.content_size.width.set(content_size.width);
-                    eh.content_size.height.set(content_size.height);
+                if self.content_size.width != eh.content_size.width.get()
+                    || self.content_size.height != eh.content_size.height.get()
+                {
+                    eh.content_size.width.set(self.content_size.width);
+                    eh.content_size.height.set(self.content_size.height);
 
                     recompute_scroll_bars = true;
                 }
@@ -133,10 +137,6 @@ impl View for ScrollContainer {
             }
             None => {
                 // first render
-                let init_viewport_size =
-                    self.viewport_size_changes.take().expect("not initialized");
-                let init_content_size = self.content_size_changes.take().expect("not initialized");
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
@@ -144,8 +144,8 @@ impl View for ScrollContainer {
                         AnimatableFloat::Value(self.offset.y),
                     ],
                     size: [
-                        AnimatableFloat::Value(init_viewport_size.width),
-                        AnimatableFloat::Value(init_viewport_size.height),
+                        AnimatableFloat::Value(self.viewport_size.width),
+                        AnimatableFloat::Value(self.viewport_size.height),
                     ],
                     has_bitmap: false,
                     // composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -162,8 +162,8 @@ impl View for ScrollContainer {
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
                     left: self.offset.x,
                     top: self.offset.y,
-                    width: init_viewport_size.width,
-                    height: init_viewport_size.height,
+                    width: self.viewport_size.width,
+                    height: self.viewport_size.height,
                     clip_children: true,
                     ..Default::default()
                 });
@@ -176,8 +176,8 @@ impl View for ScrollContainer {
                 let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
                     left: 0.0,
                     top: 0.0,
-                    width: init_viewport_size.width,
-                    height: init_viewport_size.height,
+                    width: self.viewport_size.width,
+                    height: self.viewport_size.height,
                     ..Default::default()
                 });
 
@@ -212,7 +212,7 @@ impl View for ScrollContainer {
                     size: [
                         AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
                         AnimatableFloat::Value(
-                            init_viewport_size.height - SCROLL_THUMB_SPACING * 2.0,
+                            self.viewport_size.height - SCROLL_THUMB_SPACING * 2.0,
                         ),
                     ],
                     has_bitmap: true,
@@ -236,7 +236,7 @@ impl View for ScrollContainer {
                     top: 0.0,
                     left_adjustment_factor: 1.0,
                     width: ACTIVE_SCROLL_BAR_THICKNESS,
-                    height: init_viewport_size.height,
+                    height: self.viewport_size.height,
                     ..Default::default()
                 });
 
@@ -270,7 +270,7 @@ impl View for ScrollContainer {
                     relative_offset_adjustment: [0.0, 1.0],
                     size: [
                         AnimatableFloat::Value(
-                            init_viewport_size.width - SCROLL_THUMB_SPACING * 2.0,
+                            self.viewport_size.width - SCROLL_THUMB_SPACING * 2.0,
                         ),
                         AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
                     ],
@@ -294,7 +294,7 @@ impl View for ScrollContainer {
                     left: 0.0,
                     top: -ACTIVE_SCROLL_BAR_THICKNESS,
                     top_adjustment_factor: 1.0,
-                    width: init_viewport_size.width,
+                    width: self.viewport_size.width,
                     height: ACTIVE_SCROLL_BAR_THICKNESS,
                     ..Default::default()
                 });
@@ -317,12 +317,12 @@ impl View for ScrollContainer {
                     ht_scroll_bar_horz,
                     ct_scroll_bar_horz,
                     viewport_size: Size::new_logical_interior_mutable(
-                        init_viewport_size.width,
-                        init_viewport_size.height,
+                        self.viewport_size.width,
+                        self.viewport_size.height,
                     ),
                     content_size: Size::new_logical_interior_mutable(
-                        init_content_size.width,
-                        init_content_size.height,
+                        self.content_size.width,
+                        self.content_size.height,
                     ),
                     content_offset: Point::new_logical_interior_mutable(0.0, 0.0),
                     pointer_grab_state: core::cell::Cell::new(

@@ -1872,14 +1872,13 @@ impl KeyboardFocusTokenRegistry {
             return;
         };
 
-        tracing::debug!(
-            first = self.groups[group.0].first_order_index,
-            last = self.groups[group.0].last_order_index,
-            links = ?self.groups[group.0].links.iter().map(|x| (x.prev, x.next)).collect::<Vec<_>>(),
-            data_index,
-            "leave group"
-        );
-        // TODO: リンク組み替えるときにdata_indexを更新してないのかエラーになることがあるので直す
+        // tracing::debug!(
+        //     first = self.groups[group.0].first_order_index,
+        //     last = self.groups[group.0].last_order_index,
+        //     links = ?self.groups[group.0].links.iter().map(|x| (x.prev, x.next)).collect::<Vec<_>>(),
+        //     data_index,
+        //     "leave group"
+        // );
         if data_index == self.groups[group.0].first_order_index {
             if data_index == self.groups[group.0].last_order_index {
                 // simply remove all
