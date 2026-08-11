@@ -8192,40 +8192,13 @@ struct PreviewInputState {
 
 pub struct PreviewPanePresenter {
     root_view_id: ViewIdentifier,
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    kf_token: FocusTargetToken,
-    input_handler: Rc<PreviewInputHandler>,
 }
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
     fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
-        let kf_token = ctx.keyboard_focus_registry.acquire_token();
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            // has_bitmap: true,
-            custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            keyboard_focus: Some(kf_token),
-            ..Default::default()
-        });
-
-        let input_handler = Rc::new(PreviewInputHandler { input_state });
-        ctx.ht_manager.set_action_handler(ht_root, &input_handler);
-        ctx.keyboard_focus_registry
-            .set_event_handler(kf_token, &input_handler);
-
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
-            ct_root,
-            ht_root,
-            kf_token,
-            input_handler,
+            root_view_id: ctx.construct_view(|_| Box::new(PreviewView::new(input_state))),
         }
     }
 }
@@ -8242,33 +8215,95 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         self.root_view_id
     }
 
-    // fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-    //     ctx.composite_tree.add_child(target.ct_root, self.ct_root);
-    //     ctx.ht_manager.add_child(target.ht_root, self.ht_root);
-    // }
-
-    fn resize(&self, new_size: &Size<LogicalUnit>, _context: &mut PaneContentResizeContext) {
-        unsafe { &mut *self.input_handler.input_state }.new_viewport_size = Some(new_size.clone());
+    fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
+        unsafe {
+            &mut *context
+                .view_instance_mut::<PreviewView>(self.root_view_id)
+                .expect("query failed")
+                .input_state
+        }
+        .new_viewport_size = Some(new_size.clone());
     }
+}
 
-    // fn unmount(&self, ctx: &mut MountContext) {
-    //     ctx.composite_tree.remove_child(self.ct_root);
-    //     ctx.ht_manager.remove_child(self.ht_root);
-    // }
+struct PreviewView {
+    input_state: *mut PreviewInputState,
+    entity: Option<Rc<PreviewViewEntity>>,
+}
+impl PreviewView {
+    pub fn new(input_state: *mut PreviewInputState) -> Self {
+        Self {
+            input_state,
+            entity: None,
+        }
+    }
+}
+impl View for PreviewView {
+    fn render(
+        &mut self,
+        _self_instance: &mut uikit::ViewInstanceModifier,
+        ctx: &mut RenderContext,
+        _sched: &mut RenderChildScheduler,
+    ) -> uikit::ViewNewRenderElements {
+        match self.entity {
+            Some(_) => uikit::ViewNewRenderElements::EMPTY,
+            None => {
+                // first render
+                let kf_token = ctx.keyboard_focus_registry.acquire_token();
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    // has_bitmap: true,
+                    custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
+                    relative_size_adjustment: [1.0, 1.0],
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width_adjustment_factor: 1.0,
+                    height_adjustment_factor: 1.0,
+                    keyboard_focus: Some(kf_token),
+                    ..Default::default()
+                });
+
+                let entity = Rc::new(PreviewViewEntity {
+                    ct_root,
+                    ht_root,
+                    kf_token,
+                    input_state: self.input_state,
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &entity);
+                ctx.keyboard_focus_registry
+                    .set_event_handler(kf_token, &entity);
+
+                self.entity = Some(entity);
+                uikit::ViewNewRenderElements {
+                    composite_tree: Some(ct_root),
+                    hit_tree: Some(ht_root),
+                    keyboard_focus: Some(kf_token),
+                }
+            }
+        }
+    }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        ctx.mount_context.composite_tree.free(self.ct_root);
-        ctx.mount_context.ht_manager.free(self.ht_root);
+        let Some(entity) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free(entity.ct_root);
+        ctx.mount_context.ht_manager.free(entity.ht_root);
         ctx.mount_context
             .keyboard_focus_registry
-            .release_token(self.kf_token);
+            .release_token(entity.kf_token);
     }
 }
 
-struct PreviewInputHandler {
+struct PreviewViewEntity {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    kf_token: FocusTargetToken,
     input_state: *mut PreviewInputState,
 }
-impl HitTestTreeActionHandler for PreviewInputHandler {
+impl HitTestTreeActionHandler for PreviewViewEntity {
     fn on_scroll_wheel(
         &self,
         _sender: HitTestTreeRef,
@@ -8318,7 +8353,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 }
-impl KeyInputEventHandler for PreviewInputHandler {
+impl KeyInputEventHandler for PreviewViewEntity {
     fn focus_released(&self, _context: &mut InputEventContext) {
         unsafe { &mut *self.input_state }.key_input.clear();
     }
@@ -8377,7 +8412,7 @@ impl KeyInputEventHandler for PreviewInputHandler {
         }
     }
 }
-impl PreviewInputHandler {
+impl PreviewViewEntity {
     fn set_key(&self, key: PreviewKeyInputState) {
         unsafe { &mut *self.input_state }.key_input.insert(key);
     }
