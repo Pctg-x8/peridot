@@ -8,7 +8,7 @@ use std::{
 use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, MemoryBound, VkHandle,
 };
-use peridot_math::{Camera, Matrix4, Matrix4F32};
+use peridot_math::{Camera, Matrix4, Matrix4F32, One};
 
 use crate::{
     graphics::{
@@ -656,7 +656,7 @@ fn gen_rotation_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
 
 const SCALE_HANDLE_BAR_LENGTH: f32 = 0.2;
 const SCALE_HANDLE_CUBE_SIZE: f32 = 0.02;
-const SCALE_HANDLE_BAR_THICKNESS: f32 = 0.01;
+const SCALE_HANDLE_BAR_THICKNESS: f32 = 0.005;
 const SCALE_HANDLE_VCOUNT: usize = (8 * 4) + (8 * 3); // tip cube + bar cube
 const SCALE_HANDLE_ICOUNT: usize = (6 * 6 * 4) + (6 * 4 * 3); // tip cube(6 faces) + bar cube(4 faces)
 fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
@@ -780,7 +780,7 @@ fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
             8 * 4,
         );
         #[rustfmt::skip]
-        is.copy_from_nonoverlapping(
+        is.add(6 * 4 * 3).copy_from_nonoverlapping(
             [
                 // x
                 8 * 3 + 0, 8 * 3 + 1, 8 * 3 + 2, 8 * 3 + 2, 8 * 3 + 3, 8 * 3 + 1,
@@ -803,6 +803,13 @@ fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                 8 * 3 + 8 * 2 + 2, 8 * 3 + 8 * 2 + 3, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 7, 8 * 3 + 8 * 2 + 3,
                 8 * 3 + 8 * 2 + 0, 8 * 3 + 8 * 2 + 2, 8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 2,
                 8 * 3 + 8 * 2 + 1, 8 * 3 + 8 * 2 + 3, 8 * 3 + 8 * 2 + 5, 8 * 3 + 8 * 2 + 5, 8 * 3 + 8 * 2 + 7, 8 * 3 + 8 * 2 + 3,
+                // center
+                8 * 3 + 8 * 3 + 0, 8 * 3 + 8 * 3 + 1, 8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 3, 8 * 3 + 8 * 3 + 1,
+                8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 7, 8 * 3 + 8 * 3 + 5,
+                8 * 3 + 8 * 3 + 0, 8 * 3 + 8 * 3 + 1, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 1,
+                8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 3, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 7, 8 * 3 + 8 * 3 + 3,
+                8 * 3 + 8 * 3 + 0, 8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 2,
+                8 * 3 + 8 * 3 + 1, 8 * 3 + 8 * 3 + 3, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 7, 8 * 3 + 8 * 3 + 3,
             ].as_ptr(),
             6 * 6 * 4,
         );
@@ -1279,6 +1286,13 @@ pub struct CommittedRenderData {
     pub mesh_id: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HandleShape {
+    Translation,
+    Rotation,
+    Scale,
+}
+
 pub struct CommittedState {
     pub viewport_size: Size<LogicalUnit>,
     pub main_camera: Camera,
@@ -1289,6 +1303,9 @@ pub struct CommittedState {
     pub pushed_render_data: Vec<CommittedRenderData>,
     pub dirty_render_data: HashMap<usize, CommittedRenderData>,
     pub removed_render_data: HashSet<usize>,
+    pub handle_shape: HandleShape,
+    pub handle_to_world_transform: Matrix4F32,
+    pub handle_data_dirtified: bool,
 }
 
 struct MeshData {
@@ -1360,6 +1377,9 @@ pub struct Renderer {
     user_meshes: Vec<MeshData>,
     user_renders: Vec<RenderData>,
     user_data_update_pending: bool,
+    handle_shape: HandleShape,
+    handle_to_world_transform: Matrix4F32,
+    needs_invalidate_render: bool,
     valid: bool,
 }
 impl Renderer {
@@ -1961,6 +1981,9 @@ impl Renderer {
             user_meshes: Vec::new(),
             user_renders: Vec::new(),
             user_data_update_pending: false,
+            handle_shape: HandleShape::Translation,
+            handle_to_world_transform: Matrix4::ONE,
+            needs_invalidate_render: false,
             valid: false,
         }
     }
@@ -2090,6 +2113,11 @@ impl Renderer {
                 object_uniform_update_pending: Some(object_ubuf),
                 mesh_id: r.mesh_id,
             });
+        }
+
+        if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
+            self.handle_shape = committed_state.handle_shape;
+            self.needs_invalidate_render = true;
         }
     }
 
@@ -2581,9 +2609,11 @@ impl Renderer {
             self.update_command_pending = true;
         }
 
+        let needs_invalidate_render = core::mem::replace(&mut self.needs_invalidate_render, false);
         if framebuffer_changed
             || origin_axes_pipeline_changed
             || active_rt.size != self.active_rt_size
+            || needs_invalidate_render
         {
             unsafe {
                 br::vkfn_wrapper::reset_command_pool(
@@ -2760,65 +2790,89 @@ impl Renderer {
                     }],
                 )
                 // render gizmos
-                .bind_pipeline(
-                    br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(unsafe {
-                        self.gizmos_pipeline.assume_init_ref()
-                    }),
-                )
-                .bind_descriptor_sets(
-                    br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
-                    0,
-                    &[self.common_descriptor_set],
-                    &[],
-                )
-                .bind_vertex_buffer_array(
-                    0,
-                    &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                    &[self.translate_handle_vbuf_range.start],
-                )
-                .bind_index_buffer(
-                    br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                    self.translate_handle_ibuf_range.start as _,
-                    br::IndexType::U16,
-                )
-                .draw_indexed(TRANSLATE_HANDLE_ICOUNT as _, 1, 0, 0, 0)
-                .bind_vertex_buffer_array(
-                    0,
-                    &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                    &[self.scale_handle_vbuf_range.start],
-                )
-                .bind_index_buffer(
-                    br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                    self.scale_handle_ibuf_range.start as _,
-                    br::IndexType::U16,
-                )
-                .draw_indexed(SCALE_HANDLE_ICOUNT as _, 1, 0, 0, 0)
-                .bind_pipeline(
-                    br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(unsafe {
-                        self.rotation_handle_pipeline.assume_init_ref()
-                    }),
-                )
-                .bind_descriptor_sets(
-                    br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
-                    0,
-                    &[self.common_descriptor_set],
-                    &[],
-                )
-                .bind_vertex_buffer_array(
-                    0,
-                    &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                    &[self.rotation_handle_vbuf_range.start],
-                )
-                .bind_index_buffer(
-                    br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                    self.rotation_handle_ibuf_range.start as _,
-                    br::IndexType::U16,
-                )
-                .draw_indexed(ROTATION_HANDLE_AXES_DRAW_ICOUNT, 1, 0, 0, 0)
+                .inject(|r| match self.handle_shape {
+                    HandleShape::Translation => r
+                        .bind_pipeline(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(unsafe {
+                                self.gizmos_pipeline.assume_init_ref()
+                            }),
+                        )
+                        .bind_descriptor_sets(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            0,
+                            &[self.common_descriptor_set],
+                            &[],
+                        )
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                            &[self.translate_handle_vbuf_range.start],
+                        )
+                        .bind_index_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                            self.translate_handle_ibuf_range.start as _,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(TRANSLATE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
+                    HandleShape::Rotation => r
+                        .bind_pipeline(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(unsafe {
+                                self.rotation_handle_pipeline.assume_init_ref()
+                            }),
+                        )
+                        .bind_descriptor_sets(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            0,
+                            &[self.common_descriptor_set],
+                            &[],
+                        )
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                            &[self.rotation_handle_vbuf_range.start],
+                        )
+                        .bind_index_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                            self.rotation_handle_ibuf_range.start as _,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(ROTATION_HANDLE_AXES_DRAW_ICOUNT, 1, 0, 0, 0),
+                    HandleShape::Scale => r
+                        .bind_pipeline(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(unsafe {
+                                self.gizmos_pipeline.assume_init_ref()
+                            }),
+                        )
+                        .bind_descriptor_sets(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            0,
+                            &[self.common_descriptor_set],
+                            &[],
+                        )
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                            &[self.scale_handle_vbuf_range.start],
+                        )
+                        .bind_index_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                            self.scale_handle_ibuf_range.start as _,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(SCALE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
+                })
                 .end_render_pass()
                 .end()
                 .expect("preview.validate.command_buffer.end");

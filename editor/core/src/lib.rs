@@ -169,6 +169,9 @@ pub fn launch() {
         pushed_render_data: Vec::new(),
         dirty_render_data: HashMap::new(),
         removed_render_data: HashSet::new(),
+        handle_shape: rendering::preview::HandleShape::Translation,
+        handle_to_world_transform: peridot_math::Matrix4::ONE,
+        handle_data_dirtified: false,
     });
 
     let global_time_base = std::time::Instant::now();
@@ -6463,7 +6466,7 @@ async fn run<'sys>(
                     view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
-            Event::Sync(SyncEvent::NewPresentID { id }) => {
+            Event::Sync(SyncEvent::NewPresentID { .. }) => {
                 // vsync update period
                 let mut preview_state =
                     crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
@@ -6567,6 +6570,16 @@ async fn run<'sys>(
                     }
                 } else {
                     preview_latched_key_motion_amplifier = None;
+                }
+
+                let current_handle_shape = match application.preview_edit_tool_type {
+                    PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
+                    PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
+                    PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
+                };
+                if current_handle_shape != preview_state.handle_shape {
+                    preview_state.handle_shape = current_handle_shape;
+                    preview_state.handle_data_dirtified = true;
                 }
             }
             #[cfg(windows)]
