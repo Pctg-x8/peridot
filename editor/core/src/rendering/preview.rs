@@ -6,7 +6,8 @@ use std::{
 };
 
 use bedrock::{
-    self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, MemoryBound, VkHandle,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, ImageChild,
+    MemoryBound, VkHandle,
 };
 use peridot_math::{Camera, Matrix4, Matrix4F32, One};
 
@@ -128,6 +129,12 @@ impl PreviewRenderTargetBuffer {
         .create()
         .expect("preview_rt.depth_view.create");
 
+        device.dbg_set_name(&memory, c"Preview.RenderTarget.BackingMemory");
+        device.dbg_set_name(image_view.image(), c"Preview.RenderTarget.ColorBuffer");
+        device.dbg_set_name(&image_view, c"Preview.RenderTarget.ColorBuffer.View");
+        device.dbg_set_name(depth_view.image(), c"Preview.RenderTarget.DepthBuffer");
+        device.dbg_set_name(&depth_view, c"Preview.RenderTarget.DepthBuffer.View");
+
         let (image_view, image) = image_view.unmanage();
         let (image, _, _, _, _) = image.unmanage();
         let (depth_view, depth_image) = depth_view.unmanage();
@@ -236,6 +243,12 @@ impl PreviewRenderTargetBuffer {
             )
             .create()
             .expect("preview_rt.validate.depth_view.create");
+
+            device.dbg_set_name(&memory, c"Preview.RenderTarget.BackingMemory");
+            device.dbg_set_name(image_view.image(), c"Preview.RenderTarget.ColorBuffer");
+            device.dbg_set_name(&image_view, c"Preview.RenderTarget.ColorBuffer.View");
+            device.dbg_set_name(depth_view.image(), c"Preview.RenderTarget.DepthBuffer");
+            device.dbg_set_name(&depth_view, c"Preview.RenderTarget.DepthBuffer.View");
 
             let (image_view, image) = image_view.unmanage();
             let (image, _, _, _, _) = image.unmanage();
@@ -859,6 +872,9 @@ impl ScratchStagingBuffer {
         buffer
             .bind(&memory, 0)
             .expect("preview_scratch_staging.buffer.bind");
+
+        device.dbg_set_name(&memory, c"Preview.ScratchStagingBuffer.BackingMemory");
+        device.dbg_set_name(&buffer, c"Preview.ScratchStagingBuffer");
 
         let (buffer, _) = buffer.unmanage();
         let (memory, _) = memory.unmanage();
@@ -1878,6 +1894,8 @@ impl Renderer {
             ),
         )
         .expect("preview.command_buffer.create");
+        device.dbg_set_name(&command_pool, c"Preview.RenderCommandPool");
+        device.dbg_set_name(&command_buffer, c"Preview.RenderCommandBuffer");
 
         let mut update_command_pool = br::CommandPoolObject::new(
             device,
@@ -1892,6 +1910,8 @@ impl Renderer {
             ),
         )
         .expect("preview.update_command_buffer.alloc");
+        device.dbg_set_name(&update_command_pool, c"Preview.UpdateCommandPool");
+        device.dbg_set_name(&update_command_buffer, c"Preview.UpdateCommandBuffer");
 
         work_queue.wait().expect("preview.init_cb.wait");
         // keep alive
@@ -2670,7 +2690,7 @@ impl Renderer {
                                         [&unsafe { &*x.object_uniform_start.source_page.get() }
                                             .buffer]],
                                 ],
-                                &[0, x.object_uniform_start.offset as _],
+                                &[x.object_uniform_start.offset as _],
                             )
                             .bind_vertex_buffer_array(
                                 0,
