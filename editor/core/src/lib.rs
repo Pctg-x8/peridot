@@ -3188,9 +3188,10 @@ impl ApplicationMutation<'_> {
 
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
-    header: ui::window_header::View,
+    root_view: ViewIdentifier,
+    header: ui::window_header::Component,
     appmenu: Option<ui::app_menu_bar::View>,
-    footer: Option<ui::window_footer::View>,
+    footer: Option<ViewIdentifier>,
     docking_manager: ui::dock::DockingManager,
 }
 impl PerWindowData {
@@ -3213,6 +3214,51 @@ impl PerWindowData {
                 surface_size.height - top_offset - bottom_offset,
             ),
         )
+    }
+}
+
+struct WindowRootView {
+    entity: Option<(CompositeTreeRef, HitTestTreeRef)>,
+}
+impl View for WindowRootView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+        sched: &mut RenderChildScheduler,
+    ) -> uikit::ViewNewRenderElements {
+        let &mut (ct, ht) = self.entity.get_or_insert_with(|| {
+            let ct_root = ctx.composite_tree.create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                ..Default::default()
+            });
+            let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            });
+
+            (ct_root, ht_root)
+        });
+        sched.schedule_render_children(RawMountTarget {
+            ct_root: ct,
+            ht_root: ht,
+        });
+        crate::uikit::ViewNewRenderElements {
+            composite_tree: Some(ct),
+            hit_tree: Some(ht),
+            ..crate::uikit::ViewNewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some((ct, ht)) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free(ct);
+        ctx.mount_context.ht_manager.free(ht);
     }
 }
 
@@ -3353,15 +3399,18 @@ async fn run<'sys>(
             AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
         ))
         .apply();
-
-    let window_header_view = ui::window_header::View::new(
-        &mut view_init_ctx,
+    let main_window_root_view =
+        view_init_ctx.construct_view(|_| Box::new(WindowRootView { entity: None }));
+    let window_header = ui::window_header::Component::new(
         ui::window_header::Caption::Main {
             project_name: "New Project".into(),
         },
-        main_window.needs_system_command_buttons(),
+        ui::window_header::ComponentInit {
+            with_system_command_buttons: main_window.needs_system_command_buttons(),
+        },
+        &mut view_init_ctx,
     );
-    window_header_view.mount(&mut view_init_ctx, &main_window);
+    view_init_ctx.view_set_parent(window_header.root_view(), main_window_root_view);
 
     let app_menu_view = if system_link.needs_app_menu_in_surface() {
         let app_menu_view = ui::app_menu_bar::View::new(
@@ -3449,8 +3498,9 @@ async fn run<'sys>(
         None
     };
 
-    let window_footer_view = ui::window_footer::View::new(&mut view_init_ctx);
-    window_footer_view.mount(&mut view_init_ctx, &main_window);
+    let window_footer_view =
+        view_init_ctx.construct_view(|_| Box::new(ui::window_footer::View::new()));
+    view_init_ctx.view_set_parent(window_footer_view, main_window_root_view);
 
     let initial_dock_state = DockState::Splitted {
         direction: DockDirection::Bottom(320.0),
@@ -3501,7 +3551,8 @@ async fn run<'sys>(
     let main_window_size = main_window.client_size();
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
-        header: window_header_view,
+        root_view: main_window_root_view,
+        header: window_header,
         appmenu: app_menu_view,
         footer: Some(window_footer_view),
         docking_manager: ui::dock::DockingManager::new(
@@ -3562,6 +3613,12 @@ async fn run<'sys>(
         ),
     }));
 
+    view_init_ctx.render_view_recursive(
+        main_window_root_view,
+        &main_window,
+        main_window.keyboard_focus_group(),
+    );
+
     if let Some(ref last_window_state) = last_window_state {
         for sub in last_window_state.sub.iter() {
             let new_window = system_link.open_window(
@@ -3602,14 +3659,21 @@ async fn run<'sys>(
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
                     };
-                    let window_header_view = ui::window_header::View::new(
-                        &mut view_init_ctx,
+                    let root_view =
+                        view_init_ctx.construct_view(|_| Box::new(WindowRootView { entity: None }));
+                    let window_header_view = ui::window_header::Component::new(
                         ui::window_header::Caption::Sub,
-                        w.needs_system_command_buttons(),
+                        ui::window_header::ComponentInit {
+                            with_system_command_buttons: w.needs_system_command_buttons(),
+                        },
+                        &mut view_init_ctx,
                     );
-                    window_header_view.mount(&mut view_init_ctx, &w);
+                    view_init_ctx.view_set_parent(window_header_view.root_view(), root_view);
+
+                    view_init_ctx.render_view_recursive(root_view, &w, w.keyboard_focus_group());
 
                     w.associate_extra_data(Box::new(PerWindowData {
+                        root_view,
                         screen_reposition_interests: HashSet::new(),
                         header: window_header_view,
                         appmenu: None,
@@ -4134,10 +4198,58 @@ async fn run<'sys>(
                 window,
                 is_maximized,
             } => unsafe {
+                struct LocalContext<'a> {
+                    view_render_queue: &'a mut ViewRenderQueue,
+                    view_instance_store: &'a mut ViewInstanceStore,
+                }
+                impl crate::uikit::ViewInstanceQueryableMut for LocalContext<'_> {
+                    #[inline(always)]
+                    fn view_instance_mut<T: View + 'static>(
+                        &mut self,
+                        id: ViewIdentifier,
+                    ) -> Option<&mut T> {
+                        crate::uikit::view_instance_mut(id, self.view_instance_store)
+                    }
+
+                    #[inline(always)]
+                    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+                        crate::uikit::view_set_visibility(id, visible, self.view_instance_store)
+                    }
+                }
+                impl crate::uikit::ViewRenderer for LocalContext<'_> {
+                    #[inline(always)]
+                    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+                        self.view_render_queue.schedule(target)
+                    }
+                }
                 window
                     .extra_data_ref::<PerWindowData>()
                     .header
-                    .set_maximize_state(is_maximized, &mut composite_tree, &mut ht_manager);
+                    .set_maximize_state(
+                        is_maximized,
+                        &mut LocalContext {
+                            view_render_queue: &mut view_render_queue,
+                            view_instance_store: &mut view_instance_store,
+                        },
+                    );
+
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &view_layout_state_store,
+                    &mut view_render_state_store,
+                );
             },
             Event::WindowFocusChanged {
                 mut window,
@@ -6375,14 +6487,27 @@ async fn run<'sys>(
                                     main_thread_texture_id_issuer: &mut texture_id_issuer,
                                     application: &application,
                                 };
-                                let window_header_view = ui::window_header::View::new(
-                                    &mut view_init_ctx,
+                                let root_view = view_init_ctx
+                                    .construct_view(|_| Box::new(WindowRootView { entity: None }));
+                                let window_header_view = ui::window_header::Component::new(
                                     ui::window_header::Caption::Sub,
-                                    w.needs_system_command_buttons(),
+                                    ui::window_header::ComponentInit {
+                                        with_system_command_buttons: w
+                                            .needs_system_command_buttons(),
+                                    },
+                                    &mut view_init_ctx,
                                 );
-                                window_header_view.mount(&mut view_init_ctx, &w);
+                                view_init_ctx
+                                    .view_set_parent(window_header_view.root_view(), root_view);
+
+                                view_init_ctx.render_view_recursive(
+                                    root_view,
+                                    &w,
+                                    w.keyboard_focus_group(),
+                                );
 
                                 w.associate_extra_data(Box::new(PerWindowData {
+                                    root_view,
                                     screen_reposition_interests: HashSet::new(),
                                     header: window_header_view,
                                     appmenu: None,

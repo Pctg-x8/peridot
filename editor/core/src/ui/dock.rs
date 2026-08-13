@@ -639,7 +639,7 @@ struct WindowDockRootView {
 impl View for WindowDockRootView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
