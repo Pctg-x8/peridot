@@ -16,7 +16,7 @@ use crate::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, Point, Size},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub trait SystemLinkAccess {
@@ -98,6 +98,7 @@ pub struct ViewInitContext<'a, 'h> {
     pub view_instance_store: &'a mut ViewInstanceStore,
     pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
     pub view_group_relation_store: &'a mut ViewGroupRelationStore,
+    pub view_layout_state_store: &'a mut ViewLayoutStateStore,
     pub view_render_state_store: &'a mut ViewRenderStateStore,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
     pub system_link: &'a SystemLink<'a>,
@@ -129,6 +130,7 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
             self.view_instance_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -140,6 +142,7 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
             self.view_instance_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -193,6 +196,7 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
             keyboard_focus_group,
             self.view_instance_store,
             self.view_tree_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -205,6 +209,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             self.view_instance_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -257,6 +262,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             view_instance_store: &mut self.view_instance_store,
             view_tree_relation_store: &mut self.view_tree_relation_store,
             view_group_relation_store: &mut self.view_group_relation_store,
+            view_layout_state_store: &mut self.view_layout_state_store,
             view_render_state_store: &mut self.view_render_state_store,
             view_feedback_subscription_delayed_ops: &mut self
                 .view_feedback_subscription_delayed_ops,
@@ -472,6 +478,7 @@ pub trait View: core::any::Any {
     /// Render(初回マウント/更新)時に呼ばれる
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements;
@@ -529,6 +536,7 @@ impl ViewRenderQueue {
         ctx: &mut RenderContext,
         instance_store: &mut ViewInstanceStore,
         tree_relation_store: &ViewTreeRelationStore,
+        layout_state_store: &ViewLayoutStateStore,
         render_state_store: &mut ViewRenderStateStore,
     ) {
         while let Some(mut target) = self.pending.pop_first() {
@@ -571,6 +579,7 @@ impl ViewRenderQueue {
                     mt,
                     kf_group,
                     instance_store,
+                    layout_state_store,
                     render_state_store,
                 );
 
@@ -637,6 +646,27 @@ impl ViewTreeRelationStore {
     }
 }
 
+struct ViewLayoutState {
+    layout_rect: Rect<LogicalUnit>,
+}
+impl ViewLayoutState {
+    fn init() -> Self {
+        Self {
+            layout_rect: Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(0.0, 0.0),
+            ),
+        }
+    }
+}
+
+pub struct ViewLayoutStateStore(Vec<ViewLayoutState>);
+impl ViewLayoutStateStore {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+}
+
 struct ViewRenderState {
     current_mounted_on: Option<(RawMountTarget, KeyboardFocusGroupRef)>,
     active_render_element_ct: Option<CompositeTreeRef>,
@@ -680,6 +710,7 @@ pub fn alloc_view_id_without_instance(
     instance_store: &mut ViewInstanceStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
@@ -693,6 +724,7 @@ pub fn alloc_view_id_without_instance(
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
+        layout_state_store.0[id.into_array_index()] = ViewLayoutState::init();
         render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
@@ -712,6 +744,7 @@ pub fn alloc_view_id_without_instance(
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
+    layout_state_store.0.push(ViewLayoutState::init());
     render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
@@ -722,6 +755,7 @@ pub fn construct_view(
     instance_store: &mut ViewInstanceStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
@@ -735,6 +769,7 @@ pub fn construct_view(
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
+        layout_state_store.0[id.into_array_index()] = ViewLayoutState::init();
         render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
@@ -754,6 +789,7 @@ pub fn construct_view(
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
+    layout_state_store.0.push(ViewLayoutState::init());
     render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
@@ -764,6 +800,7 @@ pub fn free_view(
     instance_store: &mut ViewInstanceStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
     // ensure no parent/group owns this item
@@ -776,6 +813,7 @@ pub fn free_view(
         instance_store.instances.pop();
         tree_relation_store.relations.pop();
         group_relation_store.joining_group.pop();
+        layout_state_store.0.pop();
         render_state_store.0.pop();
 
         return;
@@ -901,6 +939,14 @@ pub fn view_iter_self_group_participants(
         .flat_map(|x| x.iter().copied())
 }
 
+pub fn layout_view_recursive(
+    target: ViewIdentifier,
+    tree_relation_store: &ViewTreeRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
+) {
+    // TODO: layout logic here
+}
+
 pub fn render_view_recursive(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
@@ -908,6 +954,7 @@ pub fn render_view_recursive(
     keyboard_focus_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
     tree_relation_store: &ViewTreeRelationStore,
+    layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
     let mut scheduled_renders = VecDeque::new();
@@ -921,6 +968,7 @@ pub fn render_view_recursive(
             mt,
             keyboard_focus_group,
             instance_store,
+            layout_state_store,
             render_state_store,
         );
 
@@ -943,6 +991,7 @@ fn render_view_instance1(
     mount_to: RawMountTarget,
     kf_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
+    layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
     let Some(&mut ViewInstanceCell {
@@ -954,7 +1003,13 @@ fn render_view_instance1(
         return;
     };
 
-    let new_render_elements = instance.render(ctx, sched);
+    let new_render_elements = instance.render(
+        layout_state_store.0[target.into_array_index()]
+            .layout_rect
+            .clone(),
+        ctx,
+        sched,
+    );
 
     let render_state = &mut render_state_store.0[target.into_array_index()];
     // update render elements relations

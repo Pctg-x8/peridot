@@ -60,8 +60,9 @@ use crate::{
         ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegistry, ViewGroupID,
         ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLocation, ViewPlacement, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
+        ViewLayoutStateStore, ViewLocation, ViewPlacement, ViewRegisterable,
+        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer,
+        ViewTreeRelationStore,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -1353,6 +1354,7 @@ impl ColorPickerView {
 impl View for ColorPickerView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {
@@ -1855,6 +1857,7 @@ impl ColorPickerHexTextInputView {
 impl View for ColorPickerHexTextInputView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {
@@ -2101,6 +2104,7 @@ impl EditableColorButtonView {
 impl View for EditableColorButtonView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {
@@ -2763,6 +2767,7 @@ struct EmptyView;
 impl View for EmptyView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {
@@ -3249,6 +3254,7 @@ async fn run<'sys>(
     let mut view_instance_store = ViewInstanceStore::new();
     let mut view_tree_relation_store = ViewTreeRelationStore::new();
     let mut view_group_relation_store = ViewGroupRelationStore::new();
+    let mut view_layout_state_store = ViewLayoutStateStore::new();
     let mut view_render_state_store = ViewRenderStateStore::new();
     let mut view_feedback_registry = ViewFeedbackRegistry::new();
     let mut view_render_queue = ViewRenderQueue::new();
@@ -3330,6 +3336,7 @@ async fn run<'sys>(
         view_instance_store: &mut view_instance_store,
         view_tree_relation_store: &mut view_tree_relation_store,
         view_group_relation_store: &mut view_group_relation_store,
+        view_layout_state_store: &mut view_layout_state_store,
         view_render_state_store: &mut view_render_state_store,
         view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
         system_link: &system_link,
@@ -3587,6 +3594,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -3681,6 +3689,7 @@ async fn run<'sys>(
             view_instance_store: &mut view_instance_store,
             view_tree_relation_store: &mut view_tree_relation_store,
             view_group_relation_store: &mut view_group_relation_store,
+            view_layout_state_store: &mut view_layout_state_store,
             view_render_state_store: &mut view_render_state_store,
             view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
             system_link: &system_link,
@@ -3709,6 +3718,7 @@ async fn run<'sys>(
         },
         &mut view_instance_store,
         &view_tree_relation_store,
+        &view_layout_state_store,
         &mut view_render_state_store,
     );
 
@@ -3910,6 +3920,7 @@ async fn run<'sys>(
                             self.0.view_instance_store,
                             self.0.view_tree_relation_store,
                             self.0.view_group_relation_store,
+                            self.0.view_layout_state_store,
                             self.0.view_render_state_store,
                         )
                     }
@@ -3921,6 +3932,7 @@ async fn run<'sys>(
                             self.0.view_instance_store,
                             self.0.view_tree_relation_store,
                             self.0.view_group_relation_store,
+                            self.0.view_layout_state_store,
                             self.0.view_render_state_store,
                         );
                     }
@@ -3938,6 +3950,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -3981,6 +3994,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4070,6 +4084,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4101,6 +4116,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4183,6 +4199,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4214,6 +4231,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4334,6 +4352,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4365,6 +4384,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4415,6 +4435,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4446,6 +4467,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4495,6 +4517,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4526,6 +4549,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4575,6 +4599,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4606,6 +4631,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4647,6 +4673,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4678,6 +4705,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4716,6 +4744,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4747,6 +4776,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4791,6 +4821,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4822,6 +4853,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4876,6 +4908,7 @@ async fn run<'sys>(
                                 view_instance_store: &mut view_instance_store,
                                 view_tree_relation_store: &mut view_tree_relation_store,
                                 view_group_relation_store: &mut view_group_relation_store,
+                                view_layout_state_store: &mut view_layout_state_store,
                                 view_render_state_store: &mut view_render_state_store,
                                 view_feedback_subscription_delayed_ops:
                                     &mut view_feedback_registry_delayed_ops,
@@ -4907,6 +4940,7 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
+                        &view_layout_state_store,
                         &mut view_render_state_store,
                     );
 
@@ -4954,6 +4988,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4985,6 +5020,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5031,6 +5067,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5062,6 +5099,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5108,6 +5146,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5139,6 +5178,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5185,6 +5225,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5216,6 +5257,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5239,6 +5281,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5282,6 +5325,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5313,6 +5357,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5351,6 +5396,7 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
+                        &view_layout_state_store,
                         &mut view_render_state_store,
                     );
 
@@ -5400,6 +5446,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5434,6 +5481,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5480,6 +5528,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5518,6 +5567,7 @@ async fn run<'sys>(
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5641,6 +5691,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5700,6 +5751,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5731,6 +5783,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5781,6 +5834,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5812,6 +5866,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5864,6 +5919,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5895,6 +5951,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5936,6 +5993,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5967,6 +6025,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6061,6 +6120,7 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -6092,6 +6152,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6154,6 +6215,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6231,6 +6293,7 @@ async fn run<'sys>(
                                 view_instance_store: &mut view_instance_store,
                                 view_tree_relation_store: &mut view_tree_relation_store,
                                 view_group_relation_store: &mut view_group_relation_store,
+                                view_layout_state_store: &mut view_layout_state_store,
                                 view_render_state_store: &mut view_render_state_store,
                                 view_feedback_subscription_delayed_ops:
                                     &mut view_feedback_registry_delayed_ops,
@@ -6304,6 +6367,7 @@ async fn run<'sys>(
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
                                     view_group_relation_store: &mut view_group_relation_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
                                         &mut view_feedback_registry_delayed_ops,
@@ -6369,6 +6433,7 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
+                        &view_layout_state_store,
                         &mut view_render_state_store,
                     );
 
@@ -8226,6 +8291,7 @@ impl PreviewToolSelectorButtonView {
 impl View for PreviewToolSelectorButtonView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {
@@ -8593,6 +8659,7 @@ impl PreviewView {
 impl View for PreviewView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> uikit::ViewNewRenderElements {

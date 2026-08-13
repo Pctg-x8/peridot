@@ -24,7 +24,7 @@ use crate::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
         ViewNewRenderElements, ViewPlacement,
     },
-    utils::{Size, range_helper::range_from_len},
+    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
 const CHECKMARK_ACTIVATE_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -77,6 +77,7 @@ impl ToggleButtonView {
 impl View for ToggleButtonView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -309,6 +310,7 @@ impl CheckboxView {
 impl View for CheckboxView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

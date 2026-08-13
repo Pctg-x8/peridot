@@ -23,7 +23,7 @@ use crate::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
         ViewNewRenderElements, ViewPlacement,
     },
-    utils::{Point, Size, range_helper::range_from_len},
+    utils::{LogicalUnit, Point, Rect, Size, range_helper::range_from_len},
 };
 
 pub trait SimpleButtonEventHandler {
@@ -68,6 +68,7 @@ impl SimpleButtonView {
 impl View for SimpleButtonView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

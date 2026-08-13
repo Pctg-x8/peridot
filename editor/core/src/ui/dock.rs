@@ -639,6 +639,7 @@ struct WindowDockRootView {
 impl View for WindowDockRootView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -1601,6 +1602,7 @@ impl DockedPaneSplitterView {
 impl View for DockedPaneSplitterView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -1896,6 +1898,7 @@ impl PaneGroupContainerView {
 impl View for PaneGroupContainerView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -2006,6 +2009,7 @@ impl PaneGroupTabStripView {
 impl View for PaneGroupTabStripView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -2551,6 +2555,7 @@ impl PaneGroupTabView {
 impl View for PaneGroupTabView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

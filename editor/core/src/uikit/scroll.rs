@@ -91,6 +91,7 @@ impl ScrollContainer {
 impl View for ScrollContainer {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

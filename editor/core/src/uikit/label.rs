@@ -12,7 +12,7 @@ use crate::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
         ViewNewRenderElements, ViewPlacement,
     },
-    utils::{LogicalUnit, Size},
+    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct StaticTextView {
@@ -81,6 +81,7 @@ impl StaticTextView {
 impl View for StaticTextView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

@@ -17,7 +17,7 @@ use crate::{
         ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, teardown_view_recursive,
         view_instance, view_instance_mut,
     },
-    utils::{LogicalUnit, Size, range_helper::range_from_len},
+    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
 #[repr(transparent)]
@@ -243,6 +243,7 @@ impl OverlayPopupBasicMaskView {
 impl View for OverlayPopupBasicMaskView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -402,6 +403,7 @@ impl OverlayPopupBasicFrameView {
 impl View for OverlayPopupBasicFrameView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

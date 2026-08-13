@@ -17,7 +17,7 @@ use crate::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
         ViewIdentifier, ViewInstanceQueryableMut, ViewNewRenderElements, ViewPlacement,
     },
-    utils::{Point, Size},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct RadioButtonView {
@@ -39,6 +39,7 @@ impl RadioButtonView {
 impl View for RadioButtonView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

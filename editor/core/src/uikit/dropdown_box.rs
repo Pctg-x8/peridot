@@ -24,7 +24,7 @@ use crate::{
         MountContext, MountTarget, RenderContext, TeardownContext, ViewElementSize,
         ViewInitContext, ViewPlacement,
     },
-    utils::{Point, SafeF32, Size},
+    utils::{LogicalUnit, Point, Rect, SafeF32, Size},
 };
 
 const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -61,6 +61,7 @@ impl View {
 impl super::View for View {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut super::RenderChildScheduler,
     ) -> super::ViewNewRenderElements {

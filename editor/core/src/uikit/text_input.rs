@@ -1705,6 +1705,7 @@ impl TextInputView {
 impl View for TextInputView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -1841,6 +1842,7 @@ impl NumericInputView {
 impl View for NumericInputView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -2219,6 +2221,7 @@ impl MultilineTextInputView {
 impl View for MultilineTextInputView {
     fn render(
         &mut self,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
