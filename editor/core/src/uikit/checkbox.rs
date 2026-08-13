@@ -22,7 +22,7 @@ use crate::{
     },
     uikit::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewInstanceModifier, ViewNewRenderElements, ViewPlacement,
+        ViewNewRenderElements, ViewPlacement,
     },
     utils::{Size, range_helper::range_from_len},
 };
@@ -77,7 +77,6 @@ impl ToggleButtonView {
 impl View for ToggleButtonView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -310,7 +309,6 @@ impl CheckboxView {
 impl View for CheckboxView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

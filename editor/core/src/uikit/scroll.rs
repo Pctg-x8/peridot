@@ -16,9 +16,8 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View,
-        ViewEventHandler, ViewIdentifier, ViewInstanceModifier, ViewNewRenderElements,
-        ViewUpdateContext,
+        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
+        ViewNewRenderElements, ViewRenderer,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -92,7 +91,6 @@ impl ScrollContainer {
 impl View for ScrollContainer {
     fn render(
         &mut self,
-        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -136,6 +134,17 @@ impl View for ScrollContainer {
                     // mount/dismount scroll bars only if needed
                     eh.recompute_scroll_bars(ctx);
                 }
+
+                let offset_x = eh.content_offset.x.get();
+                let offset_y = eh.content_offset.y.get();
+
+                ctx.composite_tree
+                    .begin_mod_chain(eh.ct_content_root)
+                    .offset_imm(-offset_x, -offset_y)
+                    .apply();
+                ctx.ht_manager.get_data_mut(eh.ht_content_root).left = -offset_x;
+                ctx.ht_manager.get_data_mut(eh.ht_content_root).top = -offset_y;
+                eh.update_thumb_position(ctx.composite_tree, ctx.ht_manager);
 
                 sched.schedule_render_children(RawMountTarget {
                     ct_root: eh.ct_content_root,
@@ -346,7 +355,6 @@ impl View for ScrollContainer {
                 ctx.ht_manager.set_action_handler(ht_scroll_thumb_vert, &eh);
                 ctx.ht_manager.set_action_handler(ht_scroll_bar_horz, &eh);
                 ctx.ht_manager.set_action_handler(ht_scroll_thumb_horz, &eh);
-                self_instance.bind_event_handler(&eh);
 
                 // initial setup for scroll bars
                 eh.recompute_scroll_bars(ctx);
@@ -541,9 +549,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_y = ((vp_offset_y - 0.5 * vp_h * vp_h / content_h) * content_h / vp_h)
                     .clamp(0.0, content_h - vp_h);
                 self.content_offset.y.set(offset_y);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -561,9 +567,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_y =
                     ((vp_offset_y - base_offset_y) * content_h / vp_h).clamp(0.0, content_h - vp_h);
                 self.content_offset.y.set(offset_y);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -581,9 +585,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_x = ((vp_offset_x - 0.5 * vp_w * vp_w / content_w) * content_w / vp_w)
                     .clamp(0.0, content_w - vp_w);
                 self.content_offset.x.set(offset_x);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -601,9 +603,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_x =
                     ((vp_offset_x - base_offset_x) * content_w / vp_w).clamp(0.0, content_w - vp_w);
                 self.content_offset.x.set(offset_x);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -632,9 +632,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_y = ((vp_offset_y - 0.5 * vp_h * vp_h / content_h) * content_h / vp_h)
                     .clamp(0.0, content_h - vp_h);
                 self.content_offset.y.set(offset_y);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -652,9 +650,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_y =
                     ((vp_offset_y - base_offset_y) * content_h / vp_h).clamp(0.0, content_h - vp_h);
                 self.content_offset.y.set(offset_y);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -672,9 +668,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_x = ((vp_offset_x - 0.5 * vp_w * vp_w / content_w) * content_w / vp_w)
                     .clamp(0.0, content_w - vp_w);
                 self.content_offset.x.set(offset_x);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -692,9 +686,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
                 let offset_x =
                     ((vp_offset_x - base_offset_x) * content_w / vp_w).clamp(0.0, content_w - vp_w);
                 self.content_offset.x.set(offset_x);
-                context
-                    .system_link
-                    .dispatch_event(Event::UpdateView { id: self.view_id });
+                context.schedule_view_render(self.view_id);
 
                 EventContinueControl::STOP_PROPAGATION
             }
@@ -759,9 +751,7 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
             let left_amount = args.amount - (new_offset_x - offset_x);
             self.content_offset.x.set(new_offset_x);
             // HitTestTreeの更新が必要なので入力イベント処理完了後に遅延させる
-            context
-                .system_link
-                .dispatch_event(Event::UpdateView { id: self.view_id });
+            context.schedule_view_render(self.view_id);
 
             ScrollWheelActionResponse {
                 continue_flags: EventContinueControl::STOP_PROPAGATION,
@@ -795,33 +785,13 @@ impl HitTestTreeActionHandler for ScrollContainerEventHandler {
             let left_amount = args.amount - (new_offset_y - offset_y);
             self.content_offset.y.set(new_offset_y);
             // HitTestTreeの更新が必要なので入力イベント処理完了後に遅延させる
-            context
-                .system_link
-                .dispatch_event(Event::UpdateView { id: self.view_id });
+            context.schedule_view_render(self.view_id);
 
             ScrollWheelActionResponse {
                 continue_flags: EventContinueControl::STOP_PROPAGATION,
                 left_amount,
             }
         }
-    }
-}
-impl ViewEventHandler for ScrollContainerEventHandler {
-    fn update(&self, context: &mut ViewUpdateContext) {
-        let offset_x = self.content_offset.x.get();
-        let offset_y = self.content_offset.y.get();
-
-        context
-            .composite_tree
-            .begin_mod_chain(self.ct_content_root)
-            .offset_imm(-offset_x, -offset_y)
-            .apply();
-        context.ht_manager.get_data_mut(self.ht_content_root).left = -offset_x;
-        context.ht_manager.get_data_mut(self.ht_content_root).top = -offset_y;
-        self.update_thumb_position(
-            context.mount_context.composite_tree,
-            context.mount_context.ht_manager,
-        );
     }
 }
 impl ScrollContainerEventHandler {

@@ -13,9 +13,9 @@ use crate::{
     },
     uikit::{
         RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewImmediateRenderable, ViewInitContext, ViewInstanceModifier, ViewInstanceStore,
-        ViewNewRenderElements, ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore,
-        teardown_view_recursive, view_instance, view_instance_mut,
+        ViewImmediateRenderable, ViewInitContext, ViewInstanceStore, ViewNewRenderElements,
+        ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, teardown_view_recursive,
+        view_instance, view_instance_mut,
     },
     utils::{LogicalUnit, Size, range_helper::range_from_len},
 };
@@ -243,7 +243,6 @@ impl OverlayPopupBasicMaskView {
 impl View for OverlayPopupBasicMaskView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -403,7 +402,6 @@ impl OverlayPopupBasicFrameView {
 impl View for OverlayPopupBasicFrameView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

@@ -24,9 +24,8 @@ use crate::{
         CompositeTreeMutableAccess, DeriveTeardownContext, HitTestTreeMutableAccess, MountContext,
         RawMountTarget, RenderChildScheduler, RenderContext, SystemLinkAccess, TeardownContext,
         View, ViewIdentifier, ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceModifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewNewRenderElements, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderer,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore, ViewNewRenderElements,
+        ViewRegisterable, ViewRelationControllable, ViewRenderQueue, ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -640,7 +639,6 @@ struct WindowDockRootView {
 impl View for WindowDockRootView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         _ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -1603,7 +1601,6 @@ impl DockedPaneSplitterView {
 impl View for DockedPaneSplitterView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -1899,7 +1896,6 @@ impl PaneGroupContainerView {
 impl View for PaneGroupContainerView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -2010,7 +2006,6 @@ impl PaneGroupTabStripView {
 impl View for PaneGroupTabStripView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -2556,7 +2551,6 @@ impl PaneGroupTabView {
 impl View for PaneGroupTabView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

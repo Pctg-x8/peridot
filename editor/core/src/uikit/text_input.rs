@@ -6,7 +6,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    Application, ApplicationMutation, Event, LogicFiberEventDispatcher, SystemLink,
+    Application, ApplicationMutation, LogicFiberEventDispatcher, SystemLink,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, ModifierKey, PointerInputUnit,
@@ -26,9 +26,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        RenderChildScheduler, RenderContext, View, ViewEventHandler, ViewIdentifier,
-        ViewInstanceModifier, ViewNewRenderElements, ViewPlacement, ViewRenderQueue,
-        ViewUpdateContext,
+        RenderChildScheduler, RenderContext, View, ViewIdentifier, ViewNewRenderElements,
+        ViewPlacement, ViewRenderQueue, ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,
@@ -631,28 +630,28 @@ impl HitTestTreeScreenRepositionHandler for TextInputViewCoreEventHandler {
         }
     }
 }
-impl ViewEventHandler for TextInputViewCoreEventHandler {
-    #[inline(always)]
-    fn update(&self, context: &mut ViewUpdateContext) {
-        self.process_pending_updates_with_ht_mutation(
-            context.mount_context.composite_tree,
-            context.system_link,
-            context.mount_context.ht_manager,
-            context.mount_context.current_sec,
-        );
-    }
-}
+// impl ViewEventHandler for TextInputViewCoreEventHandler {
+//     #[inline(always)]
+//     fn update(&self, context: &mut ViewUpdateContext) {
+//         self.process_pending_updates_with_ht_mutation(
+//             context.mount_context.composite_tree,
+//             context.system_link,
+//             context.mount_context.ht_manager,
+//             context.mount_context.current_sec,
+//         );
+//     }
+// }
 impl KeyInputEventHandler for TextInputViewCoreEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.lazy_update_and_schedule(context.system_link, |this| {
+        self.lazy_update_and_schedule(context.view_render_queue, |this| {
             this.set_focus(context.ht_manager)
         });
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
-        self.lazy_update_and_schedule(context.system_link, |this| {
+        self.lazy_update_and_schedule(context.view_render_queue, |this| {
             this.release_focus(context.ht_manager)
         });
     }
@@ -870,13 +869,11 @@ impl TextInputViewCoreEventHandler {
     #[inline(always)]
     pub fn lazy_update_and_schedule(
         &self,
-        syslink: &SystemLink,
+        view_render_queue: &mut ViewRenderQueue,
         op: impl FnOnce(&Self) -> TextInputViewUpdateMask,
     ) {
         self.lazy_update(op);
-        syslink.dispatch_event(Event::UpdateView {
-            id: self.delegated_view_id,
-        });
+        view_render_queue.schedule(self.delegated_view_id);
     }
 
     #[inline(always)]
@@ -1516,9 +1513,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
-                id: self.delegated_view_id,
-            });
+            todo!("dispatch view re-render");
         } else {
             let text = text.to_str().expect("invalid input str");
             state
@@ -1534,9 +1529,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
-                id: self.delegated_view_id,
-            });
+            todo!("dispatch view re-render");
         }
     }
 
@@ -1575,9 +1568,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
-                id: self.delegated_view_id,
-            });
+            todo!("dispatch view re-render");
         } else {
             let text = text.to_str().expect("invalid input str");
             state
@@ -1593,9 +1584,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView {
-                id: self.delegated_view_id,
-            });
+            todo!("dispatch view re-render");
         }
     }
 
@@ -1716,14 +1705,13 @@ impl TextInputView {
 impl View for TextInputView {
     fn render(
         &mut self,
-        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
-        match self.eh {
-            Some(_) => {
+        let (eh, r) = match self.eh {
+            Some(ref eh) => {
                 // TODO: reflect changes
-                ViewNewRenderElements::EMPTY
+                (eh, ViewNewRenderElements::EMPTY)
             }
             None => {
                 // first render
@@ -1755,17 +1743,24 @@ impl View for TextInputView {
                 // sink some events to base impl
                 ctx.keyboard_focus_registry
                     .set_event_handler(kf_token, &eh.core.eh);
-                self_instance.bind_event_handler(&eh.core.eh);
 
                 let r = ViewNewRenderElements {
                     composite_tree: Some(eh.core.eh.ct_root),
                     hit_tree: Some(ht_root),
                     keyboard_focus: Some(kf_token),
                 };
-                self.eh = Some(eh);
-                r
+                (&*self.eh.insert(eh), r)
             }
-        }
+        };
+
+        eh.core.eh.process_pending_updates_with_ht_mutation(
+            ctx.composite_tree,
+            ctx.system_link,
+            ctx.ht_manager,
+            ctx.current_sec,
+        );
+
+        r
     }
 
     fn teardown(&mut self, ctx: &mut super::TeardownContext) {
@@ -1846,7 +1841,6 @@ impl NumericInputView {
 impl View for NumericInputView {
     fn render(
         &mut self,
-        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -1896,7 +1890,6 @@ impl View for NumericInputView {
                 });
                 ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
-                self_instance.bind_event_handler(&eh);
 
                 let r = ViewNewRenderElements {
                     composite_tree: Some(eh.core.eh.ct_root),
@@ -1924,6 +1917,13 @@ impl View for NumericInputView {
             );
         }
 
+        eh.core.eh.process_pending_updates_with_ht_mutation(
+            ctx.composite_tree,
+            ctx.system_link,
+            ctx.ht_manager,
+            ctx.current_sec,
+        );
+
         new_elements
     }
 
@@ -1946,15 +1946,9 @@ struct NumericInputViewEventHandler {
     ht_root: HitTestTreeRef,
     key_input_enabled: Cell<bool>,
 }
-impl ViewEventHandler for NumericInputViewEventHandler {
-    fn update(&self, context: &mut ViewUpdateContext) {
-        self.core.entity().update(context);
-    }
-}
 impl KeyInputEventHandler for NumericInputViewEventHandler {
     fn focus_released(&self, context: &mut InputEventContext) {
         self.confirm_direct_input(
-            context.system_link,
             context.ht_manager,
             context.view_render_queue,
             &mut context.application,
@@ -1966,14 +1960,12 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
             // 確定or入力開始
             if self.key_input_enabled.get() {
                 self.confirm_direct_input(
-                    context.system_link,
                     context.ht_manager,
                     context.view_render_queue,
                     &mut context.application,
                 );
             } else {
                 self.begin_direct_input(
-                    context.system_link,
                     context.ht_manager,
                     context.view_render_queue,
                     &context.application,
@@ -1986,7 +1978,6 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
         if code == KeyInputCode::Esc {
             // 入力キャンセル
             self.cancel_direct_input(
-                context.system_link,
                 context.ht_manager,
                 context.view_render_queue,
                 &context.application,
@@ -2121,7 +2112,6 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         self.begin_direct_input(
-            context.system_link,
             context.ht_manager,
             context.view_render_queue,
             &context.application,
@@ -2133,7 +2123,6 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
 impl NumericInputViewEventHandler {
     fn begin_direct_input(
         &self,
-        syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
         view_render_queue: &mut ViewRenderQueue,
         application: &Application,
@@ -2144,27 +2133,24 @@ impl NumericInputViewEventHandler {
         }
 
         // HitTestTreeへの変更がはいるので遅延させる(最初は全選択状態)
-        let update_mask = self.core.eh.perform_external_state_update(|st| {
-            st.set_content(
-                self.value
-                    .upgrade()
-                    .expect("NumericInputView has defunct")
-                    .text(self.core.eh.delegated_view_id, application),
-            ) | st.select_all()
-        });
         self.core
             .eh
-            .pending_update_mask
-            .set(self.core.eh.set_focus(ht_manager) | update_mask);
-        syslink.dispatch_event(Event::UpdateView {
-            id: self.core.eh.delegated_view_id,
-        });
-        view_render_queue.schedule(self.core.eh.delegated_view_id);
+            .lazy_update_and_schedule(view_render_queue, |e| {
+                let update_mask = e.perform_external_state_update(|st| {
+                    st.set_content(
+                        self.value
+                            .upgrade()
+                            .expect("NumericInputView has defunct")
+                            .text(self.core.eh.delegated_view_id, application),
+                    ) | st.select_all()
+                });
+
+                e.set_focus(ht_manager) | update_mask
+            });
     }
 
     fn confirm_direct_input(
         &self,
-        syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
         view_render_queue: &mut ViewRenderQueue,
         application: &mut ApplicationMutation,
@@ -2182,19 +2168,19 @@ impl NumericInputViewEventHandler {
         );
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.core.eh.lazy_update_and_schedule(syslink, |e| {
-            let mut update_mask = e.release_focus(ht_manager);
-            update_mask |= e.set_content(value.text(e.delegated_view_id, application));
-            update_mask |= e.perform_external_state_update(|st| st.cursor_move_to_home(false));
+        self.core
+            .eh
+            .lazy_update_and_schedule(view_render_queue, |e| {
+                let mut update_mask = e.release_focus(ht_manager);
+                update_mask |= e.set_content(value.text(e.delegated_view_id, application));
+                update_mask |= e.perform_external_state_update(|st| st.cursor_move_to_home(false));
 
-            update_mask
-        });
-        view_render_queue.schedule(self.core.eh.delegated_view_id);
+                update_mask
+            });
     }
 
     fn cancel_direct_input(
         &self,
-        syslink: &SystemLink,
         ht_manager: &HitTestTreeManager,
         view_render_queue: &mut ViewRenderQueue,
         application: &Application,
@@ -2202,20 +2188,21 @@ impl NumericInputViewEventHandler {
         self.key_input_enabled.set(false);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.core.eh.lazy_update_and_schedule(syslink, |e| {
-            let mut update_mask = e.release_focus(ht_manager);
-            // キャンセル時はもとにもどす
-            update_mask |= e.set_content(
-                self.value
-                    .upgrade()
-                    .expect("NumericInputView has defunct")
-                    .text(e.delegated_view_id, application),
-            );
-            update_mask |= e.perform_external_state_update(|st| st.cursor_move_to_home(false));
+        self.core
+            .eh
+            .lazy_update_and_schedule(view_render_queue, |e| {
+                let mut update_mask = e.release_focus(ht_manager);
+                // キャンセル時はもとにもどす
+                update_mask |= e.set_content(
+                    self.value
+                        .upgrade()
+                        .expect("NumericInputView has defunct")
+                        .text(e.delegated_view_id, application),
+                );
+                update_mask |= e.perform_external_state_update(|st| st.cursor_move_to_home(false));
 
-            update_mask
-        });
-        view_render_queue.schedule(self.core.eh.delegated_view_id);
+                update_mask
+            });
     }
 }
 
@@ -2232,14 +2219,13 @@ impl MultilineTextInputView {
 impl View for MultilineTextInputView {
     fn render(
         &mut self,
-        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {
-        match self.eh {
-            Some(_) => {
+        let (eh, r) = match self.eh {
+            Some(ref eh) => {
                 // TODO: reflect changes
-                ViewNewRenderElements::EMPTY
+                (eh, ViewNewRenderElements::EMPTY)
             }
             None => {
                 // first render
@@ -2360,7 +2346,6 @@ impl View for MultilineTextInputView {
                 ctx.ht_manager
                     .set_screen_reposition_handler(eh.ht_root, &eh);
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
-                self_instance.bind_event_handler(&eh);
                 #[cfg(windows)]
                 ctx.ht_manager
                     .set_native_text_deferrable_event_handler(eh.ht_root, &eh);
@@ -2387,10 +2372,19 @@ impl View for MultilineTextInputView {
                     hit_tree: Some(eh.ht_root),
                     keyboard_focus: Some(kf_token),
                 };
-                self.eh = Some(eh);
-                r
+
+                (&*self.eh.insert(eh), r)
             }
-        }
+        };
+
+        eh.process_pending_updates_with_ht_mutation(
+            ctx.composite_tree,
+            ctx.system_link,
+            ctx.ht_manager,
+            ctx.current_sec,
+        );
+
+        r
     }
 
     fn teardown(&mut self, ctx: &mut super::TeardownContext) {
@@ -2435,34 +2429,19 @@ struct MultilineTextInputEventHandler {
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     event_dispatcher: *mut LogicFiberEventDispatcher,
 }
-impl ViewEventHandler for MultilineTextInputEventHandler {
-    #[inline(always)]
-    fn update(&self, context: &mut ViewUpdateContext) {
-        self.process_pending_updates_with_ht_mutation(
-            context.mount_context.composite_tree,
-            context.system_link,
-            context.mount_context.ht_manager,
-            context.mount_context.current_sec,
-        );
-    }
-}
 impl KeyInputEventHandler for MultilineTextInputEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
         self.pending_update_mask
             .set(self.set_focus(context.ht_manager));
-        context
-            .system_link
-            .dispatch_event(Event::UpdateView { id: self.view_id });
+        context.schedule_view_render(self.view_id);
     }
 
     fn focus_released(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
         self.pending_update_mask
             .set(self.release_focus(context.ht_manager));
-        context
-            .system_link
-            .dispatch_event(Event::UpdateView { id: self.view_id });
+        context.schedule_view_render(self.view_id);
     }
 
     #[inline(always)]
@@ -3851,7 +3830,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
+            todo!("dispatch view re-render");
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -3867,7 +3846,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
+            todo!("dispatch view re-render");
         }
     }
 
@@ -3905,7 +3884,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
+            todo!("dispatch view re-render");
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -3921,7 +3900,7 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &*self.event_dispatcher }.dispatch(Event::UpdateView { id: self.view_id });
+            todo!("dispatch view re-render");
         }
     }
 

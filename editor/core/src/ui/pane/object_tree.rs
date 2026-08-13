@@ -78,7 +78,6 @@ impl View {
 impl crate::uikit::View for View {
     fn render(
         &mut self,
-        _self_instance: &mut crate::uikit::ViewInstanceModifier,
         ctx: &mut crate::uikit::RenderContext,
         sched: &mut crate::uikit::RenderChildScheduler,
     ) -> ViewNewRenderElements {
@@ -255,7 +254,6 @@ impl ObjectRowView {
 impl crate::uikit::View for ObjectRowView {
     fn render(
         &mut self,
-        _self_instance: &mut crate::uikit::ViewInstanceModifier,
         ctx: &mut crate::uikit::RenderContext,
         _sched: &mut crate::uikit::RenderChildScheduler,
     ) -> ViewNewRenderElements {

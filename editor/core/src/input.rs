@@ -16,8 +16,8 @@ use crate::{
     ui::dock::DockStore,
     uikit::{
         View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewRenderQueue, ViewRenderer, view_instance,
-        view_instance_mut, view_iter_self_group_participants,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewRenderQueue, ViewRenderer,
+        view_iter_self_group_participants,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };

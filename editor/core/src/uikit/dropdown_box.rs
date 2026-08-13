@@ -61,7 +61,6 @@ impl View {
 impl super::View for View {
     fn render(
         &mut self,
-        _self_instance: &mut super::ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut super::RenderChildScheduler,
     ) -> super::ViewNewRenderElements {

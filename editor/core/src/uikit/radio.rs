@@ -15,8 +15,7 @@ use crate::{
     },
     uikit::{
         RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewIdentifier, ViewInstanceModifier, ViewInstanceQueryableMut, ViewNewRenderElements,
-        ViewPlacement,
+        ViewIdentifier, ViewInstanceQueryableMut, ViewNewRenderElements, ViewPlacement,
     },
     utils::{Point, Size},
 };
@@ -40,7 +39,6 @@ impl RadioButtonView {
 impl View for RadioButtonView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         _sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements {

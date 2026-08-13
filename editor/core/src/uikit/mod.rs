@@ -97,7 +97,6 @@ pub struct ViewInitContext<'a, 'h> {
     pub view_allocator: &'a mut ViewIdentifierAllocator,
     pub view_instance_store: &'a mut ViewInstanceStore,
     pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
-    pub view_event_handler_store: &'a mut ViewEventHandlerStore,
     pub view_group_relation_store: &'a mut ViewGroupRelationStore,
     pub view_render_state_store: &'a mut ViewRenderStateStore,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
@@ -128,7 +127,6 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
             ctor,
             self.view_allocator,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
             self.view_render_state_store,
@@ -140,7 +138,6 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
             id,
             self.view_allocator,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
             self.view_render_state_store,
@@ -195,7 +192,6 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
             mount_on,
             keyboard_focus_group,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_render_state_store,
         )
@@ -207,7 +203,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         alloc_view_id_without_instance(
             self.view_allocator,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
             self.view_render_state_store,
@@ -222,14 +217,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
     #[inline(always)]
     pub fn join_view_group(&mut self, id: ViewIdentifier, group: ViewGroupID) {
         join_view_group(id, group, self.view_group_relation_store)
-    }
-
-    pub fn set_view_event_handler(
-        &mut self,
-        id: ViewIdentifier,
-        handler: &Rc<impl ViewEventHandler + 'static>,
-    ) {
-        set_view_event_handler(id, handler, self.view_event_handler_store)
     }
 
     pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2, 'h> {
@@ -269,7 +256,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             view_allocator: &mut self.view_allocator,
             view_instance_store: &mut self.view_instance_store,
             view_tree_relation_store: &mut self.view_tree_relation_store,
-            view_event_handler_store: &mut self.view_event_handler_store,
             view_group_relation_store: &mut self.view_group_relation_store,
             view_render_state_store: &mut self.view_render_state_store,
             view_feedback_subscription_delayed_ops: &mut self
@@ -294,60 +280,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
     ) {
         self.view_feedback_subscription_delayed_ops
             .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
-    }
-}
-
-pub struct ViewUpdateContext<'a, 'h> {
-    pub mount_context: MountContext<'a, 'h>,
-    pub view_instance_store: &'a mut ViewInstanceStore,
-    pub view_render_queue: &'a mut ViewRenderQueue,
-    pub system_link: &'a SystemLink<'a>,
-}
-impl<'a, 'h> core::ops::Deref for ViewUpdateContext<'a, 'h> {
-    type Target = MountContext<'a, 'h>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.mount_context
-    }
-}
-impl<'a, 'h> core::ops::DerefMut for ViewUpdateContext<'a, 'h> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.mount_context
-    }
-}
-impl ViewInstanceQueryable for ViewUpdateContext<'_, '_> {
-    #[inline(always)]
-    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_instance_store)
-    }
-}
-impl ViewInstanceQueryableMut for ViewUpdateContext<'_, '_> {
-    #[inline(always)]
-    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_instance_store)
-    }
-
-    #[inline(always)]
-    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
-    }
-}
-impl ViewRenderer for ViewUpdateContext<'_, '_> {
-    #[inline(always)]
-    fn schedule_view_render(&mut self, target: ViewIdentifier) {
-        self.view_render_queue.schedule(target);
-    }
-}
-impl<'h> DeriveMountContext<'h> for ViewUpdateContext<'_, 'h> {
-    fn derive_mount_context<'env2>(&'env2 mut self) -> MountContext<'env2, 'h> {
-        MountContext {
-            composite_tree: &mut self.mount_context.composite_tree,
-            ht_manager: &mut self.mount_context.ht_manager,
-            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-            current_sec: self.mount_context.current_sec,
-        }
     }
 }
 
@@ -540,7 +472,6 @@ pub trait View: core::any::Any {
     /// Render(初回マウント/更新)時に呼ばれる
     fn render(
         &mut self,
-        self_instance: &mut ViewInstanceModifier,
         ctx: &mut RenderContext,
         sched: &mut RenderChildScheduler,
     ) -> ViewNewRenderElements;
@@ -579,16 +510,6 @@ impl ViewGroupID {
     }
 }
 
-pub struct ViewInstanceModifier<'a> {
-    event_handler_ref: &'a mut Weak<dyn ViewEventHandler>,
-}
-impl ViewInstanceModifier<'_> {
-    #[inline(always)]
-    pub fn bind_event_handler(&mut self, handler: &std::rc::Rc<impl ViewEventHandler + 'static>) {
-        *self.event_handler_ref = Rc::downgrade(handler) as _;
-    }
-}
-
 pub struct ViewRenderQueue {
     pending: BTreeSet<ViewIdentifier>,
 }
@@ -609,7 +530,6 @@ impl ViewRenderQueue {
         instance_store: &mut ViewInstanceStore,
         tree_relation_store: &ViewTreeRelationStore,
         render_state_store: &mut ViewRenderStateStore,
-        event_handler_store: &mut ViewEventHandlerStore,
     ) {
         while let Some(mut target) = self.pending.pop_first() {
             let (mount_target, kf_group) = loop {
@@ -651,7 +571,6 @@ impl ViewRenderQueue {
                     mt,
                     kf_group,
                     instance_store,
-                    event_handler_store,
                     render_state_store,
                 );
 
@@ -699,17 +618,6 @@ impl ViewInstanceStore {
     pub fn new() -> Self {
         Self {
             instances: Vec::new(),
-        }
-    }
-}
-
-pub struct ViewEventHandlerStore {
-    event_handler: Vec<Weak<dyn ViewEventHandler>>,
-}
-impl ViewEventHandlerStore {
-    pub fn new() -> Self {
-        Self {
-            event_handler: Vec::new(),
         }
     }
 }
@@ -770,7 +678,6 @@ impl ViewGroupRelationStore {
 pub fn alloc_view_id_without_instance(
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
     render_state_store: &mut ViewRenderStateStore,
@@ -781,8 +688,6 @@ pub fn alloc_view_id_without_instance(
             instance: None,
             active: true,
         };
-        event_handler_store.event_handler[id.into_array_index()] =
-            Weak::<EmptyViewEventHandler>::new();
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
@@ -802,9 +707,6 @@ pub fn alloc_view_id_without_instance(
         instance: None,
         active: true,
     });
-    event_handler_store
-        .event_handler
-        .push(Weak::<EmptyViewEventHandler>::new());
     tree_relation_store.relations.push(ViewTreeRelation {
         parent: None,
         children: Vec::new(),
@@ -818,7 +720,6 @@ pub fn construct_view(
     ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
     render_state_store: &mut ViewRenderStateStore,
@@ -829,8 +730,6 @@ pub fn construct_view(
             instance: Some(ctor(id)),
             active: true,
         };
-        event_handler_store.event_handler[id.into_array_index()] =
-            Weak::<EmptyViewEventHandler>::new();
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
@@ -850,9 +749,6 @@ pub fn construct_view(
         instance: Some(ctor(id)),
         active: true,
     });
-    event_handler_store
-        .event_handler
-        .push(Weak::<EmptyViewEventHandler>::new());
     tree_relation_store.relations.push(ViewTreeRelation {
         parent: None,
         children: Vec::new(),
@@ -866,7 +762,6 @@ pub fn free_view(
     id: ViewIdentifier,
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
     render_state_store: &mut ViewRenderStateStore,
@@ -879,7 +774,6 @@ pub fn free_view(
         // returned last identifier
         allocator.last_free_identifier = id.0;
         instance_store.instances.pop();
-        event_handler_store.event_handler.pop();
         tree_relation_store.relations.pop();
         group_relation_store.joining_group.pop();
         render_state_store.0.pop();
@@ -890,25 +784,6 @@ pub fn free_view(
     allocator.free_identifier.insert(id);
     // clear heap references
     instance_store.instances[id.into_array_index()].instance = None;
-    event_handler_store.event_handler[id.into_array_index()] = Weak::<EmptyViewEventHandler>::new();
-}
-
-pub fn set_view_event_handler(
-    id: ViewIdentifier,
-    handler: &Rc<impl ViewEventHandler + 'static>,
-    event_handler_store: &mut ViewEventHandlerStore,
-) {
-    event_handler_store.event_handler[id.into_array_index()] = Rc::downgrade(handler) as _;
-}
-
-pub fn call_view_update(
-    target: ViewIdentifier,
-    context: &mut ViewUpdateContext,
-    event_handler_store: &mut ViewEventHandlerStore,
-) {
-    if let Some(h) = event_handler_store.event_handler[target.into_array_index()].upgrade() {
-        h.update(context);
-    }
 }
 
 pub fn view_set_parent(
@@ -1032,7 +907,6 @@ pub fn render_view_recursive(
     mount_on: &(impl MountTarget + ?Sized),
     keyboard_focus_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &ViewTreeRelationStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
@@ -1047,7 +921,6 @@ pub fn render_view_recursive(
             mt,
             keyboard_focus_group,
             instance_store,
-            event_handler_store,
             render_state_store,
         );
 
@@ -1070,7 +943,6 @@ fn render_view_instance1(
     mount_to: RawMountTarget,
     kf_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
     let Some(&mut ViewInstanceCell {
@@ -1082,13 +954,7 @@ fn render_view_instance1(
         return;
     };
 
-    let new_render_elements = instance.render(
-        &mut ViewInstanceModifier {
-            event_handler_ref: &mut event_handler_store.event_handler[target.into_array_index()],
-        },
-        ctx,
-        sched,
-    );
+    let new_render_elements = instance.render(ctx, sched);
 
     let render_state = &mut render_state_store.0[target.into_array_index()];
     // update render elements relations
@@ -1284,14 +1150,6 @@ pub trait ViewRenderer {
 pub trait ViewImmediateTeardownable {
     fn teardown_view_recursive(&mut self, target: ViewIdentifier);
 }
-
-pub trait ViewEventHandler {
-    #[allow(unused_variables)]
-    fn update(&self, context: &mut ViewUpdateContext) {}
-}
-
-struct EmptyViewEventHandler;
-impl ViewEventHandler for EmptyViewEventHandler {}
 
 pub enum ViewFeedbackRegistryDelayedOps {
     SubscribePerformAtomic(Weak<dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>>),
