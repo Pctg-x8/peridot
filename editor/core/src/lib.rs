@@ -6697,7 +6697,7 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_group_relation_store: &mut view_group_relation_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
@@ -6730,8 +6730,8 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
+                            &view_layout_state_store,
                             &mut view_render_state_store,
-                            &mut view_event_handler_store,
                         );
 
                         composite_tree
@@ -6794,7 +6794,7 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_group_relation_store: &mut view_group_relation_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
@@ -6827,8 +6827,8 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
+                            &view_layout_state_store,
                             &mut view_render_state_store,
-                            &mut view_event_handler_store,
                         );
 
                         composite_tree
@@ -6891,7 +6891,7 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_group_relation_store: &mut view_group_relation_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
@@ -6924,8 +6924,8 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
+                            &view_layout_state_store,
                             &mut view_render_state_store,
-                            &mut view_event_handler_store,
                         );
 
                         composite_tree
