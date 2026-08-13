@@ -121,6 +121,14 @@ impl View for ScrollContainer {
                     eh.content_size.width.set(self.content_size.width);
                     eh.content_size.height.set(self.content_size.height);
 
+                    ctx.composite_tree
+                        .begin_mod_chain(eh.ct_content_root)
+                        .size_imm(self.content_size.width, self.content_size.height)
+                        .apply();
+                    ctx.ht_manager.get_data_mut(eh.ht_content_root).width = self.content_size.width;
+                    ctx.ht_manager.get_data_mut(eh.ht_content_root).height =
+                        self.content_size.height;
+
                     recompute_scroll_bars = true;
                 }
 
@@ -169,13 +177,13 @@ impl View for ScrollContainer {
                 });
                 let ct_content_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
-                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
+                    size: [
+                        AnimatableFloat::Value(self.content_size.width),
+                        AnimatableFloat::Value(self.content_size.height),
+                    ],
                     ..Default::default()
                 });
                 let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: 0.0,
-                    top: 0.0,
                     width: self.viewport_size.width,
                     height: self.viewport_size.height,
                     ..Default::default()

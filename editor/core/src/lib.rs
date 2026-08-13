@@ -53,9 +53,9 @@ use crate::{
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
         CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
-        MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
-        PopupManager, RadioButtonView, RawMountTarget, RenderChildScheduler, RenderContext,
-        ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
+        MountContext, MountTarget, NumericInputView, NumericInputViewIO, NumericInputViewInit,
+        PopupID, PopupManager, RadioButtonView, RawMountTarget, RenderChildScheduler,
+        RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
         TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize, ViewEventHandler,
         ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
         ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore, ViewIdentifier,
@@ -1876,6 +1876,8 @@ impl View for ColorPickerHexTextInputView {
                     core: uikit::TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
+                        [0.0; 2],
+                        [0.0; 2],
                         self.id,
                         ht_root,
                         eh.clone() as _,
@@ -2348,7 +2350,7 @@ impl TextInputViewIO for UIKitPreviewNumericInputValueStore {
         self.0.set(new_value);
     }
 }
-impl NumericInputViewBackingStore for UIKitPreviewNumericInputValueStore {
+impl NumericInputViewIO for UIKitPreviewNumericInputValueStore {
     fn set_delta(
         &self,
         _sender: ViewIdentifier,
@@ -2588,11 +2590,15 @@ impl UIKitPreviewPanePresenter {
         let numeric_input_view = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
                 id,
-                Rect::from_lt_size(
-                    Point::new_logical(16.0 + label_width, ytop - 2.0),
-                    Size::new_logical(64.0, 20.0),
-                ),
-                Rc::downgrade(&numeric_input_view_backing_store),
+                NumericInputViewInit {
+                    placement: ViewPlacement {
+                        location: ViewLocation::new_left_top(16.0 + label_width, ytop - 2.0),
+                        size: ViewElementSize::fixed(64.0, 20.0),
+                        ..Default::default()
+                    },
+                    value: Rc::downgrade(&numeric_input_view_backing_store),
+                    ..Default::default()
+                },
             ))
         });
         ctx.view_set_parent(label, scroll_container);

@@ -5,7 +5,7 @@ use crate::{
     rendering::text::FontID,
     ui::dock::PaneContentResizeContext,
     uikit::{
-        CheckboxView, NumericInputView, NumericInputViewBackingStore, ScrollContainer,
+        CheckboxView, NumericInputView, NumericInputViewIO, NumericInputViewInit, ScrollContainer,
         StaticTextView, TeardownContext, TextInputViewIO, ViewElementSize, ViewFeedbackContext,
         ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext,
         ViewInstanceQueryableMut, ViewLocation, ViewPlacement, ViewRegisterable,
@@ -84,31 +84,55 @@ impl Presenter {
             let local_position_x_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0, 8.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.0, 0.0],
+                                offset: Point::new_logical(8.0, 8.0 + 12.0),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(-16.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             let local_position_y_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0 + 40.0, 8.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.333333, 0.0],
+                                offset: Point::new_logical(8.0, 8.0 + 12.0),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             let local_position_z_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.666666, 0.0],
+                                offset: Point::new_logical(8.0, 8.0 + 12.0),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             ctx.view_set_parent(label, items_container_view);
@@ -135,31 +159,55 @@ impl Presenter {
             let local_rotation_x_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.0, 0.0],
+                                offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             let local_rotation_y_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.333333, 0.0],
+                                offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             let local_rotation_z_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0 + 40.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.666666, 0.0],
+                                offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             ctx.view_set_parent(label, items_container_view);
@@ -186,34 +234,64 @@ impl Presenter {
             let local_scale_x_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.0, 0.0],
+                                offset: Point::new_logical(
+                                    8.0,
+                                    8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
+                                ),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             let local_scale_y_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(8.0 + 40.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.333333, 0.0],
+                                offset: Point::new_logical(
+                                    8.0,
+                                    8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
+                                ),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             let local_scale_z_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
-                    Rect::from_lt_size(
-                        Point::new_logical(
-                            8.0 + 40.0 + 40.0,
-                            8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
-                        ),
-                        Size::new_logical(32.0, 16.0),
-                    ),
-                    eh.clone(),
+                    NumericInputViewInit {
+                        placement: ViewPlacement {
+                            location: ViewLocation {
+                                parent_anchor: [0.666666, 0.0],
+                                offset: Point::new_logical(
+                                    8.0,
+                                    8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
+                                ),
+                                ..Default::default()
+                            },
+                            size: ViewElementSize::fixed(32.0, 16.0),
+                            ..Default::default()
+                        },
+                        value: eh.clone(),
+                        ..Default::default()
+                    },
                 ))
             });
             ctx.view_set_parent(label, items_container_view);
@@ -345,12 +423,20 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
             .expect("query failed")
             .resize(*new_size);
         context
+            .view_instance_mut::<ScrollContainer>(self.eh.root_container_view)
+            .expect("query failed")
+            .set_content_size(Size::new_logical(new_size.width.max(128.0), 8.0 + 12.0));
+        context
             .view_instance_mut::<ScrollContainer>(self.eh.items_container_view)
             .expect("query failed")
             .resize(Size::new_logical(
                 new_size.width,
                 new_size.height - 8.0 - 12.0 - 12.0,
             ));
+        context
+            .view_instance_mut::<ScrollContainer>(self.eh.items_container_view)
+            .expect("query failed")
+            .set_content_size(Size::new_logical(new_size.width.max(128.0), 8.0 + 12.0));
         context.schedule_view_render(self.eh.root_container_view);
     }
 }
@@ -578,7 +664,7 @@ impl TextInputViewIO for EventHandler {
         }
     }
 }
-impl NumericInputViewBackingStore for EventHandler {
+impl NumericInputViewIO for EventHandler {
     fn set_delta(&self, sender: ViewIdentifier, application: &mut ApplicationMutation, delta: f32) {
         // TODO: multi-select
         let Some(&selected) = application.selected_objects.iter().next() else {

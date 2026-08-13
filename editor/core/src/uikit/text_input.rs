@@ -27,10 +27,11 @@ use crate::{
     },
     uikit::{
         RenderChildScheduler, RenderContext, View, ViewEventHandler, ViewIdentifier,
-        ViewInstanceModifier, ViewNewRenderElements, ViewRenderQueue, ViewUpdateContext,
+        ViewInstanceModifier, ViewNewRenderElements, ViewPlacement, ViewRenderQueue,
+        ViewUpdateContext,
     },
     utils::{
-        LogicalUnit, Point, Rect, SafeF32,
+        LogicalUnit, Point, Rect, SafeF32, Size,
         text::{next_char_byte, prev_char_byte},
     },
 };
@@ -469,6 +470,8 @@ impl TextInputViewCore {
     pub fn new(
         ctx: &mut RenderContext,
         rect: Rect<LogicalUnit>,
+        parent_anchor: [f32; 2],
+        size_anchor: [f32; 2],
         delegated_view_id: ViewIdentifier,
         ht_root: HitTestTreeRef,
         io: std::rc::Weak<dyn TextInputViewIO>,
@@ -483,6 +486,8 @@ impl TextInputViewCore {
                 AnimatableFloat::Value(rect.left),
                 AnimatableFloat::Value(rect.top),
             ],
+            relative_offset_adjustment: parent_anchor,
+            relative_size_adjustment: size_anchor,
             has_bitmap: true,
             border: Some(Border {
                 thickness: 1.0,
@@ -555,11 +560,6 @@ impl TextInputViewCore {
             content_h_offset: core::cell::Cell::new(0.0),
             content_visible_width: 128.0 - 4.0,
             text_edit_state: RefCell::new(SingleLineTextEditState::new(String::new())),
-            // content: core::cell::RefCell::new(String::new()),
-            // cursor_pos_bytes: core::cell::Cell::new(0),
-            // preedit_range_start_bytes: core::cell::Cell::new(0),
-            // preedit_range_end_bytes: core::cell::Cell::new(0),
-            // selection_begin_bytes: core::cell::Cell::new(0),
             #[cfg(windows)]
             native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
                 ctx.system_link,
@@ -1741,6 +1741,8 @@ impl View for TextInputView {
                     core: TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
+                        [0.0; 2],
+                        [0.0; 2],
                         self.id,
                         ht_root,
                         self.io.clone() as _,
@@ -1799,28 +1801,40 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
     }
 }
 
-pub trait NumericInputViewBackingStore: TextInputViewIO {
+pub trait NumericInputViewIO: TextInputViewIO {
     fn set_delta(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, delta: f32);
+}
+
+pub struct NumericInputViewInit<ValueIO: NumericInputViewIO + 'static> {
+    pub placement: ViewPlacement,
+    pub value: std::rc::Weak<ValueIO>,
+}
+impl<ValueIO: NumericInputViewIO + 'static> Default for NumericInputViewInit<ValueIO> {
+    fn default() -> Self {
+        Self {
+            placement: ViewPlacement::default(),
+            value: std::rc::Weak::new(),
+        }
+    }
 }
 
 pub struct NumericInputView {
     id: ViewIdentifier,
     eh: Option<Rc<NumericInputViewEventHandler>>,
-    rect: Rect<LogicalUnit>,
-    value: std::rc::Weak<dyn NumericInputViewBackingStore>,
+    placement: ViewPlacement,
+    value: std::rc::Weak<dyn NumericInputViewIO>,
     should_revalidate_on_next_render: Cell<bool>,
 }
 impl NumericInputView {
     pub fn new(
         id: ViewIdentifier,
-        rect: Rect<LogicalUnit>,
-        value: std::rc::Weak<impl NumericInputViewBackingStore + 'static>,
+        init: NumericInputViewInit<impl NumericInputViewIO + 'static>,
     ) -> Self {
         Self {
             id,
             eh: None,
-            rect,
-            value: value as _,
+            placement: init.placement,
+            value: init.value as _,
             should_revalidate_on_next_render: Cell::new(true),
         }
     }
@@ -1849,12 +1863,18 @@ impl View for NumericInputView {
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
+                let size = self.placement.actual_size(|| Size::new_logical(32.0, 16.0));
+                let offset = self.placement.actual_offset(&size);
 
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: self.rect.width,
-                    height: self.rect.height,
-                    left: self.rect.left,
-                    top: self.rect.top,
+                    width: size.width,
+                    height: size.height,
+                    left: offset.x,
+                    top: offset.y,
+                    left_adjustment_factor: self.placement.location.parent_anchor[0],
+                    top_adjustment_factor: self.placement.location.parent_anchor[1],
+                    width_adjustment_factor: self.placement.size_anchor[0],
+                    height_adjustment_factor: self.placement.size_anchor[1],
                     cursor_shape: CursorShape::ResizeVertical,
                     keyboard_focus: Some(kf_token),
                     ..Default::default()
@@ -1862,7 +1882,9 @@ impl View for NumericInputView {
                 let eh = Rc::new(NumericInputViewEventHandler {
                     core: TextInputViewCore::new(
                         ctx,
-                        self.rect.clone(),
+                        Rect::from_lt_size(offset, size),
+                        self.placement.location.parent_anchor,
+                        self.placement.size_anchor,
                         self.id,
                         ht_root,
                         self.value.clone(),
@@ -1919,7 +1941,7 @@ impl View for NumericInputView {
 
 struct NumericInputViewEventHandler {
     core: TextInputViewCore,
-    value: std::rc::Weak<dyn NumericInputViewBackingStore>,
+    value: std::rc::Weak<dyn NumericInputViewIO>,
     kf_token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     key_input_enabled: Cell<bool>,

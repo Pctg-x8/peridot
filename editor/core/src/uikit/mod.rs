@@ -422,10 +422,24 @@ impl RawMountTarget {
     }
 }
 
+/// Viewの位置の指定 デフォルトでは親コンテナに対して(0, 0)に配置される
+#[derive(Clone)]
 pub struct ViewLocation {
+    /// 親コンテナ内での基準となる(大きさに対する)相対位置
     pub parent_anchor: [f32; 2],
+    /// 自身のサイズに対する相対位置([1.0, 0,0]を指定すると右橋基準で配置される)
     pub anchor: [f32; 2],
+    /// オフセット量
     pub offset: Point<LogicalUnit>,
+}
+impl Default for ViewLocation {
+    fn default() -> Self {
+        Self {
+            parent_anchor: [0.0; 2],
+            anchor: [0.0; 2],
+            offset: Point::new_logical(0.0, 0.0),
+        }
+    }
 }
 impl ViewLocation {
     pub const fn new_left_top(x: f32, y: f32) -> Self {
@@ -444,15 +458,48 @@ impl ViewLocation {
     }
 }
 
+#[derive(Clone)]
 pub enum ViewElementSize {
     Automatic,
     Fixed(Size<LogicalUnit>),
 }
+impl ViewElementSize {
+    pub const fn fixed(width: f32, height: f32) -> Self {
+        Self::Fixed(Size::new_logical(width, height))
+    }
+}
 
+#[derive(Clone)]
 pub struct ViewPlacement {
     pub location: ViewLocation,
     pub size: ViewElementSize,
     pub size_anchor: [f32; 2],
+}
+impl Default for ViewPlacement {
+    fn default() -> Self {
+        Self {
+            location: ViewLocation::new_left_top(0.0, 0.0),
+            size: ViewElementSize::Automatic,
+            size_anchor: [0.0; 2],
+        }
+    }
+}
+impl ViewPlacement {
+    /// 実際に配置されるサイズを計算する 引数にはAutomatic指定時の算出ロジックを渡す(Viewによって異なる)
+    pub fn actual_size(&self, automatic: impl FnOnce() -> Size<LogicalUnit>) -> Size<LogicalUnit> {
+        match self.size {
+            ViewElementSize::Fixed(x) => x,
+            ViewElementSize::Automatic => automatic(),
+        }
+    }
+
+    /// 実際に配置されるオフセット位置を計算する
+    pub fn actual_offset(&self, actual_size: &Size<LogicalUnit>) -> Point<LogicalUnit> {
+        Point::new_logical(
+            self.location.offset.x - actual_size.width * self.location.anchor[0],
+            self.location.offset.y - actual_size.height * self.location.anchor[1],
+        )
+    }
 }
 
 #[derive(Default)]
@@ -1483,10 +1530,7 @@ pub use self::menu::{
 };
 
 mod text_input;
-pub use self::text_input::{
-    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore, TextInputView,
-    TextInputViewCore, TextInputViewIO,
-};
+pub use self::text_input::*;
 
 mod scroll;
 pub use self::scroll::ScrollContainer;
