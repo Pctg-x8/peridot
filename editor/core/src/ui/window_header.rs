@@ -22,8 +22,8 @@ use crate::{
         text::FontID,
     },
     uikit::{
-        RenderChildScheduler, RenderContext, ViewIdentifier, ViewInstanceQueryableMut,
-        ViewRegisterable, ViewRelationControllable, ViewRenderer,
+        RenderContext, ViewIdentifier, ViewInstanceQueryableMut, ViewRegisterable,
+        ViewRelationControllable, ViewRenderer,
     },
     utils::{LogicalUnit, Rect},
 };
@@ -125,10 +125,9 @@ impl crate::uikit::View for View {
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> crate::uikit::ViewNewRenderElements {
-        match self.entity {
-            Some(_) => crate::uikit::ViewNewRenderElements::EMPTY,
+    ) -> crate::uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -180,13 +179,14 @@ impl crate::uikit::View for View {
                     ..Default::default()
                 });
 
-                self.entity = Some(ViewEntity { ct_root, ht_root });
-                crate::uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..crate::uikit::ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(ViewEntity { ct_root, ht_root })
             }
+        };
+
+        crate::uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..crate::uikit::ViewRenderElements::EMPTY
         }
     }
 
@@ -240,9 +240,8 @@ impl crate::uikit::View for SystemCommandButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> crate::uikit::ViewNewRenderElements {
-        match self.entity {
+    ) -> crate::uikit::ViewRenderElements {
+        let e = match self.entity {
             Some(ref e) => {
                 if e.cmd.replace(self.cmd) != self.cmd {
                     // cmd changeA
@@ -264,7 +263,7 @@ impl crate::uikit::View for SystemCommandButtonView {
                     ctx.ht_manager.get_data_mut(e.ht_root).role = self.cmd.role();
                 }
 
-                crate::uikit::ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -345,13 +344,14 @@ impl crate::uikit::View for SystemCommandButtonView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &entity);
 
-                self.entity = Some(entity);
-                crate::uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..crate::uikit::ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(entity)
             }
+        };
+
+        crate::uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..crate::uikit::ViewRenderElements::EMPTY
         }
     }
 

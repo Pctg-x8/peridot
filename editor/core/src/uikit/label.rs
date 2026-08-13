@@ -9,8 +9,7 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewNewRenderElements, ViewPlacement,
+        RenderContext, TeardownContext, View, ViewElementSize, ViewPlacement, ViewRenderElements,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -83,11 +82,10 @@ impl View for StaticTextView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.ct {
+    ) -> ViewRenderElements {
+        let e = match self.ct {
             // TODO: needs reflect modified properties
-            Some(_) => ViewNewRenderElements::EMPTY,
+            Some(ref e) => e,
             None => {
                 let size = match self.placement.size {
                     ViewElementSize::Fixed(s) => s,
@@ -136,12 +134,13 @@ impl View for StaticTextView {
                     ..Default::default()
                 });
 
-                self.ct = Some(ct);
-                ViewNewRenderElements {
-                    composite_tree: Some(ct),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.ct.insert(ct)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(*e),
+            ..ViewRenderElements::EMPTY
         }
     }
 

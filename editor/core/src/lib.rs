@@ -52,17 +52,16 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
-        CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
-        MountContext, MountTarget, NumericInputView, NumericInputViewIO, NumericInputViewInit,
-        PopupID, PopupManager, RadioButtonView, RawMountTarget, RenderChildScheduler,
-        RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
-        TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize,
-        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegistry, ViewGroupID,
-        ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayoutStateStore, ViewLocation, ViewPlacement, ViewRegisterable,
-        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer,
-        ViewTreeRelationStore,
+        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView, MountContext,
+        MountTarget, NumericInputView, NumericInputViewIO, NumericInputViewInit, PopupID,
+        PopupManager, RadioButtonView, RenderContext, ScrollContainer, SimpleButtonEventHandler,
+        SimpleButtonView, StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View,
+        ViewElementSize, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegistry,
+        ViewGroupID, ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator,
+        ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewLocation,
+        ViewPlacement, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
+        ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -1356,20 +1355,7 @@ impl View for ColorPickerView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        let new_render_elements = if !self.first_rendered {
-            // first render
-            uikit::ViewNewRenderElements {
-                composite_tree: Some(self.eh.ct_root),
-                hit_tree: Some(self.eh.ht_root),
-                ..uikit::ViewNewRenderElements::EMPTY
-            }
-        } else {
-            uikit::ViewNewRenderElements::EMPTY
-        };
-
-        self.first_rendered = true;
+    ) -> uikit::ViewRenderElements {
         // TODO: ViewがViewをもつパターン(これなしにしたほうがいいかも)
         // self.eh.hex_text_input_view.borrow_mut().render(
         //     ctx,
@@ -1380,7 +1366,11 @@ impl View for ColorPickerView {
         //     kf_group,
         // );
 
-        new_render_elements
+        uikit::ViewRenderElements {
+            composite_tree: Some(self.eh.ct_root),
+            hit_tree: Some(self.eh.ht_root),
+            ..uikit::ViewRenderElements::EMPTY
+        }
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
@@ -1859,12 +1849,11 @@ impl View for ColorPickerHexTextInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        match self.eh {
-            Some(_) => {
+    ) -> uikit::ViewRenderElements {
+        let e = match self.eh {
+            Some(ref e) => {
                 // TODO: reflect changes
-                uikit::ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
@@ -1896,14 +1885,14 @@ impl View for ColorPickerHexTextInputView {
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
                 ctx.ht_manager.set_action_handler(ht_root, eh.core.entity());
 
-                let r = uikit::ViewNewRenderElements {
-                    composite_tree: Some(eh.core.entity().ct_root()),
-                    hit_tree: Some(eh.core.entity().ht_root()),
-                    keyboard_focus: Some(kf_token),
-                };
-                self.eh = Some(eh);
-                r
+                &*self.eh.insert(eh)
             }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.core.entity().ct_root()),
+            hit_tree: Some(e.core.entity().ht_root()),
+            keyboard_focus: Some(e.token),
         }
     }
 
@@ -2106,9 +2095,8 @@ impl View for EditableColorButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        match self.eh {
+    ) -> uikit::ViewRenderElements {
+        let e = match self.eh {
             Some(ref e) => {
                 ctx.composite_tree
                     .begin_mod_chain(e.ct_color)
@@ -2120,7 +2108,7 @@ impl View for EditableColorButtonView {
                     ])))
                     .apply();
 
-                uikit::ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -2223,13 +2211,14 @@ impl View for EditableColorButtonView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-                self.eh = Some(eh);
-                uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..uikit::ViewNewRenderElements::EMPTY
-                }
+                &*self.eh.insert(eh)
             }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            keyboard_focus: None,
         }
     }
 
@@ -2769,9 +2758,8 @@ impl View for EmptyView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        uikit::ViewNewRenderElements::EMPTY
+    ) -> uikit::ViewRenderElements {
+        uikit::ViewRenderElements::EMPTY
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
@@ -3217,49 +3205,17 @@ impl PerWindowData {
     }
 }
 
-struct WindowRootView {
-    entity: Option<(CompositeTreeRef, HitTestTreeRef)>,
-}
+struct WindowRootView {}
 impl View for WindowRootView {
     fn render(
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
-        ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        let &mut (ct, ht) = self.entity.get_or_insert_with(|| {
-            let ct_root = ctx.composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            });
-            let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            });
-
-            (ct_root, ht_root)
-        });
-        sched.schedule_render_children(RawMountTarget {
-            ct_root: ct,
-            ht_root: ht,
-        });
-        crate::uikit::ViewNewRenderElements {
-            composite_tree: Some(ct),
-            hit_tree: Some(ht),
-            ..crate::uikit::ViewNewRenderElements::EMPTY
-        }
+        _ctx: &mut RenderContext,
+    ) -> uikit::ViewRenderElements {
+        uikit::ViewRenderElements::EMPTY
     }
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {
-        let Some((ct, ht)) = self.entity.take() else {
-            // not rendered
-            return;
-        };
-
-        ctx.mount_context.composite_tree.free(ct);
-        ctx.mount_context.ht_manager.free(ht);
-    }
+    fn teardown(&mut self, _ctx: &mut TeardownContext) {}
 }
 
 struct LaunchArgs<'sys> {
@@ -3399,8 +3355,7 @@ async fn run<'sys>(
             AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
         ))
         .apply();
-    let main_window_root_view =
-        view_init_ctx.construct_view(|_| Box::new(WindowRootView { entity: None }));
+    let main_window_root_view = view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
     let window_header = ui::window_header::Component::new(
         ui::window_header::Caption::Main {
             project_name: "New Project".into(),
@@ -3659,8 +3614,7 @@ async fn run<'sys>(
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
                     };
-                    let root_view =
-                        view_init_ctx.construct_view(|_| Box::new(WindowRootView { entity: None }));
+                    let root_view = view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
                     let window_header_view = ui::window_header::Component::new(
                         ui::window_header::Caption::Sub,
                         ui::window_header::ComponentInit {
@@ -6487,8 +6441,8 @@ async fn run<'sys>(
                                     main_thread_texture_id_issuer: &mut texture_id_issuer,
                                     application: &application,
                                 };
-                                let root_view = view_init_ctx
-                                    .construct_view(|_| Box::new(WindowRootView { entity: None }));
+                                let root_view =
+                                    view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
                                 let window_header_view = ui::window_header::Component::new(
                                     ui::window_header::Caption::Sub,
                                     ui::window_header::ComponentInit {
@@ -8418,9 +8372,8 @@ impl View for PreviewToolSelectorButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        match self.entity {
+    ) -> uikit::ViewRenderElements {
+        let e = match self.entity {
             Some(ref e) => {
                 if self.selecting != e.selecting.replace(self.selecting) {
                     // TODO: reflect selecting
@@ -8447,7 +8400,7 @@ impl View for PreviewToolSelectorButtonView {
                         .apply();
                 }
 
-                uikit::ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -8538,13 +8491,14 @@ impl View for PreviewToolSelectorButtonView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &entity);
 
-                self.entity = Some(entity);
-                uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..uikit::ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(entity)
             }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..uikit::ViewRenderElements::EMPTY
         }
     }
 
@@ -8569,9 +8523,9 @@ struct PreviewToolSelectorButtonViewEntity {
 impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> EventContinueControl {
         context
             .composite_tree
@@ -8590,9 +8544,9 @@ impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
 
     fn on_pointer_leave(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        _args: &PointerActionArgs,
     ) -> EventContinueControl {
         context
             .composite_tree
@@ -8611,36 +8565,36 @@ impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
 
     fn on_pointer_down(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_pointer_up(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_drag_start(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         context
             .application
@@ -8786,17 +8740,9 @@ impl View for PreviewView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        match self.entity {
-            Some(ref e) => {
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-
-                uikit::ViewNewRenderElements::EMPTY
-            }
+    ) -> uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
@@ -8823,14 +8769,14 @@ impl View for PreviewView {
                 ctx.keyboard_focus_registry
                     .set_event_handler(kf_token, &entity);
 
-                self.entity = Some(entity);
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    keyboard_focus: Some(kf_token),
-                }
+                &*self.entity.insert(entity)
             }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            keyboard_focus: Some(e.kf_token),
         }
     }
 

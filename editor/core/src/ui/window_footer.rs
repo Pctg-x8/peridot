@@ -18,10 +18,9 @@ impl crate::uikit::View for View {
         &mut self,
         _layout_rect: crate::utils::Rect<crate::utils::LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
-        _sched: &mut crate::uikit::RenderChildScheduler,
-    ) -> crate::uikit::ViewNewRenderElements {
-        match self.entity {
-            Some(_) => crate::uikit::ViewNewRenderElements::EMPTY,
+    ) -> crate::uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -48,12 +47,13 @@ impl crate::uikit::View for View {
                     ..Default::default()
                 });
 
-                self.entity = Some(ViewEntity { ct_root });
-                crate::uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    ..crate::uikit::ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(ViewEntity { ct_root })
             }
+        };
+
+        crate::uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            ..crate::uikit::ViewRenderElements::EMPTY
         }
     }
 

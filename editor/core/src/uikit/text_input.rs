@@ -26,8 +26,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        RenderChildScheduler, RenderContext, View, ViewIdentifier, ViewNewRenderElements,
-        ViewPlacement, ViewRenderQueue, ViewRenderer,
+        RenderContext, View, ViewIdentifier, ViewPlacement, ViewRenderElements, ViewRenderQueue,
+        ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,
@@ -1707,12 +1707,11 @@ impl View for TextInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        let (eh, r) = match self.eh {
+    ) -> ViewRenderElements {
+        let eh = match self.eh {
             Some(ref eh) => {
                 // TODO: reflect changes
-                (eh, ViewNewRenderElements::EMPTY)
+                eh
             }
             None => {
                 // first render
@@ -1745,12 +1744,7 @@ impl View for TextInputView {
                 ctx.keyboard_focus_registry
                     .set_event_handler(kf_token, &eh.core.eh);
 
-                let r = ViewNewRenderElements {
-                    composite_tree: Some(eh.core.eh.ct_root),
-                    hit_tree: Some(ht_root),
-                    keyboard_focus: Some(kf_token),
-                };
-                (&*self.eh.insert(eh), r)
+                &*self.eh.insert(eh)
             }
         };
 
@@ -1761,7 +1755,11 @@ impl View for TextInputView {
             ctx.current_sec,
         );
 
-        r
+        ViewRenderElements {
+            composite_tree: Some(eh.core.eh.ct_root),
+            hit_tree: Some(eh.ht_root),
+            keyboard_focus: Some(eh.token),
+        }
     }
 
     fn teardown(&mut self, ctx: &mut super::TeardownContext) {
@@ -1844,9 +1842,8 @@ impl View for NumericInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        let (eh, new_elements) = match self.eh {
+    ) -> ViewRenderElements {
+        let eh = match self.eh {
             Some(ref x) => {
                 ctx.ht_manager.get_data_mut(x.ht_root).cursor_shape = if x.key_input_enabled.get() {
                     CursorShape::IBeam
@@ -1854,7 +1851,7 @@ impl View for NumericInputView {
                     CursorShape::ResizeVertical
                 };
 
-                (x, ViewNewRenderElements::EMPTY)
+                x
             }
             None => {
                 // first render
@@ -1893,12 +1890,7 @@ impl View for NumericInputView {
                 ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
 
-                let r = ViewNewRenderElements {
-                    composite_tree: Some(eh.core.eh.ct_root),
-                    hit_tree: Some(ht_root),
-                    keyboard_focus: Some(kf_token),
-                };
-                (&*self.eh.insert(eh), r)
+                &*self.eh.insert(eh)
             }
         };
 
@@ -1926,7 +1918,11 @@ impl View for NumericInputView {
             ctx.current_sec,
         );
 
-        new_elements
+        ViewRenderElements {
+            composite_tree: Some(eh.core.eh.ct_root),
+            hit_tree: Some(eh.ht_root),
+            keyboard_focus: Some(eh.kf_token),
+        }
     }
 
     fn teardown(&mut self, ctx: &mut super::TeardownContext) {
@@ -2223,12 +2219,11 @@ impl View for MultilineTextInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        let (eh, r) = match self.eh {
+    ) -> ViewRenderElements {
+        let eh = match self.eh {
             Some(ref eh) => {
                 // TODO: reflect changes
-                (eh, ViewNewRenderElements::EMPTY)
+                eh
             }
             None => {
                 // first render
@@ -2370,13 +2365,7 @@ impl View for MultilineTextInputView {
                         .insert(self.eh.ht_root);
                 }*/
 
-                let r = ViewNewRenderElements {
-                    composite_tree: Some(eh.ct_root),
-                    hit_tree: Some(eh.ht_root),
-                    keyboard_focus: Some(kf_token),
-                };
-
-                (&*self.eh.insert(eh), r)
+                &*self.eh.insert(eh)
             }
         };
 
@@ -2387,7 +2376,11 @@ impl View for MultilineTextInputView {
             ctx.current_sec,
         );
 
-        r
+        ViewRenderElements {
+            composite_tree: Some(eh.ct_root),
+            hit_tree: Some(eh.ht_root),
+            keyboard_focus: Some(eh.kf_token),
+        }
     }
 
     fn teardown(&mut self, ctx: &mut super::TeardownContext) {

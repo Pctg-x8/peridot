@@ -16,8 +16,8 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewNewRenderElements, ViewRenderer,
+        RawMountTarget, RenderContext, TeardownContext, View, ViewIdentifier, ViewRenderElements,
+        ViewRenderer,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -93,9 +93,8 @@ impl View for ScrollContainer {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.eh {
+    ) -> ViewRenderElements {
+        let e = match self.eh {
             Some(ref eh) => {
                 let mut recompute_scroll_bars = false;
                 if self.viewport_size.width != eh.viewport_size.width.get()
@@ -147,11 +146,7 @@ impl View for ScrollContainer {
                 ctx.ht_manager.get_data_mut(eh.ht_content_root).top = -offset_y;
                 eh.update_thumb_position(ctx.composite_tree, ctx.ht_manager);
 
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: eh.ct_content_root,
-                    ht_root: eh.ht_content_root,
-                });
-                ViewNewRenderElements::EMPTY
+                eh
             }
             None => {
                 // first render
@@ -360,17 +355,14 @@ impl View for ScrollContainer {
                 // initial setup for scroll bars
                 eh.recompute_scroll_bars(ctx);
 
-                self.eh = Some(eh);
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: ct_content_root,
-                    ht_root: ht_content_root,
-                });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.eh.insert(eh)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 

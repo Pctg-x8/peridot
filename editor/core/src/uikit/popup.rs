@@ -12,8 +12,8 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewImmediateRenderable, ViewInitContext, ViewInstanceStore, ViewNewRenderElements,
+        RawMountTarget, RenderContext, TeardownContext, View, ViewIdentifier,
+        ViewImmediateRenderable, ViewInitContext, ViewInstanceStore, ViewRenderElements,
         ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, teardown_view_recursive,
         view_instance, view_instance_mut,
     },
@@ -245,17 +245,9 @@ impl View for OverlayPopupBasicMaskView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.render_elements {
-            Some(ref e) => {
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-
-                ViewNewRenderElements::EMPTY
-            }
+    ) -> ViewRenderElements {
+        let e = match self.render_elements {
+            Some(ref e) => e,
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -280,16 +272,16 @@ impl View for OverlayPopupBasicMaskView {
                 // play open animation at first render
                 Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
 
-                self.render_elements =
-                    Some(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root });
-
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self
+                    .render_elements
+                    .insert(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root })
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -405,17 +397,12 @@ impl View for OverlayPopupBasicFrameView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.render_elements {
+    ) -> ViewRenderElements {
+        let e = match self.render_elements {
             Some(ref e) => {
                 // TODO: reflect changes
 
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -480,16 +467,16 @@ impl View for OverlayPopupBasicFrameView {
                 // play animation on first render
                 Self::play_open_animation(ct_root, &self.size, ctx.composite_tree, ctx.current_sec);
 
-                self.render_elements =
-                    Some(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root });
-
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self
+                    .render_elements
+                    .insert(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root })
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 

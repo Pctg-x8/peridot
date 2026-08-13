@@ -440,37 +440,21 @@ impl ViewPlacement {
     }
 }
 
-#[derive(Default)]
-pub struct ViewNewRenderElements {
+/// Viewの描画要素
+pub struct ViewRenderElements {
+    /// CompositeTree
     pub composite_tree: Option<CompositeTreeRef>,
+    /// HitTestTree
     pub hit_tree: Option<HitTestTreeRef>,
+    /// キーボードフォーカス
     pub keyboard_focus: Option<FocusTargetToken>,
 }
-impl ViewNewRenderElements {
+impl ViewRenderElements {
     pub const EMPTY: Self = Self {
         composite_tree: None,
         hit_tree: None,
         keyboard_focus: None,
     };
-
-    pub fn mount_on(
-        &self,
-        target: &(impl MountTarget + ?Sized),
-        kf_group: KeyboardFocusGroupRef,
-        ctx: &mut MountContext,
-    ) {
-        if let Some(composite_tree) = self.composite_tree {
-            ctx.composite_tree
-                .add_child(target.ct_root(), composite_tree);
-        }
-        if let Some(hit_tree) = self.hit_tree {
-            ctx.ht_manager.add_child(target.ht_root(), hit_tree);
-        }
-        if let Some(keyboard_focus) = self.keyboard_focus {
-            ctx.keyboard_focus_registry
-                .join_group(kf_group, keyboard_focus);
-        }
-    }
 }
 
 /// Viewのライフサイクル
@@ -480,8 +464,7 @@ pub trait View: core::any::Any {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements;
+    ) -> ViewRenderElements;
 
     /// Teardown(アンマウント)時に呼ばれる
     fn teardown(&mut self, ctx: &mut TeardownContext);
@@ -571,28 +554,25 @@ impl ViewRenderQueue {
             let mut scheduled_renders = VecDeque::new();
             scheduled_renders.push_back((mount_target, target));
             while let Some((mt, v)) = scheduled_renders.pop_front() {
-                let mut sched = RenderChildScheduler::new();
-                render_view_instance1(
+                let new_mount_target = render_view_instance1(
                     v,
                     ctx,
-                    &mut sched,
-                    mt,
+                    &mt,
                     kf_group,
                     instance_store,
                     layout_state_store,
                     render_state_store,
                 );
+                let next_mount_target = new_mount_target.unwrap_or(mt);
 
                 // もうrenderしたので次のループからはRenderしない
                 self.pending.remove(&v);
-                if let Some(mt) = sched.mount_on {
-                    scheduled_renders.extend(
-                        tree_relation_store.relations[v.into_array_index()]
-                            .children
-                            .iter()
-                            .map(|&x| (mt.clone(), x)),
-                    );
-                }
+                scheduled_renders.extend(
+                    tree_relation_store.relations[v.into_array_index()]
+                        .children
+                        .iter()
+                        .map(|&x| (next_mount_target.clone(), x)),
+                );
             }
         }
     }
@@ -941,10 +921,22 @@ pub fn view_iter_self_group_participants(
 
 pub fn layout_view_recursive(
     target: ViewIdentifier,
+    assigned_rect: Rect<LogicalUnit>,
     tree_relation_store: &ViewTreeRelationStore,
     layout_state_store: &mut ViewLayoutStateStore,
 ) {
-    // TODO: layout logic here
+    layout_state_store.0[target.into_array_index()].layout_rect = assigned_rect.clone();
+    for &child in tree_relation_store.relations[target.into_array_index()]
+        .children
+        .iter()
+    {
+        layout_view_recursive(
+            child,
+            assigned_rect.clone(),
+            tree_relation_store,
+            layout_state_store,
+        );
+    }
 }
 
 pub fn render_view_recursive(
@@ -960,55 +952,49 @@ pub fn render_view_recursive(
     let mut scheduled_renders = VecDeque::new();
     scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), target));
     while let Some((mt, v)) = scheduled_renders.pop_front() {
-        let mut sched = RenderChildScheduler::new();
-        render_view_instance1(
+        let new_mount_target = render_view_instance1(
             v,
             ctx,
-            &mut sched,
-            mt,
+            &mt,
             keyboard_focus_group,
             instance_store,
             layout_state_store,
             render_state_store,
         );
+        let next_mount_target = new_mount_target.unwrap_or(mt);
 
-        if let Some(mt) = sched.mount_on {
-            // schedule render children to mount on
-            scheduled_renders.extend(
-                tree_relation_store.relations[v.into_array_index()]
-                    .children
-                    .iter()
-                    .map(|&x| (mt.clone(), x)),
-            );
-        }
+        scheduled_renders.extend(
+            tree_relation_store.relations[v.into_array_index()]
+                .children
+                .iter()
+                .map(|&x| (next_mount_target.clone(), x)),
+        );
     }
 }
 
 fn render_view_instance1(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
-    sched: &mut RenderChildScheduler,
-    mount_to: RawMountTarget,
+    mount_to: &RawMountTarget,
     kf_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
     layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
-) {
+) -> Option<RawMountTarget> {
     let Some(&mut ViewInstanceCell {
         instance: Some(ref mut instance),
         active,
     }) = instance_store.instances.get_mut(target.into_array_index())
     else {
         // no instance associated
-        return;
+        return None;
     };
 
-    let new_render_elements = instance.render(
+    let render_elements = instance.render(
         layout_state_store.0[target.into_array_index()]
             .layout_rect
             .clone(),
         ctx,
-        sched,
     );
 
     let render_state = &mut render_state_store.0[target.into_array_index()];
@@ -1020,20 +1006,22 @@ fn render_view_instance1(
         != Some(mount_to.ct_root)
     {
         // parent changed
-        let ct = new_render_elements
+        let ct = render_elements
             .composite_tree
             .or(render_state.active_render_element_ct);
         if let Some(ct) = ct {
             ctx.composite_tree.add_child(mount_to.ct_root, ct);
-            render_state.active_render_element_ct = Some(ct);
         }
-    } else if let Some(new_ct) = new_render_elements.composite_tree
-        && Some(new_ct) != render_state.active_render_element_ct
-    {
+    } else if render_state.active_render_element_ct != render_elements.composite_tree {
         // different object rendered
-        ctx.composite_tree.add_child(mount_to.ct_root, new_ct);
-        render_state.active_render_element_ct = Some(new_ct);
+        if let Some(old) = render_state.active_render_element_ct {
+            ctx.composite_tree.remove_child(old);
+        }
+        if let Some(new) = render_elements.composite_tree {
+            ctx.composite_tree.add_child(mount_to.ct_root, new);
+        }
     }
+    render_state.active_render_element_ct = render_elements.composite_tree;
 
     if render_state
         .current_mounted_on
@@ -1042,22 +1030,24 @@ fn render_view_instance1(
         != Some(mount_to.ht_root)
     {
         // parent changed
-        let ht = new_render_elements
+        let ht = render_elements
             .hit_tree
             .or(render_state.active_render_element_ht);
         if let Some(ht) = ht {
             ctx.ht_manager.add_child(mount_to.ht_root, ht);
-            render_state.active_render_element_ht = Some(ht);
         }
-    } else if let Some(new_ht) = new_render_elements.hit_tree
-        && Some(new_ht) != render_state.active_render_element_ht
-    {
+    } else if render_state.active_render_element_ht != render_elements.hit_tree {
         // different object rendered
-        ctx.ht_manager.add_child(mount_to.ht_root, new_ht);
-        render_state.active_render_element_ht = Some(new_ht);
+        if let Some(old) = render_state.active_render_element_ht {
+            ctx.ht_manager.remove_child(old);
+        }
+        if let Some(new) = render_elements.hit_tree {
+            ctx.ht_manager.add_child(mount_to.ht_root, new);
+        }
     }
+    render_state.active_render_element_ht = render_elements.hit_tree;
 
-    let new_active_keyboard_focus_token = new_render_elements
+    let new_active_keyboard_focus_token = render_elements
         .keyboard_focus
         .or(render_state.active_keyboard_focus_token);
     if Some(kf_group) != render_state.current_mounted_on.as_ref().map(|x| x.1) {
@@ -1074,7 +1064,7 @@ fn render_view_instance1(
         render_state.active_keyboard_focus_token = Some(kf);
     }
 
-    render_state.current_mounted_on = Some((mount_to, kf_group));
+    render_state.current_mounted_on = Some((mount_to.clone(), kf_group));
 
     if render_state.visible.replace(active) != Some(active) {
         // visible state changed
@@ -1088,6 +1078,18 @@ fn render_view_instance1(
         if let Some(ht) = render_state.active_render_element_ht {
             ctx.ht_manager.get_data_mut(ht).active = active;
         }
+    }
+
+    if let Some(ct) = render_state.active_render_element_ct
+        && let Some(ht) = render_state.active_render_element_ht
+    {
+        // 両方あるときだけこのViewの子にRenderできる
+        Some(RawMountTarget {
+            ct_root: ct,
+            ht_root: ht,
+        })
+    } else {
+        None
     }
 }
 
