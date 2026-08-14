@@ -1038,7 +1038,7 @@ impl MutableAttributedString {
     pub fn set_attributes(
         &mut self,
         range: CFRange,
-        replacement: &Dictionary<String, dyn Object>,
+        replacement: &Dictionary<String, AnyObject>,
         clear_other_attributes: bool,
     ) {
         unsafe {
@@ -1057,5 +1057,10 @@ impl AttributedStringKey {
     #[inline(always)]
     pub const fn font<'a>() -> &'a String {
         unsafe { &*crate::raw::core_foundation::NSFontAttributeName.cast::<String>() }
+    }
+
+    #[inline(always)]
+    pub const fn paragraph_style<'a>() -> &'a String {
+        unsafe { &*crate::raw::core_foundation::NSParagraphStyleAttributeName.cast::<String>() }
     }
 }

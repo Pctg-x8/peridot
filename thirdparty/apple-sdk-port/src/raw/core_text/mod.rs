@@ -24,3 +24,6 @@ pub use self::typesetter::*;
 
 mod run;
 pub use self::run::*;
+
+mod paragraph_style;
+pub use self::paragraph_style::*;

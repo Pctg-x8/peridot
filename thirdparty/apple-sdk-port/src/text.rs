@@ -535,3 +535,63 @@ impl Framesetter {
         }
     }
 }
+
+#[repr(transparent)]
+pub struct ParagraphStyle(__CTParagraphStyle);
+impl Object for ParagraphStyle {
+    #[inline(always)]
+    fn as_typeref(&self) -> crate::raw::CFTypeRef {
+        core::ptr::from_ref(&self.0).cast()
+    }
+}
+impl ParagraphStyle {
+    #[inline(always)]
+    pub fn new(settings: &[CTParagraphStyleSetting]) -> Option<Owned<Self>> {
+        unsafe {
+            Owned::from_ptr(
+                CTParagraphStyleCreate(settings.as_ptr(), settings.len())
+                    .cast_mut()
+                    .cast(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn copy(&self) -> Option<Owned<Self>> {
+        unsafe {
+            Owned::from_ptr(
+                CTParagraphStyleCreateCopy(core::ptr::from_ref(&self.0).cast_mut())
+                    .cast_mut()
+                    .cast(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn get_value_for_specifier_raw(
+        &self,
+        specifier: CTParagraphStyleSpecifier,
+        buffer_size: usize,
+        buffer: *mut core::ffi::c_void,
+    ) -> Result<(), ()> {
+        if unsafe { CTParagraphStyleGetValueForSpecifier(&self.0, specifier, buffer_size, buffer) }
+        {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_value_for_specifier<T>(
+        &self,
+        specifier: CTParagraphStyleSpecifier,
+    ) -> Result<T, ()> {
+        let mut v = core::mem::MaybeUninit::<T>::uninit();
+        unsafe {
+            self.get_value_for_specifier_raw(specifier, size_of::<T>(), v.as_mut_ptr().cast())?;
+        }
+
+        Ok(unsafe { v.assume_init() })
+    }
+}

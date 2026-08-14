@@ -10,8 +10,12 @@ use apple_sdk_port::{
         Range as NSRange, String as NSString,
     },
     graphics::Path,
-    raw::{CGPoint, CGRect, CGSize},
-    text::{Font as NativeFont, FontOrientation, Frame, Framesetter},
+    raw::{
+        CGPoint, CGRect, CGSize, CTParagraphStyleSetting, CTTextAlignment,
+        kCTParagraphStyleSpecifierAlignment, kCTTextAlignmentCenter, kCTTextAlignmentLeft,
+        kCTTextAlignmentRight,
+    },
+    text::{Font as NativeFont, FontOrientation, Frame, Framesetter, ParagraphStyle},
 };
 
 use crate::{
@@ -75,7 +79,30 @@ impl CoreTextLayout {
         for (s, r) in as_runs {
             str.replace_attributed_string(r, &s);
         }
-        // TODO: horizontal text alignment(CTParagraphStyleをkCTParagraphStyleAttrNameで紐づければ良いらしい？)
+        // overwrite entire attributes
+        let mut entire_attrs =
+            MutableDictionary::<NSString, AnyObject>::new_copying_key_generic_value(None, 1)
+                .expect("entire_attrs.create");
+        let alignment_value = match alignment {
+            CompositeRectTextHorizontalAlignment::Start => kCTTextAlignmentLeft,
+            CompositeRectTextHorizontalAlignment::Middle => kCTTextAlignmentCenter,
+            CompositeRectTextHorizontalAlignment::End => kCTTextAlignmentRight,
+        };
+        entire_attrs.set(
+            AttributedStringKey::paragraph_style(),
+            ParagraphStyle::new(&[CTParagraphStyleSetting {
+                spec: kCTParagraphStyleSpecifierAlignment,
+                value_size: size_of::<CTTextAlignment>(),
+                value: core::ptr::from_ref(&alignment_value).cast(),
+            }])
+            .expect("paragraph_style.create")
+            .as_any(),
+        );
+        let range = NSRange {
+            location: 0,
+            length: str.len(),
+        };
+        str.set_attributes(range, &entire_attrs, false);
         str.end_editing();
 
         let framesetter = Framesetter::from_attributed_string(&str).expect("framesetter.create");
@@ -148,11 +175,9 @@ impl CoreTextLayout {
                 // });
 
                 let font = unsafe {
-                    apple_sdk_port::text::Font::ref_from_untyped_ptr(
+                    NativeFont::ref_from_untyped_ptr(
                         attributes
-                            .get_untyped_value(
-                                apple_sdk_port::foundation::AttributedStringKey::font(),
-                            )
+                            .get_untyped_value(AttributedStringKey::font())
                             .expect("font not set?")
                             .as_ptr(),
                     )
@@ -195,8 +220,8 @@ impl CoreTextLayout {
                 .zip(accumulated_inline_shifts)
             {
                 let font_uniq_name = font
-                    .copy_name(apple_sdk_port::text::Font::unique_name_key())
-                    .or_else(|| font.copy_name(apple_sdk_port::text::Font::full_name_key()))
+                    .copy_name(NativeFont::unique_name_key())
+                    .or_else(|| font.copy_name(NativeFont::full_name_key()))
                     .expect("cannot determine font unique name");
                 let font_size = font.size();
                 let font_unique_id = FONT_UNIQUIFY_STORAGE
@@ -206,7 +231,7 @@ impl CoreTextLayout {
                 tracing::debug!(?font_uniq_name, font_size, count = glyph_count, "run");
                 let mut glyph_bounding_rects = Vec::with_capacity(glyph_count as _);
                 font.bounding_rects_for_glyphs(
-                    apple_sdk_port::text::FontOrientation::Horizontal,
+                    FontOrientation::Horizontal,
                     unsafe { core::slice::from_raw_parts(r.glyphs_ptr(), glyph_count as _) },
                     glyph_bounding_rects.spare_capacity_mut(),
                 );

@@ -115,4 +115,5 @@ unsafe extern "C" {
     ) -> bool;
 
     pub static NSFontAttributeName: CFStringRef;
+    pub static NSParagraphStyleAttributeName: CFStringRef;
 }
