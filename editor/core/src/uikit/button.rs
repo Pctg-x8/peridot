@@ -203,6 +203,7 @@ impl View for SimpleButtonView {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
             keyboard_focus: Some(e.kf_token),
+            ..ViewRenderElements::EMPTY
         }
     }
 

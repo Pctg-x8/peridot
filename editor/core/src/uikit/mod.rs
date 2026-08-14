@@ -446,6 +446,10 @@ pub struct ViewRenderElements {
     pub composite_tree: Option<CompositeTreeRef>,
     /// HitTestTree
     pub hit_tree: Option<HitTestTreeRef>,
+    /// 子のmount対象とするCompositeTreeRef 指定しなければ`composite_tree`と同一
+    pub mount_target_ct_override: Option<CompositeTreeRef>,
+    /// 子のmount対象とするHitTestTreeRef 指定しなければ`hit_tree`と同一
+    pub mount_target_ht_override: Option<HitTestTreeRef>,
     /// キーボードフォーカス
     pub keyboard_focus: Option<FocusTargetToken>,
 }
@@ -453,6 +457,8 @@ impl ViewRenderElements {
     pub const EMPTY: Self = Self {
         composite_tree: None,
         hit_tree: None,
+        mount_target_ct_override: None,
+        mount_target_ht_override: None,
         keyboard_focus: None,
     };
 }
@@ -1080,8 +1086,12 @@ fn render_view_instance1(
         }
     }
 
-    if let Some(ct) = render_state.active_render_element_ct
-        && let Some(ht) = render_state.active_render_element_ht
+    if let Some(ct) = render_elements
+        .mount_target_ct_override
+        .or(render_state.active_render_element_ct)
+        && let Some(ht) = render_elements
+            .mount_target_ht_override
+            .or(render_state.active_render_element_ht)
     {
         // 両方あるときだけこのViewの子にRenderできる
         Some(RawMountTarget {

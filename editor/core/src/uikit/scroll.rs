@@ -16,8 +16,7 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RawMountTarget, RenderContext, TeardownContext, View, ViewIdentifier, ViewRenderElements,
-        ViewRenderer,
+        RenderContext, TeardownContext, View, ViewIdentifier, ViewRenderElements, ViewRenderer,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -134,17 +133,6 @@ impl View for ScrollContainer {
                     // mount/dismount scroll bars only if needed
                     eh.recompute_scroll_bars(ctx);
                 }
-
-                let offset_x = eh.content_offset.x.get();
-                let offset_y = eh.content_offset.y.get();
-
-                ctx.composite_tree
-                    .begin_mod_chain(eh.ct_content_root)
-                    .offset_imm(-offset_x, -offset_y)
-                    .apply();
-                ctx.ht_manager.get_data_mut(eh.ht_content_root).left = -offset_x;
-                ctx.ht_manager.get_data_mut(eh.ht_content_root).top = -offset_y;
-                eh.update_thumb_position(ctx.composite_tree, ctx.ht_manager);
 
                 eh
             }
@@ -359,9 +347,22 @@ impl View for ScrollContainer {
             }
         };
 
+        let offset_x = e.content_offset.x.get();
+        let offset_y = e.content_offset.y.get();
+
+        ctx.composite_tree
+            .begin_mod_chain(e.ct_content_root)
+            .offset_imm(-offset_x, -offset_y)
+            .apply();
+        ctx.ht_manager.get_data_mut(e.ht_content_root).left = -offset_x;
+        ctx.ht_manager.get_data_mut(e.ht_content_root).top = -offset_y;
+        e.update_thumb_position(ctx.composite_tree, ctx.ht_manager);
+
         ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
+            mount_target_ct_override: Some(e.ct_content_root),
+            mount_target_ht_override: Some(e.ht_content_root),
             ..ViewRenderElements::EMPTY
         }
     }

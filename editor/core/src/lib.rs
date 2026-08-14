@@ -1898,6 +1898,7 @@ impl View for ColorPickerHexTextInputView {
             composite_tree: Some(e.core.entity().ct_root()),
             hit_tree: Some(e.core.entity().ht_root()),
             keyboard_focus: Some(e.token),
+            ..uikit::ViewRenderElements::EMPTY
         }
     }
 
@@ -2223,7 +2224,7 @@ impl View for EditableColorButtonView {
         uikit::ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            keyboard_focus: None,
+            ..uikit::ViewRenderElements::EMPTY
         }
     }
 
@@ -8807,6 +8808,7 @@ impl View for PreviewView {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
             keyboard_focus: Some(e.kf_token),
+            ..uikit::ViewRenderElements::EMPTY
         }
     }
 

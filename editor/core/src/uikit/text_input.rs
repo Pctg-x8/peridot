@@ -1767,6 +1767,7 @@ impl View for TextInputView {
             composite_tree: Some(eh.core.eh.ct_root),
             hit_tree: Some(eh.ht_root),
             keyboard_focus: Some(eh.token),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -1930,6 +1931,7 @@ impl View for NumericInputView {
             composite_tree: Some(eh.core.eh.ct_root),
             hit_tree: Some(eh.ht_root),
             keyboard_focus: Some(eh.kf_token),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -2388,6 +2390,7 @@ impl View for MultilineTextInputView {
             composite_tree: Some(eh.ct_root),
             hit_tree: Some(eh.ht_root),
             keyboard_focus: Some(eh.kf_token),
+            ..ViewRenderElements::EMPTY
         }
     }
 
