@@ -24,13 +24,13 @@ typedef struct {
     void (*onScrollWheel)(void* callerContext, WindowLink window, uint32_t modifierFlags, double amount);
 } WindowLinkCallbacks;
 
-typedef struct ContextMenuSurface_* ContextMenuSurface;
+typedef struct FlyoutSurface_* FlyoutSurface;
 typedef struct {
-    void (*onPointerDown)(ContextMenuSurface sender, double x, double y, uint8_t button, uint32_t modifierFlags);
-    void (*onPointerMove)(ContextMenuSurface sender, double x, double y, uint32_t modifierFlags);
-    void (*onPointerUp)(ContextMenuSurface sender, uint8_t button, uint32_t modifierFlags);
-    void (*onPointerLeave)(ContextMenuSurface sender);
-} ContextMenuSurfaceCallbacks;
+    void (*onPointerDown)(FlyoutSurface sender, double x, double y, uint8_t button, uint32_t modifierFlags);
+    void (*onPointerMove)(FlyoutSurface sender, double x, double y, uint32_t modifierFlags);
+    void (*onPointerUp)(FlyoutSurface sender, uint8_t button, uint32_t modifierFlags);
+    void (*onPointerLeave)(FlyoutSurface sender);
+} FlyoutSurfaceCallbacks;
 
 typedef struct {
     uint8_t (*hasMarkedText)(void* context);

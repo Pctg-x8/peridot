@@ -84,24 +84,24 @@ pub struct WindowLinkCallbacks {
 }
 
 #[repr(C)]
-pub struct ContextMenuSurface(
+pub struct FlyoutSurface(
     [u8; 0],
     core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
 );
 #[repr(C)]
-pub struct ContextMenuSurfaceCallbacks {
+pub struct FlyoutSurfaceCallbacks {
     pub on_pointer_down: extern "C" fn(
-        sender: *mut ContextMenuSurface,
+        sender: *mut FlyoutSurface,
         x: f64,
         y: f64,
         button: MouseButton,
         modifier_flags: u32,
     ),
     pub on_pointer_move:
-        extern "C" fn(sender: *mut ContextMenuSurface, x: f64, y: f64, modifier_flags: u32),
+        extern "C" fn(sender: *mut FlyoutSurface, x: f64, y: f64, modifier_flags: u32),
     pub on_pointer_up:
-        extern "C" fn(sender: *mut ContextMenuSurface, button: MouseButton, modifier_flags: u32),
-    pub on_pointer_leave: extern "C" fn(sender: *mut ContextMenuSurface),
+        extern "C" fn(sender: *mut FlyoutSurface, button: MouseButton, modifier_flags: u32),
+    pub on_pointer_leave: extern "C" fn(sender: *mut FlyoutSurface),
 }
 
 pub trait TextInputClientForwarding {
@@ -399,26 +399,24 @@ unsafe extern "C" {
     pub fn ni_set_pointer_hovering_timeout(millis: u32);
     pub fn ni_kill_pointer_hovering_timeout();
 
-    pub fn ni_create_context_menu_surface(
+    pub fn ni_create_flyout_surface(
         parent: *mut WindowLink,
         x: c_float,
         y: c_float,
-        instance_vars: *mut c_void,
-        callbacks: *mut ContextMenuSurfaceCallbacks,
-    ) -> *mut ContextMenuSurface;
-    pub fn ni_release_context_menu_surface(
-        surface: *mut ContextMenuSurface,
-        ret_instance_vars: *mut *mut c_void,
-        ret_callbacks: *mut *mut ContextMenuSurfaceCallbacks,
-    );
-    pub fn ni_context_menu_get_metal_layer(surface: *mut ContextMenuSurface) -> *mut c_void;
-    pub fn ni_context_menu_get_content_scale(surface: *mut ContextMenuSurface) -> c_float;
-    pub fn ni_context_menu_resize(
-        surface: *mut ContextMenuSurface,
         width: c_float,
         height: c_float,
+        instance_vars: *mut c_void,
+        callbacks: *mut FlyoutSurfaceCallbacks,
+    ) -> *mut FlyoutSurface;
+    pub fn ni_release_flyout_surface(
+        surface: *mut FlyoutSurface,
+        ret_instance_vars: *mut *mut c_void,
+        ret_callbacks: *mut *mut FlyoutSurfaceCallbacks,
     );
-    pub fn ni_context_menu_instance_vars_ptr(surface: *mut ContextMenuSurface) -> *mut c_void;
+    pub fn ni_flyout_surface_get_metal_layer(surface: *mut FlyoutSurface) -> *mut c_void;
+    pub fn ni_flyout_surface_get_content_scale(surface: *mut FlyoutSurface) -> c_float;
+    pub fn ni_flyout_surface_resize(surface: *mut FlyoutSurface, width: c_float, height: c_float);
+    pub fn ni_flyout_surface_instance_vars_ptr(surface: *mut FlyoutSurface) -> *mut c_void;
 
     pub fn ni_context_menu_reserve_delayed_action(
         millis: c_int,

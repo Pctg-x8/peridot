@@ -466,9 +466,20 @@ impl crate::SystemLink<'_> {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        delayed_render_messages: &mut Vec<RenderMessage>,
+        _delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> FlyoutSurfaceHandle {
-        unimplemented!()
+        let h = FlyoutSurfaceHandle::new(
+            parent,
+            pos,
+            size,
+            self,
+            composite_tree,
+            ht_manager,
+            keyboard_focus_registry,
+        );
+
+        h.create_render_thread_objects(self);
+        h
     }
 
     pub fn pop_context_menu(
@@ -478,7 +489,7 @@ impl crate::SystemLink<'_> {
         depth: usize,
         surface_pos: Point<LogicalUnit>,
         layouted_items: Vec<MenuItemLayout>,
-        delayed_render_messages: &mut Vec<RenderMessage>,
+        _delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
             FlyoutSurfaceHandle,
@@ -489,19 +500,18 @@ impl crate::SystemLink<'_> {
         Rc<MenuBaseSurfaceEventHandler>,
         Vec<MenuItemView>,
     ) {
-        let mut h = FlyoutSurfaceHandle::new(
+        let width = MenuItemLayout::min_width(layouted_items.iter());
+        let height = MenuItemLayout::height(layouted_items.iter());
+
+        let h = FlyoutSurfaceHandle::new(
             parent,
-            depth,
             surface_pos,
+            Size::new_logical(width.value(), height.value()),
             self,
             &mut view_init_context.mount_context.composite_tree,
             &mut view_init_context.mount_context.ht_manager,
             &mut view_init_context.mount_context.keyboard_focus_registry,
         );
-
-        let width = MenuItemLayout::min_width(layouted_items.iter());
-        let height = MenuItemLayout::height(layouted_items.iter());
-        h.resize(Size::new_logical(width.value(), height.value()));
 
         let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
         view_init_context

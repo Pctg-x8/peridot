@@ -1,10 +1,9 @@
 use core::ptr::NonNull;
-use std::rc::Rc;
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink,
+    Event, LogicFiberEventDispatcher, SystemLink,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -15,13 +14,13 @@ use crate::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{MenuBaseSurfaceEventHandler, MenuItemSubMenuView, MenuItemView, MountTarget},
+    uikit::{MenuItemSubMenuView, MountTarget},
     utils::{LogicalUnit, PixelsUnit, Point, Size},
 };
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Handle(NonNull<super::bridge::ContextMenuSurface>);
+pub struct Handle(NonNull<super::bridge::FlyoutSurface>);
 unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}
 impl MountTarget for Handle {
@@ -38,14 +37,13 @@ impl MountTarget for Handle {
 impl Handle {
     pub(super) fn new<E>(
         parent: super::WindowHandle,
-        depth: usize,
         surface_pos: Point<LogicalUnit>,
+        size: Size<LogicalUnit>,
         syslink: &SystemLink,
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> Self {
-        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
         let ct_root = composite_tree.create(CompositeRect {
             relative_size_adjustment: [1.0, 1.0],
             // macの場合は背景は不要（NSVisualEffectViewが背景がわりになる）
@@ -56,26 +54,25 @@ impl Handle {
             height_adjustment_factor: 1.0,
             ..Default::default()
         });
-        ht_manager.set_action_handler(ht_root, &base_surface_event_handler);
         let kf_root_group = keyboard_focus_registry.acquire_group();
         let h = Self(unsafe {
-            NonNull::new_unchecked(super::bridge::ni_create_context_menu_surface(
+            NonNull::new_unchecked(super::bridge::ni_create_flyout_surface(
                 parent.0,
                 surface_pos.x,
                 surface_pos.y,
+                size.width,
+                size.height,
                 Box::into_raw(Box::new(InstanceVars {
                     event_dispatcher: syslink.event_dispatcher,
-                    depth,
                     ct_root,
                     ht_root,
                     kf_state: PerWindowKeyboardFocusState::new(kf_root_group),
                     kf_root_group,
                     spawned_position: surface_pos,
-                    size: Size::new_logical(0.0, 0.0),
-                    _base_surface_event_handler: base_surface_event_handler,
+                    size,
                 }))
                 .cast(),
-                Box::into_raw(Box::new(super::bridge::ContextMenuSurfaceCallbacks {
+                Box::into_raw(Box::new(super::bridge::FlyoutSurfaceCallbacks {
                     on_pointer_down: Self::pointer_down,
                     on_pointer_move: Self::pointer_move,
                     on_pointer_up: Self::pointer_up,
@@ -95,7 +92,7 @@ impl Handle {
                 vk_surface: NewWindowVulkanSurface(
                     VulkanSurface::new(unsafe { &*syslink.vk_device }, unsafe {
                         br::MetalSurfaceCreateInfo::new(
-                            super::bridge::ni_context_menu_get_metal_layer(self.0.as_ptr())
+                            super::bridge::ni_flyout_surface_get_metal_layer(self.0.as_ptr())
                                 .cast_const(),
                         )
                         .execute((&*syslink.vk_device).instance(), None)
@@ -132,7 +129,7 @@ impl Handle {
         let mut instance_vars = core::mem::MaybeUninit::uninit();
         let mut callbacks = core::mem::MaybeUninit::uninit();
         unsafe {
-            super::bridge::ni_release_context_menu_surface(
+            super::bridge::ni_release_flyout_surface(
                 self.0.as_ptr(),
                 instance_vars.as_mut_ptr(),
                 callbacks.as_mut_ptr(),
@@ -149,7 +146,7 @@ impl Handle {
 
     pub(super) fn resize(&mut self, size: Size<LogicalUnit>) {
         unsafe {
-            super::bridge::ni_context_menu_resize(self.0.as_ptr(), size.width, size.height);
+            super::bridge::ni_flyout_surface_resize(self.0.as_ptr(), size.width, size.height);
         }
         self.instance_vars_mut().size = size;
     }
@@ -157,7 +154,7 @@ impl Handle {
     #[inline(always)]
     fn instance_vars(&self) -> &InstanceVars {
         unsafe {
-            &*super::bridge::ni_context_menu_instance_vars_ptr(self.0.as_ptr())
+            &*super::bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
                 .cast::<InstanceVars>()
         }
     }
@@ -165,7 +162,7 @@ impl Handle {
     #[inline(always)]
     fn instance_vars_mut(&mut self) -> &mut InstanceVars {
         unsafe {
-            &mut *super::bridge::ni_context_menu_instance_vars_ptr(self.0.as_ptr())
+            &mut *super::bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
                 .cast::<InstanceVars>()
         }
     }
@@ -181,7 +178,7 @@ impl Handle {
     }
 
     pub fn render_scale(&self) -> f32 {
-        unsafe { super::bridge::ni_context_menu_get_content_scale(self.0.as_ptr()) }
+        unsafe { super::bridge::ni_flyout_surface_get_content_scale(self.0.as_ptr()) }
     }
 
     #[inline(always)]
@@ -198,7 +195,7 @@ impl Handle {
     }
 
     extern "C" fn pointer_down(
-        sender: *mut super::bridge::ContextMenuSurface,
+        sender: *mut super::bridge::FlyoutSurface,
         x: f64,
         y: f64,
         button: super::bridge::MouseButton,
@@ -226,7 +223,7 @@ impl Handle {
     }
 
     extern "C" fn pointer_move(
-        sender: *mut super::bridge::ContextMenuSurface,
+        sender: *mut super::bridge::FlyoutSurface,
         x: f64,
         y: f64,
         modifier_flags: u32,
@@ -243,7 +240,7 @@ impl Handle {
     }
 
     extern "C" fn pointer_up(
-        sender: *mut super::bridge::ContextMenuSurface,
+        sender: *mut super::bridge::FlyoutSurface,
         button: super::bridge::MouseButton,
         modifier_flags: u32,
     ) {
@@ -261,11 +258,12 @@ impl Handle {
         });
     }
 
-    extern "C" fn pointer_leave(sender: *mut super::bridge::ContextMenuSurface) {
+    extern "C" fn pointer_leave(sender: *mut super::bridge::FlyoutSurface) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
-        h.instance_vars().dispatch_event(Event::MenuDeselectItem {
-            depth: h.instance_vars().depth,
+        h.instance_vars().dispatch_event(Event::MenuPointerLeave {
+            target: h,
+            pointer_id: super::PointerID(),
         });
     }
 }
@@ -279,14 +277,12 @@ impl crate::input::ShellPointerActions for Handle {
 
 struct InstanceVars {
     event_dispatcher: *mut LogicFiberEventDispatcher,
-    depth: usize,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     kf_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
     spawned_position: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
-    _base_surface_event_handler: Rc<MenuBaseSurfaceEventHandler>,
 }
 impl InstanceVars {
     fn dispatch_event(&self, event: Event) {
