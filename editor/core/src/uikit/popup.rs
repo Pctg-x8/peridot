@@ -12,12 +12,12 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RawMountTarget, RenderChildScheduler, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewImmediateRenderable, ViewInitContext, ViewInstanceModifier, ViewInstanceStore,
-        ViewNewRenderElements, ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore,
-        teardown_view_recursive, view_instance, view_instance_mut,
+        RawMountTarget, RenderContext, TeardownContext, View, ViewIdentifier,
+        ViewImmediateRenderable, ViewInitContext, ViewInstanceStore, ViewRenderElements,
+        ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, teardown_view_recursive,
+        view_instance, view_instance_mut,
     },
-    utils::{LogicalUnit, Size, range_helper::range_from_len},
+    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
 #[repr(transparent)]
@@ -243,19 +243,11 @@ impl OverlayPopupBasicMaskView {
 impl View for OverlayPopupBasicMaskView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.render_elements {
-            Some(ref e) => {
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-
-                ViewNewRenderElements::EMPTY
-            }
+    ) -> ViewRenderElements {
+        let e = match self.render_elements {
+            Some(ref e) => e,
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -280,16 +272,16 @@ impl View for OverlayPopupBasicMaskView {
                 // play open animation at first render
                 Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
 
-                self.render_elements =
-                    Some(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root });
-
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self
+                    .render_elements
+                    .insert(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root })
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -299,8 +291,8 @@ impl View for OverlayPopupBasicMaskView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(e.ct_root);
-        ctx.mount_context.ht_manager.free_all(e.ht_root);
+        ctx.mount_context.composite_tree.free(e.ct_root);
+        ctx.mount_context.ht_manager.free(e.ht_root);
     }
 }
 
@@ -403,19 +395,14 @@ impl OverlayPopupBasicFrameView {
 impl View for OverlayPopupBasicFrameView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.render_elements {
+    ) -> ViewRenderElements {
+        let e = match self.render_elements {
             Some(ref e) => {
                 // TODO: reflect changes
 
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -480,30 +467,26 @@ impl View for OverlayPopupBasicFrameView {
                 // play animation on first render
                 Self::play_open_animation(ct_root, &self.size, ctx.composite_tree, ctx.current_sec);
 
-                self.render_elements =
-                    Some(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root });
-
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self
+                    .render_elements
+                    .insert(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root })
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        let Some(render_elements) = self.render_elements.take() else {
+        let Some(e) = self.render_elements.take() else {
             // not rendered
             return;
         };
 
-        ctx.mount_context
-            .composite_tree
-            .free_all(render_elements.ct_root);
-        ctx.mount_context
-            .ht_manager
-            .free_all(render_elements.ht_root);
+        ctx.mount_context.composite_tree.free(e.ct_root);
+        ctx.mount_context.ht_manager.free(e.ht_root);
     }
 }

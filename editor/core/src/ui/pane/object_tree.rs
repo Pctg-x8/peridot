@@ -5,9 +5,9 @@ use std::{
 
 use crate::{
     Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
-    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN,
-    MENU_COMMAND_ID_OBJECT_CREATE_SPHERE, ObjectID, ViewFeedbackObjectSelectionChanged,
-    ViewFeedbackObjectTreeChanged,
+    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
+    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE, ObjectID,
+    ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -21,10 +21,11 @@ use crate::{
         CompositeRectTextVerticalAlignment, CompositeTreeRef,
     },
     uikit::{
-        MenuItem, RawMountTarget, TeardownContext, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext, ViewNewRenderElements,
-        ViewRegisterable,
+        MenuItem, TeardownContext, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext, ViewRegisterable,
+        ViewRenderElements,
     },
+    utils::{LogicalUnit, Rect},
 };
 
 pub struct Presenter {
@@ -78,18 +79,11 @@ impl View {
 impl crate::uikit::View for View {
     fn render(
         &mut self,
-        _self_instance: &mut crate::uikit::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
-        sched: &mut crate::uikit::RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.entity {
-            Some(ref e) => {
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-                ViewNewRenderElements::EMPTY
-            }
+    ) -> ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
@@ -104,14 +98,14 @@ impl crate::uikit::View for View {
                 let entity = Rc::new(ViewEntity { ct_root, ht_root });
                 ctx.ht_manager.set_action_handler(ht_root, &entity);
 
-                self.entity = Some(entity);
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(entity)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -146,6 +140,10 @@ impl HitTestTreeActionHandler for ViewEntity {
                 items: vec![
                     MenuItem::Heading {
                         label: "Create Object".into(),
+                    },
+                    MenuItem::Command {
+                        label: "Plane".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
                     },
                     MenuItem::Command {
                         label: "Cube".into(),
@@ -251,13 +249,12 @@ impl ObjectRowView {
 impl crate::uikit::View for ObjectRowView {
     fn render(
         &mut self,
-        _self_instance: &mut crate::uikit::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
-        _sched: &mut crate::uikit::RenderChildScheduler,
-    ) -> ViewNewRenderElements {
+    ) -> ViewRenderElements {
         let selected = ctx.application.object_is_selected(self.assigned_object);
 
-        match self.eh {
+        let e = match self.eh {
             // TODO: reflect state changes
             Some(ref e) => {
                 if e.selection_lit.replace(selected) != selected {
@@ -287,7 +284,7 @@ impl crate::uikit::View for ObjectRowView {
                     }
                 }
 
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -345,13 +342,14 @@ impl crate::uikit::View for ObjectRowView {
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
                 ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
 
-                self.eh = Some(eh);
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.eh.insert(eh)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 

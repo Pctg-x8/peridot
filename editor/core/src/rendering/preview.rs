@@ -6,15 +6,15 @@ use std::{
 };
 
 use bedrock::{
-    self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, MemoryBound, VkHandle,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, ImageChild,
+    MemoryBound, VkHandle,
 };
-use peridot_math::{Camera, Matrix4, Matrix4F32};
+use peridot_math::{Camera, Matrix4, Matrix4F32, One};
 
 use crate::{
     graphics::{
-        BLEND_STATE_SINGLE_NONE, BLEND_STATE_SINGLE_PREMULTIPLIED, IA_STATE_TRILIST,
+        BLEND_STATE_SINGLE_NONE, BLEND_STATE_SINGLE_PREMULTIPLIED, Graphics, IA_STATE_TRILIST,
         IA_STATE_TRISTRIP, MS_STATE_EMPTY, RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
-        Graphics,
     },
     rendering::composite::CustomRenderContext,
     utils::{
@@ -129,6 +129,12 @@ impl PreviewRenderTargetBuffer {
         .create()
         .expect("preview_rt.depth_view.create");
 
+        device.dbg_set_name(&memory, c"Preview.RenderTarget.BackingMemory");
+        device.dbg_set_name(image_view.image(), c"Preview.RenderTarget.ColorBuffer");
+        device.dbg_set_name(&image_view, c"Preview.RenderTarget.ColorBuffer.View");
+        device.dbg_set_name(depth_view.image(), c"Preview.RenderTarget.DepthBuffer");
+        device.dbg_set_name(&depth_view, c"Preview.RenderTarget.DepthBuffer.View");
+
         let (image_view, image) = image_view.unmanage();
         let (image, _, _, _, _) = image.unmanage();
         let (depth_view, depth_image) = depth_view.unmanage();
@@ -238,6 +244,12 @@ impl PreviewRenderTargetBuffer {
             .create()
             .expect("preview_rt.validate.depth_view.create");
 
+            device.dbg_set_name(&memory, c"Preview.RenderTarget.BackingMemory");
+            device.dbg_set_name(image_view.image(), c"Preview.RenderTarget.ColorBuffer");
+            device.dbg_set_name(&image_view, c"Preview.RenderTarget.ColorBuffer.View");
+            device.dbg_set_name(depth_view.image(), c"Preview.RenderTarget.DepthBuffer");
+            device.dbg_set_name(&depth_view, c"Preview.RenderTarget.DepthBuffer.View");
+
             let (image_view, image) = image_view.unmanage();
             let (image, _, _, _, _) = image.unmanage();
             let (depth_view, depth_image) = depth_view.unmanage();
@@ -343,6 +355,480 @@ pub struct HandleVertex {
     col: [f32; 4],
 }
 
+const TRANSLATE_HANDLE_BAR_LENGTH: f32 = 0.2;
+const TRANSLATE_HANDLE_ARROW_SIZE: f32 = 0.05;
+const TRANSLATE_HANDLE_BAR_RADIUS: f32 = 0.005;
+const TRANSLATE_HANDLE_ARROW_RADIUS: f32 = 0.02;
+const TRANSLATE_HANDLE_BAR_DIVISION: u32 = 6;
+const TRANSLATE_HANDLE_ARROW_DIVISION: u32 = 12;
+const TRANSLATE_HANDLE_VCOUNT: usize =
+    (TRANSLATE_HANDLE_BAR_DIVISION as usize * 2 + TRANSLATE_HANDLE_ARROW_DIVISION as usize + 1) * 3;
+const TRANSLATE_HANDLE_ICOUNT: usize = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+    + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+    + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3)
+    * 3;
+unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
+    let base_vindex_x = 0;
+    let base_vindex_y = base_vindex_x
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+        + 1
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
+    let base_vindex_z = base_vindex_y
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
+        + 1
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
+    let mut iindex_x = 0;
+    let mut iindex_y = iindex_x
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+        + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
+    let mut iindex_z = iindex_y
+        + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
+        + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
+        + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
+    for r in 0..TRANSLATE_HANDLE_BAR_DIVISION {
+        let (s, c) =
+            (core::f32::consts::TAU * r as f32 / TRANSLATE_HANDLE_BAR_DIVISION as f32).sin_cos();
+
+        unsafe {
+            vs.add(base_vindex_x + r as usize).write(HandleVertex {
+                pos: [
+                    0.0,
+                    TRANSLATE_HANDLE_BAR_RADIUS * s,
+                    TRANSLATE_HANDLE_BAR_RADIUS * c,
+                    1.0,
+                ],
+                col: [1.0, 0.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_x + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                .write(HandleVertex {
+                    pos: [
+                        TRANSLATE_HANDLE_BAR_LENGTH,
+                        TRANSLATE_HANDLE_BAR_RADIUS * s,
+                        TRANSLATE_HANDLE_BAR_RADIUS * c,
+                        1.0,
+                    ],
+                    col: [1.0, 0.0, 0.0, 1.0],
+                });
+            vs.add(base_vindex_y + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_RADIUS * s,
+                    0.0,
+                    TRANSLATE_HANDLE_BAR_RADIUS * c,
+                    1.0,
+                ],
+                col: [0.0, 1.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_y + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                .write(HandleVertex {
+                    pos: [
+                        TRANSLATE_HANDLE_BAR_RADIUS * s,
+                        TRANSLATE_HANDLE_BAR_LENGTH,
+                        TRANSLATE_HANDLE_BAR_RADIUS * c,
+                        1.0,
+                    ],
+                    col: [0.0, 1.0, 0.0, 1.0],
+                });
+            vs.add(base_vindex_z + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_RADIUS * s,
+                    TRANSLATE_HANDLE_BAR_RADIUS * c,
+                    0.0,
+                    1.0,
+                ],
+                col: [0.0, 0.0, 1.0, 1.0],
+            });
+            vs.add(base_vindex_z + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
+                .write(HandleVertex {
+                    pos: [
+                        TRANSLATE_HANDLE_BAR_RADIUS * s,
+                        TRANSLATE_HANDLE_BAR_RADIUS * c,
+                        TRANSLATE_HANDLE_BAR_LENGTH,
+                        1.0,
+                    ],
+                    col: [0.0, 0.0, 1.0, 1.0],
+                });
+        }
+
+        let prev_r = if r > 0 {
+            r as u16
+        } else {
+            TRANSLATE_HANDLE_BAR_DIVISION as u16
+        } - 1;
+
+        let a0 = base_vindex_x as u16 + prev_r;
+        let b0 = base_vindex_x as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        let a1 = base_vindex_x as u16 + r as u16;
+        let b1 = base_vindex_x as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        unsafe {
+            is.add(iindex_x + 0).write(a0);
+            is.add(iindex_x + 1).write(b0);
+            is.add(iindex_x + 2).write(a1);
+            is.add(iindex_x + 3).write(a1);
+            is.add(iindex_x + 4).write(b1);
+            is.add(iindex_x + 5).write(b0);
+        }
+        iindex_x += 6;
+
+        let a0 = base_vindex_y as u16 + prev_r;
+        let b0 = base_vindex_y as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        let a1 = base_vindex_y as u16 + r as u16;
+        let b1 = base_vindex_y as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        unsafe {
+            is.add(iindex_y + 0).write(a0);
+            is.add(iindex_y + 1).write(b0);
+            is.add(iindex_y + 2).write(a1);
+            is.add(iindex_y + 3).write(a1);
+            is.add(iindex_y + 4).write(b1);
+            is.add(iindex_y + 5).write(b0);
+        }
+        iindex_y += 6;
+
+        let a0 = base_vindex_z as u16 + prev_r;
+        let b0 = base_vindex_z as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        let a1 = base_vindex_z as u16 + r as u16;
+        let b1 = base_vindex_z as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
+        unsafe {
+            is.add(iindex_z + 0).write(a0);
+            is.add(iindex_z + 1).write(b0);
+            is.add(iindex_z + 2).write(a1);
+            is.add(iindex_z + 3).write(a1);
+            is.add(iindex_z + 4).write(b1);
+            is.add(iindex_z + 5).write(b0);
+        }
+        iindex_z += 6;
+    }
+    let arrow_top_vindex_x = base_vindex_x + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+    let arrow_top_vindex_y = base_vindex_y + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+    let arrow_top_vindex_z = base_vindex_z + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
+    unsafe {
+        vs.add(arrow_top_vindex_x).write(HandleVertex {
+            pos: [
+                TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                0.0,
+                0.0,
+                1.0,
+            ],
+            col: [1.0, 0.0, 0.0, 1.0],
+        });
+        vs.add(arrow_top_vindex_y).write(HandleVertex {
+            pos: [
+                0.0,
+                TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                0.0,
+                1.0,
+            ],
+            col: [0.0, 1.0, 0.0, 1.0],
+        });
+        vs.add(arrow_top_vindex_z).write(HandleVertex {
+            pos: [
+                0.0,
+                0.0,
+                TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
+                1.0,
+            ],
+            col: [0.0, 0.0, 1.0, 1.0],
+        });
+    }
+    let base_vindex_x = arrow_top_vindex_x + 1;
+    let base_vindex_y = arrow_top_vindex_y + 1;
+    let base_vindex_z = arrow_top_vindex_z + 1;
+    for r in 0..TRANSLATE_HANDLE_ARROW_DIVISION {
+        let (s, c) =
+            (core::f32::consts::TAU * r as f32 / TRANSLATE_HANDLE_ARROW_DIVISION as f32).sin_cos();
+
+        unsafe {
+            vs.add(base_vindex_x + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_BAR_LENGTH,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                    1.0,
+                ],
+                col: [1.0, 0.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_y + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                    TRANSLATE_HANDLE_BAR_LENGTH,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                    1.0,
+                ],
+                col: [0.0, 1.0, 0.0, 1.0],
+            });
+            vs.add(base_vindex_z + r as usize).write(HandleVertex {
+                pos: [
+                    TRANSLATE_HANDLE_ARROW_RADIUS * s,
+                    TRANSLATE_HANDLE_ARROW_RADIUS * c,
+                    TRANSLATE_HANDLE_BAR_LENGTH,
+                    1.0,
+                ],
+                col: [0.0, 0.0, 1.0, 1.0],
+            });
+        }
+
+        let prev_r = if r > 0 {
+            r as u16
+        } else {
+            TRANSLATE_HANDLE_ARROW_DIVISION as u16
+        } - 1;
+        unsafe {
+            is.add(iindex_x + 0).write(arrow_top_vindex_x as u16);
+            is.add(iindex_x + 1).write(base_vindex_x as u16 + prev_r);
+            is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
+        }
+        iindex_x += 3;
+        unsafe {
+            is.add(iindex_y + 0).write(arrow_top_vindex_y as u16);
+            is.add(iindex_y + 1).write(base_vindex_y as u16 + prev_r);
+            is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
+        }
+        iindex_y += 3;
+        unsafe {
+            is.add(iindex_z + 0).write(arrow_top_vindex_z as u16);
+            is.add(iindex_z + 1).write(base_vindex_z as u16 + prev_r);
+            is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
+        }
+        iindex_z += 3;
+
+        if r > 1 {
+            unsafe {
+                is.add(iindex_x + 0).write(base_vindex_x as u16 + 0);
+                is.add(iindex_x + 1)
+                    .write(base_vindex_x as u16 + r as u16 - 1);
+                is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
+            }
+            iindex_x += 3;
+            unsafe {
+                is.add(iindex_y + 0).write(base_vindex_y as u16 + 0);
+                is.add(iindex_y + 1)
+                    .write(base_vindex_y as u16 + r as u16 - 1);
+                is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
+            }
+            iindex_y += 3;
+            unsafe {
+                is.add(iindex_z + 0).write(base_vindex_z as u16 + 0);
+                is.add(iindex_z + 1)
+                    .write(base_vindex_z as u16 + r as u16 - 1);
+                is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
+            }
+            iindex_z += 3;
+        }
+    }
+}
+
+const ROTATION_HANDLE_DIVS: u32 = 60;
+const ROTATION_HANDLE_VCOUNT: usize = (ROTATION_HANDLE_DIVS * 4) as usize;
+const ROTATION_HANDLE_ICOUNT: usize = (((ROTATION_HANDLE_DIVS) * 2) * 4) as usize;
+const ROTATION_HANDLE_AXES_DRAW_ICOUNT: u32 = (ROTATION_HANDLE_DIVS * 2) * 3;
+fn gen_rotation_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
+    for n in 0..ROTATION_HANDLE_DIVS {
+        let th = core::f32::consts::TAU * n as f32 / ROTATION_HANDLE_DIVS as f32;
+        let (s, c) = th.sin_cos();
+
+        unsafe {
+            vs.add(n as usize).write(HandleVertex {
+                pos: [s, c, 0.0, 1.0],
+                col: [0.0, 0.0, 1.0, 1.0],
+            });
+            vs.add((n + ROTATION_HANDLE_DIVS) as usize)
+                .write(HandleVertex {
+                    pos: [s, 0.0, c, 1.0],
+                    col: [0.0, 1.0, 0.0, 1.0],
+                });
+            vs.add((n + ROTATION_HANDLE_DIVS * 2) as usize)
+                .write(HandleVertex {
+                    pos: [0.0, s, c, 1.0],
+                    col: [1.0, 0.0, 0.0, 1.0],
+                });
+            is.add((n * 2) as usize).write(n as u16);
+            is.add((n * 2 + 1) as usize)
+                .write(((n + 1) % ROTATION_HANDLE_DIVS) as u16);
+            is.add(((n + ROTATION_HANDLE_DIVS) * 2) as usize)
+                .write((n + ROTATION_HANDLE_DIVS) as u16);
+            is.add(((n + ROTATION_HANDLE_DIVS) * 2 + 1) as usize)
+                .write((((n + 1) % ROTATION_HANDLE_DIVS) + ROTATION_HANDLE_DIVS) as u16);
+            is.add(((n + ROTATION_HANDLE_DIVS * 2) * 2) as usize)
+                .write((n + ROTATION_HANDLE_DIVS * 2) as u16);
+            is.add(((n + ROTATION_HANDLE_DIVS * 2) * 2 + 1) as usize)
+                .write((((n + 1) % ROTATION_HANDLE_DIVS) + ROTATION_HANDLE_DIVS * 2) as u16);
+
+            // facing to camera
+            vs.add((n + ROTATION_HANDLE_DIVS * 3) as usize)
+                .write(HandleVertex {
+                    pos: [c, s, 0.0, c],
+                    col: [1.0, 1.0, 1.0, 1.0],
+                });
+            is.add(((n + ROTATION_HANDLE_DIVS * 3) * 2) as usize)
+                .write((n + ROTATION_HANDLE_DIVS * 3) as u16);
+            is.add(((n + ROTATION_HANDLE_DIVS * 3) * 2 + 1) as usize)
+                .write((((n + 1) % ROTATION_HANDLE_DIVS) + ROTATION_HANDLE_DIVS * 3) as u16);
+        }
+    }
+}
+
+const SCALE_HANDLE_BAR_LENGTH: f32 = 0.2;
+const SCALE_HANDLE_CUBE_SIZE: f32 = 0.02;
+const SCALE_HANDLE_BAR_THICKNESS: f32 = 0.005;
+const SCALE_HANDLE_VCOUNT: usize = (8 * 4) + (8 * 3); // tip cube + bar cube
+const SCALE_HANDLE_ICOUNT: usize = (6 * 6 * 4) + (6 * 4 * 3); // tip cube(6 faces) + bar cube(4 faces)
+fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
+    // Note: 編集しづらいので一部rustfmtを意図的にスキップする
+    const fn hv(x: f32, y: f32, z: f32, c: [f32; 4]) -> HandleVertex {
+        HandleVertex {
+            pos: [x, y, z, 1.0],
+            col: c,
+        }
+    }
+
+    // bar cubes
+    unsafe {
+        let t = SCALE_HANDLE_BAR_THICKNESS;
+        let am = 0.0;
+        let ar = SCALE_HANDLE_BAR_LENGTH;
+        let col = [1.0, 1.0, 1.0, 1.0];
+        vs.copy_from_nonoverlapping(
+            [
+                // x
+                hv(am, -t, -t, col),
+                hv(ar, -t, -t, col),
+                hv(am, -t, t, col),
+                hv(ar, -t, t, col),
+                hv(am, t, -t, col),
+                hv(ar, t, -t, col),
+                hv(am, t, t, col),
+                hv(ar, t, t, col),
+                // y
+                hv(-t, am, -t, col),
+                hv(-t, ar, -t, col),
+                hv(-t, am, t, col),
+                hv(-t, ar, t, col),
+                hv(t, am, -t, col),
+                hv(t, ar, -t, col),
+                hv(t, am, t, col),
+                hv(t, ar, t, col),
+                // z
+                hv(-t, -t, am, col),
+                hv(-t, -t, ar, col),
+                hv(-t, t, am, col),
+                hv(-t, t, ar, col),
+                hv(t, -t, am, col),
+                hv(t, -t, ar, col),
+                hv(t, t, am, col),
+                hv(t, t, ar, col),
+            ]
+            .as_ptr(),
+            8 * 3,
+        );
+        #[rustfmt::skip]
+        is.copy_from_nonoverlapping(
+            [
+                // x
+                0, 1, 2, 2, 3, 1,
+                4, 5, 6, 6, 7, 5,
+                0, 1, 4, 4, 5, 1,
+                2, 3, 6, 6, 7, 3,
+                // y
+                8 + 0, 8 + 1, 8 + 2, 8 + 2, 8 + 3, 8 + 1,
+                8 + 4, 8 + 5, 8 + 6, 8 + 6, 8 + 7, 8 + 5,
+                8 + 0, 8 + 1, 8 + 4, 8 + 4, 8 + 5, 8 + 1,
+                8 + 2, 8 + 3, 8 + 6, 8 + 6, 8 + 7, 8 + 3,
+                // z
+                8 * 2 + 0, 8 * 2 + 1, 8 * 2 + 2, 8 * 2 + 2, 8 * 2 + 3, 8 * 2 + 1,
+                8 * 2 + 4, 8 * 2 + 5, 8 * 2 + 6, 8 * 2 + 6, 8 * 2 + 7, 8 * 2 + 5,
+                8 * 2 + 0, 8 * 2 + 1, 8 * 2 + 4, 8 * 2 + 4, 8 * 2 + 5, 8 * 2 + 1,
+                8 * 2 + 2, 8 * 2 + 3, 8 * 2 + 6, 8 * 2 + 6, 8 * 2 + 7, 8 * 2 + 3,
+            ]
+            .as_ptr(),
+            6 * 4 * 3,
+        );
+    }
+
+    // tip cubes
+    unsafe {
+        let s = SCALE_HANDLE_CUBE_SIZE;
+        let c = SCALE_HANDLE_BAR_LENGTH;
+
+        #[rustfmt::skip]
+        vs.add(8 * 3).copy_from_nonoverlapping(
+            [
+                // x
+                hv(c - s, -s, -s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c + s, -s, -s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c - s,  s, -s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c + s,  s, -s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c - s, -s,  s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c + s, -s,  s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c - s,  s,  s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c + s,  s,  s, [1.0, 0.0, 0.0, 1.0]),
+                // y
+                hv(-s, c - s, -s, [0.0, 1.0, 0.0, 1.0]),
+                hv( s, c - s, -s, [0.0, 1.0, 0.0, 1.0]),
+                hv(-s, c + s, -s, [0.0, 1.0, 0.0, 1.0]),
+                hv( s, c + s, -s, [0.0, 1.0, 0.0, 1.0]),
+                hv(-s, c - s,  s, [0.0, 1.0, 0.0, 1.0]),
+                hv( s, c - s,  s, [0.0, 1.0, 0.0, 1.0]),
+                hv(-s, c + s,  s, [0.0, 1.0, 0.0, 1.0]),
+                hv( s, c + s,  s, [0.0, 1.0, 0.0, 1.0]),
+                // z
+                hv(-s, -s, c - s, [0.0, 0.0, 1.0, 1.0]),
+                hv( s, -s, c - s, [0.0, 0.0, 1.0, 1.0]),
+                hv(-s,  s, c - s, [0.0, 0.0, 1.0, 1.0]),
+                hv( s,  s, c - s, [0.0, 0.0, 1.0, 1.0]),
+                hv(-s, -s, c + s, [0.0, 0.0, 1.0, 1.0]),
+                hv( s, -s, c + s, [0.0, 0.0, 1.0, 1.0]),
+                hv(-s,  s, c + s, [0.0, 0.0, 1.0, 1.0]),
+                hv( s,  s, c + s, [0.0, 0.0, 1.0, 1.0]),
+                // center
+                hv(-s, -s, -s, [1.0, 1.0, 1.0, 1.0]),
+                hv( s, -s, -s, [1.0, 1.0, 1.0, 1.0]),
+                hv(-s,  s, -s, [1.0, 1.0, 1.0, 1.0]),
+                hv( s,  s, -s, [1.0, 1.0, 1.0, 1.0]),
+                hv(-s, -s,  s, [1.0, 1.0, 1.0, 1.0]),
+                hv( s, -s,  s, [1.0, 1.0, 1.0, 1.0]),
+                hv(-s,  s,  s, [1.0, 1.0, 1.0, 1.0]),
+                hv( s,  s,  s, [1.0, 1.0, 1.0, 1.0]),
+            ]
+            .as_ptr(),
+            8 * 4,
+        );
+        #[rustfmt::skip]
+        is.add(6 * 4 * 3).copy_from_nonoverlapping(
+            [
+                // x
+                8 * 3 + 0, 8 * 3 + 1, 8 * 3 + 2, 8 * 3 + 2, 8 * 3 + 3, 8 * 3 + 1,
+                8 * 3 + 4, 8 * 3 + 5, 8 * 3 + 6, 8 * 3 + 6, 8 * 3 + 7, 8 * 3 + 5,
+                8 * 3 + 0, 8 * 3 + 1, 8 * 3 + 4, 8 * 3 + 4, 8 * 3 + 5, 8 * 3 + 1,
+                8 * 3 + 2, 8 * 3 + 3, 8 * 3 + 6, 8 * 3 + 6, 8 * 3 + 7, 8 * 3 + 3,
+                8 * 3 + 0, 8 * 3 + 2, 8 * 3 + 4, 8 * 3 + 4, 8 * 3 + 6, 8 * 3 + 2,
+                8 * 3 + 1, 8 * 3 + 3, 8 * 3 + 5, 8 * 3 + 5, 8 * 3 + 7, 8 * 3 + 3,
+                // y
+                8 * 3 + 8 + 0, 8 * 3 + 8 + 1, 8 * 3 + 8 + 2, 8 * 3 + 8 + 2, 8 * 3 + 8 + 3, 8 * 3 + 8 + 1,
+                8 * 3 + 8 + 4, 8 * 3 + 8 + 5, 8 * 3 + 8 + 6, 8 * 3 + 8 + 6, 8 * 3 + 8 + 7, 8 * 3 + 8 + 5,
+                8 * 3 + 8 + 0, 8 * 3 + 8 + 1, 8 * 3 + 8 + 4, 8 * 3 + 8 + 4, 8 * 3 + 8 + 5, 8 * 3 + 8 + 1,
+                8 * 3 + 8 + 2, 8 * 3 + 8 + 3, 8 * 3 + 8 + 6, 8 * 3 + 8 + 6, 8 * 3 + 8 + 7, 8 * 3 + 8 + 3,
+                8 * 3 + 8 + 0, 8 * 3 + 8 + 2, 8 * 3 + 8 + 4, 8 * 3 + 8 + 4, 8 * 3 + 8 + 6, 8 * 3 + 8 + 2,
+                8 * 3 + 8 + 1, 8 * 3 + 8 + 3, 8 * 3 + 8 + 5, 8 * 3 + 8 + 5, 8 * 3 + 8 + 7, 8 * 3 + 8 + 3,
+                // z
+                8 * 3 + 8 * 2 + 0, 8 * 3 + 8 * 2 + 1, 8 * 3 + 8 * 2 + 2, 8 * 3 + 8 * 2 + 2, 8 * 3 + 8 * 2 + 3, 8 * 3 + 8 * 2 + 1,
+                8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 5, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 7, 8 * 3 + 8 * 2 + 5,
+                8 * 3 + 8 * 2 + 0, 8 * 3 + 8 * 2 + 1, 8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 5, 8 * 3 + 8 * 2 + 1,
+                8 * 3 + 8 * 2 + 2, 8 * 3 + 8 * 2 + 3, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 7, 8 * 3 + 8 * 2 + 3,
+                8 * 3 + 8 * 2 + 0, 8 * 3 + 8 * 2 + 2, 8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 4, 8 * 3 + 8 * 2 + 6, 8 * 3 + 8 * 2 + 2,
+                8 * 3 + 8 * 2 + 1, 8 * 3 + 8 * 2 + 3, 8 * 3 + 8 * 2 + 5, 8 * 3 + 8 * 2 + 5, 8 * 3 + 8 * 2 + 7, 8 * 3 + 8 * 2 + 3,
+                // center
+                8 * 3 + 8 * 3 + 0, 8 * 3 + 8 * 3 + 1, 8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 3, 8 * 3 + 8 * 3 + 1,
+                8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 7, 8 * 3 + 8 * 3 + 5,
+                8 * 3 + 8 * 3 + 0, 8 * 3 + 8 * 3 + 1, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 1,
+                8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 3, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 7, 8 * 3 + 8 * 3 + 3,
+                8 * 3 + 8 * 3 + 0, 8 * 3 + 8 * 3 + 2, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 4, 8 * 3 + 8 * 3 + 6, 8 * 3 + 8 * 3 + 2,
+                8 * 3 + 8 * 3 + 1, 8 * 3 + 8 * 3 + 3, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 5, 8 * 3 + 8 * 3 + 7, 8 * 3 + 8 * 3 + 3,
+            ].as_ptr(),
+            6 * 6 * 4,
+        );
+    }
+}
+
 struct ScratchStagingBuffer {
     buffer: br::vk::VkBuffer,
     memory: br::vk::VkDeviceMemory,
@@ -386,6 +872,9 @@ impl ScratchStagingBuffer {
         buffer
             .bind(&memory, 0)
             .expect("preview_scratch_staging.buffer.bind");
+
+        device.dbg_set_name(&memory, c"Preview.ScratchStagingBuffer.BackingMemory");
+        device.dbg_set_name(&buffer, c"Preview.ScratchStagingBuffer");
 
         let (buffer, _) = buffer.unmanage();
         let (memory, _) = memory.unmanage();
@@ -813,6 +1302,13 @@ pub struct CommittedRenderData {
     pub mesh_id: usize,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HandleShape {
+    Translation,
+    Rotation,
+    Scale,
+}
+
 pub struct CommittedState {
     pub viewport_size: Size<LogicalUnit>,
     pub main_camera: Camera,
@@ -823,6 +1319,9 @@ pub struct CommittedState {
     pub pushed_render_data: Vec<CommittedRenderData>,
     pub dirty_render_data: HashMap<usize, CommittedRenderData>,
     pub removed_render_data: HashSet<usize>,
+    pub handle_shape: HandleShape,
+    pub handle_to_world_transform: Matrix4F32,
+    pub handle_data_dirtified: bool,
 }
 
 struct MeshData {
@@ -867,8 +1366,10 @@ pub struct Renderer {
     grid_shader: br::vk::VkShaderModule,
     grid_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     unlit_colored_shader: br::vk::VkShaderModule,
+    rotation_handle_shader: br::vk::VkShaderModule,
     unlit_colored_object_pipeline_layout: br::vk::VkPipelineLayout,
     gizmos_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
+    rotation_handle_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     command_pool: br::vk::VkCommandPool,
     command_buffer: br::vk::VkCommandBuffer,
     update_command_pool: br::vk::VkCommandPool,
@@ -880,6 +1381,10 @@ pub struct Renderer {
     origin_axes_vbuf_range: core::ops::Range<br::DeviceSize>,
     translate_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
     translate_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
+    rotation_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
+    rotation_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
+    scale_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
+    scale_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
@@ -888,6 +1393,9 @@ pub struct Renderer {
     user_meshes: Vec<MeshData>,
     user_renders: Vec<RenderData>,
     user_data_update_pending: bool,
+    handle_shape: HandleShape,
+    handle_to_world_transform: Matrix4F32,
+    needs_invalidate_render: bool,
     valid: bool,
 }
 impl Renderer {
@@ -905,6 +1413,9 @@ impl Renderer {
         }
 
         if self.valid {
+            drop(unsafe {
+                br::PipelineObject::manage(self.rotation_handle_pipeline.assume_init(), device)
+            });
             drop(unsafe { br::PipelineObject::manage(self.gizmos_pipeline.assume_init(), device) });
             drop(unsafe { br::PipelineObject::manage(self.grid_pipeline.assume_init(), device) });
             drop(unsafe {
@@ -916,6 +1427,7 @@ impl Renderer {
             drop(unsafe { br::FramebufferObject::manage(self.framebuffer.assume_init(), device) });
         }
 
+        drop(unsafe { br::ShaderModuleObject::manage(self.rotation_handle_shader, device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.unlit_colored_shader, device) });
         drop(unsafe {
             br::PipelineLayoutObject::manage(self.unlit_colored_object_pipeline_layout, device)
@@ -1065,35 +1577,43 @@ impl Renderer {
         let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
         let grid_shader = device.require_shader("preview/grid.spv");
         let unlit_colored_shader = device.require_shader("preview/unlit_colored.spv");
-
-        const TRANSLATE_HANDLE_BAR_LENGTH: f32 = 0.2;
-        const TRANSLATE_HANDLE_ARROW_SIZE: f32 = 0.05;
-        const TRANSLATE_HANDLE_BAR_RADIUS: f32 = 0.005;
-        const TRANSLATE_HANDLE_ARROW_RADIUS: f32 = 0.02;
-        const TRANSLATE_HANDLE_BAR_DIVISION: u32 = 6;
-        const TRANSLATE_HANDLE_ARROW_DIVISION: u32 = 12;
-        let translate_handle_vcount = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
-            + TRANSLATE_HANDLE_ARROW_DIVISION as usize
-            + 1)
-            * 3;
-        let translate_handle_icount = (TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
-            + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
-            + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3)
-            * 3;
+        let rotation_handle_shader = device.require_shader("preview/rotation_handle.spv");
 
         let origin_axes_vbuf_range = 0..size_of_val(VS_ORIGIN_AXES) as br::DeviceSize;
         let translate_handle_vbuf_range = range_from_len_u64(
             rup2_u64(origin_axes_vbuf_range.end, align_of::<HandleVertex>() as _),
-            (size_of::<HandleVertex>() * translate_handle_vcount) as _,
+            (size_of::<HandleVertex>() * TRANSLATE_HANDLE_VCOUNT) as _,
+        );
+        let rotation_handle_vbuf_range = range_from_len_u64(
+            rup2_u64(
+                translate_handle_vbuf_range.end,
+                align_of::<HandleVertex>() as _,
+            ),
+            (size_of::<HandleVertex>() * ROTATION_HANDLE_VCOUNT) as _,
+        );
+        let scale_handle_vbuf_range = range_from_len_u64(
+            rup2_u64(
+                rotation_handle_vbuf_range.end,
+                align_of::<HandleVertex>() as _,
+            ),
+            (size_of::<HandleVertex>() * SCALE_HANDLE_VCOUNT) as _,
         );
         let translate_handle_ibuf_range = range_from_len_u64(
-            rup2_u64(translate_handle_vbuf_range.end, align_of::<u16>() as _),
-            (size_of::<u16>() * translate_handle_icount) as _,
+            rup2_u64(scale_handle_vbuf_range.end, align_of::<u16>() as _),
+            (size_of::<u16>() * TRANSLATE_HANDLE_ICOUNT) as _,
+        );
+        let rotation_handle_ibuf_range = range_from_len_u64(
+            rup2_u64(translate_handle_ibuf_range.end, align_of::<u16>() as _),
+            (size_of::<u16>() * ROTATION_HANDLE_ICOUNT) as _,
+        );
+        let scale_handle_ibuf_range = range_from_len_u64(
+            rup2_u64(rotation_handle_ibuf_range.end, align_of::<u16>() as _),
+            (size_of::<u16>() * SCALE_HANDLE_ICOUNT) as _,
         );
         let mut internal_mesh_buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(
-                translate_handle_ibuf_range.end,
+                scale_handle_ibuf_range.end,
                 br::BufferUsage::VERTEX_BUFFER
                     | br::BufferUsage::INDEX_BUFFER
                     | br::BufferUsage::TRANSFER_DEST,
@@ -1135,13 +1655,28 @@ impl Renderer {
         }
         let translate_handle_vbuf_upload_offset =
             rup2(size_of::<UploadBufferData>(), align_of::<HandleVertex>());
-        let translate_handle_ibuf_upload_offset = rup2(
+        let rotation_handle_vbuf_upload_offset = rup2(
             translate_handle_vbuf_upload_offset
-                + size_of::<UploadBufferData>() * translate_handle_vcount,
+                + size_of::<HandleVertex>() * TRANSLATE_HANDLE_VCOUNT,
+            align_of::<HandleVertex>(),
+        );
+        let scale_handle_vbuf_upload_offset = rup2(
+            rotation_handle_vbuf_upload_offset + size_of::<HandleVertex>() * ROTATION_HANDLE_VCOUNT,
+            align_of::<HandleVertex>(),
+        );
+        let translate_handle_ibuf_upload_offset = rup2(
+            scale_handle_vbuf_upload_offset + size_of::<HandleVertex>() * SCALE_HANDLE_VCOUNT,
             align_of::<u16>(),
         );
-        let upload_size =
-            translate_handle_ibuf_upload_offset + size_of::<u16>() * translate_handle_icount;
+        let rotation_handle_ibuf_upload_offset = rup2(
+            translate_handle_ibuf_upload_offset + size_of::<u16>() * TRANSLATE_HANDLE_ICOUNT,
+            align_of::<u16>(),
+        );
+        let scale_handle_ibuf_upload_offset = rup2(
+            rotation_handle_ibuf_upload_offset + size_of::<u16>() * ROTATION_HANDLE_ICOUNT,
+            align_of::<u16>(),
+        );
+        let upload_size = scale_handle_ibuf_upload_offset + size_of::<u16>() * SCALE_HANDLE_ICOUNT;
         let mut upload_buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(upload_size as _, br::BufferUsage::TRANSFER_SRC),
@@ -1176,239 +1711,26 @@ impl Renderer {
                 CameraData::new(&init_state.main_camera, init_rt.aspect_wh()),
             );
 
-            let vs = ptr
-                .ptr()
-                .byte_add(translate_handle_vbuf_upload_offset)
-                .cast::<HandleVertex>();
-            let is = ptr
-                .ptr()
-                .byte_add(translate_handle_ibuf_upload_offset)
-                .cast::<u16>();
-            let base_vindex_x = 0;
-            let base_vindex_y = base_vindex_x
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
-                + 1
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
-            let base_vindex_z = base_vindex_y
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2
-                + 1
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize;
-            let mut iindex_x = 0;
-            let mut iindex_y = iindex_x
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
-                + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
-            let mut iindex_z = iindex_y
-                + TRANSLATE_HANDLE_BAR_DIVISION as usize * 6
-                + TRANSLATE_HANDLE_ARROW_DIVISION as usize * 3
-                + (TRANSLATE_HANDLE_ARROW_DIVISION as usize - 2) * 3;
-            for r in 0..TRANSLATE_HANDLE_BAR_DIVISION {
-                let (s, c) = (core::f32::consts::TAU * r as f32
-                    / TRANSLATE_HANDLE_BAR_DIVISION as f32)
-                    .sin_cos();
-
-                vs.add(base_vindex_x + r as usize).write(HandleVertex {
-                    pos: [
-                        0.0,
-                        TRANSLATE_HANDLE_BAR_RADIUS * s,
-                        TRANSLATE_HANDLE_BAR_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [1.0, 0.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_x + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
-                    .write(HandleVertex {
-                        pos: [
-                            TRANSLATE_HANDLE_BAR_LENGTH,
-                            TRANSLATE_HANDLE_BAR_RADIUS * s,
-                            TRANSLATE_HANDLE_BAR_RADIUS * c,
-                            1.0,
-                        ],
-                        col: [1.0, 0.0, 0.0, 1.0],
-                    });
-                vs.add(base_vindex_y + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_BAR_RADIUS * s,
-                        0.0,
-                        TRANSLATE_HANDLE_BAR_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [0.0, 1.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_y + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
-                    .write(HandleVertex {
-                        pos: [
-                            TRANSLATE_HANDLE_BAR_RADIUS * s,
-                            TRANSLATE_HANDLE_BAR_LENGTH,
-                            TRANSLATE_HANDLE_BAR_RADIUS * c,
-                            1.0,
-                        ],
-                        col: [0.0, 1.0, 0.0, 1.0],
-                    });
-                vs.add(base_vindex_z + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_BAR_RADIUS * s,
-                        TRANSLATE_HANDLE_BAR_RADIUS * c,
-                        0.0,
-                        1.0,
-                    ],
-                    col: [0.0, 0.0, 1.0, 1.0],
-                });
-                vs.add(base_vindex_z + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
-                    .write(HandleVertex {
-                        pos: [
-                            TRANSLATE_HANDLE_BAR_RADIUS * s,
-                            TRANSLATE_HANDLE_BAR_RADIUS * c,
-                            TRANSLATE_HANDLE_BAR_LENGTH,
-                            1.0,
-                        ],
-                        col: [0.0, 0.0, 1.0, 1.0],
-                    });
-
-                let prev_r = if r > 0 {
-                    r as u16
-                } else {
-                    TRANSLATE_HANDLE_BAR_DIVISION as u16
-                } - 1;
-
-                let a0 = base_vindex_x as u16 + prev_r;
-                let b0 = base_vindex_x as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                let a1 = base_vindex_x as u16 + r as u16;
-                let b1 = base_vindex_x as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                is.add(iindex_x + 0).write(a0);
-                is.add(iindex_x + 1).write(b0);
-                is.add(iindex_x + 2).write(a1);
-                is.add(iindex_x + 3).write(a1);
-                is.add(iindex_x + 4).write(b1);
-                is.add(iindex_x + 5).write(b0);
-                iindex_x += 6;
-
-                let a0 = base_vindex_y as u16 + prev_r;
-                let b0 = base_vindex_y as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                let a1 = base_vindex_y as u16 + r as u16;
-                let b1 = base_vindex_y as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                is.add(iindex_y + 0).write(a0);
-                is.add(iindex_y + 1).write(b0);
-                is.add(iindex_y + 2).write(a1);
-                is.add(iindex_y + 3).write(a1);
-                is.add(iindex_y + 4).write(b1);
-                is.add(iindex_y + 5).write(b0);
-                iindex_y += 6;
-
-                let a0 = base_vindex_z as u16 + prev_r;
-                let b0 = base_vindex_z as u16 + prev_r + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                let a1 = base_vindex_z as u16 + r as u16;
-                let b1 = base_vindex_z as u16 + r as u16 + TRANSLATE_HANDLE_BAR_DIVISION as u16;
-                is.add(iindex_z + 0).write(a0);
-                is.add(iindex_z + 1).write(b0);
-                is.add(iindex_z + 2).write(a1);
-                is.add(iindex_z + 3).write(a1);
-                is.add(iindex_z + 4).write(b1);
-                is.add(iindex_z + 5).write(b0);
-                iindex_z += 6;
-            }
-            let arrow_top_vindex_x = base_vindex_x + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
-            let arrow_top_vindex_y = base_vindex_y + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
-            let arrow_top_vindex_z = base_vindex_z + TRANSLATE_HANDLE_BAR_DIVISION as usize * 2;
-            vs.add(arrow_top_vindex_x).write(HandleVertex {
-                pos: [
-                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
-                    0.0,
-                    0.0,
-                    1.0,
-                ],
-                col: [1.0, 0.0, 0.0, 1.0],
-            });
-            vs.add(arrow_top_vindex_y).write(HandleVertex {
-                pos: [
-                    0.0,
-                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
-                    0.0,
-                    1.0,
-                ],
-                col: [0.0, 1.0, 0.0, 1.0],
-            });
-            vs.add(arrow_top_vindex_z).write(HandleVertex {
-                pos: [
-                    0.0,
-                    0.0,
-                    TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
-                    1.0,
-                ],
-                col: [0.0, 0.0, 1.0, 1.0],
-            });
-            let base_vindex_x = arrow_top_vindex_x + 1;
-            let base_vindex_y = arrow_top_vindex_y + 1;
-            let base_vindex_z = arrow_top_vindex_z + 1;
-            for r in 0..TRANSLATE_HANDLE_ARROW_DIVISION {
-                let (s, c) = (core::f32::consts::TAU * r as f32
-                    / TRANSLATE_HANDLE_ARROW_DIVISION as f32)
-                    .sin_cos();
-
-                vs.add(base_vindex_x + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_BAR_LENGTH,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * s,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [1.0, 0.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_y + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_ARROW_RADIUS * s,
-                        TRANSLATE_HANDLE_BAR_LENGTH,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * c,
-                        1.0,
-                    ],
-                    col: [0.0, 1.0, 0.0, 1.0],
-                });
-                vs.add(base_vindex_z + r as usize).write(HandleVertex {
-                    pos: [
-                        TRANSLATE_HANDLE_ARROW_RADIUS * s,
-                        TRANSLATE_HANDLE_ARROW_RADIUS * c,
-                        TRANSLATE_HANDLE_BAR_LENGTH,
-                        1.0,
-                    ],
-                    col: [0.0, 0.0, 1.0, 1.0],
-                });
-
-                let prev_r = if r > 0 {
-                    r as u16
-                } else {
-                    TRANSLATE_HANDLE_ARROW_DIVISION as u16
-                } - 1;
-                is.add(iindex_x + 0).write(arrow_top_vindex_x as u16);
-                is.add(iindex_x + 1).write(base_vindex_x as u16 + prev_r);
-                is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
-                iindex_x += 3;
-                is.add(iindex_y + 0).write(arrow_top_vindex_y as u16);
-                is.add(iindex_y + 1).write(base_vindex_y as u16 + prev_r);
-                is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
-                iindex_y += 3;
-                is.add(iindex_z + 0).write(arrow_top_vindex_z as u16);
-                is.add(iindex_z + 1).write(base_vindex_z as u16 + prev_r);
-                is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
-                iindex_z += 3;
-
-                if r > 1 {
-                    is.add(iindex_x + 0).write(base_vindex_x as u16 + 0);
-                    is.add(iindex_x + 1)
-                        .write(base_vindex_x as u16 + r as u16 - 1);
-                    is.add(iindex_x + 2).write(base_vindex_x as u16 + r as u16);
-                    iindex_x += 3;
-                    is.add(iindex_y + 0).write(base_vindex_y as u16 + 0);
-                    is.add(iindex_y + 1)
-                        .write(base_vindex_y as u16 + r as u16 - 1);
-                    is.add(iindex_y + 2).write(base_vindex_y as u16 + r as u16);
-                    iindex_y += 3;
-                    is.add(iindex_z + 0).write(base_vindex_z as u16 + 0);
-                    is.add(iindex_z + 1)
-                        .write(base_vindex_z as u16 + r as u16 - 1);
-                    is.add(iindex_z + 2).write(base_vindex_z as u16 + r as u16);
-                    iindex_z += 3;
-                }
-            }
+            gen_translate_handle_mesh(
+                ptr.ptr()
+                    .byte_add(translate_handle_vbuf_upload_offset)
+                    .cast(),
+                ptr.ptr()
+                    .byte_add(translate_handle_ibuf_upload_offset)
+                    .cast(),
+            );
+            gen_rotation_handle_mesh(
+                ptr.ptr()
+                    .byte_add(rotation_handle_vbuf_upload_offset)
+                    .cast(),
+                ptr.ptr()
+                    .byte_add(rotation_handle_ibuf_upload_offset)
+                    .cast(),
+            );
+            gen_scale_handle_mesh(
+                ptr.ptr().byte_add(scale_handle_vbuf_upload_offset).cast(),
+                ptr.ptr().byte_add(scale_handle_ibuf_upload_offset).cast(),
+            );
         }
         if should_flush {
             unsafe {
@@ -1459,6 +1781,26 @@ impl Renderer {
                     srcOffset: translate_handle_ibuf_upload_offset as _,
                     dstOffset: translate_handle_ibuf_range.start,
                     size: translate_handle_ibuf_range.end - translate_handle_ibuf_range.start,
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: rotation_handle_vbuf_upload_offset as _,
+                    dstOffset: rotation_handle_vbuf_range.start,
+                    size: rotation_handle_vbuf_range.end - rotation_handle_vbuf_range.start,
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: rotation_handle_ibuf_upload_offset as _,
+                    dstOffset: rotation_handle_ibuf_range.start,
+                    size: rotation_handle_ibuf_range.end - rotation_handle_ibuf_range.start,
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: scale_handle_vbuf_upload_offset as _,
+                    dstOffset: scale_handle_vbuf_range.start,
+                    size: scale_handle_vbuf_range.end - scale_handle_vbuf_range.start,
+                }),
+                br::BufferCopy(br::vk::VkBufferCopy {
+                    srcOffset: scale_handle_ibuf_upload_offset as _,
+                    dstOffset: scale_handle_ibuf_range.start,
+                    size: scale_handle_ibuf_range.end - scale_handle_ibuf_range.start,
                 }),
             ],
         )
@@ -1552,6 +1894,8 @@ impl Renderer {
             ),
         )
         .expect("preview.command_buffer.create");
+        device.dbg_set_name(&command_pool, c"Preview.RenderCommandPool");
+        device.dbg_set_name(&command_buffer, c"Preview.RenderCommandBuffer");
 
         let mut update_command_pool = br::CommandPoolObject::new(
             device,
@@ -1566,6 +1910,8 @@ impl Renderer {
             ),
         )
         .expect("preview.update_command_buffer.alloc");
+        device.dbg_set_name(&update_command_pool, c"Preview.UpdateCommandPool");
+        device.dbg_set_name(&update_command_buffer, c"Preview.UpdateCommandBuffer");
 
         work_queue.wait().expect("preview.init_cb.wait");
         // keep alive
@@ -1580,6 +1926,7 @@ impl Renderer {
         let (default_material_shader, _) = default_material_shader.unmanage();
         let (default_material_pipeline_layout, _) = default_material_pipeline_layout.unmanage();
         let (unlit_colored_shader, _) = unlit_colored_shader.unmanage();
+        let (rotation_handle_shader, _) = rotation_handle_shader.unmanage();
         let (unlit_colored_object_pipeline_layout, _) =
             unlit_colored_object_pipeline_layout.unmanage();
         let (grid_shader, _) = grid_shader.unmanage();
@@ -1620,11 +1967,17 @@ impl Renderer {
             grid_pipeline: core::mem::MaybeUninit::uninit(),
             unlit_colored_object_pipeline_layout,
             unlit_colored_shader,
+            rotation_handle_shader,
             gizmos_pipeline: core::mem::MaybeUninit::uninit(),
+            rotation_handle_pipeline: core::mem::MaybeUninit::uninit(),
             internal_mesh_buffer,
             origin_axes_vbuf_range,
             translate_handle_vbuf_range,
             translate_handle_ibuf_range,
+            rotation_handle_vbuf_range,
+            rotation_handle_ibuf_range,
+            scale_handle_vbuf_range,
+            scale_handle_ibuf_range,
             internal_uniform_buffer,
             camera_data_ubuf_range,
             internal_data_memory,
@@ -1648,6 +2001,9 @@ impl Renderer {
             user_meshes: Vec::new(),
             user_renders: Vec::new(),
             user_data_update_pending: false,
+            handle_shape: HandleShape::Translation,
+            handle_to_world_transform: Matrix4::ONE,
+            needs_invalidate_render: false,
             valid: false,
         }
     }
@@ -1778,6 +2134,11 @@ impl Renderer {
                 mesh_id: r.mesh_id,
             });
         }
+
+        if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
+            self.handle_shape = committed_state.handle_shape;
+            self.needs_invalidate_render = true;
+        }
     }
 
     pub fn validate(
@@ -1831,6 +2192,9 @@ impl Renderer {
                 drop(unsafe {
                     br::PipelineObject::manage(self.gizmos_pipeline.assume_init(), device)
                 });
+                drop(unsafe {
+                    br::PipelineObject::manage(self.rotation_handle_pipeline.assume_init(), device)
+                });
             }
 
             let [
@@ -1838,6 +2202,7 @@ impl Renderer {
                 origin_axes_pipeline,
                 grid_pipeline,
                 gizmos_pipeline,
+                rotation_handle_pipeline,
             ] = device
                 .create_graphics_pipelines_array(&[
                     br::GraphicsPipelineCreateInfo::new(
@@ -2007,6 +2372,7 @@ impl Renderer {
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .config_depth(Some(br::CompareOp::Less), false),
                     ),
+                    // gizmos
                     br::GraphicsPipelineCreateInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
                         br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
@@ -2061,6 +2427,68 @@ impl Renderer {
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .config_depth(Some(br::CompareOp::Less), false),
                     ),
+                    // rotation handle
+                    br::GraphicsPipelineCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
+                        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
+                        &[
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Vertex,
+                                br::VkHandleRef::from_raw_ref(&self.rotation_handle_shader),
+                                c"vertMain",
+                            ),
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Fragment,
+                                br::VkHandleRef::from_raw_ref(&self.rotation_handle_shader),
+                                c"fragMain",
+                            ),
+                        ],
+                        &br::PipelineVertexInputStateCreateInfo::new(
+                            &[br::VertexInputBindingDescription::per_vertex_typed::<
+                                HandleVertex,
+                            >(0)],
+                            &[
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 0,
+                                        binding: 0,
+                                        offset: core::mem::offset_of!(HandleVertex, pos) as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                                br::VertexInputAttributeDescription(
+                                    br::vk::VkVertexInputAttributeDescription {
+                                        location: 1,
+                                        binding: 0,
+                                        offset: core::mem::offset_of!(HandleVertex, col) as _,
+                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                    },
+                                ),
+                            ],
+                        ),
+                        &br::PipelineInputAssemblyStateCreateInfo::new(
+                            br::PrimitiveTopology::LineList,
+                        ),
+                        &br::PipelineViewportStateCreateInfo::new(
+                            &[active_rt
+                                .size
+                                .into_rect(br::Offset2D::ZERO)
+                                .make_viewport(0.0..1.0)],
+                            &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                        ),
+                        &&br::PipelineRasterizationStateCreateInfo::new(
+                            br::PolygonMode::Fill,
+                            br::CullModeFlags::NONE,
+                            br::FrontFace::CounterClockwise,
+                        )
+                        .line_width(2.0),
+                        BLEND_STATE_SINGLE_NONE,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)
+                    .set_depth_stencil_state(
+                        &br::PipelineDepthStencilStateCreateInfo::new()
+                            .config_depth(Some(br::CompareOp::Less), false),
+                    ),
                 ])
                 .expect("preview.validate.origin_axes.pipelines.create");
             self.default_material_pipeline
@@ -2069,6 +2497,8 @@ impl Renderer {
                 .write(origin_axes_pipeline.unmanage().0);
             self.grid_pipeline.write(grid_pipeline.unmanage().0);
             self.gizmos_pipeline.write(gizmos_pipeline.unmanage().0);
+            self.rotation_handle_pipeline
+                .write(rotation_handle_pipeline.unmanage().0);
 
             origin_axes_pipeline_changed = true;
         }
@@ -2199,9 +2629,11 @@ impl Renderer {
             self.update_command_pending = true;
         }
 
+        let needs_invalidate_render = core::mem::replace(&mut self.needs_invalidate_render, false);
         if framebuffer_changed
             || origin_axes_pipeline_changed
             || active_rt.size != self.active_rt_size
+            || needs_invalidate_render
         {
             unsafe {
                 br::vkfn_wrapper::reset_command_pool(
@@ -2258,7 +2690,7 @@ impl Renderer {
                                         [&unsafe { &*x.object_uniform_start.source_page.get() }
                                             .buffer]],
                                 ],
-                                &[0, x.object_uniform_start.offset as _],
+                                &[x.object_uniform_start.offset as _],
                             )
                             .bind_vertex_buffer_array(
                                 0,
@@ -2377,31 +2809,90 @@ impl Renderer {
                         layerCount: 1,
                     }],
                 )
-                .bind_pipeline(
-                    br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(unsafe {
-                        self.gizmos_pipeline.assume_init_ref()
-                    }),
-                )
-                .bind_descriptor_sets(
-                    br::PipelineBindPoint::Graphics,
-                    br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
-                    0,
-                    &[self.common_descriptor_set],
-                    &[],
-                )
-                .bind_vertex_buffer_array(
-                    0,
-                    &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                    &[self.translate_handle_vbuf_range.start],
-                )
-                .bind_index_buffer(
-                    br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                    self.translate_handle_ibuf_range.start as _,
-                    br::IndexType::U16,
-                )
-                // TODO: あとでちゃんと計算する
-                .draw_indexed(102 * 3, 1, 0, 0, 0)
+                // render gizmos
+                .inject(|r| match self.handle_shape {
+                    HandleShape::Translation => r
+                        .bind_pipeline(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(unsafe {
+                                self.gizmos_pipeline.assume_init_ref()
+                            }),
+                        )
+                        .bind_descriptor_sets(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            0,
+                            &[self.common_descriptor_set],
+                            &[],
+                        )
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                            &[self.translate_handle_vbuf_range.start],
+                        )
+                        .bind_index_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                            self.translate_handle_ibuf_range.start as _,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(TRANSLATE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
+                    HandleShape::Rotation => r
+                        .bind_pipeline(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(unsafe {
+                                self.rotation_handle_pipeline.assume_init_ref()
+                            }),
+                        )
+                        .bind_descriptor_sets(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            0,
+                            &[self.common_descriptor_set],
+                            &[],
+                        )
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                            &[self.rotation_handle_vbuf_range.start],
+                        )
+                        .bind_index_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                            self.rotation_handle_ibuf_range.start as _,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(ROTATION_HANDLE_AXES_DRAW_ICOUNT, 1, 0, 0, 0),
+                    HandleShape::Scale => r
+                        .bind_pipeline(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(unsafe {
+                                self.gizmos_pipeline.assume_init_ref()
+                            }),
+                        )
+                        .bind_descriptor_sets(
+                            br::PipelineBindPoint::Graphics,
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            0,
+                            &[self.common_descriptor_set],
+                            &[],
+                        )
+                        .bind_vertex_buffer_array(
+                            0,
+                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
+                            &[self.scale_handle_vbuf_range.start],
+                        )
+                        .bind_index_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                            self.scale_handle_ibuf_range.start as _,
+                            br::IndexType::U16,
+                        )
+                        .draw_indexed(SCALE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
+                })
                 .end_render_pass()
                 .end()
                 .expect("preview.validate.command_buffer.end");

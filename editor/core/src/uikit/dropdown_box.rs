@@ -24,7 +24,7 @@ use crate::{
         MountContext, MountTarget, RenderContext, TeardownContext, ViewElementSize,
         ViewInitContext, ViewPlacement,
     },
-    utils::{Point, SafeF32, Size},
+    utils::{LogicalUnit, Point, Rect, SafeF32, Size},
 };
 
 const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
@@ -61,14 +61,13 @@ impl View {
 impl super::View for View {
     fn render(
         &mut self,
-        _self_instance: &mut super::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut super::RenderChildScheduler,
-    ) -> super::ViewNewRenderElements {
-        match self.entity {
-            Some(_) => {
+    ) -> super::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => {
                 // TODO: reflect changes
-                super::ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -210,13 +209,14 @@ impl super::View for View {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-                self.entity = Some(eh);
-                super::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..super::ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(eh)
             }
+        };
+
+        super::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..super::ViewRenderElements::EMPTY
         }
     }
 

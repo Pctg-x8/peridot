@@ -43,26 +43,25 @@ use crate::{
         ShaderTexture, TextureID,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
-            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            CompositeTreeSyncBuffer, CornerRadius, Gradient, GradientRef, TextureMappingMode,
-            TextureType,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
+            CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
+            CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
+            GradientRef, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
-        CheckboxView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView,
-        MountContext, MountTarget, NumericInputView, NumericInputViewBackingStore, PopupID,
-        PopupManager, RadioButtonView, RawMountTarget, RenderChildScheduler, RenderContext,
-        ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
-        TeardownContext, TextInputView, TextInputViewIO, View, ViewElementSize, ViewEventHandler,
-        ViewEventHandlerStore, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
-        ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore, ViewIdentifier,
-        ViewIdentifierAllocator, ViewImmediateRenderable, ViewImmediateTeardownable,
-        ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore, ViewLocation, ViewPlacement,
-        ViewRegisterable, ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore,
-        ViewRenderer, ViewTreeRelationStore, ViewUpdateContext, call_view_update,
+        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView, MountContext,
+        MountTarget, NumericInputView, NumericInputViewIO, NumericInputViewInit, PopupID,
+        PopupManager, RadioButtonView, RenderContext, ScrollContainer, SimpleButtonEventHandler,
+        SimpleButtonView, StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View,
+        ViewElementSize, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegistry,
+        ViewGroupID, ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator,
+        ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewLocation,
+        ViewPlacement, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
+        ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -169,6 +168,9 @@ pub fn launch() {
         pushed_render_data: Vec::new(),
         dirty_render_data: HashMap::new(),
         removed_render_data: HashSet::new(),
+        handle_shape: rendering::preview::HandleShape::Translation,
+        handle_to_world_transform: peridot_math::Matrix4::ONE,
+        handle_data_dirtified: false,
     });
 
     let global_time_base = std::time::Instant::now();
@@ -839,7 +841,7 @@ pub enum Event {
     OpenCustomViewFlyout {
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
-        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfaceViewConstructor>>>,
+        view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfacePresenterConstructor>>>,
     },
     MenuOpen {
         parent: WindowHandle,
@@ -902,9 +904,6 @@ pub enum Event {
     DropdownMenuSelectItem {
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
-    },
-    UpdateView {
-        id: ViewIdentifier,
     },
     DockMoveSplitter {
         controlling_dock: ui::dock::DockID,
@@ -989,7 +988,6 @@ impl Event {
             Self::MenuPointerLeave { .. } => "MenuPointerLeave",
             Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
-            Self::UpdateView { .. } => "UpdateView",
             Self::DockMoveSplitter { .. } => "DockMoveSplitter",
             Self::DockBeginPreview { .. } => "DockBeginPreview",
             Self::DockMovePreview { .. } => "DockMovePreview",
@@ -1061,10 +1059,11 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
     }
 }
 
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 1;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 2;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 3;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_PLANE: u64 = 1;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 2;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 3;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
+pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
 
 pub struct ColorPickerSharedResources {
@@ -1354,22 +1353,9 @@ impl ColorPickerView {
 impl View for ColorPickerView {
     fn render(
         &mut self,
-        self_instance: &mut uikit::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        let new_render_elements = if !self.first_rendered {
-            // first render
-            uikit::ViewNewRenderElements {
-                composite_tree: Some(self.eh.ct_root),
-                hit_tree: Some(self.eh.ht_root),
-                ..uikit::ViewNewRenderElements::EMPTY
-            }
-        } else {
-            uikit::ViewNewRenderElements::EMPTY
-        };
-
-        self.first_rendered = true;
+    ) -> uikit::ViewRenderElements {
         // TODO: ViewがViewをもつパターン(これなしにしたほうがいいかも)
         // self.eh.hex_text_input_view.borrow_mut().render(
         //     ctx,
@@ -1380,7 +1366,11 @@ impl View for ColorPickerView {
         //     kf_group,
         // );
 
-        new_render_elements
+        uikit::ViewRenderElements {
+            composite_tree: Some(self.eh.ct_root),
+            hit_tree: Some(self.eh.ht_root),
+            ..uikit::ViewRenderElements::EMPTY
+        }
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
@@ -1442,7 +1432,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             let dcenter_y = local_y - 64.0;
             let hue =
                 360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 - 90.0;
-            self.select_hue(hue, context.composite_tree, context.system_link);
+            self.select_hue(hue, context.composite_tree, context.view_render_queue);
             self.ring_selecting.set(true);
 
             return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
@@ -1462,7 +1452,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
                 local_x,
                 local_y,
                 context.composite_tree,
-                context.system_link,
+                context.view_render_queue,
             );
 
             self.box_selecting.set(true);
@@ -1479,7 +1469,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             );
             let new_alpha = local_x.clamp(0.0, w) / w;
             self.current_alpha.set(new_alpha);
-            self.color_changed(context.system_link, context.composite_tree);
+            self.color_changed(context.composite_tree, context.view_render_queue);
             context
                 .composite_tree
                 .get_mut(self.ct_alpha_slider_thumb)
@@ -1516,7 +1506,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             let dcenter_y = local_y - 64.0;
             let hue =
                 360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 - 90.0;
-            self.select_hue(hue, context.composite_tree, context.system_link);
+            self.select_hue(hue, context.composite_tree, context.view_render_queue);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -1535,7 +1525,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
                 local_x,
                 local_y,
                 context.composite_tree,
-                context.system_link,
+                context.view_render_queue,
             );
 
             return EventContinueControl::STOP_PROPAGATION;
@@ -1551,7 +1541,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             );
             let new_alpha = local_x.clamp(0.0, w) / w;
             self.current_alpha.set(new_alpha);
-            self.color_changed(context.system_link, context.composite_tree);
+            self.color_changed(context.composite_tree, context.view_render_queue);
             context
                 .composite_tree
                 .get_mut(self.ct_alpha_slider_thumb)
@@ -1587,7 +1577,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             let dcenter_y = local_y - 64.0;
             let hue =
                 360.0 * (dcenter_y.atan2(dcenter_x) / core::f32::consts::TAU + 0.5) + 360.0 - 90.0;
-            self.select_hue(hue, context.composite_tree, context.system_link);
+            self.select_hue(hue, context.composite_tree, context.view_render_queue);
 
             return EventContinueControl::STOP_PROPAGATION;
         }
@@ -1606,7 +1596,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
                 local_x,
                 local_y,
                 context.composite_tree,
-                context.system_link,
+                context.view_render_queue,
             );
 
             return EventContinueControl::STOP_PROPAGATION;
@@ -1622,7 +1612,7 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             );
             let new_alpha = local_x.clamp(0.0, w) / w;
             self.current_alpha.set(new_alpha);
-            self.color_changed(context.system_link, context.composite_tree);
+            self.color_changed(context.composite_tree, context.view_render_queue);
             context
                 .composite_tree
                 .get_mut(self.ct_alpha_slider_thumb)
@@ -1642,8 +1632,8 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
     fn on_pointer_up(
         &self,
         sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         if sender == self.ht_root {
             self.ring_selecting.set(false);
@@ -1672,13 +1662,13 @@ impl ColorPickerEventHandler {
         x: f32,
         y: f32,
         composite_tree: &mut CompositeTree<E>,
-        syslink: &SystemLink,
+        view_render_queue: &mut ViewRenderQueue,
     ) {
         self.current_light
             .set(1.0 - y / self.sat_light_box_size.height);
         self.current_saturation
             .set(x / self.sat_light_box_size.width);
-        self.color_changed(syslink, composite_tree);
+        self.color_changed(composite_tree, view_render_queue);
 
         let ct_pointer = composite_tree.get_mut(self.ct_pointer);
         ct_pointer.offset = [
@@ -1688,9 +1678,14 @@ impl ColorPickerEventHandler {
         composite_tree.mark_dirty(self.ct_pointer);
     }
 
-    fn select_hue<E>(&self, hue: f32, composite_tree: &mut CompositeTree<E>, syslink: &SystemLink) {
+    fn select_hue<E>(
+        &self,
+        hue: f32,
+        composite_tree: &mut CompositeTree<E>,
+        view_render_queue: &mut ViewRenderQueue,
+    ) {
         self.current_hue.set(hue);
-        self.color_changed(syslink, composite_tree);
+        self.color_changed(composite_tree, view_render_queue);
 
         let r = hue_to_rgb_wave(hue + 120.0);
         let g = hue_to_rgb_wave(hue);
@@ -1701,7 +1696,11 @@ impl ColorPickerEventHandler {
         composite_tree.mark_dirty(self.ct_sat_light_box);
     }
 
-    fn color_changed<E>(&self, syslink: &SystemLink, composite_tree: &mut CompositeTree<E>) {
+    fn color_changed<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        view_render_queue: &mut ViewRenderQueue,
+    ) {
         const fn lerp(a: f32, b: f32, t: f32) -> f32 {
             a + (b - a) * t
         }
@@ -1741,7 +1740,7 @@ impl ColorPickerEventHandler {
         );
 
         if let Some(e) = self.backing_store.upgrade() {
-            e.new_value(rgba, syslink.event_dispatcher());
+            e.new_value(rgba, view_render_queue);
         }
     }
 
@@ -1848,14 +1847,13 @@ impl ColorPickerHexTextInputView {
 impl View for ColorPickerHexTextInputView {
     fn render(
         &mut self,
-        self_instance: &mut uikit::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        match self.eh {
-            Some(_) => {
+    ) -> uikit::ViewRenderElements {
+        let e = match self.eh {
+            Some(ref e) => {
                 // TODO: reflect changes
-                uikit::ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
@@ -1872,6 +1870,8 @@ impl View for ColorPickerHexTextInputView {
                     core: uikit::TextInputViewCore::new(
                         ctx,
                         self.rect.clone(),
+                        [0.0; 2],
+                        [0.0; 2],
                         self.id,
                         ht_root,
                         eh.clone() as _,
@@ -1884,16 +1884,15 @@ impl View for ColorPickerHexTextInputView {
                 });
                 ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
                 ctx.ht_manager.set_action_handler(ht_root, eh.core.entity());
-                self_instance.bind_event_handler(eh.core.entity());
 
-                let r = uikit::ViewNewRenderElements {
-                    composite_tree: Some(eh.core.entity().ct_root()),
-                    hit_tree: Some(eh.core.entity().ht_root()),
-                    keyboard_focus: Some(kf_token),
-                };
-                self.eh = Some(eh);
-                r
+                &*self.eh.insert(eh)
             }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.core.entity().ct_root()),
+            hit_tree: Some(e.core.entity().ht_root()),
+            keyboard_focus: Some(e.token),
         }
     }
 
@@ -1925,19 +1924,19 @@ impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
 
     fn focus_released(&self, context: &mut InputEventContext) {
         self.core.entity().focus_released(context);
-        self.confirm_direct_input(context.system_link, context.composite_tree);
+        self.confirm_direct_input(context.composite_tree, context.view_render_queue);
     }
 
     fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
         if code == KeyInputCode::Enter {
             // 確定or入力開始
-            self.confirm_direct_input(context.system_link, context.composite_tree);
+            self.confirm_direct_input(context.composite_tree, context.view_render_queue);
             return;
         }
 
         if code == KeyInputCode::Esc {
             // 入力キャンセル
-            self.cancel_direct_input(context.system_link);
+            self.cancel_direct_input(context.view_render_queue);
             return;
         }
 
@@ -2031,7 +2030,11 @@ impl ColorPickerHexTextInputEventHandler {
         format!("{r:02X}{g:02X}{b:02X}{a:02X}")
     }
 
-    fn confirm_direct_input<E>(&self, syslink: &SystemLink, composite_tree: &mut CompositeTree<E>) {
+    fn confirm_direct_input<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        view_render_queue: &mut ViewRenderQueue,
+    ) {
         let current_value = self.value.get();
         let new_value = Self::parse(&self.value_edit.borrow()).unwrap_or(current_value);
         self.value.set(new_value);
@@ -2039,7 +2042,7 @@ impl ColorPickerHexTextInputEventHandler {
         // HitTestTreeへの変更がはいるので遅延させる
         self.core
             .entity()
-            .perform_ops_and_schedule_update(syslink, |e| {
+            .lazy_update_and_schedule(view_render_queue, |e| {
                 e.perform_external_state_update(|st| st.set_content(Self::fmt(new_value)))
             });
 
@@ -2049,16 +2052,16 @@ impl ColorPickerHexTextInputEventHandler {
                 parent.set_by_color(new_value, composite_tree);
 
                 if let Some(e) = parent.backing_store.upgrade() {
-                    e.new_value(new_value, syslink.event_dispatcher());
+                    e.new_value(new_value, view_render_queue);
                 }
             }
         }
     }
 
-    fn cancel_direct_input(&self, syslink: &SystemLink) {
+    fn cancel_direct_input(&self, view_render_queue: &mut ViewRenderQueue) {
         self.core
             .entity()
-            .perform_ops_and_schedule_update(syslink, |e| {
+            .lazy_update_and_schedule(view_render_queue, |e| {
                 e.perform_external_state_update(|st| st.set_content(Self::fmt(self.value.get())))
             });
     }
@@ -2066,7 +2069,7 @@ impl ColorPickerHexTextInputEventHandler {
 
 pub trait ColorPickerBackingStoreEvent {
     fn value(&self) -> u32;
-    fn new_value(&self, value: u32, event_dispatcher: &LogicFiberEventDispatcher);
+    fn new_value(&self, value: u32, view_render_queue: &mut ViewRenderQueue);
 }
 
 pub struct EditableColorButtonView {
@@ -2090,14 +2093,22 @@ impl EditableColorButtonView {
 impl View for EditableColorButtonView {
     fn render(
         &mut self,
-        self_instance: &mut uikit::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        match self.eh {
-            Some(_) => {
-                // TODO: reflect changes
-                uikit::ViewNewRenderElements::EMPTY
+    ) -> uikit::ViewRenderElements {
+        let e = match self.eh {
+            Some(ref e) => {
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_color)
+                    .composite_mode(CompositeMode::FillColor(AnimatableColor::Value([
+                        e.color.get() as u8 as f32 / 255.0,
+                        (e.color.get() >> 8) as u8 as f32 / 255.0,
+                        (e.color.get() >> 16) as u8 as f32 / 255.0,
+                        (e.color.get() >> 24) as u8 as f32 / 255.0,
+                    ])))
+                    .apply();
+
+                e
             }
             None => {
                 // first render
@@ -2199,15 +2210,15 @@ impl View for EditableColorButtonView {
                     color: Cell::new(self.color),
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
-                self_instance.bind_event_handler(&eh);
 
-                self.eh = Some(eh);
-                uikit::ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..uikit::ViewNewRenderElements::EMPTY
-                }
+                &*self.eh.insert(eh)
             }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            keyboard_focus: None,
         }
     }
 
@@ -2230,18 +2241,6 @@ struct EditableColorButtonEventHandler {
     ct_color: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     color: Cell<u32>,
-}
-impl ViewEventHandler for EditableColorButtonEventHandler {
-    fn update(&self, context: &mut ViewUpdateContext) {
-        context.composite_tree.get_mut(self.ct_color).composite_mode =
-            CompositeMode::FillColor(AnimatableColor::Value([
-                self.color.get() as u8 as f32 / 255.0,
-                (self.color.get() >> 8) as u8 as f32 / 255.0,
-                (self.color.get() >> 16) as u8 as f32 / 255.0,
-                (self.color.get() >> 24) as u8 as f32 / 255.0,
-            ]));
-        context.composite_tree.mark_dirty(self.ct_color);
-    }
 }
 impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
     fn on_click(
@@ -2273,9 +2272,9 @@ impl ColorPickerBackingStoreEvent for EditableColorButtonEventHandler {
         self.color.get()
     }
 
-    fn new_value(&self, value: u32, event_dispatcher: &LogicFiberEventDispatcher) {
+    fn new_value(&self, value: u32, view_render_queue: &mut ViewRenderQueue) {
         self.color.set(value);
-        event_dispatcher.dispatch(Event::UpdateView { id: self.view_id });
+        view_render_queue.schedule(self.view_id);
     }
 }
 
@@ -2289,7 +2288,7 @@ impl EditableColorButtonPickerFlyoutView {
         Self(ctx.construct_view(|_| Box::new(v)))
     }
 }
-impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
+impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
     fn root_view_id(&self) -> ViewIdentifier {
         self.0
     }
@@ -2298,12 +2297,12 @@ impl FlyoutSurfaceView for EditableColorButtonPickerFlyoutView {
 pub struct EditableColorButtonPickerFlyoutViewConstructor {
     backing_store: std::rc::Weak<EditableColorButtonEventHandler>,
 }
-impl FlyoutSurfaceViewConstructor for EditableColorButtonPickerFlyoutViewConstructor {
+impl FlyoutSurfacePresenterConstructor for EditableColorButtonPickerFlyoutViewConstructor {
     fn size(&self) -> Size<LogicalUnit> {
         Size::new_logical(128.0 + 16.0, 128.0 + 32.0 + 16.0 + 20.0 + 16.0)
     }
 
-    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView> {
+    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter> {
         Box::new(EditableColorButtonPickerFlyoutView::new(
             ctx,
             &self.backing_store,
@@ -2318,7 +2317,7 @@ impl ColorPickerBackingStoreEvent for ColorPickerTestBackingStore {
     fn value(&self) -> u32 {
         self.color.get()
     }
-    fn new_value(&self, value: u32, _event_dispatcher: &LogicFiberEventDispatcher) {
+    fn new_value(&self, value: u32, _view_render_queue: &mut ViewRenderQueue) {
         self.color.set(value);
     }
 }
@@ -2348,7 +2347,7 @@ impl TextInputViewIO for UIKitPreviewNumericInputValueStore {
         self.0.set(new_value);
     }
 }
-impl NumericInputViewBackingStore for UIKitPreviewNumericInputValueStore {
+impl NumericInputViewIO for UIKitPreviewNumericInputValueStore {
     fn set_delta(
         &self,
         _sender: ViewIdentifier,
@@ -2588,11 +2587,15 @@ impl UIKitPreviewPanePresenter {
         let numeric_input_view = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
                 id,
-                Rect::from_lt_size(
-                    Point::new_logical(16.0 + label_width, ytop - 2.0),
-                    Size::new_logical(64.0, 20.0),
-                ),
-                Rc::downgrade(&numeric_input_view_backing_store),
+                NumericInputViewInit {
+                    placement: ViewPlacement {
+                        location: ViewLocation::new_left_top(16.0 + label_width, ytop - 2.0),
+                        size: ViewElementSize::fixed(64.0, 20.0),
+                        ..Default::default()
+                    },
+                    value: Rc::downgrade(&numeric_input_view_backing_store),
+                    ..Default::default()
+                },
             ))
         });
         ctx.view_set_parent(label, scroll_container);
@@ -2753,11 +2756,10 @@ struct EmptyView;
 impl View for EmptyView {
     fn render(
         &mut self,
-        _self_instance: &mut uikit::ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> uikit::ViewNewRenderElements {
-        uikit::ViewNewRenderElements::EMPTY
+    ) -> uikit::ViewRenderElements {
+        uikit::ViewRenderElements::EMPTY
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
@@ -2879,6 +2881,7 @@ pub enum ViewFeedback {
     ObjectTreeChanged(ViewFeedbackObjectTreeChanged),
     ObjectSelectionChanged(ViewFeedbackObjectSelectionChanged),
     ObjectDataChanged(ViewFeedbackObjectDataChanged),
+    PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged),
 }
 impl ViewFeedback {
     pub const fn object_tree_changed() -> Self {
@@ -2893,11 +2896,16 @@ impl ViewFeedback {
         Self::ObjectDataChanged(ViewFeedbackObjectDataChanged(object_id))
     }
 
+    pub const fn preview_edit_tool_type_changed() -> Self {
+        Self::PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged)
+    }
+
     pub fn dispatch(self, registry: &ViewFeedbackRegistry, context: &mut ViewFeedbackContext) {
         match self {
             Self::ObjectTreeChanged(o) => registry.dispatch(o, context),
             Self::ObjectSelectionChanged(o) => registry.dispatch(o, context),
             Self::ObjectDataChanged(o) => registry.dispatch(o, context),
+            Self::PreviewEditToolTypeChanged(o) => registry.dispatch(o, context),
         }
     }
 }
@@ -2973,6 +2981,7 @@ pub struct Application {
     free_object_indices: BTreeSet<usize>,
     root_objects: Vec<ObjectID>,
     selected_objects: HashSet<ObjectID>,
+    preview_edit_tool_type: PreviewEditToolType,
 }
 impl Application {
     pub fn new() -> Self {
@@ -2981,7 +2990,16 @@ impl Application {
             free_object_indices: BTreeSet::new(),
             root_objects: Vec::new(),
             selected_objects: HashSet::new(),
+            preview_edit_tool_type: PreviewEditToolType::Translate,
         }
+    }
+
+    pub fn sync(&self, feedback_queue: &mut VecDeque<ViewFeedback>) {
+        feedback_queue.extend([
+            ViewFeedback::object_tree_changed(),
+            ViewFeedback::object_selection_changed(),
+            ViewFeedback::preview_edit_tool_type_changed(),
+        ]);
     }
 
     fn alloc_object(&mut self, o: Object) -> ObjectID {
@@ -3148,13 +3166,20 @@ impl ApplicationMutation<'_> {
         self.view_feedbacks
             .push_back(ViewFeedback::object_selection_changed());
     }
+
+    pub fn set_preview_edit_tool_type(&mut self, tool_type: PreviewEditToolType) {
+        self.state.preview_edit_tool_type = tool_type;
+        self.view_feedbacks
+            .push_back(ViewFeedback::preview_edit_tool_type_changed());
+    }
 }
 
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
-    header: ui::window_header::View,
+    root_view: ViewIdentifier,
+    header: ui::window_header::Component,
     appmenu: Option<ui::app_menu_bar::View>,
-    footer: Option<ui::window_footer::View>,
+    footer: Option<ViewIdentifier>,
     docking_manager: ui::dock::DockingManager,
 }
 impl PerWindowData {
@@ -3178,6 +3203,19 @@ impl PerWindowData {
             ),
         )
     }
+}
+
+struct WindowRootView {}
+impl View for WindowRootView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        _ctx: &mut RenderContext,
+    ) -> uikit::ViewRenderElements {
+        uikit::ViewRenderElements::EMPTY
+    }
+
+    fn teardown(&mut self, _ctx: &mut TeardownContext) {}
 }
 
 struct LaunchArgs<'sys> {
@@ -3217,8 +3255,8 @@ async fn run<'sys>(
     let mut view_allocator = ViewIdentifierAllocator::new();
     let mut view_instance_store = ViewInstanceStore::new();
     let mut view_tree_relation_store = ViewTreeRelationStore::new();
-    let mut view_event_handler_store = ViewEventHandlerStore::new();
     let mut view_group_relation_store = ViewGroupRelationStore::new();
+    let mut view_layout_state_store = ViewLayoutStateStore::new();
     let mut view_render_state_store = ViewRenderStateStore::new();
     let mut view_feedback_registry = ViewFeedbackRegistry::new();
     let mut view_render_queue = ViewRenderQueue::new();
@@ -3299,8 +3337,8 @@ async fn run<'sys>(
         view_allocator: &mut view_allocator,
         view_instance_store: &mut view_instance_store,
         view_tree_relation_store: &mut view_tree_relation_store,
-        view_event_handler_store: &mut view_event_handler_store,
         view_group_relation_store: &mut view_group_relation_store,
+        view_layout_state_store: &mut view_layout_state_store,
         view_render_state_store: &mut view_render_state_store,
         view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
         system_link: &system_link,
@@ -3317,15 +3355,17 @@ async fn run<'sys>(
             AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
         ))
         .apply();
-
-    let window_header_view = ui::window_header::View::new(
-        &mut view_init_ctx,
+    let main_window_root_view = view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
+    let window_header = ui::window_header::Component::new(
         ui::window_header::Caption::Main {
             project_name: "New Project".into(),
         },
-        main_window.needs_system_command_buttons(),
+        ui::window_header::ComponentInit {
+            with_system_command_buttons: main_window.needs_system_command_buttons(),
+        },
+        &mut view_init_ctx,
     );
-    window_header_view.mount(&mut view_init_ctx, &main_window);
+    view_init_ctx.view_set_parent(window_header.root_view(), main_window_root_view);
 
     let app_menu_view = if system_link.needs_app_menu_in_surface() {
         let app_menu_view = ui::app_menu_bar::View::new(
@@ -3413,8 +3453,9 @@ async fn run<'sys>(
         None
     };
 
-    let window_footer_view = ui::window_footer::View::new(&mut view_init_ctx);
-    window_footer_view.mount(&mut view_init_ctx, &main_window);
+    let window_footer_view =
+        view_init_ctx.construct_view(|_| Box::new(ui::window_footer::View::new()));
+    view_init_ctx.view_set_parent(window_footer_view, main_window_root_view);
 
     let initial_dock_state = DockState::Splitted {
         direction: DockDirection::Bottom(320.0),
@@ -3465,7 +3506,8 @@ async fn run<'sys>(
     let main_window_size = main_window.client_size();
     main_window.associate_extra_data(Box::new(PerWindowData {
         screen_reposition_interests: HashSet::new(),
-        header: window_header_view,
+        root_view: main_window_root_view,
+        header: window_header,
         appmenu: app_menu_view,
         footer: Some(window_footer_view),
         docking_manager: ui::dock::DockingManager::new(
@@ -3526,6 +3568,12 @@ async fn run<'sys>(
         ),
     }));
 
+    view_init_ctx.render_view_recursive(
+        main_window_root_view,
+        &main_window,
+        main_window.keyboard_focus_group(),
+    );
+
     if let Some(ref last_window_state) = last_window_state {
         for sub in last_window_state.sub.iter() {
             let new_window = system_link.open_window(
@@ -3557,8 +3605,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -3566,14 +3614,20 @@ async fn run<'sys>(
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
                     };
-                    let window_header_view = ui::window_header::View::new(
-                        &mut view_init_ctx,
+                    let root_view = view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
+                    let window_header_view = ui::window_header::Component::new(
                         ui::window_header::Caption::Sub,
-                        w.needs_system_command_buttons(),
+                        ui::window_header::ComponentInit {
+                            with_system_command_buttons: w.needs_system_command_buttons(),
+                        },
+                        &mut view_init_ctx,
                     );
-                    window_header_view.mount(&mut view_init_ctx, &w);
+                    view_init_ctx.view_set_parent(window_header_view.root_view(), root_view);
+
+                    view_init_ctx.render_view_recursive(root_view, &w, w.keyboard_focus_group());
 
                     w.associate_extra_data(Box::new(PerWindowData {
+                        root_view,
                         screen_reposition_interests: HashSet::new(),
                         header: window_header_view,
                         appmenu: None,
@@ -3636,6 +3690,39 @@ async fn run<'sys>(
         }
     }
 
+    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
+
+    // initial sync model with view
+    application.sync(&mut view_feedback_store);
+    let mut fb_context = ViewFeedbackContext {
+        application: &application,
+        view_init_context: ViewInitContext {
+            mount_context: MountContext {
+                composite_tree: &mut composite_tree,
+                ht_manager: &mut ht_manager,
+                current_sec: global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut keyboard_focus_registry,
+            },
+            view_allocator: &mut view_allocator,
+            view_instance_store: &mut view_instance_store,
+            view_tree_relation_store: &mut view_tree_relation_store,
+            view_group_relation_store: &mut view_group_relation_store,
+            view_layout_state_store: &mut view_layout_state_store,
+            view_render_state_store: &mut view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+            system_link: &system_link,
+            main_thread_texture_id_issuer: &mut texture_id_issuer,
+            application: &application,
+        },
+        view_render_queue: &mut view_render_queue,
+    };
+
+    for x in view_feedback_store.drain(..) {
+        x.dispatch(&view_feedback_registry, &mut fb_context);
+    }
+
+    view_feedback_registry.perform_atomic(&mut fb_context);
+
     view_render_queue.perform(
         &mut RenderContext {
             composite_tree: &mut composite_tree,
@@ -3649,8 +3736,8 @@ async fn run<'sys>(
         },
         &mut view_instance_store,
         &view_tree_relation_store,
+        &view_layout_state_store,
         &mut view_render_state_store,
-        &mut view_event_handler_store,
     );
 
     composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
@@ -3849,9 +3936,9 @@ async fn run<'sys>(
                             ctor,
                             self.0.view_allocator,
                             self.0.view_instance_store,
-                            self.0.view_event_handler_store,
                             self.0.view_tree_relation_store,
                             self.0.view_group_relation_store,
+                            self.0.view_layout_state_store,
                             self.0.view_render_state_store,
                         )
                     }
@@ -3861,9 +3948,9 @@ async fn run<'sys>(
                             id,
                             self.0.view_allocator,
                             self.0.view_instance_store,
-                            self.0.view_event_handler_store,
                             self.0.view_tree_relation_store,
                             self.0.view_group_relation_store,
+                            self.0.view_layout_state_store,
                             self.0.view_render_state_store,
                         );
                     }
@@ -3880,8 +3967,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -3925,8 +4012,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4014,8 +4101,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4047,8 +4134,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4065,10 +4152,58 @@ async fn run<'sys>(
                 window,
                 is_maximized,
             } => unsafe {
+                struct LocalContext<'a> {
+                    view_render_queue: &'a mut ViewRenderQueue,
+                    view_instance_store: &'a mut ViewInstanceStore,
+                }
+                impl crate::uikit::ViewInstanceQueryableMut for LocalContext<'_> {
+                    #[inline(always)]
+                    fn view_instance_mut<T: View + 'static>(
+                        &mut self,
+                        id: ViewIdentifier,
+                    ) -> Option<&mut T> {
+                        crate::uikit::view_instance_mut(id, self.view_instance_store)
+                    }
+
+                    #[inline(always)]
+                    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+                        crate::uikit::view_set_visibility(id, visible, self.view_instance_store)
+                    }
+                }
+                impl crate::uikit::ViewRenderer for LocalContext<'_> {
+                    #[inline(always)]
+                    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+                        self.view_render_queue.schedule(target)
+                    }
+                }
                 window
                     .extra_data_ref::<PerWindowData>()
                     .header
-                    .set_maximize_state(is_maximized, &mut composite_tree, &mut ht_manager);
+                    .set_maximize_state(
+                        is_maximized,
+                        &mut LocalContext {
+                            view_render_queue: &mut view_render_queue,
+                            view_instance_store: &mut view_instance_store,
+                        },
+                    );
+
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &view_layout_state_store,
+                    &mut view_render_state_store,
+                );
             },
             Event::WindowFocusChanged {
                 mut window,
@@ -4129,8 +4264,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4162,8 +4297,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4282,8 +4417,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4315,8 +4450,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4365,8 +4500,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4398,8 +4533,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4447,8 +4582,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4480,8 +4615,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4529,8 +4664,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4562,8 +4697,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4603,8 +4738,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4636,8 +4771,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4674,8 +4809,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4707,8 +4842,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4751,8 +4886,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4784,8 +4919,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4838,8 +4973,8 @@ async fn run<'sys>(
                                 view_allocator: &mut view_allocator,
                                 view_instance_store: &mut view_instance_store,
                                 view_tree_relation_store: &mut view_tree_relation_store,
-                                view_event_handler_store: &mut view_event_handler_store,
                                 view_group_relation_store: &mut view_group_relation_store,
+                                view_layout_state_store: &mut view_layout_state_store,
                                 view_render_state_store: &mut view_render_state_store,
                                 view_feedback_subscription_delayed_ops:
                                     &mut view_feedback_registry_delayed_ops,
@@ -4871,8 +5006,8 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
+                        &view_layout_state_store,
                         &mut view_render_state_store,
-                        &mut view_event_handler_store,
                     );
 
                     composite_tree
@@ -4918,8 +5053,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -4951,8 +5086,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -4997,8 +5132,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5030,8 +5165,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5076,8 +5211,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5109,8 +5244,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5155,8 +5290,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5188,8 +5323,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5200,7 +5335,6 @@ async fn run<'sys>(
                 target_window,
                 message,
             } => {
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 let opened_id = popup_manager.open(
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -5212,8 +5346,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5256,8 +5390,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5289,8 +5423,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5328,8 +5462,8 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
+                        &view_layout_state_store,
                         &mut view_render_state_store,
-                        &mut view_event_handler_store,
                     );
 
                     composite_tree
@@ -5363,7 +5497,7 @@ async fn run<'sys>(
                 view_constructor,
             } => {
                 let mut view_feedback_registry_delayed_ops = VecDeque::new();
-                custom_view_flyout_session = Some(CustomViewFlyoutSession::new(
+                custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
                     parent,
                     surface_pos,
                     view_constructor.0.0,
@@ -5377,8 +5511,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5412,8 +5546,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5459,8 +5593,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5498,8 +5632,8 @@ async fn run<'sys>(
                         view_allocator: &mut view_allocator,
                         view_instance_store: &mut view_instance_store,
                         view_tree_relation_store: &mut view_tree_relation_store,
-                        view_event_handler_store: &mut view_event_handler_store,
                         view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
                         view_render_state_store: &mut view_render_state_store,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
@@ -5622,8 +5756,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5682,8 +5816,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5715,8 +5849,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5765,8 +5899,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5798,8 +5932,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5850,8 +5984,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5883,8 +6017,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5924,8 +6058,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -5957,8 +6091,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -5991,6 +6125,13 @@ async fn run<'sys>(
                 }
 
                 match id {
+                    MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
+                        ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        }
+                        .object_create("New Plane".into());
+                    }
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
                         ApplicationMutation {
                             state: &mut application,
@@ -6026,7 +6167,9 @@ async fn run<'sys>(
                         }
                         .object_create("New Terrain".into());
                     }
-                    _ => (),
+                    _ => {
+                        tracing::warn!(id, "unhandled menu command");
+                    }
                 }
 
                 if !view_feedback_store.is_empty() {
@@ -6042,8 +6185,8 @@ async fn run<'sys>(
                             view_allocator: &mut view_allocator,
                             view_instance_store: &mut view_instance_store,
                             view_tree_relation_store: &mut view_tree_relation_store,
-                            view_event_handler_store: &mut view_event_handler_store,
                             view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
                             view_render_state_store: &mut view_render_state_store,
                             view_feedback_subscription_delayed_ops:
                                 &mut view_feedback_registry_delayed_ops,
@@ -6075,8 +6218,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -6108,44 +6251,6 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
-            Event::UpdateView { id } => {
-                call_view_update(
-                    id,
-                    &mut ViewUpdateContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                        },
-                        view_instance_store: &mut view_instance_store,
-                        view_render_queue: &mut view_render_queue,
-                        system_link: &system_link,
-                    },
-                    &mut view_event_handler_store,
-                );
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_render_state_store,
-                    &mut view_event_handler_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-            }
             Event::DockMoveSplitter {
                 controlling_dock,
                 pos_client,
@@ -6176,8 +6281,8 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
+                    &view_layout_state_store,
                     &mut view_render_state_store,
-                    &mut view_event_handler_store,
                 );
 
                 composite_tree
@@ -6253,8 +6358,8 @@ async fn run<'sys>(
                                 view_allocator: &mut view_allocator,
                                 view_instance_store: &mut view_instance_store,
                                 view_tree_relation_store: &mut view_tree_relation_store,
-                                view_event_handler_store: &mut view_event_handler_store,
                                 view_group_relation_store: &mut view_group_relation_store,
+                                view_layout_state_store: &mut view_layout_state_store,
                                 view_render_state_store: &mut view_render_state_store,
                                 view_feedback_subscription_delayed_ops:
                                     &mut view_feedback_registry_delayed_ops,
@@ -6327,8 +6432,8 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
                                     view_group_relation_store: &mut view_group_relation_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
                                         &mut view_feedback_registry_delayed_ops,
@@ -6336,14 +6441,27 @@ async fn run<'sys>(
                                     main_thread_texture_id_issuer: &mut texture_id_issuer,
                                     application: &application,
                                 };
-                                let window_header_view = ui::window_header::View::new(
-                                    &mut view_init_ctx,
+                                let root_view =
+                                    view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
+                                let window_header_view = ui::window_header::Component::new(
                                     ui::window_header::Caption::Sub,
-                                    w.needs_system_command_buttons(),
+                                    ui::window_header::ComponentInit {
+                                        with_system_command_buttons: w
+                                            .needs_system_command_buttons(),
+                                    },
+                                    &mut view_init_ctx,
                                 );
-                                window_header_view.mount(&mut view_init_ctx, &w);
+                                view_init_ctx
+                                    .view_set_parent(window_header_view.root_view(), root_view);
+
+                                view_init_ctx.render_view_recursive(
+                                    root_view,
+                                    &w,
+                                    w.keyboard_focus_group(),
+                                );
 
                                 w.associate_extra_data(Box::new(PerWindowData {
+                                    root_view,
                                     screen_reposition_interests: HashSet::new(),
                                     header: window_header_view,
                                     appmenu: None,
@@ -6394,8 +6512,8 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
+                        &view_layout_state_store,
                         &mut view_render_state_store,
-                        &mut view_event_handler_store,
                     );
 
                     composite_tree
@@ -6403,7 +6521,7 @@ async fn run<'sys>(
                     view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
-            Event::Sync(SyncEvent::NewPresentID { id }) => {
+            Event::Sync(SyncEvent::NewPresentID { .. }) => {
                 // vsync update period
                 let mut preview_state =
                     crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
@@ -6508,6 +6626,16 @@ async fn run<'sys>(
                 } else {
                     preview_latched_key_motion_amplifier = None;
                 }
+
+                let current_handle_shape = match application.preview_edit_tool_type {
+                    PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
+                    PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
+                    PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
+                };
+                if current_handle_shape != preview_state.handle_shape {
+                    preview_state.handle_shape = current_handle_shape;
+                    preview_state.handle_data_dirtified = true;
+                }
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
@@ -6569,7 +6697,7 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_group_relation_store: &mut view_group_relation_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
@@ -6602,8 +6730,8 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
+                            &view_layout_state_store,
                             &mut view_render_state_store,
-                            &mut view_event_handler_store,
                         );
 
                         composite_tree
@@ -6666,7 +6794,7 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_group_relation_store: &mut view_group_relation_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
@@ -6699,8 +6827,8 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
+                            &view_layout_state_store,
                             &mut view_render_state_store,
-                            &mut view_event_handler_store,
                         );
 
                         composite_tree
@@ -6763,7 +6891,7 @@ async fn run<'sys>(
                                     view_allocator: &mut view_allocator,
                                     view_instance_store: &mut view_instance_store,
                                     view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_event_handler_store: &mut view_event_handler_store,
+                                    view_layout_state_store: &mut view_layout_state_store,
                                     view_group_relation_store: &mut view_group_relation_store,
                                     view_render_state_store: &mut view_render_state_store,
                                     view_feedback_subscription_delayed_ops:
@@ -6796,8 +6924,8 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
+                            &view_layout_state_store,
                             &mut view_render_state_store,
-                            &mut view_event_handler_store,
                         );
 
                         composite_tree
@@ -6850,7 +6978,7 @@ async fn run<'sys>(
     }
 }
 
-pub trait FlyoutSurfaceView {
+pub trait FlyoutSurfacePresenter {
     fn root_view_id(&self) -> ViewIdentifier;
 
     #[allow(unused_variables)]
@@ -6863,24 +6991,25 @@ pub trait FlyoutSurfaceView {
     ) {
     }
 }
-pub trait FlyoutSurfaceViewConstructor {
+pub trait FlyoutSurfacePresenterConstructor {
     fn size(&self) -> Size<LogicalUnit>;
-    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfaceView>;
+    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter>;
 }
+
 pub struct CustomViewFlyoutSurface {
     native_surface: FlyoutSurfaceHandle,
     kf_group: KeyboardFocusGroupRef,
-    view: Box<dyn FlyoutSurfaceView>,
+    view: Box<dyn FlyoutSurfacePresenter>,
 }
 pub struct CustomViewFlyoutSession {
     parent: WindowHandle,
     opening_surface: CustomViewFlyoutSurface,
 }
 impl CustomViewFlyoutSession {
-    pub fn new(
+    pub fn begin(
         parent: WindowHandle,
         pos: Point<LogicalUnit>,
-        view_constructor: Box<dyn FlyoutSurfaceViewConstructor>,
+        view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
         view_init_context: &mut ViewInitContext,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
@@ -7058,9 +7187,7 @@ impl MenuSession {
             view_init_context,
             0,
             surface_pos,
-            |render_scale| {
-                crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set())
-            },
+            crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set()),
             delayed_render_messages,
             |layout, h, view_init_ctx| {
                 let views = crate::uikit::MenuItemLayout::instantiate(
@@ -7130,12 +7257,10 @@ impl MenuSession {
                         view_init_context,
                         depth + 1,
                         pos,
-                        |render_scale| {
-                            crate::uikit::MenuItemLayout::build(
-                                items.into_iter().cloned(),
-                                system_link.font_set(),
-                            )
-                        },
+                        crate::uikit::MenuItemLayout::build(
+                            items.into_iter().cloned(),
+                            system_link.font_set(),
+                        ),
                         delayed_render_messages,
                         |layout, h, view_init_ctx| {
                             let views = crate::uikit::MenuItemLayout::instantiate(
@@ -7216,12 +7341,7 @@ impl MenuSession {
             view_init_context,
             depth + 1,
             display_pos,
-            |render_scale| {
-                crate::uikit::MenuItemLayout::build(
-                    items.into_iter().cloned(),
-                    system_link.font_set(),
-                )
-            },
+            crate::uikit::MenuItemLayout::build(items.into_iter().cloned(), system_link.font_set()),
             delayed_render_messages,
             |layout, h, view_init_ctx| {
                 let views = crate::uikit::MenuItemLayout::instantiate(
@@ -7305,18 +7425,43 @@ impl MenuSession {
     }
 }
 
+/// Main Windowを開く方法
 pub enum MainWindowOpenMode {
+    /// 新規
     New,
+    /// 復元
     Restore(WindowGeometryState),
 }
 
+/// Sub Windowを開く方法
 pub enum SubWindowOpenMode {
+    /// ドックからポップする
     DockDiverge {
         rect: Rect<LogicalUnit>,
         position_ref_window: WindowHandle,
     },
+    /// 復元
     Restore(WindowGeometryState),
 }
+
+/// Windowの種類
+pub enum WindowType {
+    /// Main（起動時に必ず1つ存在するWindow 閉じるとアプリ終了）
+    Main {
+        #[cfg(target_os = "linux")]
+        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
+    },
+    /// Sub（Dockから外したり必要に応じて表示されるWindow）
+    Sub,
+}
+
+// platform-dependent constants
+pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
+    r: 16,
+    g: 176,
+    b: 255,
+    a: 16,
+};
 
 #[cfg(windows)]
 pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
@@ -7394,7 +7539,7 @@ impl SystemLink<'_> {
         view_init_context: &mut ViewInitContext,
         depth: usize,
         surface_pos: Point<LogicalUnit>,
-        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        layouted_items: Vec<MenuItemLayout>,
         delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
@@ -7406,7 +7551,6 @@ impl SystemLink<'_> {
         Rc<MenuBaseSurfaceEventHandler>,
         Vec<MenuItemView>,
     ) {
-        let layouted_items = layouted_items(view_init_context.ui_scale_factor);
         let width = MenuItemLayout::min_width(layouted_items.iter());
         let height = MenuItemLayout::height(layouted_items.iter());
         tracing::debug!(%width, %height, "pop context menu");
@@ -7429,14 +7573,6 @@ impl SystemLink<'_> {
 
         (handle, base_surface_event_handler, views)
     }
-}
-
-pub enum WindowType {
-    Main {
-        #[cfg(target_os = "linux")]
-        termination_event: std::sync::Arc<linux_eventfd::EventFD>,
-    },
-    Sub,
 }
 
 #[cfg(target_os = "macos")]
@@ -7537,14 +7673,6 @@ impl SyncEventBus {
         }
     }
 }
-
-// platform-dependent constants
-pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
-    r: 16,
-    g: 176,
-    b: 255,
-    a: 16,
-};
 
 #[derive(thiserror::Error, Debug)]
 pub enum PersistStateDeserializeError {
@@ -7802,13 +7930,13 @@ impl DockState {
     }
 }
 
-trait PersistStateFormat: Sized {
+trait PersistStateSerializable: Sized {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()>;
     fn deserialize(
         r: &mut (impl std::io::Read + ?Sized),
     ) -> Result<Self, PersistStateDeserializeError>;
 }
-impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
+impl PersistStateSerializable for Rect<crate::utils::LogicalUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&f32::to_ne_bytes(self.left))?;
         w.write_all(&f32::to_ne_bytes(self.top))?;
@@ -7839,7 +7967,7 @@ impl PersistStateFormat for Rect<crate::utils::LogicalUnit> {
         ))
     }
 }
-impl PersistStateFormat for Rect<crate::utils::PixelsUnit> {
+impl PersistStateSerializable for Rect<crate::utils::PixelsUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&i32::to_ne_bytes(self.left))?;
         w.write_all(&i32::to_ne_bytes(self.top))?;
@@ -7910,7 +8038,7 @@ impl WindowGeometryState {
                 Ok(Self::Maximized { monitor_index })
             }
             0x02 => {
-                let rect = PersistStateFormat::deserialize(r)?;
+                let rect = PersistStateSerializable::deserialize(r)?;
 
                 Ok(Self::Restored { rect })
             }
@@ -8050,19 +8178,18 @@ impl FileSystem {
 
         #[cfg(windows)]
         let appdata_base_path =
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").expect("fs.appdata_base_path.no_env"))
-                .join("peridot/.editor");
+            crate::utils::platform::windows::local_app_data_dir().join("peridot/.editor");
         #[cfg(windows)]
         let cache_base_path = appdata_base_path.join("cache");
         #[cfg(windows)]
         let persist_state_base_path = appdata_base_path.join("state");
 
         if let Err(e) = std::fs::create_dir_all(&cache_base_path) {
-            tracing::error!(reason = %e, "fs.cache_base_path.create_dir_all");
+            tracing::error!(path = ?cache_base_path, reason = %e, "fs.cache_base_path.create_dir_all");
         }
 
         if let Err(e) = std::fs::create_dir_all(&persist_state_base_path) {
-            tracing::error!(reason = %e, "fs.persist_state_base_path.create_dir_all");
+            tracing::error!(path = ?persist_state_base_path, reason = %e, "fs.persist_state_base_path.create_dir_all");
         }
 
         tracing::info!(
@@ -8194,42 +8321,339 @@ struct PreviewInputState {
     key_input: PreviewKeyInputState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewEditToolType {
+    Translate,
+    Rotate,
+    Scale,
+}
+
+pub struct ViewFeedbackPreviewEditToolTypeChanged;
+
+struct PreviewToolSelectorButtonView {
+    round_top: bool,
+    round_bottom: bool,
+    pos: Point<LogicalUnit>,
+    label: String,
+    bound_tool_type: PreviewEditToolType,
+    entity: Option<Rc<PreviewToolSelectorButtonViewEntity>>,
+    selecting: bool,
+}
+impl PreviewToolSelectorButtonView {
+    const SIZE: f32 = 24.0;
+    const ROUNDING: f32 = 8.0;
+    const SELECTING_COLOR: [f32; 4] = [0.25, 0.5, 1.0, 0.5];
+    const DESELECTING_COLOR: [f32; 4] = [0.25, 0.25, 0.25, 0.5];
+
+    fn new(
+        round_top: bool,
+        round_bottom: bool,
+        pos: Point<LogicalUnit>,
+        label: String,
+        bound_tool_type: PreviewEditToolType,
+    ) -> Self {
+        Self {
+            round_top,
+            round_bottom,
+            pos,
+            label,
+            bound_tool_type,
+            entity: None,
+            selecting: false,
+        }
+    }
+
+    fn set_selecting(&mut self, selecting: bool) {
+        self.selecting = selecting;
+    }
+}
+impl View for PreviewToolSelectorButtonView {
+    fn render(
+        &mut self,
+        layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+    ) -> uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => {
+                if self.selecting != e.selecting.replace(self.selecting) {
+                    // TODO: reflect selecting
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_root)
+                        .composite_mode(CompositeMode::FillColorBackdropBlur(
+                            AnimatableColor::Animated {
+                                from_value: if self.selecting {
+                                    Self::DESELECTING_COLOR
+                                } else {
+                                    Self::SELECTING_COLOR
+                                },
+                                to_value: if self.selecting {
+                                    Self::SELECTING_COLOR
+                                } else {
+                                    Self::DESELECTING_COLOR
+                                },
+                                curve: AnimationCurve::Linear,
+                                event_on_complete: None,
+                                sec_duration: (ctx.current_sec..ctx.current_sec + 0.1).into(),
+                            },
+                            AnimatableFloat::Value(3.0),
+                        ))
+                        .apply();
+                }
+
+                e
+            }
+            None => {
+                // first render
+                let rounding = match (self.round_top, self.round_bottom) {
+                    (false, false) => CornerRadius::all(0.0),
+                    (true, false) => CornerRadius {
+                        left_top: [Self::ROUNDING, Self::ROUNDING],
+                        right_top: [Self::ROUNDING, Self::ROUNDING],
+                        left_bottom: [0.0, 0.0],
+                        right_bottom: [0.0, 0.0],
+                    },
+                    (false, true) => CornerRadius {
+                        left_top: [0.0, 0.0],
+                        right_top: [0.0, 0.0],
+                        left_bottom: [Self::ROUNDING, Self::ROUNDING],
+                        right_bottom: [Self::ROUNDING, Self::ROUNDING],
+                    },
+                    (true, true) => CornerRadius {
+                        left_top: [Self::ROUNDING, Self::ROUNDING],
+                        right_top: [Self::ROUNDING, Self::ROUNDING],
+                        left_bottom: [Self::ROUNDING, Self::ROUNDING],
+                        right_bottom: [Self::ROUNDING, Self::ROUNDING],
+                    },
+                };
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [
+                        AnimatableFloat::Value(Self::SIZE),
+                        AnimatableFloat::Value(Self::SIZE),
+                    ],
+                    offset: [
+                        AnimatableFloat::Value(self.pos.x),
+                        AnimatableFloat::Value(self.pos.y),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColorBackdropBlur(
+                        AnimatableColor::Value(if self.selecting {
+                            Self::SELECTING_COLOR
+                        } else {
+                            Self::DESELECTING_COLOR
+                        }),
+                        AnimatableFloat::Value(3.0),
+                    ),
+                    corner_radius: rounding.clone(),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: self.label.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_hover_lit = ctx.composite_tree.create(CompositeRect {
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    corner_radius: rounding,
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width: Self::SIZE,
+                    height: Self::SIZE,
+                    left: self.pos.x,
+                    top: self.pos.y,
+                    cursor_shape: CursorShape::Pointer,
+                    ..Default::default()
+                });
+                ctx.composite_tree.add_child(ct_root, ct_hover_lit);
+
+                let entity = Rc::new(PreviewToolSelectorButtonViewEntity {
+                    ct_root,
+                    ct_hover_lit,
+                    ht_root,
+                    bound_tool_type: self.bound_tool_type,
+                    selecting: Cell::new(self.selecting),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &entity);
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..uikit::ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            // not rendering
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+}
+
+struct PreviewToolSelectorButtonViewEntity {
+    ct_root: CompositeTreeRef,
+    ct_hover_lit: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    bound_tool_type: PreviewEditToolType,
+    selecting: Cell<bool>,
+}
+impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
+    fn on_pointer_enter(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_hover_lit)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.1],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_hover_lit)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.1],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_down(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_start(
+        &self,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        context
+            .application
+            .set_preview_edit_tool_type(self.bound_tool_type);
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
 pub struct PreviewPanePresenter {
     root_view_id: ViewIdentifier,
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    kf_token: FocusTargetToken,
-    input_handler: Rc<PreviewInputHandler>,
+    feedback_receiver: Rc<PreviewPaneFeedbackReceiver>,
 }
 impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
     fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
-        let kf_token = ctx.keyboard_focus_registry.acquire_token();
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            // has_bitmap: true,
-            custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
+        let root_view = ctx.construct_view(|_| Box::new(PreviewView::new(input_state)));
+        let translate_control_button = ctx.construct_view(|_| {
+            Box::new(PreviewToolSelectorButtonView::new(
+                true,
+                false,
+                Point::new_logical(8.0, 8.0),
+                "T".into(),
+                PreviewEditToolType::Translate,
+            ))
         });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            keyboard_focus: Some(kf_token),
-            ..Default::default()
+        let rotate_control_button = ctx.construct_view(|_| {
+            Box::new(PreviewToolSelectorButtonView::new(
+                false,
+                false,
+                Point::new_logical(8.0, 8.0 + 24.0 - 1.0),
+                "R".into(),
+                PreviewEditToolType::Rotate,
+            ))
         });
+        let scale_control_button = ctx.construct_view(|_| {
+            Box::new(PreviewToolSelectorButtonView::new(
+                false,
+                true,
+                Point::new_logical(8.0, 8.0 + 48.0 - 2.0),
+                "S".into(),
+                PreviewEditToolType::Scale,
+            ))
+        });
+        ctx.view_set_parent(translate_control_button, root_view);
+        ctx.view_set_parent(rotate_control_button, root_view);
+        ctx.view_set_parent(scale_control_button, root_view);
 
-        let input_handler = Rc::new(PreviewInputHandler { input_state });
-        ctx.ht_manager.set_action_handler(ht_root, &input_handler);
-        ctx.keyboard_focus_registry
-            .set_event_handler(kf_token, &input_handler);
+        let feedback_receiver = Rc::new(PreviewPaneFeedbackReceiver {
+            translate_tool_button_view_id: translate_control_button,
+            rotate_tool_button_view_id: rotate_control_button,
+            scale_tool_button_view_id: scale_control_button,
+        });
+        ctx.subscribe_view_feedback::<ViewFeedbackPreviewEditToolTypeChanged>(&feedback_receiver);
 
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
-            ct_root,
-            ht_root,
-            kf_token,
-            input_handler,
+            root_view_id: root_view,
+            feedback_receiver,
         }
     }
 }
@@ -8246,33 +8670,137 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
         self.root_view_id
     }
 
-    // fn mount(&self, ctx: &mut MountContext, target: &RawMountTarget) {
-    //     ctx.composite_tree.add_child(target.ct_root, self.ct_root);
-    //     ctx.ht_manager.add_child(target.ht_root, self.ht_root);
-    // }
-
-    fn resize(&self, new_size: &Size<LogicalUnit>, _context: &mut PaneContentResizeContext) {
-        unsafe { &mut *self.input_handler.input_state }.new_viewport_size = Some(new_size.clone());
+    fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
+        unsafe {
+            &mut *context
+                .view_instance_mut::<PreviewView>(self.root_view_id)
+                .expect("query failed")
+                .input_state
+        }
+        .new_viewport_size = Some(new_size.clone());
     }
-
-    // fn unmount(&self, ctx: &mut MountContext) {
-    //     ctx.composite_tree.remove_child(self.ct_root);
-    //     ctx.ht_manager.remove_child(self.ht_root);
-    // }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        ctx.mount_context.composite_tree.free(self.ct_root);
-        ctx.mount_context.ht_manager.free(self.ht_root);
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(self.kf_token);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackPreviewEditToolTypeChanged>(
+            &self.feedback_receiver,
+        );
     }
 }
 
-struct PreviewInputHandler {
+pub struct PreviewPaneFeedbackReceiver {
+    translate_tool_button_view_id: ViewIdentifier,
+    rotate_tool_button_view_id: ViewIdentifier,
+    scale_tool_button_view_id: ViewIdentifier,
+}
+impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPaneFeedbackReceiver {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        feedback: &ViewFeedbackPreviewEditToolTypeChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        let is_selecting =
+            context.application.preview_edit_tool_type == PreviewEditToolType::Translate;
+        context
+            .view_instance_mut::<PreviewToolSelectorButtonView>(self.translate_tool_button_view_id)
+            .expect("query failed")
+            .set_selecting(is_selecting);
+        context.schedule_render(self.translate_tool_button_view_id);
+
+        let is_selecting =
+            context.application.preview_edit_tool_type == PreviewEditToolType::Rotate;
+        context
+            .view_instance_mut::<PreviewToolSelectorButtonView>(self.rotate_tool_button_view_id)
+            .expect("query failed")
+            .set_selecting(is_selecting);
+        context.schedule_render(self.rotate_tool_button_view_id);
+
+        let is_selecting = context.application.preview_edit_tool_type == PreviewEditToolType::Scale;
+        context
+            .view_instance_mut::<PreviewToolSelectorButtonView>(self.scale_tool_button_view_id)
+            .expect("query failed")
+            .set_selecting(is_selecting);
+        context.schedule_render(self.scale_tool_button_view_id);
+    }
+}
+
+struct PreviewView {
+    input_state: *mut PreviewInputState,
+    entity: Option<Rc<PreviewViewEntity>>,
+}
+impl PreviewView {
+    pub fn new(input_state: *mut PreviewInputState) -> Self {
+        Self {
+            input_state,
+            entity: None,
+        }
+    }
+}
+impl View for PreviewView {
+    fn render(
+        &mut self,
+        layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+    ) -> uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
+            None => {
+                // first render
+                let kf_token = ctx.keyboard_focus_registry.acquire_token();
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    // has_bitmap: true,
+                    custom_render_token: Some(rendering::PREVIEW_COMPOSITE),
+                    relative_size_adjustment: [1.0, 1.0],
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width_adjustment_factor: 1.0,
+                    height_adjustment_factor: 1.0,
+                    keyboard_focus: Some(kf_token),
+                    ..Default::default()
+                });
+
+                let entity = Rc::new(PreviewViewEntity {
+                    ct_root,
+                    ht_root,
+                    kf_token,
+                    input_state: self.input_state,
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &entity);
+                ctx.keyboard_focus_registry
+                    .set_event_handler(kf_token, &entity);
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            keyboard_focus: Some(e.kf_token),
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free(entity.ct_root);
+        ctx.mount_context.ht_manager.free(entity.ht_root);
+        ctx.mount_context
+            .keyboard_focus_registry
+            .release_token(entity.kf_token);
+    }
+}
+
+struct PreviewViewEntity {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    kf_token: FocusTargetToken,
     input_state: *mut PreviewInputState,
 }
-impl HitTestTreeActionHandler for PreviewInputHandler {
+impl HitTestTreeActionHandler for PreviewViewEntity {
     fn on_scroll_wheel(
         &self,
         _sender: HitTestTreeRef,
@@ -8322,7 +8850,7 @@ impl HitTestTreeActionHandler for PreviewInputHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 }
-impl KeyInputEventHandler for PreviewInputHandler {
+impl KeyInputEventHandler for PreviewViewEntity {
     fn focus_released(&self, _context: &mut InputEventContext) {
         unsafe { &mut *self.input_state }.key_input.clear();
     }
@@ -8381,7 +8909,7 @@ impl KeyInputEventHandler for PreviewInputHandler {
         }
     }
 }
-impl PreviewInputHandler {
+impl PreviewViewEntity {
     fn set_key(&self, key: PreviewKeyInputState) {
         unsafe { &mut *self.input_state }.key_input.insert(key);
     }

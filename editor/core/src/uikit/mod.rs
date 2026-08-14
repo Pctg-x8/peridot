@@ -16,7 +16,7 @@ use crate::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, Point, Size},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub trait SystemLinkAccess {
@@ -97,8 +97,8 @@ pub struct ViewInitContext<'a, 'h> {
     pub view_allocator: &'a mut ViewIdentifierAllocator,
     pub view_instance_store: &'a mut ViewInstanceStore,
     pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
-    pub view_event_handler_store: &'a mut ViewEventHandlerStore,
     pub view_group_relation_store: &'a mut ViewGroupRelationStore,
+    pub view_layout_state_store: &'a mut ViewLayoutStateStore,
     pub view_render_state_store: &'a mut ViewRenderStateStore,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
     pub system_link: &'a SystemLink<'a>,
@@ -128,9 +128,9 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
             ctor,
             self.view_allocator,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -140,9 +140,9 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
             id,
             self.view_allocator,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -195,8 +195,8 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
             mount_on,
             keyboard_focus_group,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -207,9 +207,9 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         alloc_view_id_without_instance(
             self.view_allocator,
             self.view_instance_store,
-            self.view_event_handler_store,
             self.view_tree_relation_store,
             self.view_group_relation_store,
+            self.view_layout_state_store,
             self.view_render_state_store,
         )
     }
@@ -222,14 +222,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
     #[inline(always)]
     pub fn join_view_group(&mut self, id: ViewIdentifier, group: ViewGroupID) {
         join_view_group(id, group, self.view_group_relation_store)
-    }
-
-    pub fn set_view_event_handler(
-        &mut self,
-        id: ViewIdentifier,
-        handler: &Rc<impl ViewEventHandler + 'static>,
-    ) {
-        set_view_event_handler(id, handler, self.view_event_handler_store)
     }
 
     pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2, 'h> {
@@ -269,8 +261,8 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             view_allocator: &mut self.view_allocator,
             view_instance_store: &mut self.view_instance_store,
             view_tree_relation_store: &mut self.view_tree_relation_store,
-            view_event_handler_store: &mut self.view_event_handler_store,
             view_group_relation_store: &mut self.view_group_relation_store,
+            view_layout_state_store: &mut self.view_layout_state_store,
             view_render_state_store: &mut self.view_render_state_store,
             view_feedback_subscription_delayed_ops: &mut self
                 .view_feedback_subscription_delayed_ops,
@@ -294,60 +286,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
     ) {
         self.view_feedback_subscription_delayed_ops
             .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
-    }
-}
-
-pub struct ViewUpdateContext<'a, 'h> {
-    pub mount_context: MountContext<'a, 'h>,
-    pub view_instance_store: &'a mut ViewInstanceStore,
-    pub view_render_queue: &'a mut ViewRenderQueue,
-    pub system_link: &'a SystemLink<'a>,
-}
-impl<'a, 'h> core::ops::Deref for ViewUpdateContext<'a, 'h> {
-    type Target = MountContext<'a, 'h>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.mount_context
-    }
-}
-impl<'a, 'h> core::ops::DerefMut for ViewUpdateContext<'a, 'h> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.mount_context
-    }
-}
-impl ViewInstanceQueryable for ViewUpdateContext<'_, '_> {
-    #[inline(always)]
-    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_instance_store)
-    }
-}
-impl ViewInstanceQueryableMut for ViewUpdateContext<'_, '_> {
-    #[inline(always)]
-    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_instance_store)
-    }
-
-    #[inline(always)]
-    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
-    }
-}
-impl ViewRenderer for ViewUpdateContext<'_, '_> {
-    #[inline(always)]
-    fn schedule_view_render(&mut self, target: ViewIdentifier) {
-        self.view_render_queue.schedule(target);
-    }
-}
-impl<'h> DeriveMountContext<'h> for ViewUpdateContext<'_, 'h> {
-    fn derive_mount_context<'env2>(&'env2 mut self) -> MountContext<'env2, 'h> {
-        MountContext {
-            composite_tree: &mut self.mount_context.composite_tree,
-            ht_manager: &mut self.mount_context.ht_manager,
-            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-            current_sec: self.mount_context.current_sec,
-        }
     }
 }
 
@@ -422,10 +360,24 @@ impl RawMountTarget {
     }
 }
 
+/// Viewの位置の指定 デフォルトでは親コンテナに対して(0, 0)に配置される
+#[derive(Clone)]
 pub struct ViewLocation {
+    /// 親コンテナ内での基準となる(大きさに対する)相対位置
     pub parent_anchor: [f32; 2],
+    /// 自身のサイズに対する相対位置([1.0, 0,0]を指定すると右橋基準で配置される)
     pub anchor: [f32; 2],
+    /// オフセット量
     pub offset: Point<LogicalUnit>,
+}
+impl Default for ViewLocation {
+    fn default() -> Self {
+        Self {
+            parent_anchor: [0.0; 2],
+            anchor: [0.0; 2],
+            offset: Point::new_logical(0.0, 0.0),
+        }
+    }
 }
 impl ViewLocation {
     pub const fn new_left_top(x: f32, y: f32) -> Self {
@@ -444,48 +396,65 @@ impl ViewLocation {
     }
 }
 
+#[derive(Clone)]
 pub enum ViewElementSize {
     Automatic,
     Fixed(Size<LogicalUnit>),
 }
+impl ViewElementSize {
+    pub const fn fixed(width: f32, height: f32) -> Self {
+        Self::Fixed(Size::new_logical(width, height))
+    }
+}
 
+#[derive(Clone)]
 pub struct ViewPlacement {
     pub location: ViewLocation,
     pub size: ViewElementSize,
     pub size_anchor: [f32; 2],
 }
+impl Default for ViewPlacement {
+    fn default() -> Self {
+        Self {
+            location: ViewLocation::new_left_top(0.0, 0.0),
+            size: ViewElementSize::Automatic,
+            size_anchor: [0.0; 2],
+        }
+    }
+}
+impl ViewPlacement {
+    /// 実際に配置されるサイズを計算する 引数にはAutomatic指定時の算出ロジックを渡す(Viewによって異なる)
+    pub fn actual_size(&self, automatic: impl FnOnce() -> Size<LogicalUnit>) -> Size<LogicalUnit> {
+        match self.size {
+            ViewElementSize::Fixed(x) => x,
+            ViewElementSize::Automatic => automatic(),
+        }
+    }
 
-#[derive(Default)]
-pub struct ViewNewRenderElements {
+    /// 実際に配置されるオフセット位置を計算する
+    pub fn actual_offset(&self, actual_size: &Size<LogicalUnit>) -> Point<LogicalUnit> {
+        Point::new_logical(
+            self.location.offset.x - actual_size.width * self.location.anchor[0],
+            self.location.offset.y - actual_size.height * self.location.anchor[1],
+        )
+    }
+}
+
+/// Viewの描画要素
+pub struct ViewRenderElements {
+    /// CompositeTree
     pub composite_tree: Option<CompositeTreeRef>,
+    /// HitTestTree
     pub hit_tree: Option<HitTestTreeRef>,
+    /// キーボードフォーカス
     pub keyboard_focus: Option<FocusTargetToken>,
 }
-impl ViewNewRenderElements {
+impl ViewRenderElements {
     pub const EMPTY: Self = Self {
         composite_tree: None,
         hit_tree: None,
         keyboard_focus: None,
     };
-
-    pub fn mount_on(
-        &self,
-        target: &(impl MountTarget + ?Sized),
-        kf_group: KeyboardFocusGroupRef,
-        ctx: &mut MountContext,
-    ) {
-        if let Some(composite_tree) = self.composite_tree {
-            ctx.composite_tree
-                .add_child(target.ct_root(), composite_tree);
-        }
-        if let Some(hit_tree) = self.hit_tree {
-            ctx.ht_manager.add_child(target.ht_root(), hit_tree);
-        }
-        if let Some(keyboard_focus) = self.keyboard_focus {
-            ctx.keyboard_focus_registry
-                .join_group(kf_group, keyboard_focus);
-        }
-    }
 }
 
 /// Viewのライフサイクル
@@ -493,10 +462,9 @@ pub trait View: core::any::Any {
     /// Render(初回マウント/更新)時に呼ばれる
     fn render(
         &mut self,
-        self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements;
+    ) -> ViewRenderElements;
 
     /// Teardown(アンマウント)時に呼ばれる
     fn teardown(&mut self, ctx: &mut TeardownContext);
@@ -532,16 +500,6 @@ impl ViewGroupID {
     }
 }
 
-pub struct ViewInstanceModifier<'a> {
-    event_handler_ref: &'a mut Weak<dyn ViewEventHandler>,
-}
-impl ViewInstanceModifier<'_> {
-    #[inline(always)]
-    pub fn bind_event_handler(&mut self, handler: &std::rc::Rc<impl ViewEventHandler + 'static>) {
-        *self.event_handler_ref = Rc::downgrade(handler) as _;
-    }
-}
-
 pub struct ViewRenderQueue {
     pending: BTreeSet<ViewIdentifier>,
 }
@@ -561,8 +519,8 @@ impl ViewRenderQueue {
         ctx: &mut RenderContext,
         instance_store: &mut ViewInstanceStore,
         tree_relation_store: &ViewTreeRelationStore,
+        layout_state_store: &ViewLayoutStateStore,
         render_state_store: &mut ViewRenderStateStore,
-        event_handler_store: &mut ViewEventHandlerStore,
     ) {
         while let Some(mut target) = self.pending.pop_first() {
             let (mount_target, kf_group) = loop {
@@ -596,28 +554,25 @@ impl ViewRenderQueue {
             let mut scheduled_renders = VecDeque::new();
             scheduled_renders.push_back((mount_target, target));
             while let Some((mt, v)) = scheduled_renders.pop_front() {
-                let mut sched = RenderChildScheduler::new();
-                render_view_instance1(
+                let new_mount_target = render_view_instance1(
                     v,
                     ctx,
-                    &mut sched,
-                    mt,
+                    &mt,
                     kf_group,
                     instance_store,
-                    event_handler_store,
+                    layout_state_store,
                     render_state_store,
                 );
+                let next_mount_target = new_mount_target.unwrap_or(mt);
 
                 // もうrenderしたので次のループからはRenderしない
                 self.pending.remove(&v);
-                if let Some(mt) = sched.mount_on {
-                    scheduled_renders.extend(
-                        tree_relation_store.relations[v.into_array_index()]
-                            .children
-                            .iter()
-                            .map(|&x| (mt.clone(), x)),
-                    );
-                }
+                scheduled_renders.extend(
+                    tree_relation_store.relations[v.into_array_index()]
+                        .children
+                        .iter()
+                        .map(|&x| (next_mount_target.clone(), x)),
+                );
             }
         }
     }
@@ -656,17 +611,6 @@ impl ViewInstanceStore {
     }
 }
 
-pub struct ViewEventHandlerStore {
-    event_handler: Vec<Weak<dyn ViewEventHandler>>,
-}
-impl ViewEventHandlerStore {
-    pub fn new() -> Self {
-        Self {
-            event_handler: Vec::new(),
-        }
-    }
-}
-
 struct ViewTreeRelation {
     parent: Option<ViewIdentifier>,
     children: Vec<ViewIdentifier>,
@@ -679,6 +623,27 @@ impl ViewTreeRelationStore {
         Self {
             relations: Vec::new(),
         }
+    }
+}
+
+struct ViewLayoutState {
+    layout_rect: Rect<LogicalUnit>,
+}
+impl ViewLayoutState {
+    fn init() -> Self {
+        Self {
+            layout_rect: Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(0.0, 0.0),
+            ),
+        }
+    }
+}
+
+pub struct ViewLayoutStateStore(Vec<ViewLayoutState>);
+impl ViewLayoutStateStore {
+    pub fn new() -> Self {
+        Self(Vec::new())
     }
 }
 
@@ -723,9 +688,9 @@ impl ViewGroupRelationStore {
 pub fn alloc_view_id_without_instance(
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
@@ -734,13 +699,12 @@ pub fn alloc_view_id_without_instance(
             instance: None,
             active: true,
         };
-        event_handler_store.event_handler[id.into_array_index()] =
-            Weak::<EmptyViewEventHandler>::new();
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
+        layout_state_store.0[id.into_array_index()] = ViewLayoutState::init();
         render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
@@ -755,14 +719,12 @@ pub fn alloc_view_id_without_instance(
         instance: None,
         active: true,
     });
-    event_handler_store
-        .event_handler
-        .push(Weak::<EmptyViewEventHandler>::new());
     tree_relation_store.relations.push(ViewTreeRelation {
         parent: None,
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
+    layout_state_store.0.push(ViewLayoutState::init());
     render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
@@ -771,9 +733,9 @@ pub fn construct_view(
     ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
@@ -782,13 +744,12 @@ pub fn construct_view(
             instance: Some(ctor(id)),
             active: true,
         };
-        event_handler_store.event_handler[id.into_array_index()] =
-            Weak::<EmptyViewEventHandler>::new();
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
+        layout_state_store.0[id.into_array_index()] = ViewLayoutState::init();
         render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
@@ -803,14 +764,12 @@ pub fn construct_view(
         instance: Some(ctor(id)),
         active: true,
     });
-    event_handler_store
-        .event_handler
-        .push(Weak::<EmptyViewEventHandler>::new());
     tree_relation_store.relations.push(ViewTreeRelation {
         parent: None,
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
+    layout_state_store.0.push(ViewLayoutState::init());
     render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
@@ -819,9 +778,9 @@ pub fn free_view(
     id: ViewIdentifier,
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
     // ensure no parent/group owns this item
@@ -832,9 +791,9 @@ pub fn free_view(
         // returned last identifier
         allocator.last_free_identifier = id.0;
         instance_store.instances.pop();
-        event_handler_store.event_handler.pop();
         tree_relation_store.relations.pop();
         group_relation_store.joining_group.pop();
+        layout_state_store.0.pop();
         render_state_store.0.pop();
 
         return;
@@ -843,25 +802,6 @@ pub fn free_view(
     allocator.free_identifier.insert(id);
     // clear heap references
     instance_store.instances[id.into_array_index()].instance = None;
-    event_handler_store.event_handler[id.into_array_index()] = Weak::<EmptyViewEventHandler>::new();
-}
-
-pub fn set_view_event_handler(
-    id: ViewIdentifier,
-    handler: &Rc<impl ViewEventHandler + 'static>,
-    event_handler_store: &mut ViewEventHandlerStore,
-) {
-    event_handler_store.event_handler[id.into_array_index()] = Rc::downgrade(handler) as _;
-}
-
-pub fn call_view_update(
-    target: ViewIdentifier,
-    context: &mut ViewUpdateContext,
-    event_handler_store: &mut ViewEventHandlerStore,
-) {
-    if let Some(h) = event_handler_store.event_handler[target.into_array_index()].upgrade() {
-        h.update(context);
-    }
 }
 
 pub fn view_set_parent(
@@ -979,68 +919,82 @@ pub fn view_iter_self_group_participants(
         .flat_map(|x| x.iter().copied())
 }
 
+pub fn layout_view_recursive(
+    target: ViewIdentifier,
+    assigned_rect: Rect<LogicalUnit>,
+    tree_relation_store: &ViewTreeRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
+) {
+    layout_state_store.0[target.into_array_index()].layout_rect = assigned_rect.clone();
+    for &child in tree_relation_store.relations[target.into_array_index()]
+        .children
+        .iter()
+    {
+        layout_view_recursive(
+            child,
+            assigned_rect.clone(),
+            tree_relation_store,
+            layout_state_store,
+        );
+    }
+}
+
 pub fn render_view_recursive(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
     mount_on: &(impl MountTarget + ?Sized),
     keyboard_focus_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
     tree_relation_store: &ViewTreeRelationStore,
+    layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
     let mut scheduled_renders = VecDeque::new();
     scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), target));
     while let Some((mt, v)) = scheduled_renders.pop_front() {
-        let mut sched = RenderChildScheduler::new();
-        render_view_instance1(
+        let new_mount_target = render_view_instance1(
             v,
             ctx,
-            &mut sched,
-            mt,
+            &mt,
             keyboard_focus_group,
             instance_store,
-            event_handler_store,
+            layout_state_store,
             render_state_store,
         );
+        let next_mount_target = new_mount_target.unwrap_or(mt);
 
-        if let Some(mt) = sched.mount_on {
-            // schedule render children to mount on
-            scheduled_renders.extend(
-                tree_relation_store.relations[v.into_array_index()]
-                    .children
-                    .iter()
-                    .map(|&x| (mt.clone(), x)),
-            );
-        }
+        scheduled_renders.extend(
+            tree_relation_store.relations[v.into_array_index()]
+                .children
+                .iter()
+                .map(|&x| (next_mount_target.clone(), x)),
+        );
     }
 }
 
 fn render_view_instance1(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
-    sched: &mut RenderChildScheduler,
-    mount_to: RawMountTarget,
+    mount_to: &RawMountTarget,
     kf_group: KeyboardFocusGroupRef,
     instance_store: &mut ViewInstanceStore,
-    event_handler_store: &mut ViewEventHandlerStore,
+    layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
-) {
+) -> Option<RawMountTarget> {
     let Some(&mut ViewInstanceCell {
         instance: Some(ref mut instance),
         active,
     }) = instance_store.instances.get_mut(target.into_array_index())
     else {
         // no instance associated
-        return;
+        return None;
     };
 
-    let new_render_elements = instance.render(
-        &mut ViewInstanceModifier {
-            event_handler_ref: &mut event_handler_store.event_handler[target.into_array_index()],
-        },
+    let render_elements = instance.render(
+        layout_state_store.0[target.into_array_index()]
+            .layout_rect
+            .clone(),
         ctx,
-        sched,
     );
 
     let render_state = &mut render_state_store.0[target.into_array_index()];
@@ -1052,20 +1006,22 @@ fn render_view_instance1(
         != Some(mount_to.ct_root)
     {
         // parent changed
-        let ct = new_render_elements
+        let ct = render_elements
             .composite_tree
             .or(render_state.active_render_element_ct);
         if let Some(ct) = ct {
             ctx.composite_tree.add_child(mount_to.ct_root, ct);
-            render_state.active_render_element_ct = Some(ct);
         }
-    } else if let Some(new_ct) = new_render_elements.composite_tree
-        && Some(new_ct) != render_state.active_render_element_ct
-    {
+    } else if render_state.active_render_element_ct != render_elements.composite_tree {
         // different object rendered
-        ctx.composite_tree.add_child(mount_to.ct_root, new_ct);
-        render_state.active_render_element_ct = Some(new_ct);
+        if let Some(old) = render_state.active_render_element_ct {
+            ctx.composite_tree.remove_child(old);
+        }
+        if let Some(new) = render_elements.composite_tree {
+            ctx.composite_tree.add_child(mount_to.ct_root, new);
+        }
     }
+    render_state.active_render_element_ct = render_elements.composite_tree;
 
     if render_state
         .current_mounted_on
@@ -1074,22 +1030,24 @@ fn render_view_instance1(
         != Some(mount_to.ht_root)
     {
         // parent changed
-        let ht = new_render_elements
+        let ht = render_elements
             .hit_tree
             .or(render_state.active_render_element_ht);
         if let Some(ht) = ht {
             ctx.ht_manager.add_child(mount_to.ht_root, ht);
-            render_state.active_render_element_ht = Some(ht);
         }
-    } else if let Some(new_ht) = new_render_elements.hit_tree
-        && Some(new_ht) != render_state.active_render_element_ht
-    {
+    } else if render_state.active_render_element_ht != render_elements.hit_tree {
         // different object rendered
-        ctx.ht_manager.add_child(mount_to.ht_root, new_ht);
-        render_state.active_render_element_ht = Some(new_ht);
+        if let Some(old) = render_state.active_render_element_ht {
+            ctx.ht_manager.remove_child(old);
+        }
+        if let Some(new) = render_elements.hit_tree {
+            ctx.ht_manager.add_child(mount_to.ht_root, new);
+        }
     }
+    render_state.active_render_element_ht = render_elements.hit_tree;
 
-    let new_active_keyboard_focus_token = new_render_elements
+    let new_active_keyboard_focus_token = render_elements
         .keyboard_focus
         .or(render_state.active_keyboard_focus_token);
     if Some(kf_group) != render_state.current_mounted_on.as_ref().map(|x| x.1) {
@@ -1106,7 +1064,7 @@ fn render_view_instance1(
         render_state.active_keyboard_focus_token = Some(kf);
     }
 
-    render_state.current_mounted_on = Some((mount_to, kf_group));
+    render_state.current_mounted_on = Some((mount_to.clone(), kf_group));
 
     if render_state.visible.replace(active) != Some(active) {
         // visible state changed
@@ -1120,6 +1078,18 @@ fn render_view_instance1(
         if let Some(ht) = render_state.active_render_element_ht {
             ctx.ht_manager.get_data_mut(ht).active = active;
         }
+    }
+
+    if let Some(ct) = render_state.active_render_element_ct
+        && let Some(ht) = render_state.active_render_element_ht
+    {
+        // 両方あるときだけこのViewの子にRenderできる
+        Some(RawMountTarget {
+            ct_root: ct,
+            ht_root: ht,
+        })
+    } else {
+        None
     }
 }
 
@@ -1237,14 +1207,6 @@ pub trait ViewRenderer {
 pub trait ViewImmediateTeardownable {
     fn teardown_view_recursive(&mut self, target: ViewIdentifier);
 }
-
-pub trait ViewEventHandler {
-    #[allow(unused_variables)]
-    fn update(&self, context: &mut ViewUpdateContext) {}
-}
-
-struct EmptyViewEventHandler;
-impl ViewEventHandler for EmptyViewEventHandler {}
 
 pub enum ViewFeedbackRegistryDelayedOps {
     SubscribePerformAtomic(Weak<dyn ViewFeedbackHandler<ViewFeedbackPerformAtomic>>),
@@ -1483,10 +1445,7 @@ pub use self::menu::{
 };
 
 mod text_input;
-pub use self::text_input::{
-    MultilineTextInputView, NumericInputView, NumericInputViewBackingStore, TextInputView,
-    TextInputViewCore, TextInputViewIO,
-};
+pub use self::text_input::*;
 
 mod scroll;
 pub use self::scroll::ScrollContainer;

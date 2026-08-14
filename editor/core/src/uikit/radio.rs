@@ -14,11 +14,10 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
     },
     uikit::{
-        RenderChildScheduler, RenderContext, TeardownContext, View, ViewElementSize,
-        ViewIdentifier, ViewInstanceModifier, ViewInstanceQueryableMut, ViewNewRenderElements,
-        ViewPlacement,
+        RenderContext, TeardownContext, View, ViewElementSize, ViewIdentifier,
+        ViewInstanceQueryableMut, ViewPlacement, ViewRenderElements,
     },
-    utils::{Point, Size},
+    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct RadioButtonView {
@@ -40,11 +39,10 @@ impl RadioButtonView {
 impl View for RadioButtonView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.eh {
+    ) -> ViewRenderElements {
+        let e = match self.eh {
             Some(ref eh) => {
                 if let Some(selected) = self.selected_changes.take() {
                     if eh.current.replace(selected) != selected {
@@ -53,7 +51,7 @@ impl View for RadioButtonView {
                     }
                 }
 
-                ViewNewRenderElements::EMPTY
+                eh
             }
             None => {
                 // first render
@@ -136,13 +134,14 @@ impl View for RadioButtonView {
                     }
                 }
 
-                self.eh = Some(eh);
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.eh.insert(eh)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 

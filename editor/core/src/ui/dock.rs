@@ -22,11 +22,10 @@ use crate::{
     },
     uikit::{
         CompositeTreeMutableAccess, DeriveTeardownContext, HitTestTreeMutableAccess, MountContext,
-        RawMountTarget, RenderChildScheduler, RenderContext, SystemLinkAccess, TeardownContext,
-        View, ViewIdentifier, ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceModifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewNewRenderElements, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderer,
+        RenderContext, SystemLinkAccess, TeardownContext, View, ViewIdentifier,
+        ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewRegisterable, ViewRelationControllable,
+        ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -640,12 +639,10 @@ struct WindowDockRootView {
 impl View for WindowDockRootView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        _layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        sched.schedule_render_children(RawMountTarget::from_typed(&self.window));
-        ViewNewRenderElements::EMPTY
+    ) -> ViewRenderElements {
+        ViewRenderElements::EMPTY
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
@@ -1603,11 +1600,10 @@ impl DockedPaneSplitterView {
 impl View for DockedPaneSplitterView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.entity {
+    ) -> ViewRenderElements {
+        let e = match self.entity {
             Some(ref e) => {
                 if let Some(rect) = self.rect.take() {
                     // relayout
@@ -1622,7 +1618,7 @@ impl View for DockedPaneSplitterView {
                     ctx.ht_manager.get_data_mut(e.ht_root).height = rect.height;
                 }
 
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -1666,13 +1662,14 @@ impl View for DockedPaneSplitterView {
                 });
                 ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
 
-                self.entity = Some(eh);
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(eh)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -1899,11 +1896,10 @@ impl PaneGroupContainerView {
 impl View for PaneGroupContainerView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.entity {
+    ) -> ViewRenderElements {
+        let e = match self.entity {
             Some(ref e) => {
                 if let Some(rect) = self.rect.take() {
                     // placement changed
@@ -1918,11 +1914,7 @@ impl View for PaneGroupContainerView {
                     ctx.ht_manager.get_data_mut(e.ht_root).height = rect.height;
                 }
 
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -1953,14 +1945,16 @@ impl View for PaneGroupContainerView {
                     ..Default::default()
                 });
 
-                self.entity = Some(PaneGroupContainerViewEntity { ct_root, ht_root });
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self
+                    .entity
+                    .insert(PaneGroupContainerViewEntity { ct_root, ht_root })
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -2010,11 +2004,10 @@ impl PaneGroupTabStripView {
 impl View for PaneGroupTabStripView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.entity {
+    ) -> ViewRenderElements {
+        let e = match self.entity {
             Some(ref e) => {
                 if let Some(rect) = self.rect.take() {
                     // placement changed
@@ -2029,11 +2022,7 @@ impl View for PaneGroupTabStripView {
                     ctx.ht_manager.get_data_mut(e.ht_root).height = rect.height;
                 }
 
-                sched.schedule_render_children(RawMountTarget {
-                    ct_root: e.ct_root,
-                    ht_root: e.ht_root,
-                });
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -2060,14 +2049,16 @@ impl View for PaneGroupTabStripView {
                     ..Default::default()
                 });
 
-                self.entity = Some(PaneGroupTabStripViewEntity { ct_root, ht_root });
-                sched.schedule_render_children(RawMountTarget { ct_root, ht_root });
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self
+                    .entity
+                    .insert(PaneGroupTabStripViewEntity { ct_root, ht_root })
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -2556,11 +2547,10 @@ impl PaneGroupTabView {
 impl View for PaneGroupTabView {
     fn render(
         &mut self,
-        _self_instance: &mut ViewInstanceModifier,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
-        _sched: &mut RenderChildScheduler,
-    ) -> ViewNewRenderElements {
-        match self.entity {
+    ) -> ViewRenderElements {
+        let e = match self.entity {
             Some(ref e) => {
                 ctx.composite_tree
                     .begin_mod_chain(e.ct_root)
@@ -2613,7 +2603,7 @@ impl View for PaneGroupTabView {
                     }
                 }
 
-                ViewNewRenderElements::EMPTY
+                e
             }
             None => {
                 // first render
@@ -2697,13 +2687,14 @@ impl View for PaneGroupTabView {
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
-                self.entity = Some(eh);
-                ViewNewRenderElements {
-                    composite_tree: Some(ct_root),
-                    hit_tree: Some(ht_root),
-                    ..ViewNewRenderElements::EMPTY
-                }
+                &*self.entity.insert(eh)
             }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
         }
     }
 
