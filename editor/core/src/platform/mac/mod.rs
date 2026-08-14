@@ -466,7 +466,7 @@ impl crate::SystemLink<'_> {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        _delayed_render_messages: &mut Vec<RenderMessage>,
+        delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> FlyoutSurfaceHandle {
         let h = FlyoutSurfaceHandle::new(
             parent,
@@ -478,7 +478,7 @@ impl crate::SystemLink<'_> {
             keyboard_focus_registry,
         );
 
-        h.create_render_thread_objects(self);
+        h.create_render_thread_objects(unsafe { &*self.vk_device }, delayed_render_messages);
         h
     }
 

@@ -1621,7 +1621,7 @@ impl CompositeInstanceMappedStreamingMemory<'_, '_> {
 }
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CompositeTreeRef(usize);
 impl CompositeTreeRef {
     #[inline(always)]

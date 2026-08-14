@@ -5529,6 +5529,26 @@ async fn run<'sys>(
                     &mut delayed_render_messages,
                 ));
 
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &view_layout_state_store,
+                    &mut view_render_state_store,
+                );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuOpen {

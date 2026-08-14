@@ -4,7 +4,7 @@ use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 
 use crate::{
     Event, LogicFiberEventDispatcher, SystemLink,
-    graphics::VulkanSurface,
+    graphics::{Graphics, VulkanSurface},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
@@ -55,6 +55,7 @@ impl Handle {
             ..Default::default()
         });
         let kf_root_group = keyboard_focus_registry.acquire_group();
+        tracing::debug!(?ct_root, "flyout surface root");
         let h = Self(unsafe {
             NonNull::new_unchecked(super::bridge::ni_create_flyout_surface(
                 parent.0,
@@ -84,26 +85,27 @@ impl Handle {
         h
     }
 
-    pub(super) fn create_render_thread_objects(&self, syslink: &SystemLink) {
-        syslink
-            .rt_sender
-            .send(RenderMessage::NewContextMenu(NewContextMenuData {
-                w: *self,
-                vk_surface: NewWindowVulkanSurface(
-                    VulkanSurface::new(unsafe { &*syslink.vk_device }, unsafe {
-                        br::MetalSurfaceCreateInfo::new(
-                            super::bridge::ni_flyout_surface_get_metal_layer(self.0.as_ptr())
-                                .cast_const(),
-                        )
-                        .execute((&*syslink.vk_device).instance(), None)
-                        .expect("vk_surface.create")
-                    })
-                    .unbound()
-                    .1,
-                ),
-                composite_root: self.instance_vars().ct_root,
-            }))
-            .expect("rt_sender.send");
+    pub(super) fn create_render_thread_objects(
+        &self,
+        device: &Graphics,
+        delayed_render_messages: &mut Vec<RenderMessage>,
+    ) {
+        delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
+            w: *self,
+            vk_surface: NewWindowVulkanSurface(
+                VulkanSurface::new(device, unsafe {
+                    br::MetalSurfaceCreateInfo::new(
+                        super::bridge::ni_flyout_surface_get_metal_layer(self.0.as_ptr())
+                            .cast_const(),
+                    )
+                    .execute(device.instance(), None)
+                    .expect("vk_surface.create")
+                })
+                .unbound()
+                .1,
+            ),
+            composite_root: self.instance_vars().ct_root,
+        }));
     }
 
     pub fn close<E>(
