@@ -78,6 +78,10 @@ final class FlyoutSurface : NSPanel, NSWindowDelegate {
         )
     }
     
+    override func mouseDragged(with event: NSEvent) {
+        self.mouseMoved(with: event)
+    }
+    
     override func mouseDown(with event: NSEvent) {
         let p = event.locationInWindow
         
