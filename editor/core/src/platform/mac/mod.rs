@@ -477,7 +477,7 @@ impl crate::SystemLink<'_> {
         view_init_context: &mut ViewInitContext,
         depth: usize,
         surface_pos: Point<LogicalUnit>,
-        layouted_items: impl FnOnce(f32) -> Vec<MenuItemLayout>,
+        layouted_items: Vec<MenuItemLayout>,
         delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
@@ -499,7 +499,6 @@ impl crate::SystemLink<'_> {
             &mut view_init_context.mount_context.keyboard_focus_registry,
         );
 
-        let layouted_items = layouted_items(h.render_scale());
         let width = MenuItemLayout::min_width(layouted_items.iter());
         let height = MenuItemLayout::height(layouted_items.iter());
         h.resize(Size::new_logical(width.value(), height.value()));

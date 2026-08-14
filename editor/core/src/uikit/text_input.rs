@@ -243,7 +243,7 @@ impl SingleLineTextEditState {
 
         #[cfg(target_os = "macos")]
         {
-            let at_utf16 = self.content[..cursor_pos_bytes]
+            let at_utf16 = self.content[..self.cursor_pos_byte]
                 .encode_utf16()
                 .count()
                 .min(self.content.encode_utf16().count() - 1);
@@ -1513,7 +1513,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.delegated_view_id,
+            });
         } else {
             let text = text.to_str().expect("invalid input str");
             state
@@ -1529,7 +1531,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.delegated_view_id,
+            });
         }
     }
 
@@ -1568,7 +1572,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.delegated_view_id,
+            });
         } else {
             let text = text.to_str().expect("invalid input str");
             state
@@ -1584,7 +1590,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.delegated_view_id,
+            });
         }
     }
 
@@ -3826,7 +3834,8 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }
+                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -3842,7 +3851,8 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }
+                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
         }
     }
 
@@ -3880,7 +3890,8 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }
+                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -3896,7 +3907,8 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            todo!("dispatch view re-render");
+            unsafe { &mut *self.event_dispatcher }
+                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
         }
     }
 
