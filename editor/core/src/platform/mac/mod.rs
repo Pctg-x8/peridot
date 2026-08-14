@@ -489,7 +489,7 @@ impl crate::SystemLink<'_> {
         depth: usize,
         surface_pos: Point<LogicalUnit>,
         layouted_items: Vec<MenuItemLayout>,
-        _delayed_render_messages: &mut Vec<RenderMessage>,
+        delayed_render_messages: &mut Vec<RenderMessage>,
         setup_contents: impl FnOnce(
             Vec<MenuItemLayout>,
             FlyoutSurfaceHandle,
@@ -503,14 +503,14 @@ impl crate::SystemLink<'_> {
         let width = MenuItemLayout::min_width(layouted_items.iter());
         let height = MenuItemLayout::height(layouted_items.iter());
 
-        let h = FlyoutSurfaceHandle::new(
+        let h = self.new_flyout_surface(
             parent,
             surface_pos,
             Size::new_logical(width.value(), height.value()),
-            self,
-            &mut view_init_context.mount_context.composite_tree,
-            &mut view_init_context.mount_context.ht_manager,
-            &mut view_init_context.mount_context.keyboard_focus_registry,
+            view_init_context.mount_context.composite_tree,
+            view_init_context.mount_context.ht_manager,
+            view_init_context.mount_context.keyboard_focus_registry,
+            delayed_render_messages,
         );
 
         let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
@@ -519,7 +519,6 @@ impl crate::SystemLink<'_> {
             .set_action_handler(h.ht_root(), &base_surface_event_handler);
         let views = setup_contents(layouted_items, h, view_init_context);
 
-        h.create_render_thread_objects(self);
         (h, base_surface_event_handler, views)
     }
 
