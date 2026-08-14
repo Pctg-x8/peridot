@@ -604,6 +604,17 @@ impl ViewIdentifierAllocator {
 struct ViewInstanceCell {
     instance: Option<Box<dyn View>>,
     active: bool,
+    pub(self) layout: ViewLayout,
+}
+impl ViewInstanceCell {
+    #[inline(always)]
+    fn new(instance: Option<Box<dyn View>>) -> Self {
+        Self {
+            instance,
+            active: true,
+            layout: Default::default(),
+        }
+    }
 }
 
 pub struct ViewInstanceStore {
@@ -614,6 +625,11 @@ impl ViewInstanceStore {
         Self {
             instances: Vec::new(),
         }
+    }
+
+    #[inline(always)]
+    pub(self) fn get(&self, id: ViewIdentifier) -> &ViewInstanceCell {
+        &self.instances[id.into_array_index()]
     }
 }
 
@@ -629,27 +645,6 @@ impl ViewTreeRelationStore {
         Self {
             relations: Vec::new(),
         }
-    }
-}
-
-struct ViewLayoutState {
-    layout_rect: Rect<LogicalUnit>,
-}
-impl ViewLayoutState {
-    fn init() -> Self {
-        Self {
-            layout_rect: Rect::from_lt_size(
-                Point::new_logical(0.0, 0.0),
-                Size::new_logical(0.0, 0.0),
-            ),
-        }
-    }
-}
-
-pub struct ViewLayoutStateStore(Vec<ViewLayoutState>);
-impl ViewLayoutStateStore {
-    pub fn new() -> Self {
-        Self(Vec::new())
     }
 }
 
@@ -701,16 +696,13 @@ pub fn alloc_view_id_without_instance(
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
         // reuse
-        instance_store.instances[id.into_array_index()] = ViewInstanceCell {
-            instance: None,
-            active: true,
-        };
+        instance_store.instances[id.into_array_index()] = ViewInstanceCell::new(None);
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
-        layout_state_store.0[id.into_array_index()] = ViewLayoutState::init();
+        layout_state_store.set_empty(id);
         render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
@@ -721,16 +713,13 @@ pub fn alloc_view_id_without_instance(
         .last_free_identifier
         .checked_add(1)
         .expect("too many views!");
-    instance_store.instances.push(ViewInstanceCell {
-        instance: None,
-        active: true,
-    });
+    instance_store.instances.push(ViewInstanceCell::new(None));
     tree_relation_store.relations.push(ViewTreeRelation {
         parent: None,
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
-    layout_state_store.0.push(ViewLayoutState::init());
+    layout_state_store.push_empty();
     render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
@@ -746,16 +735,13 @@ pub fn construct_view(
 ) -> ViewIdentifier {
     if let Some(id) = allocator.free_identifier.pop_first() {
         // reuse
-        instance_store.instances[id.into_array_index()] = ViewInstanceCell {
-            instance: Some(ctor(id)),
-            active: true,
-        };
+        instance_store.instances[id.into_array_index()] = ViewInstanceCell::new(Some(ctor(id)));
         tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
         };
         group_relation_store.joining_group[id.into_array_index()] = None;
-        layout_state_store.0[id.into_array_index()] = ViewLayoutState::init();
+        layout_state_store.set_empty(id);
         render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
@@ -766,16 +752,15 @@ pub fn construct_view(
         .last_free_identifier
         .checked_add(1)
         .expect("too many views!");
-    instance_store.instances.push(ViewInstanceCell {
-        instance: Some(ctor(id)),
-        active: true,
-    });
+    instance_store
+        .instances
+        .push(ViewInstanceCell::new(Some(ctor(id))));
     tree_relation_store.relations.push(ViewTreeRelation {
         parent: None,
         children: Vec::new(),
     });
     group_relation_store.joining_group.push(None);
-    layout_state_store.0.push(ViewLayoutState::init());
+    layout_state_store.push_empty();
     render_state_store.0.push(ViewRenderState::EMPTY);
     id
 }
@@ -799,7 +784,7 @@ pub fn free_view(
         instance_store.instances.pop();
         tree_relation_store.relations.pop();
         group_relation_store.joining_group.pop();
-        layout_state_store.0.pop();
+        layout_state_store.pop();
         render_state_store.0.pop();
 
         return;
@@ -925,26 +910,6 @@ pub fn view_iter_self_group_participants(
         .flat_map(|x| x.iter().copied())
 }
 
-pub fn layout_view_recursive(
-    target: ViewIdentifier,
-    assigned_rect: Rect<LogicalUnit>,
-    tree_relation_store: &ViewTreeRelationStore,
-    layout_state_store: &mut ViewLayoutStateStore,
-) {
-    layout_state_store.0[target.into_array_index()].layout_rect = assigned_rect.clone();
-    for &child in tree_relation_store.relations[target.into_array_index()]
-        .children
-        .iter()
-    {
-        layout_view_recursive(
-            child,
-            assigned_rect.clone(),
-            tree_relation_store,
-            layout_state_store,
-        );
-    }
-}
-
 pub fn render_view_recursive(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
@@ -990,18 +955,14 @@ fn render_view_instance1(
     let Some(&mut ViewInstanceCell {
         instance: Some(ref mut instance),
         active,
+        ..
     }) = instance_store.instances.get_mut(target.into_array_index())
     else {
         // no instance associated
         return None;
     };
 
-    let render_elements = instance.render(
-        layout_state_store.0[target.into_array_index()]
-            .layout_rect
-            .clone(),
-        ctx,
-    );
+    let render_elements = instance.render(layout_state_store.get(target).layout_rect.clone(), ctx);
 
     let render_state = &mut render_state_store.0[target.into_array_index()];
     // update render elements relations
@@ -1453,6 +1414,9 @@ pub use self::menu::{
     HeadingView as MenuItemHeadingView, MenuItem, MenuItemLayout, MenuItemView,
     SeparatorView as MenuItemSeparatorView, SubMenuView as MenuItemSubMenuView,
 };
+
+mod layout;
+pub use self::layout::*;
 
 mod text_input;
 pub use self::text_input::*;

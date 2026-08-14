@@ -7,6 +7,14 @@ final class FlyoutSurface : NSPanel, NSWindowDelegate {
     let mainView: FlyoutSurfaceView
     unowned let parentLink: WindowLink
     
+    static func from(borrowed ptr: UnsafeMutableRawPointer) -> Self {
+        Unmanaged<Self>.fromOpaque(ptr).takeUnretainedValue()
+    }
+    
+    func borrow() -> UnsafeMutableRawPointer {
+        Unmanaged.passUnretained(self).toOpaque()
+    }
+    
     init(
         _ parent: WindowLink,
         _ surfacePos: NSPoint,
@@ -64,14 +72,14 @@ final class FlyoutSurface : NSPanel, NSWindowDelegate {
     }
     
     override func mouseExited(with event: NSEvent) {
-        self.callbacks.pointee.onPointerLeave(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()))
+        self.callbacks.pointee.onPointerLeave(OpaquePointer(self.borrow()))
     }
     
     override func mouseMoved(with event: NSEvent) {
         let p = event.locationInWindow
         
         self.callbacks.pointee.onPointerMove(
-            OpaquePointer(Unmanaged.passUnretained(self).toOpaque()),
+            OpaquePointer(self.borrow()),
             Double(p.x),
             Double(self.frame.height - p.y),
             UInt32(event.modifierFlags.rawValue),
@@ -86,7 +94,7 @@ final class FlyoutSurface : NSPanel, NSWindowDelegate {
         let p = event.locationInWindow
         
         self.callbacks.pointee.onPointerDown(
-            OpaquePointer(Unmanaged.passUnretained(self).toOpaque()),
+            OpaquePointer(self.borrow()),
             Double(p.x),
             Double(self.frame.height - p.y),
             MouseButtonLeft,
@@ -98,7 +106,7 @@ final class FlyoutSurface : NSPanel, NSWindowDelegate {
         let p = event.locationInWindow
         
         self.callbacks.pointee.onPointerDown(
-            OpaquePointer(Unmanaged.passUnretained(self).toOpaque()),
+            OpaquePointer(self.borrow()),
             Double(p.x),
             Double(self.frame.height - p.y),
             MouseButtonRight,
@@ -107,11 +115,11 @@ final class FlyoutSurface : NSPanel, NSWindowDelegate {
     }
     
     override func mouseUp(with event: NSEvent) {
-        self.callbacks.pointee.onPointerUp(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()), MouseButtonLeft, UInt32(event.modifierFlags.rawValue))
+        self.callbacks.pointee.onPointerUp(OpaquePointer(self.borrow()), MouseButtonLeft, UInt32(event.modifierFlags.rawValue))
     }
     
     override func rightMouseUp(with event: NSEvent) {
-        self.callbacks.pointee.onPointerUp(OpaquePointer(Unmanaged.passUnretained(self).toOpaque()), MouseButtonRight, UInt32(event.modifierFlags.rawValue))
+        self.callbacks.pointee.onPointerUp(OpaquePointer(self.borrow()), MouseButtonRight, UInt32(event.modifierFlags.rawValue))
     }
 }
 
@@ -196,17 +204,17 @@ func getFlyoutSurfaceMetalLayer(_ surface: UnsafeMutableRawPointer) -> UnsafeMut
 
 @_cdecl("ni_flyout_surface_get_content_scale")
 func getFlyoutSurfaceContentScale(_ surface: UnsafeMutableRawPointer) -> Float {
-    Float(Unmanaged<FlyoutSurface>.fromOpaque(surface).takeUnretainedValue().contentsScale)
+    Float(FlyoutSurface.from(borrowed: surface).contentsScale)
 }
 
 @_cdecl("ni_flyout_surface_resize")
 func flyoutSurfaceResize(_ surface: UnsafeMutableRawPointer, _ width: CFloat, _ height: CFloat) {
-    Unmanaged<FlyoutSurface>.fromOpaque(surface).takeUnretainedValue().resize(NSSize(width: CGFloat(width), height: CGFloat(height)))
+    FlyoutSurface.from(borrowed: surface).resize(NSSize(width: CGFloat(width), height: CGFloat(height)))
 }
 
 @_cdecl("ni_flyout_surface_instance_vars_ptr")
 func flyoutsurfaceInstanceVarsPtr(_ surface: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
-    Unmanaged<FlyoutSurface>.fromOpaque(surface).takeUnretainedValue().instanceVars
+    FlyoutSurface.from(borrowed: surface).instanceVars
 }
 
 var contextMenuReservedDelayedActionWorker: DispatchWorkItem? = nil
