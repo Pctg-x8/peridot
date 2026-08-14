@@ -150,7 +150,7 @@ impl ViewLayoutStateStore {
         self.0[id.into_array_index()] = ViewLayoutState::init();
     }
 
-    pub fn get(&self, id: ViewIdentifier) -> &ViewLayoutState {
+    pub(self) fn get(&self, id: ViewIdentifier) -> &ViewLayoutState {
         &self.0[id.into_array_index()]
     }
 }
