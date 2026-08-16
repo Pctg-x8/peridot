@@ -1,4 +1,4 @@
-import type { SectionRange } from "./app";
+import type { HierarchySectionRange, SectionRange } from "./app";
 import type { EventMarker } from "./binloader";
 import { timestampToSecs, type Range } from "./utils";
 
@@ -61,6 +61,69 @@ export function buildTimelineChartModel(
             height: designMetrics.barThickness,
         });
         endTimestampStack.push(r.timestamp.end);
+    }
+
+    const eventLines = events
+        .toSorted((a, b) => Number(a.timestamp - b.timestamp))
+        .map(e => {
+            if (e.timestamp < timestampRange.begin || timestampRange.end < e.timestamp) {
+                // out of range
+                return null;
+            }
+
+            const labelText = markerAddrToName.get(e.markerAddr)!;
+            const left =
+                timestampToSecs(e.timestamp - timestampRange.begin, timestampFrequency) * designMetrics.widthPerSec;
+
+            return { labelText, left };
+        })
+        .filter(x => x !== null);
+
+    return { barRects: rects, eventLines };
+}
+export function buildTimelineChartModelFromHierarchyData(
+    rootRanges: HierarchySectionRange[],
+    events: EventMarker[],
+    timestampRange: Range<bigint>,
+    timestampFrequency: bigint,
+    markerAddrToName: Map<bigint, string>,
+    designMetrics: TimelineChartDesignMetrics,
+): TimelineChartModel {
+    const rects: BarRect[] = [];
+    const processStack: (readonly [HierarchySectionRange, number])[] = [];
+    processStack.push(...rootRanges.map(r => [r, 0] as const));
+    while (processStack.length > 0) {
+        const [r, depth] = processStack.pop()!;
+
+        if (r.range.timestamp.end < timestampRange.begin || timestampRange.end < r.range.timestamp.begin) {
+            // completely out of range
+            continue;
+        }
+
+        const durationNs = ((r.range.timestamp.end - r.range.timestamp.begin) * 1_000_000_000n) / timestampFrequency;
+        const childrenDurationNsTotal = r.children.reduce(
+            (a, c) => a + ((c.range.timestamp.end - c.range.timestamp.begin) * 1_000_000_000n) / timestampFrequency,
+            0n,
+        );
+        const selfDurationNs = durationNs - childrenDurationNsTotal;
+        const labelText = formatSectionText(r.range);
+        const tooltipText = `${labelText} (${displayNanos(durationNs)} self=${displayNanos(selfDurationNs)})`;
+        const left =
+            timestampToSecs(r.range.timestamp.begin - timestampRange.begin, timestampFrequency) *
+            designMetrics.widthPerSec;
+        const right =
+            timestampToSecs(r.range.timestamp.end - timestampRange.begin, timestampFrequency) *
+            designMetrics.widthPerSec;
+        rects.push({
+            labelText,
+            tooltipText,
+            left,
+            top: depth * designMetrics.barThickness,
+            width: right - left,
+            height: designMetrics.barThickness,
+        });
+
+        processStack.push(...r.children.map(r => [r, depth + 1] as const));
     }
 
     const eventLines = events

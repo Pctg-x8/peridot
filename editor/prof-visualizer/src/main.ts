@@ -1,7 +1,7 @@
-import { Application, type SectionRange, type ViewTab } from "./app";
+import { Application, type ViewTab } from "./app";
 import { type MemoryStatsMarker } from "./binloader";
 import {
-    buildTimelineChartModel,
+    buildTimelineChartModelFromHierarchyData,
     displayByteSize,
     instantiateTimelineChart,
     timelineChartHeight,
@@ -112,8 +112,8 @@ class HeaderPresenter {
                 } else {
                     this.#timestampRange = Application.instance.computeChartTimestampRange();
 
-                    this.#timelineChartModel = buildTimelineChartModel(
-                        Application.instance.sectionRanges,
+                    this.#timelineChartModel = buildTimelineChartModelFromHierarchyData(
+                        Application.instance.sectionRangeHierarchy,
                         Application.instance.events,
                         this.#timestampRange,
                         binMetadata.timestampFrequency,

@@ -36,6 +36,7 @@ export class Application extends (EventTarget as typeof TypedEventTarget<Applica
     #binMetadata: BinMetadata | null = null;
     #events: EventMarker[] = [];
     #sectionRanges: SectionRange[] = [];
+    #sectionRangeHierarchy: HierarchySectionRange[] = [];
     #memoryStats: MemoryStatsMarker[] = [];
 
     get currentBinMetadata(): BinMetadata | null {
@@ -48,6 +49,10 @@ export class Application extends (EventTarget as typeof TypedEventTarget<Applica
 
     get sectionRanges(): SectionRange[] {
         return this.#sectionRanges;
+    }
+
+    get sectionRangeHierarchy(): HierarchySectionRange[] {
+        return this.#sectionRangeHierarchy;
     }
 
     get memoryStats(): MemoryStatsMarker[] {
@@ -84,10 +89,14 @@ export class Application extends (EventTarget as typeof TypedEventTarget<Applica
 
         const sectionRanges = buildSectionRanges(sectionMarkers, binMetadata.markerAddrToName);
         console.log(sectionRanges);
+        const sectionRangeHierarchy = buildSectionRangeHierarchy(
+            sectionRanges.toSorted((a, b) => Number(a.timestamp.begin - b.timestamp.begin)),
+        );
 
         this.#binMetadata = binMetadata;
         this.#events = events;
         this.#sectionRanges = sectionRanges;
+        this.#sectionRangeHierarchy = sectionRangeHierarchy;
         this.#memoryStats = memoryStats;
         this.#typedDispatchEvent("sourceDataChanged", binMetadata);
 
@@ -179,6 +188,40 @@ function buildSectionRanges(
             };
         })
         .toArray();
+}
+
+export type HierarchySectionRange = {
+    readonly range: SectionRange;
+    readonly children: HierarchySectionRange[];
+};
+
+export function buildSectionRangeHierarchy(sortedSectionRanges: SectionRange[]): HierarchySectionRange[] {
+    const roots: HierarchySectionRange[] = [];
+    const stack: HierarchySectionRange[] = [];
+    for (const r of sortedSectionRanges) {
+        while (stack.length > 0) {
+            if (r.timestamp.begin < stack.at(-1)!.range.timestamp.end) {
+                // stack onto this
+                break;
+            }
+
+            stack.pop();
+        }
+
+        if (stack.length <= 0) {
+            // this is root
+            roots.push({
+                range: r,
+                children: [],
+            });
+            stack.push(roots.at(-1)!);
+        } else {
+            stack.at(-1)!.children.push({ range: r, children: [] });
+            stack.push(stack.at(-1)!.children.at(-1)!);
+        }
+    }
+
+    return roots;
 }
 
 function computeTimestampRange(
