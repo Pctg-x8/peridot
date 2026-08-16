@@ -61,14 +61,12 @@ static SHARED_CHECK_ICON: Normalized2DStaticMeshTextureLazyInit =
 
 pub struct ToggleButtonView {
     entity: Option<Rc<ToggleButtonEventHandler>>,
-    placement: ViewPlacement,
     label: String,
 }
 impl ToggleButtonView {
-    pub fn new(placement: ViewPlacement, label: String) -> Self {
+    pub fn new(label: String) -> Self {
         Self {
             entity: None,
-            placement,
             label,
         }
     }
@@ -81,7 +79,16 @@ impl View for ToggleButtonView {
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
-                // TODO: reflect changes
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
+
                 e
             }
             None => {
@@ -91,34 +98,15 @@ impl View for ToggleButtonView {
                     ctx.system_link.rt_sender(),
                 );
 
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    ViewElementSize::Automatic => {
-                        let label_size = TextLayout::new_single(
-                            &self.label,
-                            FontID::UIDefault,
-                            ctx.system_link.font_set(),
-                            CompositeRectTextHorizontalAlignment::Start,
-                            None,
-                        )
-                        .size();
-
-                        // space for checkmark / rounding padding
-                        Size::new_logical(24.0 + label_size.width + 4.0, label_size.height + 8.0)
-                    }
-                };
-                let offset = self.placement.location.compute(&size);
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(offset.x),
-                        AnimatableFloat::Value(offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
-                    relative_offset_adjustment: self.placement.location.parent_anchor,
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -169,12 +157,10 @@ impl View for ToggleButtonView {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: self.placement.location.parent_anchor[0],
-                    top_adjustment_factor: self.placement.location.parent_anchor[1],
-                    width: size.width,
-                    height: size.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     cursor_shape: CursorShape::Pointer,
                     ..Default::default()
                 });
@@ -208,6 +194,20 @@ impl View for ToggleButtonView {
 
         ctx.mount_context.composite_tree.free_all(e.ct_root);
         ctx.mount_context.ht_manager.free_all(e.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        let label_size = TextLayout::new_single(
+            &self.label,
+            FontID::UIDefault,
+            ctx.system_link.font_set(),
+            CompositeRectTextHorizontalAlignment::Start,
+            None,
+        )
+        .size();
+
+        // space for checkmark / rounding padding
+        Size::new_logical(24.0 + label_size.width + 4.0, label_size.height + 8.0)
     }
 }
 
@@ -296,14 +296,10 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
 
 pub struct CheckboxView {
     entity: Option<Rc<CheckboxEventHandler>>,
-    placement: ViewPlacement,
 }
 impl CheckboxView {
-    pub fn new(placement: ViewPlacement) -> Self {
-        Self {
-            entity: None,
-            placement,
-        }
+    pub fn new() -> Self {
+        Self { entity: None }
     }
 }
 impl View for CheckboxView {
@@ -314,7 +310,16 @@ impl View for CheckboxView {
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
-                // TODO: reflect changes
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
+
                 e
             }
             None => {
@@ -324,23 +329,15 @@ impl View for CheckboxView {
                     ctx.system_link.rt_sender(),
                 );
 
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    // preferred default
-                    ViewElementSize::Automatic => Size::new_logical(16.0, 16.0),
-                };
-                let offset = self.placement.location.compute(&size);
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(offset.x),
-                        AnimatableFloat::Value(offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
-                    relative_offset_adjustment: self.placement.location.parent_anchor,
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -380,12 +377,10 @@ impl View for CheckboxView {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: self.placement.location.parent_anchor[0],
-                    top_adjustment_factor: self.placement.location.parent_anchor[1],
-                    width: size.width,
-                    height: size.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     cursor_shape: CursorShape::Pointer,
                     ..Default::default()
                 });
@@ -419,6 +414,10 @@ impl View for CheckboxView {
 
         ctx.mount_context.composite_tree.free_all(e.ct_root);
         ctx.mount_context.ht_manager.free_all(e.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(16.0, 16.0)
     }
 }
 

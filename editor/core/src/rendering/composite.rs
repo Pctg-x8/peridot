@@ -180,6 +180,37 @@ pub enum AnimatableFloat<Event> {
         event_on_complete: Option<Event>,
     },
 }
+impl<Event: PartialEq> core::cmp::PartialEq for AnimatableFloat<Event> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Value(v1), Self::Value(v2)) => v1.eq(v2),
+            (Self::Expression(v1), Self::Expression(v2)) => Arc::ptr_eq(v1, v2),
+            (
+                Self::Animated {
+                    sec_duration: sec_duration1,
+                    from_value: from_value1,
+                    to_value: to_value1,
+                    curve: curve1,
+                    event_on_complete: event_on_complete1,
+                },
+                Self::Animated {
+                    sec_duration: sec_duration2,
+                    from_value: from_value2,
+                    to_value: to_value2,
+                    curve: curve2,
+                    event_on_complete: event_on_complete2,
+                },
+            ) => {
+                from_value1.eq(from_value2)
+                    && to_value1.eq(to_value2)
+                    && curve1.eq(curve2)
+                    && sec_duration1.eq(sec_duration2)
+                    && event_on_complete1.eq(event_on_complete2)
+            }
+            _ => false,
+        }
+    }
+}
 impl<Event> core::fmt::Debug for AnimatableFloat<Event> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -342,7 +373,7 @@ impl<Event> AnimatableColor<Event> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AnimationCurve {
     Linear,
     CubicBezier { p1: (f32, f32), p2: (f32, f32) },
@@ -933,14 +964,21 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self
     }
 
-    pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self {
-        unsafe { &mut *self.target }.offset = [x, y];
-        self.dirty = true;
+    pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self
+    where
+        Event: PartialEq,
+    {
+        let t = unsafe { &mut *self.target };
+        self.dirty = t.offset[0] != x || t.offset[1] != y || self.dirty;
+        t.offset = [x, y];
         self
     }
 
     #[inline(always)]
-    pub fn offset_imm(self, x: f32, y: f32) -> Self {
+    pub fn offset_imm(self, x: f32, y: f32) -> Self
+    where
+        Event: PartialEq,
+    {
         self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
     }
 
@@ -984,14 +1022,21 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self.x(AnimatableFloat::from_template(template, start_sec))
     }
 
-    pub fn size(mut self, w: AnimatableFloat<Event>, h: AnimatableFloat<Event>) -> Self {
-        unsafe { &mut *self.target }.size = [w, h];
-        self.dirty = true;
+    pub fn size(mut self, w: AnimatableFloat<Event>, h: AnimatableFloat<Event>) -> Self
+    where
+        Event: PartialEq,
+    {
+        let t = unsafe { &mut *self.target };
+        self.dirty = t.size[0] != w || t.size[1] != h || self.dirty;
+        t.size = [w, h];
         self
     }
 
     #[inline(always)]
-    pub fn size_imm(self, w: f32, h: f32) -> Self {
+    pub fn size_imm(self, w: f32, h: f32) -> Self
+    where
+        Event: PartialEq,
+    {
         self.size(AnimatableFloat::Value(w), AnimatableFloat::Value(h))
     }
 

@@ -15,7 +15,7 @@ use crate::{
     },
     uikit::{
         RenderContext, TeardownContext, View, ViewElementSize, ViewIdentifier,
-        ViewInstanceQueryableMut, ViewPlacement, ViewRenderElements,
+        ViewInstanceQueryableMut, ViewRenderElements,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -23,15 +23,13 @@ use crate::{
 pub struct RadioButtonView {
     id: ViewIdentifier,
     eh: Option<Rc<RadioButtonEventHandler>>,
-    placement: ViewPlacement,
     selected_changes: Option<bool>,
 }
 impl RadioButtonView {
-    pub fn new(id: ViewIdentifier, placement: ViewPlacement) -> Self {
+    pub fn new(id: ViewIdentifier) -> Self {
         Self {
             id,
             eh: None,
-            placement,
             selected_changes: None,
         }
     }
@@ -44,6 +42,16 @@ impl View for RadioButtonView {
     ) -> ViewRenderElements {
         let e = match self.eh {
             Some(ref eh) => {
+                ctx.composite_tree
+                    .begin_mod_chain(eh.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(eh.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(eh.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(eh.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(eh.ht_root).height = layout_rect.height;
+
                 if let Some(selected) = self.selected_changes.take() {
                     if eh.current.replace(selected) != selected {
                         // changed
@@ -55,28 +63,15 @@ impl View for RadioButtonView {
             }
             None => {
                 // first render
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    // preferred default
-                    ViewElementSize::Automatic => Size::new_logical(16.0, 16.0),
-                };
-                let offset = Point::new_logical(
-                    self.placement.location.offset.x
-                        - size.width * self.placement.location.anchor[0],
-                    self.placement.location.offset.y
-                        - size.height * self.placement.location.anchor[1],
-                );
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(offset.x),
-                        AnimatableFloat::Value(offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
-                    relative_offset_adjustment: self.placement.location.parent_anchor,
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -94,8 +89,8 @@ impl View for RadioButtonView {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [AnimatableFloat::Value(4.0), AnimatableFloat::Value(4.0)],
                     size: [
-                        AnimatableFloat::Value(size.width - 8.0),
-                        AnimatableFloat::Value(size.height - 8.0),
+                        AnimatableFloat::Value(layout_rect.width - 8.0),
+                        AnimatableFloat::Value(layout_rect.height - 8.0),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -106,12 +101,10 @@ impl View for RadioButtonView {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: self.placement.location.parent_anchor[0],
-                    top_adjustment_factor: self.placement.location.parent_anchor[1],
-                    width: size.width,
-                    height: size.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     cursor_shape: CursorShape::Pointer,
                     ..Default::default()
                 });
@@ -153,6 +146,10 @@ impl View for RadioButtonView {
 
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(16.0, 16.0)
     }
 }
 

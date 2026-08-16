@@ -1,6 +1,10 @@
-use crate::rendering::composite::{
-    AnimatableColor, AnimatableFloat, CompositeRect, CompositeRectScaleFactor, CompositeRectText,
-    CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTreeRef,
+use crate::{
+    rendering::composite::{
+        AnimatableColor, AnimatableFloat, CompositeRect, CompositeRectScaleFactor,
+        CompositeRectText, CompositeRectTextRun, CompositeRectTextVerticalAlignment,
+        CompositeTreeRef,
+    },
+    utils::{LogicalUnit, Size},
 };
 
 pub struct View {
@@ -64,6 +68,17 @@ impl crate::uikit::View for View {
         };
 
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, Self::THICKNESS)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
     }
 }
 

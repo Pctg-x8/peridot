@@ -31,26 +31,10 @@ impl Presenter {
             ))
         });
 
-        let selected_object_label = ctx.construct_view(|_| {
-            Box::new(StaticTextView::new(
-                "No selection".into(),
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(8.0, 8.0),
-                    size: ViewElementSize::Fixed(Size::new_logical(-16.0, 12.0)),
-                    size_anchor: [1.0, 0.0],
-                },
-            ))
-        });
-        let selected_object_name_label = ctx.construct_view(|_| {
-            Box::new(StaticTextView::new(
-                String::new(),
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(8.0, 8.0 + 12.0),
-                    size: ViewElementSize::Fixed(Size::new_logical(-16.0, 12.0)),
-                    size_anchor: [1.0, 0.0],
-                },
-            ))
-        });
+        let selected_object_label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("No selection".into())));
+        let selected_object_name_label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new(String::new())));
         ctx.view_set_parent(selected_object_label, root_container_view);
         ctx.view_set_parent(selected_object_name_label, root_container_view);
 
@@ -66,18 +50,7 @@ impl Presenter {
             });
 
             let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new(
-                    "POSITION".into(),
-                    ViewPlacement {
-                        location: ViewLocation {
-                            offset: Point::new_logical(8.0, 8.0),
-                            anchor: [0.0, 0.0],
-                            parent_anchor: [0.0, 0.0],
-                        },
-                        size: ViewElementSize::Automatic,
-                        size_anchor: [0.0, 0.0],
-                    },
-                ));
+                let mut v = Box::new(StaticTextView::new("POSITION".into()));
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
@@ -85,15 +58,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.0, 0.0],
-                                offset: Point::new_logical(8.0, 8.0 + 12.0),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(-16.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -103,15 +67,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.333333, 0.0],
-                                offset: Point::new_logical(8.0, 8.0 + 12.0),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -121,15 +76,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.666666, 0.0],
-                                offset: Point::new_logical(8.0, 8.0 + 12.0),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -141,18 +87,7 @@ impl Presenter {
             ctx.view_set_parent(local_position_z_input_view, items_container_view);
 
             let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new(
-                    "ROTATION".into(),
-                    ViewPlacement {
-                        location: ViewLocation {
-                            offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0),
-                            anchor: [0.0, 0.0],
-                            parent_anchor: [0.0, 0.0],
-                        },
-                        size: ViewElementSize::Automatic,
-                        size_anchor: [0.0, 0.0],
-                    },
-                ));
+                let mut v = Box::new(StaticTextView::new("ROTATION".into()));
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
@@ -160,15 +95,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.0, 0.0],
-                                offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -178,15 +104,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.333333, 0.0],
-                                offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -196,15 +113,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.666666, 0.0],
-                                offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -216,18 +124,7 @@ impl Presenter {
             ctx.view_set_parent(local_rotation_z_input_view, items_container_view);
 
             let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new(
-                    "SCALE".into(),
-                    ViewPlacement {
-                        location: ViewLocation {
-                            offset: Point::new_logical(8.0, 8.0 + 12.0 + 16.0 + 12.0 + 16.0),
-                            anchor: [0.0, 0.0],
-                            parent_anchor: [0.0, 0.0],
-                        },
-                        size: ViewElementSize::Automatic,
-                        size_anchor: [0.0, 0.0],
-                    },
-                ));
+                let mut v = Box::new(StaticTextView::new("SCALE".into()));
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
@@ -235,18 +132,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.0, 0.0],
-                                offset: Point::new_logical(
-                                    8.0,
-                                    8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
-                                ),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -256,18 +141,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.333333, 0.0],
-                                offset: Point::new_logical(
-                                    8.0,
-                                    8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
-                                ),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -277,18 +150,6 @@ impl Presenter {
                 Box::new(NumericInputView::new(
                     id,
                     NumericInputViewInit {
-                        placement: ViewPlacement {
-                            location: ViewLocation {
-                                parent_anchor: [0.666666, 0.0],
-                                offset: Point::new_logical(
-                                    8.0,
-                                    8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0,
-                                ),
-                                ..Default::default()
-                            },
-                            size: ViewElementSize::fixed(32.0, 16.0),
-                            ..Default::default()
-                        },
                         value: eh.clone(),
                         ..Default::default()
                     },
@@ -300,64 +161,24 @@ impl Presenter {
             ctx.view_set_parent(local_scale_z_input_view, items_container_view);
 
             let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
-            let render_checkbox = ctx.construct_view(|_| {
-                Box::new(CheckboxView::new(ViewPlacement {
-                    location: ViewLocation::new_left_top(8.0, render_section_top),
-                    size: ViewElementSize::Automatic,
-                    size_anchor: [0.0, 0.0],
-                }))
-            });
-            let section_label = ctx.construct_view(|_| {
-                Box::new(StaticTextView::new(
-                    "Render".into(),
-                    ViewPlacement {
-                        location: ViewLocation {
-                            offset: Point::new_logical(8.0 + 24.0, render_section_top),
-                            anchor: [0.0, 0.0],
-                            parent_anchor: [0.0, 0.0],
-                        },
-                        size: ViewElementSize::Automatic,
-                        size_anchor: [0.0, 0.0],
-                    },
-                ))
-            });
+            let render_checkbox = ctx.construct_view(|_| Box::new(CheckboxView::new()));
+            let section_label =
+                ctx.construct_view(|_| Box::new(StaticTextView::new("Render".into())));
             ctx.view_set_parent(render_checkbox, items_container_view);
             ctx.view_set_parent(section_label, items_container_view);
 
             let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new(
-                    "SHAPE".into(),
-                    ViewPlacement {
-                        location: ViewLocation {
-                            offset: Point::new_logical(8.0, render_section_top + 24.0),
-                            anchor: [0.0, 0.0],
-                            parent_anchor: [0.0, 0.0],
-                        },
-                        size: ViewElementSize::Automatic,
-                        size_anchor: [0.0, 0.0],
-                    },
-                ));
+                let mut v = Box::new(StaticTextView::new("SHAPE".into()));
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
             let shape_selector = ctx.construct_view(|_| {
-                Box::new(crate::uikit::dropdown_box::View::new(
-                    ViewPlacement {
-                        location: ViewLocation {
-                            parent_anchor: [0.0, 0.0],
-                            anchor: [0.0, 0.0],
-                            offset: Point::new_logical(8.0, render_section_top + 24.0 + 12.0),
-                        },
-                        size: ViewElementSize::Automatic,
-                        size_anchor: [0.0, 0.0],
-                    },
-                    vec![
-                        "Cube".into(),
-                        "Sphere".into(),
-                        "Cylinder".into(),
-                        "Capsule".into(),
-                    ],
-                ))
+                Box::new(crate::uikit::dropdown_box::View::new(vec![
+                    "Cube".into(),
+                    "Sphere".into(),
+                    "Cylinder".into(),
+                    "Capsule".into(),
+                ]))
             });
             ctx.view_set_parent(label, items_container_view);
             ctx.view_set_parent(shape_selector, items_container_view);

@@ -8,8 +8,10 @@ use crate::{
     uikit::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
         SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView, TeardownContext,
-        ViewElementSize, ViewIdentifier, ViewInitContext, ViewLocation, ViewPlacement,
-        ViewRegisterable, ViewRelationControllable, popup::PopupCloseContext,
+        ViewElementSize, ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut,
+        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
+        ViewLayoutOverflow, ViewLocation, ViewPlacement, ViewRegisterable,
+        ViewRelationControllable, ViewSize, popup::PopupCloseContext,
     },
     utils::{Point, Size},
 };
@@ -49,42 +51,39 @@ impl AlertDialogPresenter {
                 tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
             )))
         });
+        {
+            let frame = ctx.view_layout_mut(frame).expect("query failed");
+            frame.padding.set_all(16.0);
+            frame.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Center,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 16.0,
+            };
+        }
 
         let msg = ctx.construct_view(|_| {
-            let mut v = Box::new(StaticTextView::new(
-                message,
-                ViewPlacement {
-                    location: ViewLocation {
-                        offset: Point::new_logical(0.0, Self::AROUND_PADDING),
-                        anchor: [0.5, 0.0],
-                        parent_anchor: [0.5, 0.0],
-                    },
-                    size: ViewElementSize::Fixed(Size::new_logical(text_width, 16.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-            ));
+            let mut v = Box::new(StaticTextView::new(message));
             v.allow_wrapping();
             v.set_horizontal_alignment(CompositeRectTextHorizontalAlignment::Middle);
             v
         });
+        ctx.view_layout_mut(msg).expect("query failed").width = ViewSize::Fixed(text_width);
 
         let confirm_button = ctx.construct_view(|_| {
             Box::new(SimpleButtonView::new(
                 "OK".into(),
-                ViewPlacement {
-                    location: ViewLocation {
-                        parent_anchor: [0.5, 1.0],
-                        anchor: [0.5, 1.0],
-                        offset: Point::new_logical(0.0, -Self::AROUND_PADDING),
-                    },
-                    size: ViewElementSize::Fixed(Size::new_logical(64.0, 24.0)),
-                    size_anchor: [0.0, 0.0],
-                },
                 Some(Box::new(SimpleButtonConstantEventHandler(
                     Event::PopupClose { id: popup_id },
                 ))),
             ))
         });
+        {
+            let confirm_button = ctx.view_layout_mut(confirm_button).expect("query failed");
+            confirm_button.width = ViewSize::Fixed(64.0);
+            confirm_button.height = ViewSize::Fixed(24.0);
+        }
 
         ctx.view_set_parent(msg, frame);
         ctx.view_set_parent(confirm_button, frame);

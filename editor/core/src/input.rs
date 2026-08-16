@@ -66,6 +66,11 @@ impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
     }
+
+    #[inline(always)]
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut crate::uikit::ViewLayout> {
+        crate::uikit::view_layout_mut(id, self.view_instance_store)
+    }
 }
 impl ViewRenderer for InputEventContext<'_, '_, '_> {
     #[inline(always)]

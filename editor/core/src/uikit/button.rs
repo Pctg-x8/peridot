@@ -19,10 +19,8 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{
-        RenderContext, TeardownContext, View, ViewElementSize, ViewPlacement, ViewRenderElements,
-    },
-    utils::{LogicalUnit, Point, Rect, Size, range_helper::range_from_len},
+    uikit::{RenderContext, TeardownContext, View, ViewRenderElements},
+    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
 pub trait SimpleButtonEventHandler {
@@ -39,7 +37,6 @@ impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
 pub struct SimpleButtonView {
     entity: Option<Rc<SimpleButtonActionHandler>>,
     label: String,
-    placement: ViewPlacement,
     event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
     interactive_changes: Option<bool>,
 }
@@ -48,13 +45,11 @@ impl SimpleButtonView {
 
     pub fn new(
         init_label: String,
-        init_placement: ViewPlacement,
         event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
     ) -> Self {
         Self {
             entity: None,
             label: init_label,
-            placement: init_placement,
             event_handler,
             interactive_changes: None,
         }
@@ -72,6 +67,16 @@ impl View for SimpleButtonView {
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
+
                 if let Some(interactive) = self.interactive_changes.take() {
                     ctx.ht_manager.get_data_mut(e.ht_root).active = interactive;
                     e.interactive.set(interactive);
@@ -82,48 +87,18 @@ impl View for SimpleButtonView {
             }
             None => {
                 // first render
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    ViewElementSize::Automatic => {
-                        let label_size = TextLayout::new_single(
-                            &self.label,
-                            FontID::UIDefault,
-                            ctx.system_link.font_set(),
-                            CompositeRectTextHorizontalAlignment::Start,
-                            None,
-                        )
-                        .size();
-                        // consider rounding pads
-                        Size::new_logical(
-                            label_size.width + Self::ROUNDING * 2.0,
-                            label_size.height + Self::ROUNDING,
-                        )
-                    }
-                };
-                let offset = Point::new_logical(
-                    self.placement.location.offset.x
-                        - size.width * self.placement.location.anchor[0],
-                    self.placement.location.offset.y
-                        - size.height * self.placement.location.anchor[1],
-                );
-                let relative_offset = [
-                    self.placement.location.anchor[0],
-                    self.placement.location.anchor[1],
-                ];
-
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
 
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     offset: [
-                        AnimatableFloat::Value(offset.x),
-                        AnimatableFloat::Value(offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
-                    relative_offset_adjustment: relative_offset.clone(),
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
                         1.0, 1.0, 1.0, 0.0,
@@ -164,12 +139,10 @@ impl View for SimpleButtonView {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: size.width,
-                    height: size.height,
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: relative_offset[0],
-                    top_adjustment_factor: relative_offset[1],
+                    width: layout_rect.width,
+                    height: layout_rect.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
                     cursor_shape: CursorShape::Pointer,
                     keyboard_focus: Some(kf_token),
                     ..Default::default()
@@ -216,6 +189,22 @@ impl View for SimpleButtonView {
                 .keyboard_focus_registry
                 .release_token(entity.kf_token);
         }
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        let label_size = TextLayout::new_single(
+            &self.label,
+            FontID::UIDefault,
+            ctx.system_link.font_set(),
+            CompositeRectTextHorizontalAlignment::Start,
+            None,
+        )
+        .size();
+        // consider rounding pads
+        Size::new_logical(
+            label_size.width + Self::ROUNDING * 2.0,
+            label_size.height + Self::ROUNDING,
+        )
     }
 }
 

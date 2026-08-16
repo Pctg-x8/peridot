@@ -588,6 +588,18 @@ impl TextInputViewCore {
     pub const fn entity(&self) -> &std::rc::Rc<TextInputViewCoreEventHandler> {
         &self.eh
     }
+
+    pub fn set_rect<E: PartialEq>(
+        &self,
+        rect: Rect<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+    ) {
+        composite_tree
+            .begin_mod_chain(self.eh.ct_root)
+            .offset_imm(rect.left, rect.top)
+            .size_imm(rect.width, rect.height)
+            .apply();
+    }
 }
 
 pub struct TextInputViewCoreEventHandler {
@@ -1693,19 +1705,13 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
 pub struct TextInputView {
     id: ViewIdentifier,
     eh: Option<Rc<TextInputViewEventHandler>>,
-    rect: Rect<LogicalUnit>,
     io: std::rc::Weak<dyn TextInputViewIO>,
 }
 impl TextInputView {
-    pub fn new(
-        id: ViewIdentifier,
-        rect: Rect<LogicalUnit>,
-        io: std::rc::Weak<impl TextInputViewIO + 'static>,
-    ) -> Self {
+    pub fn new(id: ViewIdentifier, io: std::rc::Weak<impl TextInputViewIO + 'static>) -> Self {
         Self {
             id,
             eh: None,
-            rect,
             io: io as _,
         }
     }
@@ -1718,17 +1724,22 @@ impl View for TextInputView {
     ) -> ViewRenderElements {
         let eh = match self.eh {
             Some(ref eh) => {
-                // TODO: reflect changes
+                eh.core.set_rect(layout_rect.clone(), ctx.composite_tree);
+                ctx.ht_manager.get_data_mut(eh.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(eh.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(eh.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(eh.ht_root).height = layout_rect.height;
+
                 eh
             }
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: self.rect.width,
-                    height: self.rect.height,
-                    left: self.rect.left,
-                    top: self.rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
                     cursor_shape: CursorShape::IBeam,
                     keyboard_focus: Some(kf_token),
                     ..Default::default()
@@ -1736,7 +1747,7 @@ impl View for TextInputView {
                 let eh = Rc::new(TextInputViewEventHandler {
                     core: TextInputViewCore::new(
                         ctx,
-                        self.rect.clone(),
+                        layout_rect.clone(),
                         [0.0; 2],
                         [0.0; 2],
                         self.id,
@@ -1781,6 +1792,10 @@ impl View for TextInputView {
             .keyboard_focus_registry
             .release_token(entity.token);
     }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(32.0, 16.0)
+    }
 }
 
 struct TextInputViewEventHandler {
@@ -1809,13 +1824,11 @@ pub trait NumericInputViewIO: TextInputViewIO {
 }
 
 pub struct NumericInputViewInit<ValueIO: NumericInputViewIO + 'static> {
-    pub placement: ViewPlacement,
     pub value: std::rc::Weak<ValueIO>,
 }
 impl<ValueIO: NumericInputViewIO + 'static> Default for NumericInputViewInit<ValueIO> {
     fn default() -> Self {
         Self {
-            placement: ViewPlacement::default(),
             value: std::rc::Weak::new(),
         }
     }
@@ -1824,7 +1837,6 @@ impl<ValueIO: NumericInputViewIO + 'static> Default for NumericInputViewInit<Val
 pub struct NumericInputView {
     id: ViewIdentifier,
     eh: Option<Rc<NumericInputViewEventHandler>>,
-    placement: ViewPlacement,
     value: std::rc::Weak<dyn NumericInputViewIO>,
     should_revalidate_on_next_render: Cell<bool>,
 }
@@ -1836,7 +1848,6 @@ impl NumericInputView {
         Self {
             id,
             eh: None,
-            placement: init.placement,
             value: init.value as _,
             should_revalidate_on_next_render: Cell::new(true),
         }
@@ -1854,6 +1865,12 @@ impl View for NumericInputView {
     ) -> ViewRenderElements {
         let eh = match self.eh {
             Some(ref x) => {
+                x.core.set_rect(layout_rect.clone(), ctx.composite_tree);
+                ctx.ht_manager.get_data_mut(x.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(x.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(x.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(x.ht_root).height = layout_rect.height;
+
                 ctx.ht_manager.get_data_mut(x.ht_root).cursor_shape = if x.key_input_enabled.get() {
                     CursorShape::IBeam
                 } else {
@@ -1865,18 +1882,12 @@ impl View for NumericInputView {
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
-                let size = self.placement.actual_size(|| Size::new_logical(32.0, 16.0));
-                let offset = self.placement.actual_offset(&size);
 
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: size.width,
-                    height: size.height,
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: self.placement.location.parent_anchor[0],
-                    top_adjustment_factor: self.placement.location.parent_anchor[1],
-                    width_adjustment_factor: self.placement.size_anchor[0],
-                    height_adjustment_factor: self.placement.size_anchor[1],
+                    width: layout_rect.width,
+                    height: layout_rect.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
                     cursor_shape: CursorShape::ResizeVertical,
                     keyboard_focus: Some(kf_token),
                     ..Default::default()
@@ -1884,9 +1895,9 @@ impl View for NumericInputView {
                 let eh = Rc::new(NumericInputViewEventHandler {
                     core: TextInputViewCore::new(
                         ctx,
-                        Rect::from_lt_size(offset, size),
-                        self.placement.location.parent_anchor,
-                        self.placement.size_anchor,
+                        layout_rect.clone(),
+                        [0.0; 2],
+                        [0.0; 2],
                         self.id,
                         ht_root,
                         self.value.clone(),
@@ -1944,6 +1955,10 @@ impl View for NumericInputView {
         ctx.mount_context
             .keyboard_focus_registry
             .release_token(entity.kf_token);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(32.0, 16.0)
     }
 }
 
@@ -2217,11 +2232,10 @@ impl NumericInputViewEventHandler {
 pub struct MultilineTextInputView {
     id: ViewIdentifier,
     eh: Option<Rc<MultilineTextInputEventHandler>>,
-    rect: Rect<LogicalUnit>,
 }
 impl MultilineTextInputView {
-    pub fn new(id: ViewIdentifier, rect: Rect<LogicalUnit>) -> Self {
-        Self { id, eh: None, rect }
+    pub fn new(id: ViewIdentifier) -> Self {
+        Self { id, eh: None }
     }
 }
 impl View for MultilineTextInputView {
@@ -2232,7 +2246,16 @@ impl View for MultilineTextInputView {
     ) -> ViewRenderElements {
         let eh = match self.eh {
             Some(ref eh) => {
-                // TODO: reflect changes
+                ctx.composite_tree
+                    .begin_mod_chain(eh.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(eh.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(eh.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(eh.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(eh.ht_root).height = layout_rect.height;
+
                 eh
             }
             None => {
@@ -2242,12 +2265,12 @@ impl View for MultilineTextInputView {
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     size: [
-                        AnimatableFloat::Value(self.rect.width),
-                        AnimatableFloat::Value(self.rect.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     offset: [
-                        AnimatableFloat::Value(self.rect.left),
-                        AnimatableFloat::Value(self.rect.top),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
                     has_bitmap: true,
                     border: Some(Border {
@@ -2260,8 +2283,8 @@ impl View for MultilineTextInputView {
                 let ct_text_clip = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     size: [
-                        AnimatableFloat::Value(self.rect.width - 4.0),
-                        AnimatableFloat::Value(self.rect.height - 4.0),
+                        AnimatableFloat::Value(layout_rect.width - 4.0),
+                        AnimatableFloat::Value(layout_rect.height - 4.0),
                     ],
                     offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
                     clip_child: Some(ClipConfig {
@@ -2315,10 +2338,10 @@ impl View for MultilineTextInputView {
                     view_id: self.id,
                     kf_token,
                     ht_root: ctx.ht_manager.create(HitTestTreeData {
-                        left: self.rect.left,
-                        top: self.rect.top,
-                        width: self.rect.width,
-                        height: self.rect.height,
+                        left: layout_rect.left,
+                        top: layout_rect.top,
+                        width: layout_rect.width,
+                        height: layout_rect.height,
                         cursor_shape: CursorShape::IBeam,
                         keyboard_focus: Some(kf_token),
                         ..Default::default()
@@ -2333,8 +2356,8 @@ impl View for MultilineTextInputView {
                     has_focus: core::cell::Cell::new(false),
                     content_h_offset: core::cell::Cell::new(0.0),
                     content_v_offset: core::cell::Cell::new(0.0),
-                    content_visible_width: self.rect.width - 4.0,
-                    content_visible_height: self.rect.height - 4.0,
+                    content_visible_width: layout_rect.width - 4.0,
+                    content_visible_height: layout_rect.height - 4.0,
                     content: core::cell::RefCell::new(String::new()),
                     cursor_pos_bytes: core::cell::Cell::new(0),
                     preedit_range_start_bytes: core::cell::Cell::new(0),
@@ -2403,6 +2426,10 @@ impl View for MultilineTextInputView {
         ctx.mount_context
             .keyboard_focus_registry
             .release_token(entity.kf_token);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(128.0, 96.0)
     }
 }
 

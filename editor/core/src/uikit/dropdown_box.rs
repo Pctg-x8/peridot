@@ -46,14 +46,12 @@ static DOWN_ARROW_ICON: Normalized2DStaticMeshTextureLazyInit =
 
 pub struct View {
     entity: Option<Rc<EventHandler>>,
-    placement: ViewPlacement,
     items: Vec<String>,
 }
 impl View {
-    pub fn new(placement: ViewPlacement, items: Vec<String>) -> Self {
+    pub fn new(items: Vec<String>) -> Self {
         Self {
             entity: None,
-            placement,
             items,
         }
     }
@@ -66,7 +64,16 @@ impl super::View for View {
     ) -> super::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
-                // TODO: reflect changes
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
+
                 e
             }
             None => {
@@ -76,48 +83,15 @@ impl super::View for View {
                     ctx.system_link.rt_sender(),
                 );
 
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    ViewElementSize::Automatic => {
-                        let content_size = self
-                            .items
-                            .iter()
-                            .map(|t| {
-                                TextLayout::new_single(
-                                    t,
-                                    FontID::UIDefault,
-                                    ctx.system_link.font_set(),
-                                    CompositeRectTextHorizontalAlignment::Start,
-                                    None,
-                                )
-                                .size()
-                            })
-                            .fold(Size::new_logical(8.0, 24.0), |a, b| {
-                                Size::new_logical(a.width.max(b.width), a.height.max(b.height))
-                            });
-
-                        // space for arrow icon
-                        Size::new_logical(content_size.width + 24.0, content_size.height)
-                    }
-                };
-                let offset = Point::new_logical(
-                    self.placement.location.offset.x
-                        - size.width * self.placement.location.anchor[0],
-                    self.placement.location.offset.y
-                        - size.height * self.placement.location.anchor[1],
-                );
-                let relative_offset = self.placement.location.parent_anchor.clone();
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(offset.x),
-                        AnimatableFloat::Value(offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
-                    relative_offset_adjustment: relative_offset.clone(),
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -189,12 +163,10 @@ impl super::View for View {
                 ctx.composite_tree.add_child(ct_root, ct_down_arrow);
 
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: relative_offset[0],
-                    top_adjustment_factor: relative_offset[1],
-                    width: size.width,
-                    height: size.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     ..Default::default()
                 });
 
@@ -228,6 +200,28 @@ impl super::View for View {
 
         ctx.mount_context.composite_tree.free_all(e.ct_root);
         ctx.mount_context.ht_manager.free_all(e.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        let content_size = self
+            .items
+            .iter()
+            .map(|t| {
+                TextLayout::new_single(
+                    t,
+                    FontID::UIDefault,
+                    ctx.system_link.font_set(),
+                    CompositeRectTextHorizontalAlignment::Start,
+                    None,
+                )
+                .size()
+            })
+            .fold(Size::new_logical(8.0, 24.0), |a, b| {
+                Size::new_logical(a.width.max(b.width), a.height.max(b.height))
+            });
+
+        // space for arrow icon
+        Size::new_logical(content_size.width + 24.0, content_size.height)
     }
 }
 

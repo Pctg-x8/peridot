@@ -42,6 +42,10 @@ pub trait DeriveMountContext<'h> {
     fn derive_mount_context<'env2>(&'env2 mut self) -> MountContext<'env2, 'h>;
 }
 
+pub struct MeasureContext<'env> {
+    pub system_link: &'env SystemLink<'env>,
+}
+
 pub struct RenderContext<'env, 'h> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub ht_manager: &'env mut HitTestTreeManager<'h>,
@@ -172,15 +176,21 @@ impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
     }
+
+    #[inline(always)]
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+        view_layout_mut(id, self.view_instance_store)
+    }
 }
 impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
-    fn render_view_recursive(
+    fn render_view_with_base(
         &mut self,
         id: ViewIdentifier,
         mount_on: &(impl MountTarget + ?Sized),
         keyboard_focus_group: KeyboardFocusGroupRef,
+        layout_rect: Rect<LogicalUnit>,
     ) {
-        render_view_recursive(
+        render_view_with_base(
             id,
             &mut RenderContext {
                 composite_tree: &mut self.mount_context.composite_tree,
@@ -194,6 +204,7 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
             },
             mount_on,
             keyboard_focus_group,
+            layout_rect,
             self.view_instance_store,
             self.view_tree_relation_store,
             self.view_layout_state_store,
@@ -474,6 +485,14 @@ pub trait View: core::any::Any {
 
     /// Teardown(アンマウント)時に呼ばれる
     fn teardown(&mut self, ctx: &mut TeardownContext);
+
+    /// 自身の推奨サイズを計算する
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit>;
+
+    /// 新しいLayout Layer(基準点を0, 0にもどす)をつくるかどうか
+    fn create_new_layout_layer(&self) -> bool {
+        false
+    }
 }
 
 #[repr(transparent)]
@@ -525,7 +544,7 @@ impl ViewRenderQueue {
         ctx: &mut RenderContext,
         instance_store: &mut ViewInstanceStore,
         tree_relation_store: &ViewTreeRelationStore,
-        layout_state_store: &ViewLayoutStateStore,
+        layout_state_store: &mut ViewLayoutStateStore,
         render_state_store: &mut ViewRenderStateStore,
     ) {
         while let Some(mut target) = self.pending.pop_first() {
@@ -557,6 +576,16 @@ impl ViewRenderQueue {
                 }
             };
 
+            layout_view_partial_recursive(
+                target,
+                &mut MeasureContext {
+                    system_link: ctx.system_link,
+                },
+                instance_store,
+                tree_relation_store,
+                layout_state_store,
+                |_| {},
+            );
             let mut scheduled_renders = VecDeque::new();
             scheduled_renders.push_back((mount_target, target));
             while let Some((mt, v)) = scheduled_renders.pop_front() {
@@ -910,16 +939,29 @@ pub fn view_iter_self_group_participants(
         .flat_map(|x| x.iter().copied())
 }
 
-pub fn render_view_recursive(
+pub fn render_view_with_base(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
     mount_on: &(impl MountTarget + ?Sized),
     keyboard_focus_group: KeyboardFocusGroupRef,
+    layout_rect: Rect<LogicalUnit>,
     instance_store: &mut ViewInstanceStore,
     tree_relation_store: &ViewTreeRelationStore,
-    layout_state_store: &ViewLayoutStateStore,
+    layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
+    layout_view_recursive(
+        target,
+        &mut MeasureContext {
+            system_link: ctx.system_link,
+        },
+        layout_rect,
+        instance_store,
+        tree_relation_store,
+        layout_state_store,
+        &mut |_| {},
+    );
+
     let mut scheduled_renders = VecDeque::new();
     scheduled_renders.push_back((RawMountTarget::from_typed(mount_on), target));
     while let Some((mt, v)) = scheduled_renders.pop_front() {
@@ -1136,6 +1178,18 @@ pub fn view_set_visibility(
     instance.active = visible;
 }
 
+pub fn view_layout_mut(
+    id: ViewIdentifier,
+    instance_store: &mut ViewInstanceStore,
+) -> Option<&mut ViewLayout> {
+    Some(
+        &mut instance_store
+            .instances
+            .get_mut(id.into_array_index())?
+            .layout,
+    )
+}
+
 pub trait ViewRegisterable {
     fn construct_view(
         &mut self,
@@ -1155,6 +1209,7 @@ pub trait ViewInstanceQueryable {
 pub trait ViewInstanceQueryableMut {
     fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T>;
     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool);
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout>;
 }
 
 pub trait ViewRelationControllable {
@@ -1163,11 +1218,12 @@ pub trait ViewRelationControllable {
 }
 
 pub trait ViewImmediateRenderable {
-    fn render_view_recursive(
+    fn render_view_with_base(
         &mut self,
         target: ViewIdentifier,
         mount_on: &(impl MountTarget + ?Sized),
         keyboard_focus_group: KeyboardFocusGroupRef,
+        layout_rect: Rect<LogicalUnit>,
     );
 }
 

@@ -25,7 +25,7 @@ use crate::{
         RenderContext, ViewIdentifier, ViewInstanceQueryableMut, ViewRegisterable,
         ViewRelationControllable, ViewRenderer,
     },
-    utils::{LogicalUnit, Rect},
+    utils::{LogicalUnit, Rect, Size},
 };
 
 pub enum Caption {
@@ -199,6 +199,17 @@ impl crate::uikit::View for View {
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, Self::THICKNESS)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
+    }
 }
 
 struct ViewEntity {
@@ -363,6 +374,13 @@ impl crate::uikit::View for SystemCommandButtonView {
 
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(Self::WIDTH, View::THICKNESS)
     }
 }
 

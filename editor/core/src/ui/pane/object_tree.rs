@@ -25,7 +25,7 @@ use crate::{
         ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext, ViewRegisterable,
         ViewRenderElements,
     },
-    utils::{LogicalUnit, Rect},
+    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct Presenter {
@@ -117,6 +117,17 @@ impl crate::uikit::View for View {
 
         ctx.mount_context.composite_tree.free(entity.ct_root);
         ctx.mount_context.ht_manager.free(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
     }
 }
 
@@ -362,6 +373,13 @@ impl crate::uikit::View for ObjectRowView {
         ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&entity);
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, Self::ITEM_HEIGHT)
     }
 }
 

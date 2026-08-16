@@ -13,11 +13,11 @@ use crate::{
     },
     uikit::{
         RawMountTarget, RenderContext, TeardownContext, View, ViewIdentifier,
-        ViewImmediateRenderable, ViewInitContext, ViewInstanceStore, ViewRenderElements,
-        ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore, teardown_view_recursive,
-        view_instance, view_instance_mut,
+        ViewImmediateRenderable, ViewInitContext, ViewInstanceStore, ViewLayoutStateStore,
+        ViewRenderElements, ViewRenderQueue, ViewRenderStateStore, ViewTreeRelationStore,
+        render_view_with_base, teardown_view_recursive, view_instance, view_instance_mut,
     },
-    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
+    utils::{LogicalUnit, Point, Rect, Size, range_helper::range_from_len},
 };
 
 #[repr(transparent)]
@@ -86,7 +86,12 @@ impl PopupManager {
         let id = PopupID::new();
         let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
         let instance = ctor(id, ctx);
-        ctx.render_view_recursive(instance.root_view_id(), &window, popup_focus_group);
+        ctx.render_view_with_base(
+            instance.root_view_id(),
+            &window,
+            popup_focus_group,
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), window.client_size()),
+        );
         self.instance_by_id
             .insert(id, (Box::new(instance), window, popup_focus_group));
 
@@ -109,11 +114,13 @@ impl PopupManager {
     pub fn close(
         &mut self,
         id: PopupID,
-        view_instance_store: &mut ViewInstanceStore,
-        view_render_queue: &mut ViewRenderQueue,
         ctx: &mut RenderContext,
+        view_instance_store: &mut ViewInstanceStore,
+        view_tree_relation_store: &ViewTreeRelationStore,
+        view_layout_state_store: &mut ViewLayoutStateStore,
+        view_render_state_store: &mut ViewRenderStateStore,
     ) -> bool {
-        if let Some((instance, _, _)) = self.instance_by_id.get_mut(&id) {
+        if let Some(&mut (ref mut instance, ref w, g)) = self.instance_by_id.get_mut(&id) {
             instance.close(
                 &mut PopupCloseContext {
                     view_instance_store,
@@ -122,7 +129,17 @@ impl PopupManager {
                 ctx.ht_manager,
                 ctx.current_sec,
             );
-            view_render_queue.schedule(instance.root_view_id());
+            render_view_with_base(
+                instance.root_view_id(),
+                ctx,
+                w,
+                g,
+                Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                view_instance_store,
+                view_tree_relation_store,
+                view_layout_state_store,
+                view_render_state_store,
+            );
             true
         } else {
             false
@@ -294,6 +311,14 @@ impl View for OverlayPopupBasicMaskView {
         ctx.mount_context.composite_tree.free(e.ct_root);
         ctx.mount_context.ht_manager.free(e.ht_root);
     }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
+    }
 }
 
 struct OverlayPopupBasicFrameViewRenderElements {
@@ -410,12 +435,12 @@ impl View for OverlayPopupBasicFrameView {
                     scale_factor: CompositeRectScaleFactor::UI,
                     relative_offset_adjustment: [0.5, 0.5],
                     size: [
-                        AnimatableFloat::Value(self.size.width),
-                        AnimatableFloat::Value(self.size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     offset: [
-                        AnimatableFloat::Value(-self.size.width * 0.5),
-                        AnimatableFloat::Value(-self.size.height * 0.5),
+                        AnimatableFloat::Value(-layout_rect.width * 0.5),
+                        AnimatableFloat::Value(-layout_rect.height * 0.5),
                     ],
                     ..Default::default()
                 });
@@ -488,5 +513,13 @@ impl View for OverlayPopupBasicFrameView {
 
         ctx.mount_context.composite_tree.free(e.ct_root);
         ctx.mount_context.ht_manager.free(e.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
     }
 }

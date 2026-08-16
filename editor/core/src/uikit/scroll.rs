@@ -376,6 +376,14 @@ impl View for ScrollContainer {
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
+    }
 }
 
 struct ScrollContainerEventHandler {

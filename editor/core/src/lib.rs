@@ -59,9 +59,11 @@ use crate::{
         ViewElementSize, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegistry,
         ViewGroupID, ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator,
         ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewLocation,
-        ViewPlacement, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderStateStore, ViewRenderer, ViewTreeRelationStore,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
+        ViewLayoutStateStore, ViewLocation, ViewPlacement, ViewRegisterable,
+        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize,
+        ViewTreeRelationStore,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -728,7 +730,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     });
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum SyncEvent {
     NewPresentID { id: u64 },
     WindowPostCreateRenderBuffer { window: WindowHandle },
@@ -996,7 +998,7 @@ impl Event {
             Self::DockBeginPreview { .. } => "DockBeginPreview",
             Self::DockMovePreview { .. } => "DockMovePreview",
             Self::DockConfirm { .. } => "DockConfirm",
-            Self::ScheduleViewrenderExt { .. } => "ScheduleViewRenderExt",
+            Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
             #[cfg(not(target_os = "macos"))]
             #[cfg(windows)]
             Self::CoreTextLayoutRequested { .. } => "CoreTextLayoutRequested",
@@ -1379,6 +1381,10 @@ impl View for ColorPickerView {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
 }
 
 struct ColorPickerEventHandler {
@@ -1913,6 +1919,10 @@ impl View for ColorPickerHexTextInputView {
             .release_token(entity.token);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
 }
 
 struct ColorPickerHexTextInputEventHandler {
@@ -2081,17 +2091,15 @@ pub trait ColorPickerBackingStoreEvent {
 pub struct EditableColorButtonView {
     id: ViewIdentifier,
     eh: Option<Rc<EditableColorButtonEventHandler>>,
-    placement: ViewPlacement,
     color: u32,
 }
 impl EditableColorButtonView {
     const COLOR_PREVIEW_MARGIN: f32 = 6.0;
 
-    pub fn new(id: ViewIdentifier, placement: ViewPlacement, init_color: u32) -> Self {
+    pub fn new(id: ViewIdentifier, init_color: u32) -> Self {
         Self {
             id,
             eh: None,
-            placement,
             color: init_color,
         }
     }
@@ -2113,6 +2121,15 @@ impl View for EditableColorButtonView {
                         (e.color.get() >> 24) as u8 as f32 / 255.0,
                     ])))
                     .apply();
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
 
                 e
             }
@@ -2125,28 +2142,15 @@ impl View for EditableColorButtonView {
                     )
                 });
 
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    // preferred default
-                    ViewElementSize::Automatic => Size::new_logical(48.0, 20.0),
-                };
-                let offset = Point::new_logical(
-                    self.placement.location.offset.x
-                        - size.width * self.placement.location.anchor[0],
-                    self.placement.location.offset.y
-                        - size.height * self.placement.location.anchor[1],
-                );
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(offset.x),
-                        AnimatableFloat::Value(offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
-                    relative_offset_adjustment: self.placement.location.parent_anchor,
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -2193,12 +2197,10 @@ impl View for EditableColorButtonView {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: offset.x,
-                    top: offset.y,
-                    left_adjustment_factor: self.placement.location.parent_anchor[0],
-                    top_adjustment_factor: self.placement.location.parent_anchor[1],
-                    width: size.width,
-                    height: size.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     cursor_shape: CursorShape::Pointer,
                     ..Default::default()
                 });
@@ -2236,6 +2238,10 @@ impl View for EditableColorButtonView {
 
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(48.0, 20.0)
     }
 }
 
@@ -2399,10 +2405,22 @@ impl UIKitPreviewPanePresenter {
                 id,
                 Rect::from_lt_size(
                     Point::new_logical(0.0, 0.0),
-                    Size::new_logical(128.0, 128.0),
+                    Size::new_logical(256.0, 128.0),
                 ),
             ))
         });
+        {
+            let scroll_container = ctx.view_layout_mut(scroll_container).expect("query failed");
+            scroll_container.width = ViewSize::Fixed(256.0);
+            scroll_container.padding.set_all(8.0);
+            scroll_container.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 8.0,
+            };
+        }
 
         let mut ytop = 8.0;
         let mut content_width = 8.0f32;
@@ -2418,127 +2436,137 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
-        let label = StaticTextView::new(
-            "Simple Buttons + Alert Dialog".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        ytop += label.compute_size_without_render(ctx.system_link).height;
-        let test_alert_btn = SimpleButtonView::new(
-            "Test Alert".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(16.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-            Some(Box::new(AlertButtonEventHandler(
-                "てすとめっせーじ from button\n改行もしてみる".into(),
-            ))),
-        );
-        let test_alert_btn2 = SimpleButtonView::new(
+        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        {
+            let container = ctx.view_layout_mut(container).expect("query failed");
+            container.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 0.0,
+            };
+        }
+        ctx.view_set_parent(container, scroll_container);
+        let label = ctx.construct_view(|_| {
+            Box::new(StaticTextView::new("Simple Buttons + Alert Dialog".into()))
+        });
+        ctx.view_set_parent(label, container);
+        let button_container = ctx.construct_view(|_| Box::new(EmptyView));
+        {
+            let button_container = ctx.view_layout_mut(button_container).expect("query failed");
+            button_container.padding.left = 8.0;
+            button_container.width = ViewSize::FillParent;
+            button_container.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Horizontal,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 8.0,
+            };
+        }
+        ctx.view_set_parent(button_container, container);
+        let test_alert_btn = ctx.construct_view(|_| {
+            Box::new(SimpleButtonView::new(
+                "Test Alert".into(),
+                Some(Box::new(AlertButtonEventHandler(
+                    "てすとめっせーじ from button\n改行もしてみる".into(),
+                ))),
+            ))
+        });
+        ctx.view_set_parent(test_alert_btn, button_container);
+        let test_alert_btn2 = ctx.construct_view(|_| Box::new(SimpleButtonView::new(
             "Test Alert 2".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(88.0, ytop),
-                size: ViewElementSize::Fixed(Size::new_logical(96.0, 24.0)),
-                size_anchor: [0.0, 0.0],
-            },
             Some(Box::new(AlertButtonEventHandler("とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into()))),
-        );
-        ytop += 24.0;
-
-        let label = ctx.construct_view(|_| Box::new(label));
-        let test_alert_btn = ctx.construct_view(|_| Box::new(test_alert_btn));
-        let test_alert_btn2 = ctx.construct_view(|_| Box::new(test_alert_btn2));
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(test_alert_btn, scroll_container);
-        ctx.view_set_parent(test_alert_btn2, scroll_container);
-
-        ytop += 8.0;
+        )));
+        ctx.view_set_parent(test_alert_btn2, button_container);
 
         let text_input_backing_store1 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
         let text_input_backing_store2 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
 
-        let label = StaticTextView::new(
-            "Text Input(Single Line)".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        ytop += label.compute_size_without_render(ctx.system_link).height;
+        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Flow {
+            direction: ViewLayoutFlowDirection::Vertical,
+            alignment: ViewLayoutFlowAlignment::Start,
+            justify: ViewLayoutFlowJustify::Start,
+            overflow: ViewLayoutOverflow::Overflow,
+            gap: 0.0,
+        };
+        ctx.view_set_parent(container, scroll_container);
+        let label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input(Single Line)".into())));
+        ctx.view_set_parent(label, container);
+        let controls_container = ctx.construct_view(|_| Box::new(EmptyView));
+        {
+            let controls_view = ctx
+                .view_layout_mut(controls_container)
+                .expect("query failed");
+            controls_view.padding.left = 8.0;
+            controls_view.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 4.0,
+            };
+        }
+        ctx.view_set_parent(controls_container, container);
         let text_input_view = ctx.construct_view(|id| {
             Box::new(TextInputView::new(
                 id,
-                Rect::from_lt_size(
-                    Point::new_logical(16.0, ytop),
-                    Size::new_logical(128.0, 20.0),
-                ),
                 Rc::downgrade(&text_input_backing_store1),
             ))
         });
-        ytop += 24.0;
+        ctx.view_set_parent(text_input_view, controls_container);
+        {
+            let l = ctx.view_layout_mut(text_input_view).expect("query failed");
+            l.width = ViewSize::Fixed(128.0);
+            l.height = ViewSize::Fixed(20.0);
+        }
         let text_input_view2 = ctx.construct_view(|id| {
             Box::new(TextInputView::new(
                 id,
-                Rect::from_lt_size(
-                    Point::new_logical(16.0, ytop),
-                    Size::new_logical(128.0, 20.0),
-                ),
                 Rc::downgrade(&text_input_backing_store2),
             ))
         });
-        ytop += 24.0;
+        {
+            let l = ctx.view_layout_mut(text_input_view2).expect("query failed");
+            l.width = ViewSize::Fixed(128.0);
+            l.height = ViewSize::Fixed(20.0);
+        }
+        ctx.view_set_parent(text_input_view2, controls_container);
 
-        let label = ctx.construct_view(|_| Box::new(label));
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(text_input_view, scroll_container);
-        ctx.view_set_parent(text_input_view2, scroll_container);
+        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Flow {
+            direction: ViewLayoutFlowDirection::Vertical,
+            alignment: ViewLayoutFlowAlignment::Start,
+            justify: ViewLayoutFlowJustify::Start,
+            overflow: ViewLayoutOverflow::Overflow,
+            gap: 0.0,
+        };
+        ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillParent;
+        ctx.view_set_parent(container, scroll_container);
+        let label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input (Multiline)".into())));
+        ctx.view_set_parent(label, container);
+        let ml_text_editor_view =
+            ctx.construct_view(|id| Box::new(uikit::MultilineTextInputView::new(id)));
+        {
+            let l = ctx
+                .view_layout_mut(ml_text_editor_view)
+                .expect("query failed");
+            l.width = ViewSize::FillParent;
+            l.height = ViewSize::Fixed(100.0);
+        }
+        ctx.view_set_parent(ml_text_editor_view, container);
 
-        ytop += 8.0;
-
-        let label = StaticTextView::new(
-            "Text Input (Multiline)".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        ytop += label.compute_size_without_render(ctx.system_link).height;
-        let label = ctx.construct_view(|_| Box::new(label));
-        let ml_text_editor_view = ctx.construct_view(|id| {
-            Box::new(uikit::MultilineTextInputView::new(
-                id,
-                Rect::from_lt_size(
-                    Point::new_logical(16.0, ytop),
-                    Size::new_logical(160.0, 100.0),
-                ),
-            ))
-        });
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(ml_text_editor_view, scroll_container);
-        ytop += 100.0;
-
-        ytop += 8.0;
-
+        ytop = 1000.0;
         let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
             color: Cell::new(0xffffffff),
         });
-        let label = StaticTextView::new(
-            "Color Picker(Standalone)".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        ytop += label.compute_size_without_render(ctx.system_link).height;
+        let label = StaticTextView::new("Color Picker(Standalone)".into());
         let label = ctx.construct_view(|_| Box::new(label));
         let color_picker = ColorPickerView::new(
             ctx,
@@ -2552,173 +2580,105 @@ impl UIKitPreviewPanePresenter {
 
         ytop += 8.0;
 
-        let label = StaticTextView::new(
-            "Color Picker(Button Style)".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        let label_width = label.compute_size_without_render(ctx.system_link).width;
-        let label = ctx.construct_view(|_| Box::new(label));
-        let editable_color_button = ctx.construct_view(|id| {
-            Box::new(EditableColorButtonView::new(
-                id,
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(16.0 + label_width, ytop - 2.0),
-                    size: ViewElementSize::Fixed(Size::new_logical(64.0, 20.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-                0xffffffff,
-            ))
-        });
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(editable_color_button, scroll_container);
-        ytop += 20.0;
-        content_width = content_width.max(label_width + 16.0 + 64.0 + 8.0);
+        let toggle_button =
+            ctx.construct_view(|_| Box::new(uikit::ToggleButtonView::new("Toggle".into())));
+        ctx.view_set_parent(toggle_button, scroll_container);
+
+        // inline controls preview
+        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        ctx.view_set_parent(container, scroll_container);
+        ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Grid {
+            cols: vec![
+                ViewLayoutGridCell::Flexible(1.0),
+                ViewLayoutGridCell::FixedFitContent,
+            ],
+            rows: vec![ViewLayoutGridCell::FixedFitContent],
+            gap_cols: 4.0,
+            gap_rows: 4.0,
+        };
+        ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillParent;
+
+        let label = ctx
+            .construct_view(|_| Box::new(StaticTextView::new("Color Picker(Button Style)".into())));
+        ctx.view_set_parent(label, container);
+        let editable_color_button =
+            ctx.construct_view(|id| Box::new(EditableColorButtonView::new(id, 0xffffffff)));
+        {
+            let l = ctx
+                .view_layout_mut(editable_color_button)
+                .expect("query failed");
+            l.width = ViewSize::Fixed(64.0);
+            l.height = ViewSize::Fixed(20.0);
+        }
+        ctx.view_set_parent(editable_color_button, container);
 
         let numeric_input_view_backing_store =
             Rc::new(UIKitPreviewNumericInputValueStore(Cell::new(0)));
-        let label = StaticTextView::new(
-            "Numeric Input".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        let label_width = label.compute_size_without_render(ctx.system_link).width;
-        let label = ctx.construct_view(|_| Box::new(label));
+        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Numeric Input".into())));
+        ctx.view_set_parent(label, container);
         let numeric_input_view = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
                 id,
                 NumericInputViewInit {
-                    placement: ViewPlacement {
-                        location: ViewLocation::new_left_top(16.0 + label_width, ytop - 2.0),
-                        size: ViewElementSize::fixed(64.0, 20.0),
-                        ..Default::default()
-                    },
                     value: Rc::downgrade(&numeric_input_view_backing_store),
                     ..Default::default()
                 },
             ))
         });
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(numeric_input_view, scroll_container);
-        ytop += 20.0;
+        {
+            let l = ctx
+                .view_layout_mut(numeric_input_view)
+                .expect("query failed");
+            l.width = ViewSize::Fixed(64.0);
+            l.height = ViewSize::Fixed(20.0);
+        }
+        ctx.view_set_parent(numeric_input_view, container);
 
-        let label = StaticTextView::new(
-            "Dropdown".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop + 4.0),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        let label_width = label.compute_size_without_render(ctx.system_link).width;
-        let label = ctx.construct_view(|_| Box::new(label));
+        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Dropdown".into())));
+        ctx.view_set_parent(label, container);
         let dropdown_box = ctx.construct_view(|_| {
-            Box::new(uikit::dropdown_box::View::new(
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(label_width + 16.0, ytop),
-                    size: ViewElementSize::Fixed(Size::new_logical(128.0, 24.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-                vec![
-                    "DropdownBox Item 1".into(),
-                    "DropdownBox Item 2".into(),
-                    "DropdownBox Item 3 too long version".into(),
-                ],
-            ))
+            Box::new(uikit::dropdown_box::View::new(vec![
+                "DropdownBox Item 1".into(),
+                "DropdownBox Item 2".into(),
+                "DropdownBox Item 3 too long version".into(),
+            ]))
         });
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(dropdown_box, scroll_container);
-        ytop += 28.0;
+        {
+            let l = ctx.view_layout_mut(dropdown_box).expect("query failed");
+            l.width = ViewSize::Fixed(80.0);
+            l.height = ViewSize::Fixed(24.0);
+        }
+        ctx.view_set_parent(dropdown_box, container);
 
-        let toggle_button = uikit::ToggleButtonView::new(
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-            "Toggle / Checkbox".into(),
-        );
-        let toggle_button = ctx.construct_view(|_| Box::new(toggle_button));
-        ctx.view_set_parent(toggle_button, scroll_container);
-
-        let checkbox = uikit::CheckboxView::new(ViewPlacement {
-            location: ViewLocation::new_left_top(144.0, ytop + 4.0),
-            size: ViewElementSize::Automatic,
-            size_anchor: [0.0, 0.0],
-        });
-        let checkbox = ctx.construct_view(|_| Box::new(checkbox));
-        ctx.view_set_parent(checkbox, scroll_container);
-        ytop += 24.0;
-
-        ytop += 8.0;
-
-        let label = StaticTextView::new(
-            "Radio Buttons/Groups".into(),
-            ViewPlacement {
-                location: ViewLocation::new_left_top(8.0, ytop),
-                size: ViewElementSize::Automatic,
-                size_anchor: [0.0, 0.0],
-            },
-        );
-        ytop += label.compute_size_without_render(ctx.system_link).height;
-        let label = ctx.construct_view(|_| Box::new(label));
-        ctx.view_set_parent(label, scroll_container);
+        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Single Checkbox".into())));
+        ctx.view_set_parent(label, container);
+        let checkbox = ctx.construct_view(|_| Box::new(uikit::CheckboxView::new()));
+        ctx.view_set_parent(checkbox, container);
 
         let rgc1 = ctx.alloc_view_group();
-        let radio_button1 = ctx.construct_view(|id| {
-            Box::new(RadioButtonView::new(
-                id,
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(16.0, ytop),
-                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-            ))
-        });
+        let label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
+        ctx.view_set_parent(label, container);
+        let radio_button1 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button1, rgc1);
-        ctx.view_set_parent(radio_button1, scroll_container);
-        let radio_button2 = ctx.construct_view(|id| {
-            Box::new(RadioButtonView::new(
-                id,
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(36.0, ytop),
-                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-            ))
-        });
+        ctx.view_set_parent(radio_button1, container);
+        let label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
+        ctx.view_set_parent(label, container);
+        let radio_button2 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button2, rgc1);
-        ctx.view_set_parent(radio_button2, scroll_container);
-        let radio_button3 = ctx.construct_view(|id| {
-            Box::new(RadioButtonView::new(
-                id,
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(56.0, ytop),
-                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-            ))
-        });
+        ctx.view_set_parent(radio_button2, container);
+        let label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
+        ctx.view_set_parent(label, container);
+        let radio_button3 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button3, rgc1);
-        ctx.view_set_parent(radio_button3, scroll_container);
-        let radio_button4 = ctx.construct_view(|id| {
-            Box::new(RadioButtonView::new(
-                id,
-                ViewPlacement {
-                    location: ViewLocation::new_left_top(76.0, ytop),
-                    size: ViewElementSize::Fixed(Size::new_logical(16.0, 16.0)),
-                    size_anchor: [0.0, 0.0],
-                },
-            ))
-        });
-        ctx.view_set_parent(radio_button4, scroll_container);
-        ytop += 24.0;
+        ctx.view_set_parent(radio_button3, container);
+        let label =
+            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (No group)".into())));
+        ctx.view_set_parent(label, container);
+        let radio_button4 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
+        ctx.view_set_parent(radio_button4, container);
 
         ctx.view_instance_mut::<ScrollContainer>(scroll_container)
             .expect("query failed")
@@ -2749,10 +2709,16 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
+        tracing::debug!(?new_size, "resize pane");
         context
             .view_instance_mut::<ScrollContainer>(self.scroll_container)
             .expect("query failed")
             .resize(new_size.clone());
+        let content_width = new_size.width.max(128.0);
+        context
+            .view_layout_mut(self.scroll_container)
+            .expect("query failed")
+            .width = ViewSize::Fixed(content_width);
         context.schedule_view_render(self.scroll_container);
     }
 }
@@ -2762,13 +2728,17 @@ struct EmptyView;
 impl View for EmptyView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
     ) -> uikit::ViewRenderElements {
         uikit::ViewRenderElements::EMPTY
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
 }
 
 struct TimelinePanePresenter {
@@ -3222,6 +3192,10 @@ impl View for WindowRootView {
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
 }
 
 struct LaunchArgs<'sys> {
@@ -3574,10 +3548,11 @@ async fn run<'sys>(
         ),
     }));
 
-    view_init_ctx.render_view_recursive(
+    view_init_ctx.render_view_with_base(
         main_window_root_view,
         &main_window,
         main_window.keyboard_focus_group(),
+        Rect::from_lt_size(Point::new_logical(0.0, 0.0), main_window.client_size()),
     );
 
     if let Some(ref last_window_state) = last_window_state {
@@ -3630,7 +3605,12 @@ async fn run<'sys>(
                     );
                     view_init_ctx.view_set_parent(window_header_view.root_view(), root_view);
 
-                    view_init_ctx.render_view_recursive(root_view, &w, w.keyboard_focus_group());
+                    view_init_ctx.render_view_with_base(
+                        root_view,
+                        &w,
+                        w.keyboard_focus_group(),
+                        Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                    );
 
                     w.associate_extra_data(Box::new(PerWindowData {
                         root_view,
@@ -3742,7 +3722,7 @@ async fn run<'sys>(
         },
         &mut view_instance_store,
         &view_tree_relation_store,
-        &view_layout_state_store,
+        &mut view_layout_state_store,
         &mut view_render_state_store,
     );
 
@@ -4018,7 +3998,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4140,7 +4120,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4175,6 +4155,14 @@ async fn run<'sys>(
                     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
                         crate::uikit::view_set_visibility(id, visible, self.view_instance_store)
                     }
+
+                    #[inline(always)]
+                    fn view_layout_mut(
+                        &mut self,
+                        id: ViewIdentifier,
+                    ) -> Option<&mut crate::uikit::ViewLayout> {
+                        crate::uikit::view_layout_mut(id, self.view_instance_store)
+                    }
                 }
                 impl crate::uikit::ViewRenderer for LocalContext<'_> {
                     #[inline(always)]
@@ -4207,7 +4195,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
             },
@@ -4303,7 +4291,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4456,7 +4444,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4539,7 +4527,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4621,7 +4609,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4703,7 +4691,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4777,7 +4765,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4848,7 +4836,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -4925,7 +4913,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5012,7 +5000,7 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
-                        &view_layout_state_store,
+                        &mut view_layout_state_store,
                         &mut view_render_state_store,
                     );
 
@@ -5092,7 +5080,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5171,7 +5159,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5250,7 +5238,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5329,7 +5317,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5429,7 +5417,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5440,8 +5428,6 @@ async fn run<'sys>(
             Event::PopupClose { id } => {
                 if popup_manager.close(
                     id,
-                    &mut view_instance_store,
-                    &mut view_render_queue,
                     &mut RenderContext {
                         composite_tree: &mut composite_tree,
                         ht_manager: &mut ht_manager,
@@ -5453,6 +5439,10 @@ async fn run<'sys>(
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
                     },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &mut view_layout_state_store,
+                    &mut view_render_state_store,
                 ) {
                     view_render_queue.perform(
                         &mut RenderContext {
@@ -5468,7 +5458,7 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
-                        &view_layout_state_store,
+                        &mut view_layout_state_store,
                         &mut view_render_state_store,
                     );
 
@@ -5543,7 +5533,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5875,7 +5865,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -5958,7 +5948,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6043,7 +6033,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6117,7 +6107,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6244,7 +6234,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6307,7 +6297,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -6480,10 +6470,14 @@ async fn run<'sys>(
                                 view_init_ctx
                                     .view_set_parent(window_header_view.root_view(), root_view);
 
-                                view_init_ctx.render_view_recursive(
+                                view_init_ctx.render_view_with_base(
                                     root_view,
                                     &w,
                                     w.keyboard_focus_group(),
+                                    Rect::from_lt_size(
+                                        Point::new_logical(0.0, 0.0),
+                                        w.client_size(),
+                                    ),
                                 );
 
                                 w.associate_extra_data(Box::new(PerWindowData {
@@ -6538,7 +6532,7 @@ async fn run<'sys>(
                         },
                         &mut view_instance_store,
                         &view_tree_relation_store,
-                        &view_layout_state_store,
+                        &mut view_layout_state_store,
                         &mut view_render_state_store,
                     );
 
@@ -6680,7 +6674,7 @@ async fn run<'sys>(
                     },
                     &mut view_instance_store,
                     &view_tree_relation_store,
-                    &view_layout_state_store,
+                    &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
 
@@ -7075,7 +7069,12 @@ impl CustomViewFlyoutSession {
         );
         let kf_group = view_init_context.keyboard_focus_registry.acquire_group();
         let view = view_constructor.create(view_init_context);
-        view_init_context.render_view_recursive(view.root_view_id(), &surface, kf_group);
+        view_init_context.render_view_with_base(
+            view.root_view_id(),
+            &surface,
+            kf_group,
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), view_constructor.size()),
+        );
 
         Self {
             parent,
@@ -8562,6 +8561,10 @@ impl View for PreviewToolSelectorButtonView {
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(Self::SIZE, Self::SIZE)
+    }
 }
 
 struct PreviewToolSelectorButtonViewEntity {
@@ -8843,6 +8846,14 @@ impl View for PreviewView {
         ctx.mount_context
             .keyboard_focus_registry
             .release_token(entity.kf_token);
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
     }
 }
 

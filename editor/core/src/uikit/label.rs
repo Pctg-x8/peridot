@@ -8,16 +8,13 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{
-        RenderContext, TeardownContext, View, ViewElementSize, ViewPlacement, ViewRenderElements,
-    },
+    uikit::{RenderContext, TeardownContext, View, ViewRenderElements},
     utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct StaticTextView {
     content: String,
     font: FontID,
-    placement: ViewPlacement,
     allow_wrapping: bool,
     horizontal_alignment: CompositeRectTextHorizontalAlignment,
     vertical_alignment: CompositeRectTextVerticalAlignment,
@@ -31,11 +28,10 @@ impl Drop for StaticTextView {
     }
 }
 impl StaticTextView {
-    pub fn new(content: String, init_placement: ViewPlacement) -> Self {
+    pub fn new(content: String) -> Self {
         Self {
             content,
             font: FontID::UIDefault,
-            placement: init_placement,
             allow_wrapping: false,
             horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
             vertical_alignment: CompositeRectTextVerticalAlignment::Start,
@@ -62,20 +58,6 @@ impl StaticTextView {
     pub fn set_vertical_alignment(&mut self, alignment: CompositeRectTextVerticalAlignment) {
         self.vertical_alignment = alignment;
     }
-
-    pub fn compute_size_without_render(&self, system_link: &SystemLink) -> Size<LogicalUnit> {
-        match self.placement.size {
-            ViewElementSize::Fixed(s) => s,
-            ViewElementSize::Automatic => TextLayout::new_single(
-                &self.content,
-                self.font,
-                system_link.font_set(),
-                CompositeRectTextHorizontalAlignment::Start,
-                None,
-            )
-            .size(),
-        }
-    }
 }
 impl View for StaticTextView {
     fn render(
@@ -84,40 +66,25 @@ impl View for StaticTextView {
         ctx: &mut RenderContext,
     ) -> ViewRenderElements {
         let e = match self.ct {
-            // TODO: needs reflect modified properties
-            Some(ref e) => e,
-            None => {
-                let size = match self.placement.size {
-                    ViewElementSize::Fixed(s) => s,
-                    ViewElementSize::Automatic => TextLayout::new_single(
-                        &self.content,
-                        self.font,
-                        ctx.system_link.font_set(),
-                        CompositeRectTextHorizontalAlignment::Start,
-                        None,
-                    )
-                    .size(),
-                };
+            Some(ref e) => {
+                ctx.composite_tree
+                    .begin_mod_chain(*e)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
 
+                e
+            }
+            None => {
                 let ct = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(
-                            self.placement.location.offset.x
-                                - size.width * self.placement.location.anchor[0],
-                        ),
-                        AnimatableFloat::Value(
-                            self.placement.location.offset.y
-                                - size.height * self.placement.location.anchor[1],
-                        ),
-                    ],
-                    relative_offset_adjustment: [
-                        self.placement.location.parent_anchor[0],
-                        self.placement.location.parent_anchor[1],
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
                     size: [
-                        AnimatableFloat::Value(size.width),
-                        AnimatableFloat::Value(size.height),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     text: Some(CompositeRectText {
                         runs: vec![CompositeRectTextRun {
@@ -131,6 +98,12 @@ impl View for StaticTextView {
                         vertical_alignment: self.vertical_alignment,
                         ..Default::default()
                     }),
+                    // has_bitmap: true,
+                    // border: Some(crate::rendering::composite::Border {
+                    //     thickness: 1.0,
+                    //     color: AnimatableColor::Value([1.0; 4]),
+                    //     ..Default::default()
+                    // }),
                     ..Default::default()
                 });
 
@@ -148,5 +121,16 @@ impl View for StaticTextView {
         if let Some(ct) = self.ct.take() {
             ctx.mount_context.composite_tree.free(ct);
         }
+    }
+
+    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+        TextLayout::new_single(
+            &self.content,
+            self.font,
+            ctx.system_link.font_set(),
+            CompositeRectTextHorizontalAlignment::Start,
+            None,
+        )
+        .size()
     }
 }

@@ -1950,16 +1950,6 @@ impl<'d> WindowRenderer<'d> {
                 },
             );
 
-            tracing::debug!(
-                "RenderDataChanged: {}",
-                composite_render_data
-                    .instructions
-                    .iter()
-                    .map(|x| format!("{x:?}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
-
             self.last_composite_render_data = composite_render_data;
         }
 

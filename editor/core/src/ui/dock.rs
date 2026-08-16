@@ -101,6 +101,11 @@ impl ViewInstanceQueryableMut for PaneContentResizeContext<'_, '_> {
     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
     }
+
+    #[inline(always)]
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut crate::uikit::ViewLayout> {
+        crate::uikit::view_layout_mut(id, self.view_instance_store)
+    }
 }
 impl ViewRenderer for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
@@ -572,6 +577,11 @@ impl ViewInstanceQueryableMut for RedockingContext<'_, '_> {
     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_init_ctx.view_instance_store);
     }
+
+    #[inline(always)]
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut crate::uikit::ViewLayout> {
+        crate::uikit::view_layout_mut(id, self.view_init_ctx.view_instance_store)
+    }
 }
 impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h> {
     fn derive_pane_content_resize_context<'env2>(
@@ -646,6 +656,13 @@ impl View for WindowDockRootView {
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
 }
 
 pub struct DockingManager {
@@ -700,10 +717,11 @@ impl DockingManager {
             }
         }
         rec(root_id, store, root_view_id, ctx);
-        ctx.render_view_recursive(
+        ctx.render_view_with_base(
             root_view_id,
             &bound_window,
             bound_window.keyboard_focus_group(),
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), bound_window.client_size()),
         );
 
         relayout_dock(
@@ -1682,6 +1700,16 @@ impl View for DockedPaneSplitterView {
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(
+            DESIGN_METRICS.splitter_thickness,
+            DESIGN_METRICS.splitter_thickness,
+        )
+    }
 }
 
 /// Splitterのイベントハンドラ
@@ -1832,6 +1860,11 @@ impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_> {
     fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_init_context.view_instance_store);
     }
+
+    #[inline(always)]
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut crate::uikit::ViewLayout> {
+        crate::uikit::view_layout_mut(id, self.view_init_context.view_instance_store)
+    }
 }
 impl<'a, 'h> core::ops::Deref for PaneGroupCreateContext<'_, 'a, 'h> {
     type Target = MountContext<'a, 'h>;
@@ -1967,6 +2000,17 @@ impl View for PaneGroupContainerView {
         ctx.mount_context.composite_tree.free(entity.ct_root);
         ctx.mount_context.ht_manager.free(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
+    }
 }
 
 struct PaneGroupContainerViewEntity {
@@ -2070,6 +2114,17 @@ impl View for PaneGroupTabStripView {
 
         ctx.mount_context.composite_tree.free(entity.ct_root);
         ctx.mount_context.ht_manager.free(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, DESIGN_METRICS.tab_height())
+    }
+
+    fn create_new_layout_layer(&self) -> bool {
+        true
     }
 }
 
@@ -2712,6 +2767,16 @@ impl View for PaneGroupTabView {
         ctx.mount_context.composite_tree.free_all(entity.ct_root);
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
+
+    fn measure_preferred_content_size(
+        &self,
+        ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(
+            Self::compute_width(&self.label, ctx.system_link),
+            DESIGN_METRICS.tab_height(),
+        )
+    }
 }
 
 /// タブViewのイベントハンドラ
@@ -2807,6 +2872,14 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                 #[inline(always)]
                 fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
                     crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
+                }
+
+                #[inline(always)]
+                fn view_layout_mut(
+                    &mut self,
+                    id: ViewIdentifier,
+                ) -> Option<&mut crate::uikit::ViewLayout> {
+                    crate::uikit::view_layout_mut(id, self.view_instance_store)
                 }
             }
             impl ViewRenderer for LocalContext<'_> {
