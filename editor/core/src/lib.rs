@@ -2458,7 +2458,7 @@ impl UIKitPreviewPanePresenter {
         {
             let button_container = ctx.view_layout_mut(button_container).expect("query failed");
             button_container.padding.left = 8.0;
-            button_container.width = ViewSize::FillParent;
+            button_container.width = ViewSize::FillAvailable;
             button_container.child = ViewLayoutChild::Flow {
                 direction: ViewLayoutFlowDirection::Horizontal,
                 alignment: ViewLayoutFlowAlignment::Start,
@@ -2548,7 +2548,7 @@ impl UIKitPreviewPanePresenter {
             overflow: ViewLayoutOverflow::Overflow,
             gap: 0.0,
         };
-        ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillParent;
+        ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillAvailable;
         ctx.view_set_parent(container, content_view);
         let label =
             ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input (Multiline)".into())));
@@ -2559,7 +2559,7 @@ impl UIKitPreviewPanePresenter {
             let l = ctx
                 .view_layout_mut(ml_text_editor_view)
                 .expect("query failed");
-            l.width = ViewSize::FillParent;
+            l.width = ViewSize::FillAvailable;
             l.height = ViewSize::Fixed(100.0);
         }
         ctx.view_set_parent(ml_text_editor_view, container);
@@ -2595,7 +2595,7 @@ impl UIKitPreviewPanePresenter {
             gap_cols: 4.0,
             gap_rows: 4.0,
         };
-        ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillParent;
+        ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillAvailable;
 
         let label = ctx
             .construct_view(|_| Box::new(StaticTextView::new("Color Picker(Button Style)".into())));

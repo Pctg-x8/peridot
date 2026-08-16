@@ -545,6 +545,8 @@ impl ViewGroupID {
     }
 }
 
+crate::perf_section!(VIEW_RENDER_QUEUE_PERFORM = "View.RenderQueue.Perform");
+
 pub struct ViewRenderQueue {
     pending: BTreeSet<ViewIdentifier>,
 }
@@ -567,6 +569,8 @@ impl ViewRenderQueue {
         layout_state_store: &mut ViewLayoutStateStore,
         render_state_store: &mut ViewRenderStateStore,
     ) {
+        crate::perf_scope!(VIEW_RENDER_QUEUE_PERFORM);
+
         while let Some(mut target) = self.pending.pop_first() {
             let (mount_target, kf_group) = loop {
                 let Some(p) = tree_relation_store.relations[target.into_array_index()].parent
@@ -959,6 +963,8 @@ pub fn view_iter_self_group_participants(
         .flat_map(|x| x.iter().copied())
 }
 
+crate::perf_section!(RENDER_WITH_BASE = "View.RenderWithBase");
+
 pub fn render_view_with_base(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
@@ -970,6 +976,8 @@ pub fn render_view_with_base(
     layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
+    crate::perf_scope!(RENDER_WITH_BASE);
+
     layout_view_recursive(
         target,
         &mut MeasureContext {
@@ -1005,6 +1013,8 @@ pub fn render_view_with_base(
     }
 }
 
+crate::perf_section!(RENDER_VIEW_INSTANCE1 = "View.Render.Instance");
+
 fn render_view_instance1(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
@@ -1014,6 +1024,8 @@ fn render_view_instance1(
     layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) -> Option<RawMountTarget> {
+    crate::perf_scope!(RENDER_VIEW_INSTANCE1);
+
     let Some(&mut ViewInstanceCell {
         instance: Some(ref mut instance),
         active,

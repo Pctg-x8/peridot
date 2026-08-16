@@ -36,7 +36,7 @@ pub enum ViewSize {
     Fixed(f32),
     Percent(f32),
     FitContent,
-    FillParent,
+    FillAvailable,
 }
 impl Default for ViewSize {
     #[inline(always)]
@@ -45,17 +45,12 @@ impl Default for ViewSize {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ViewLayoutFlowBasis {
     Flexible(f32),
     Fixed(f32),
+    #[default]
     FixedFitContent,
-}
-impl Default for ViewLayoutFlowBasis {
-    #[inline(always)]
-    fn default() -> Self {
-        Self::Flexible(1.0)
-    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,6 +96,7 @@ pub enum ViewLayoutFlowJustify {
     Start,
     End,
     Center,
+    Stretch,
     SpaceBetween,
     SpaceAround,
 }
@@ -162,6 +158,10 @@ impl ViewLayoutStateStore {
     }
 }
 
+crate::perf_section!(LAYOUT_VIEW_PARTIAL = "View.LayoutPartial");
+crate::perf_section!(LAYOUT_VIEW = "View.Layout");
+crate::perf_section!(COMPUTE_CONTENT_SIZE = "View.Layout.ComputeContentSize");
+
 pub fn layout_view_partial_recursive(
     target: ViewIdentifier,
     ctx: &mut MeasureContext,
@@ -170,6 +170,8 @@ pub fn layout_view_partial_recursive(
     layout_state_store: &mut ViewLayoutStateStore,
     mut cb_perform_target_relayout: impl FnMut(ViewIdentifier),
 ) {
+    crate::perf_scope!(LAYOUT_VIEW_PARTIAL);
+
     let available_rect = layout_state_store.get(target).layout_rect.clone();
 
     layout_view_recursive(
@@ -199,6 +201,8 @@ pub fn layout_view_recursive(
     layout_state_store: &mut ViewLayoutStateStore,
     cb_perform_target_relayout: &mut impl FnMut(ViewIdentifier),
 ) {
+    crate::perf_scope!(LAYOUT_VIEW);
+
     let content_size = compute_actual_content_size(
         target,
         ctx,
@@ -261,29 +265,61 @@ pub fn layout_view_recursive(
             overflow,
             gap,
         } => {
-            let child_content_sizes = tree_relation_store.relations[target.into_array_index()]
+            let mut content_widths = vec![
+                0.0;
+                tree_relation_store.relations[target.into_array_index()]
+                    .children
+                    .len()
+            ];
+            let mut flexible_value_total = 0.0;
+            for (i, &child) in tree_relation_store.relations[target.into_array_index()]
                 .children
                 .iter()
-                .map(|&child| {
-                    compute_actual_content_size(
-                        child,
-                        ctx,
-                        &child_available_rect,
-                        instance_store,
-                        tree_relation_store,
-                    )
-                })
-                .collect::<Vec<_>>();
+                .enumerate()
+            {
+                match instance_store.get(child).layout.flow_basis {
+                    ViewLayoutFlowBasis::Fixed(v) => {
+                        content_widths[i] = v;
+                    }
+                    ViewLayoutFlowBasis::FixedFitContent => {
+                        content_widths[i] = compute_actual_content_size(
+                            child,
+                            ctx,
+                            &child_available_rect,
+                            instance_store,
+                            tree_relation_store,
+                        )
+                        .width;
+                    }
+                    ViewLayoutFlowBasis::Flexible(v) => {
+                        flexible_value_total += v;
+                    }
+                }
+            }
+            let flexible_leftover = available_rect.width
+                - content_widths.iter().sum::<f32>()
+                - gap * content_widths.len().saturating_sub(1) as f32;
+            for (i, &child) in tree_relation_store.relations[target.into_array_index()]
+                .children
+                .iter()
+                .enumerate()
+            {
+                if let ViewLayoutFlowBasis::Flexible(v) =
+                    instance_store.get(child).layout.flow_basis
+                {
+                    content_widths[i] = v * flexible_leftover / flexible_value_total;
+                }
+            }
 
             let mut left_placement = 0.0;
             let mut top_placement = 0.0;
             let mut size = Size::new_logical(0.0, 0.0);
-            for (&child, child_size) in tree_relation_store.relations[target.into_array_index()]
+            for (&child, cw) in tree_relation_store.relations[target.into_array_index()]
                 .children
                 .iter()
-                .zip(child_content_sizes)
+                .zip(content_widths)
             {
-                if left_placement + child_size.width >= available_rect.width {
+                if left_placement + cw >= available_rect.width {
                     // overflow
                     match overflow {
                         ViewLayoutOverflow::Overflow => {
@@ -303,7 +339,7 @@ pub fn layout_view_recursive(
                         child_available_rect
                             .left_top()
                             .with_offset(Point::new_logical(left_placement, top_placement)),
-                        child_size.clone(),
+                        Size::new_logical(cw, child_available_rect.height),
                     ),
                     instance_store,
                     tree_relation_store,
@@ -311,9 +347,9 @@ pub fn layout_view_recursive(
                     cb_perform_target_relayout,
                 );
 
-                size.width = size.width.max(left_placement + child_size.width);
-                size.height = size.height.max(top_placement + child_size.height);
-                left_placement += child_size.width + gap;
+                size.width = size.width.max(left_placement + cw);
+                size.height = size.height.max(top_placement + child_available_rect.height);
+                left_placement += cw + gap;
             }
         }
         ViewLayoutChild::Flow {
@@ -323,29 +359,61 @@ pub fn layout_view_recursive(
             overflow,
             gap,
         } => {
-            let child_content_sizes = tree_relation_store.relations[target.into_array_index()]
+            let mut content_heights = vec![
+                0.0;
+                tree_relation_store.relations[target.into_array_index()]
+                    .children
+                    .len()
+            ];
+            let mut flexible_value_total = 0.0;
+            for (i, &child) in tree_relation_store.relations[target.into_array_index()]
                 .children
                 .iter()
-                .map(|&child| {
-                    compute_actual_content_size(
-                        child,
-                        ctx,
-                        &child_available_rect,
-                        instance_store,
-                        tree_relation_store,
-                    )
-                })
-                .collect::<Vec<_>>();
+                .enumerate()
+            {
+                match instance_store.get(child).layout.flow_basis {
+                    ViewLayoutFlowBasis::Fixed(v) => {
+                        content_heights[i] = v;
+                    }
+                    ViewLayoutFlowBasis::FixedFitContent => {
+                        content_heights[i] = compute_actual_content_size(
+                            child,
+                            ctx,
+                            &child_available_rect,
+                            instance_store,
+                            tree_relation_store,
+                        )
+                        .height;
+                    }
+                    ViewLayoutFlowBasis::Flexible(v) => {
+                        flexible_value_total += v;
+                    }
+                }
+            }
+            let flexible_leftover = available_rect.height
+                - content_heights.iter().sum::<f32>()
+                - gap * content_heights.len().saturating_sub(1) as f32;
+            for (i, &child) in tree_relation_store.relations[target.into_array_index()]
+                .children
+                .iter()
+                .enumerate()
+            {
+                if let ViewLayoutFlowBasis::Flexible(v) =
+                    instance_store.get(child).layout.flow_basis
+                {
+                    content_heights[i] = v * flexible_leftover / flexible_value_total;
+                }
+            }
 
             let mut left_placement = 0.0;
             let mut top_placement = 0.0;
             let mut size = Size::new_logical(0.0, 0.0);
-            for (&child, child_size) in tree_relation_store.relations[target.into_array_index()]
+            for (&child, ch) in tree_relation_store.relations[target.into_array_index()]
                 .children
                 .iter()
-                .zip(child_content_sizes)
+                .zip(content_heights)
             {
-                if top_placement + child_size.height >= available_rect.height {
+                if top_placement + ch >= available_rect.height {
                     // overflow
                     match overflow {
                         ViewLayoutOverflow::Overflow => {
@@ -365,7 +433,7 @@ pub fn layout_view_recursive(
                         child_available_rect
                             .left_top()
                             .with_offset(Point::new_logical(left_placement, top_placement)),
-                        child_size.clone(),
+                        Size::new_logical(child_available_rect.width, ch),
                     ),
                     instance_store,
                     tree_relation_store,
@@ -373,9 +441,9 @@ pub fn layout_view_recursive(
                     cb_perform_target_relayout,
                 );
 
-                size.width = size.width.max(left_placement + child_size.width);
-                size.height = size.height.max(top_placement + child_size.height);
-                top_placement += child_size.height + gap;
+                size.width = size.width.max(left_placement + child_available_rect.width);
+                size.height = size.height.max(top_placement + ch);
+                top_placement += ch + gap;
             }
         }
         ViewLayoutChild::Grid {
@@ -520,6 +588,8 @@ fn compute_actual_content_size(
     instance_store: &ViewInstanceStore,
     tree_relation_store: &ViewTreeRelationStore,
 ) -> Size<LogicalUnit> {
+    crate::perf_scope!(COMPUTE_CONTENT_SIZE);
+
     let target_inst = instance_store.get(target);
     let inner_size = if matches!(target_inst.layout.width, ViewSize::FitContent)
         || matches!(target_inst.layout.height, ViewSize::FitContent)
@@ -574,19 +644,65 @@ fn compute_actual_content_size(
                 if children.is_empty() {
                     Size::new_logical(0.0, 0.0)
                 } else {
-                    let mut left_placement = 0.0;
-                    let mut top_placement = 0.0;
-                    let mut size = Size::new_logical(0.0, 0.0);
-                    for &child in children.iter() {
-                        let child_size = compute_actual_content_size(
+                    let mut content_widths = vec![
+                        0.0;
+                        tree_relation_store.relations
+                            [target.into_array_index()]
+                        .children
+                        .len()
+                    ];
+                    let mut content_heights = Vec::with_capacity(
+                        tree_relation_store.relations[target.into_array_index()]
+                            .children
+                            .len(),
+                    );
+                    let mut flexible_value_total = 0.0;
+                    for (i, &child) in tree_relation_store.relations[target.into_array_index()]
+                        .children
+                        .iter()
+                        .enumerate()
+                    {
+                        let content_size = compute_actual_content_size(
                             child,
                             ctx,
                             &child_available_rect,
                             instance_store,
                             tree_relation_store,
                         );
+                        content_heights.push(content_size.height);
 
-                        if left_placement + child_size.width >= available_rect.width {
+                        match instance_store.get(child).layout.flow_basis {
+                            ViewLayoutFlowBasis::Fixed(v) => {
+                                content_widths[i] = v;
+                            }
+                            ViewLayoutFlowBasis::FixedFitContent => {
+                                content_widths[i] = content_size.width;
+                            }
+                            ViewLayoutFlowBasis::Flexible(v) => {
+                                flexible_value_total += v;
+                            }
+                        }
+                    }
+                    let flexible_leftover = available_rect.width
+                        - content_widths.iter().sum::<f32>()
+                        - gap * content_widths.len().saturating_sub(1) as f32;
+                    for (i, &child) in tree_relation_store.relations[target.into_array_index()]
+                        .children
+                        .iter()
+                        .enumerate()
+                    {
+                        if let ViewLayoutFlowBasis::Flexible(v) =
+                            instance_store.get(child).layout.flow_basis
+                        {
+                            content_widths[i] = v * flexible_leftover / flexible_value_total;
+                        }
+                    }
+
+                    let mut left_placement = 0.0;
+                    let mut top_placement = 0.0;
+                    let mut size = Size::new_logical(0.0, 0.0);
+                    for (cw, ch) in content_widths.into_iter().zip(content_heights) {
+                        if left_placement + cw >= available_rect.width {
                             // overflow
                             match overflow {
                                 ViewLayoutOverflow::Overflow => {
@@ -599,9 +715,9 @@ fn compute_actual_content_size(
                             }
                         }
 
-                        size.width = size.width.max(left_placement + child_size.width);
-                        size.height = size.height.max(top_placement + child_size.height);
-                        left_placement += child_size.width + gap;
+                        size.width = size.width.max(left_placement + cw);
+                        size.height = size.height.max(top_placement + ch);
+                        left_placement += cw + gap;
                     }
 
                     size
@@ -618,19 +734,65 @@ fn compute_actual_content_size(
                 if children.is_empty() {
                     Size::new_logical(0.0, 0.0)
                 } else {
-                    let mut left_placement = 0.0;
-                    let mut top_placement = 0.0;
-                    let mut size = Size::new_logical(0.0, 0.0);
-                    for &child in children.iter() {
-                        let child_size = compute_actual_content_size(
+                    let mut content_heights = vec![
+                        0.0;
+                        tree_relation_store.relations
+                            [target.into_array_index()]
+                        .children
+                        .len()
+                    ];
+                    let mut content_widths = Vec::with_capacity(
+                        tree_relation_store.relations[target.into_array_index()]
+                            .children
+                            .len(),
+                    );
+                    let mut flexible_value_total = 0.0;
+                    for (i, &child) in tree_relation_store.relations[target.into_array_index()]
+                        .children
+                        .iter()
+                        .enumerate()
+                    {
+                        let content_size = compute_actual_content_size(
                             child,
                             ctx,
                             &child_available_rect,
                             instance_store,
                             tree_relation_store,
                         );
+                        content_widths.push(content_size.width);
 
-                        if top_placement + child_size.height >= available_rect.height {
+                        match instance_store.get(child).layout.flow_basis {
+                            ViewLayoutFlowBasis::Fixed(v) => {
+                                content_heights[i] = v;
+                            }
+                            ViewLayoutFlowBasis::FixedFitContent => {
+                                content_heights[i] = content_size.height;
+                            }
+                            ViewLayoutFlowBasis::Flexible(v) => {
+                                flexible_value_total += v;
+                            }
+                        }
+                    }
+                    let flexible_leftover = available_rect.height
+                        - content_heights.iter().sum::<f32>()
+                        - gap * content_heights.len().saturating_sub(1) as f32;
+                    for (i, &child) in tree_relation_store.relations[target.into_array_index()]
+                        .children
+                        .iter()
+                        .enumerate()
+                    {
+                        if let ViewLayoutFlowBasis::Flexible(v) =
+                            instance_store.get(child).layout.flow_basis
+                        {
+                            content_heights[i] = v * flexible_leftover / flexible_value_total;
+                        }
+                    }
+
+                    let mut left_placement = 0.0;
+                    let mut top_placement = 0.0;
+                    let mut size = Size::new_logical(0.0, 0.0);
+                    for (ch, cw) in content_heights.into_iter().zip(content_widths) {
+                        if top_placement + ch >= available_rect.height {
                             // overflow
                             match overflow {
                                 ViewLayoutOverflow::Overflow => {
@@ -643,9 +805,9 @@ fn compute_actual_content_size(
                             }
                         }
 
-                        size.width = size.width.max(left_placement + child_size.width);
-                        size.height = size.height.max(top_placement + child_size.height);
-                        top_placement += child_size.height + gap;
+                        size.width = size.width.max(left_placement + cw);
+                        size.height = size.height.max(top_placement + ch);
+                        top_placement += ch + gap;
                     }
 
                     size
@@ -768,7 +930,7 @@ fn compute_actual_content_size(
                     + target_inst.layout.padding.left
                     + target_inst.layout.padding.right
             }
-            ViewSize::FillParent => available_rect.width,
+            ViewSize::FillAvailable => available_rect.width,
         },
         match target_inst.layout.height {
             ViewSize::Fixed(x) => x,
@@ -778,7 +940,7 @@ fn compute_actual_content_size(
                     + target_inst.layout.padding.top
                     + target_inst.layout.padding.bottom
             }
-            ViewSize::FillParent => available_rect.height,
+            ViewSize::FillAvailable => available_rect.height,
         },
     )
 }

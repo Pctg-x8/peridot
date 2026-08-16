@@ -599,6 +599,10 @@ impl TextInputViewCore {
             .offset_imm(rect.left, rect.top)
             .size_imm(rect.width, rect.height)
             .apply();
+        composite_tree
+            .begin_mod_chain(self.ct_text_clip)
+            .size_imm(rect.width - 4.0, rect.height - 4.0)
+            .apply();
     }
 }
 

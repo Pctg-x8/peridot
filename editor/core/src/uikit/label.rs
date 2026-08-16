@@ -19,6 +19,7 @@ pub struct StaticTextView {
     horizontal_alignment: CompositeRectTextHorizontalAlignment,
     vertical_alignment: CompositeRectTextVerticalAlignment,
     ct: Option<CompositeTreeRef>,
+    content_changed: bool,
 }
 impl Drop for StaticTextView {
     fn drop(&mut self) {
@@ -36,6 +37,7 @@ impl StaticTextView {
             horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
             vertical_alignment: CompositeRectTextVerticalAlignment::Start,
             ct: None,
+            content_changed: false,
         }
     }
 
@@ -49,6 +51,7 @@ impl StaticTextView {
 
     pub fn set_text(&mut self, content: String) {
         self.content = content;
+        self.content_changed = true;
     }
 
     pub fn set_horizontal_alignment(&mut self, alignment: CompositeRectTextHorizontalAlignment) {
@@ -66,6 +69,8 @@ impl View for StaticTextView {
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
+        let content_changed = core::mem::replace(&mut self.content_changed, false);
+
         let e = match self.ct {
             Some(ref e) => {
                 ctx.composite_tree
@@ -73,6 +78,18 @@ impl View for StaticTextView {
                     .offset_imm(layout_rect.left, layout_rect.top)
                     .size_imm(layout_rect.width, layout_rect.height)
                     .apply();
+
+                if content_changed {
+                    ctx.composite_tree
+                        .begin_mod_chain(*e)
+                        .text_run(CompositeRectTextRun {
+                            content: self.content.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            font_id: self.font,
+                            ..Default::default()
+                        })
+                        .apply();
+                }
 
                 e
             }

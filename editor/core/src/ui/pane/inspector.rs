@@ -8,7 +8,7 @@ use crate::{
         CheckboxView, ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit,
         ScrollContainer, StaticTextView, TeardownContext, TextInputViewIO, ViewFeedbackContext,
         ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext,
-        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
         ViewRelationControllable, ViewRenderer, ViewSize,
     },
@@ -23,6 +23,19 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let root_content_view = ctx.construct_view(|_| Box::new(ContainerView));
+        {
+            let l = ctx
+                .view_layout_mut(root_content_view)
+                .expect("query failed");
+            l.padding.set_all(8.0);
+            l.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 0.0,
+            };
+        }
 
         let selected_object_label =
             ctx.construct_view(|_| Box::new(StaticTextView::new("No selection".into())));
@@ -33,31 +46,41 @@ impl Presenter {
 
         let eh = Rc::new_cyclic(|eh| {
             let content_view = ctx.construct_view(|_| Box::new(ContainerView));
-            ctx.view_layout_mut(content_view)
-                .expect("query failed")
-                .child = ViewLayoutChild::Flow {
-                direction: ViewLayoutFlowDirection::Vertical,
-                alignment: ViewLayoutFlowAlignment::Start,
-                justify: ViewLayoutFlowJustify::Start,
-                overflow: ViewLayoutOverflow::Overflow,
-                gap: 4.0,
-            };
+            {
+                let l = ctx.view_layout_mut(content_view).expect("query failed");
+                l.child = ViewLayoutChild::Flow {
+                    direction: ViewLayoutFlowDirection::Vertical,
+                    alignment: ViewLayoutFlowAlignment::Start,
+                    justify: ViewLayoutFlowJustify::Start,
+                    overflow: ViewLayoutOverflow::Overflow,
+                    gap: 4.0,
+                };
+                l.padding.left = 8.0;
+                l.padding.right = 8.0;
+            }
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("POSITION".into()));
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
+            ctx.view_set_parent(label, content_view);
             let input_container = ctx.construct_view(|_| Box::new(ContainerView));
             ctx.view_layout_mut(input_container)
                 .expect("query failed")
                 .child = ViewLayoutChild::Flow {
                 direction: ViewLayoutFlowDirection::Horizontal,
                 alignment: ViewLayoutFlowAlignment::Start,
-                justify: ViewLayoutFlowJustify::Start,
+                justify: ViewLayoutFlowJustify::Stretch,
                 overflow: ViewLayoutOverflow::Overflow,
                 gap: 4.0,
             };
+            ctx.view_layout_mut(input_container)
+                .expect("query failed")
+                .width = ViewSize::FillAvailable;
+            ctx.view_set_parent(input_container, content_view);
+            let label = ctx.construct_view(|_| Box::new(StaticTextView::new("X".into())));
+            ctx.view_set_parent(label, input_container);
             let local_position_x_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
@@ -67,6 +90,16 @@ impl Presenter {
                     },
                 ))
             });
+            {
+                let l = ctx
+                    .view_layout_mut(local_position_x_input_view)
+                    .expect("query failed");
+                l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+                l.width = ViewSize::FillAvailable;
+            }
+            ctx.view_set_parent(local_position_x_input_view, input_container);
+            let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Y".into())));
+            ctx.view_set_parent(label, input_container);
             let local_position_y_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
@@ -76,6 +109,16 @@ impl Presenter {
                     },
                 ))
             });
+            {
+                let l = ctx
+                    .view_layout_mut(local_position_y_input_view)
+                    .expect("query failed");
+                l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+                l.width = ViewSize::FillAvailable;
+            }
+            ctx.view_set_parent(local_position_y_input_view, input_container);
+            let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Z".into())));
+            ctx.view_set_parent(label, input_container);
             let local_position_z_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
@@ -85,11 +128,14 @@ impl Presenter {
                     },
                 ))
             });
-            ctx.view_set_parent(label, content_view);
-            ctx.view_set_parent(local_position_x_input_view, input_container);
-            ctx.view_set_parent(local_position_y_input_view, input_container);
+            {
+                let l = ctx
+                    .view_layout_mut(local_position_z_input_view)
+                    .expect("query failed");
+                l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+                l.width = ViewSize::FillAvailable;
+            }
             ctx.view_set_parent(local_position_z_input_view, input_container);
-            ctx.view_set_parent(input_container, content_view);
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("ROTATION".into()));
@@ -201,6 +247,7 @@ impl Presenter {
                 ))
             });
             ctx.view_set_parent(content_view, items_container_view);
+            ctx.view_set_parent(items_container_view, root_content_view);
 
             ctx.view_layout_mut(root_content_view)
                 .expect("query failed")
