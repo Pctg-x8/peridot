@@ -262,6 +262,7 @@ impl View for OverlayPopupBasicMaskView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.render_elements {
             Some(ref e) => e,
@@ -422,6 +423,7 @@ impl View for OverlayPopupBasicFrameView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.render_elements {
             Some(ref e) => {

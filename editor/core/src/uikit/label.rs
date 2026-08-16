@@ -8,7 +8,7 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{RenderContext, TeardownContext, View, ViewRenderElements},
+    uikit::{RenderContext, TeardownContext, View, ViewLayoutStateStore, ViewRenderElements},
     utils::{LogicalUnit, Rect, Size},
 };
 
@@ -64,6 +64,7 @@ impl View for StaticTextView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.ct {
             Some(ref e) => {

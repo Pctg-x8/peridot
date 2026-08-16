@@ -19,7 +19,7 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{RenderContext, TeardownContext, View, ViewRenderElements},
+    uikit::{RenderContext, TeardownContext, View, ViewLayoutStateStore, ViewRenderElements},
     utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
@@ -64,6 +64,7 @@ impl View for SimpleButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {

@@ -26,8 +26,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        RenderContext, View, ViewIdentifier, ViewPlacement, ViewRenderElements, ViewRenderQueue,
-        ViewRenderer,
+        RenderContext, View, ViewIdentifier, ViewLayoutStateStore, ViewPlacement,
+        ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,
@@ -1721,6 +1721,7 @@ impl View for TextInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let eh = match self.eh {
             Some(ref eh) => {
@@ -1862,6 +1863,7 @@ impl View for NumericInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let eh = match self.eh {
             Some(ref x) => {
@@ -2243,6 +2245,7 @@ impl View for MultilineTextInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let eh = match self.eh {
             Some(ref eh) => {

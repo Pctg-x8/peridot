@@ -22,6 +22,7 @@ impl crate::uikit::View for View {
         &mut self,
         _layout_rect: crate::utils::Rect<crate::utils::LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
+        _layout_state: &crate::uikit::ViewLayoutStateStore,
     ) -> crate::uikit::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,

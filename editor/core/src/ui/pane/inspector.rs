@@ -5,11 +5,12 @@ use crate::{
     rendering::text::FontID,
     ui::dock::PaneContentResizeContext,
     uikit::{
-        CheckboxView, NumericInputView, NumericInputViewIO, NumericInputViewInit, ScrollContainer,
-        StaticTextView, TeardownContext, TextInputViewIO, ViewElementSize, ViewFeedbackContext,
+        CheckboxView, ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit,
+        ScrollContainer, StaticTextView, TeardownContext, TextInputViewIO, ViewFeedbackContext,
         ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext,
-        ViewInstanceQueryableMut, ViewLocation, ViewPlacement, ViewRegisterable,
-        ViewRelationControllable, ViewRenderer,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
+        ViewRelationControllable, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -21,39 +22,42 @@ impl Presenter {
     pub const ID: &str = internal_pane_identifier!("Inspector");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
-        let root_container_view = ctx.construct_view(|id| {
-            Box::new(ScrollContainer::new(
-                id,
-                Rect::from_lt_size(
-                    Point::new_logical(0.0, 0.0),
-                    Size::new_logical(128.0, 128.0),
-                ),
-            ))
-        });
+        let root_content_view = ctx.construct_view(|_| Box::new(ContainerView));
 
         let selected_object_label =
             ctx.construct_view(|_| Box::new(StaticTextView::new("No selection".into())));
         let selected_object_name_label =
             ctx.construct_view(|_| Box::new(StaticTextView::new(String::new())));
-        ctx.view_set_parent(selected_object_label, root_container_view);
-        ctx.view_set_parent(selected_object_name_label, root_container_view);
+        ctx.view_set_parent(selected_object_label, root_content_view);
+        ctx.view_set_parent(selected_object_name_label, root_content_view);
 
         let eh = Rc::new_cyclic(|eh| {
-            let items_container_view = ctx.construct_view(|id| {
-                Box::new(ScrollContainer::new(
-                    id,
-                    Rect::from_lt_size(
-                        Point::new_logical(0.0, 8.0 + 12.0 + 12.0),
-                        Size::new_logical(128.0, 128.0),
-                    ),
-                ))
-            });
+            let content_view = ctx.construct_view(|_| Box::new(ContainerView));
+            ctx.view_layout_mut(content_view)
+                .expect("query failed")
+                .child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 4.0,
+            };
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("POSITION".into()));
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
+            let input_container = ctx.construct_view(|_| Box::new(ContainerView));
+            ctx.view_layout_mut(input_container)
+                .expect("query failed")
+                .child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Horizontal,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Start,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 4.0,
+            };
             let local_position_x_input_view = ctx.construct_view(|id| {
                 Box::new(NumericInputView::new(
                     id,
@@ -81,10 +85,11 @@ impl Presenter {
                     },
                 ))
             });
-            ctx.view_set_parent(label, items_container_view);
-            ctx.view_set_parent(local_position_x_input_view, items_container_view);
-            ctx.view_set_parent(local_position_y_input_view, items_container_view);
-            ctx.view_set_parent(local_position_z_input_view, items_container_view);
+            ctx.view_set_parent(label, content_view);
+            ctx.view_set_parent(local_position_x_input_view, input_container);
+            ctx.view_set_parent(local_position_y_input_view, input_container);
+            ctx.view_set_parent(local_position_z_input_view, input_container);
+            ctx.view_set_parent(input_container, content_view);
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("ROTATION".into()));
@@ -118,10 +123,10 @@ impl Presenter {
                     },
                 ))
             });
-            ctx.view_set_parent(label, items_container_view);
-            ctx.view_set_parent(local_rotation_x_input_view, items_container_view);
-            ctx.view_set_parent(local_rotation_y_input_view, items_container_view);
-            ctx.view_set_parent(local_rotation_z_input_view, items_container_view);
+            ctx.view_set_parent(label, content_view);
+            ctx.view_set_parent(local_rotation_x_input_view, content_view);
+            ctx.view_set_parent(local_rotation_y_input_view, content_view);
+            ctx.view_set_parent(local_rotation_z_input_view, content_view);
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("SCALE".into()));
@@ -155,17 +160,16 @@ impl Presenter {
                     },
                 ))
             });
-            ctx.view_set_parent(label, items_container_view);
-            ctx.view_set_parent(local_scale_x_input_view, items_container_view);
-            ctx.view_set_parent(local_scale_y_input_view, items_container_view);
-            ctx.view_set_parent(local_scale_z_input_view, items_container_view);
+            ctx.view_set_parent(label, content_view);
+            ctx.view_set_parent(local_scale_x_input_view, content_view);
+            ctx.view_set_parent(local_scale_y_input_view, content_view);
+            ctx.view_set_parent(local_scale_z_input_view, content_view);
 
-            let render_section_top = 8.0 + 12.0 + 16.0 + 12.0 + 16.0 + 12.0 + 16.0 + 8.0;
             let render_checkbox = ctx.construct_view(|_| Box::new(CheckboxView::new()));
             let section_label =
                 ctx.construct_view(|_| Box::new(StaticTextView::new("Render".into())));
-            ctx.view_set_parent(render_checkbox, items_container_view);
-            ctx.view_set_parent(section_label, items_container_view);
+            ctx.view_set_parent(render_checkbox, content_view);
+            ctx.view_set_parent(section_label, content_view);
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("SHAPE".into()));
@@ -180,23 +184,48 @@ impl Presenter {
                     "Capsule".into(),
                 ]))
             });
-            ctx.view_set_parent(label, items_container_view);
-            ctx.view_set_parent(shape_selector, items_container_view);
+            ctx.view_set_parent(label, content_view);
+            ctx.view_set_parent(shape_selector, content_view);
 
-            ctx.view_instance_mut::<ScrollContainer>(items_container_view)
+            ctx.view_layout_mut(content_view)
                 .expect("query failed")
-                .set_content_size(Size::new_logical(
-                    128.0 + 16.0,
-                    render_section_top + 24.0 + 12.0 + 24.0,
-                ));
+                .width = ViewSize::Fixed(128.0 + 16.0);
+            let items_container_view = ctx.construct_view(|id| {
+                Box::new(ScrollContainer::new(
+                    id,
+                    Rect::from_lt_size(
+                        Point::new_logical(0.0, 8.0 + 12.0 + 12.0),
+                        Size::new_logical(128.0, 128.0),
+                    ),
+                    content_view,
+                ))
+            });
+            ctx.view_set_parent(content_view, items_container_view);
+
+            ctx.view_layout_mut(root_content_view)
+                .expect("query failed")
+                .width = ViewSize::Fixed(128.0);
+            let root_container_view = ctx.construct_view(|id| {
+                Box::new(ScrollContainer::new(
+                    id,
+                    Rect::from_lt_size(
+                        Point::new_logical(0.0, 0.0),
+                        Size::new_logical(128.0, 128.0),
+                    ),
+                    root_content_view,
+                ))
+            });
+            ctx.view_set_parent(root_content_view, root_container_view);
 
             EventHandler {
                 object_selection_changed: Cell::new(false),
                 items_container_mounted: Cell::new(false),
                 root_container_view,
+                root_content_view,
                 selected_object_label,
                 selected_object_name_label,
                 items_container_view,
+                items_content_view: content_view,
                 numeric_input_view_ids: vec![
                     local_position_x_input_view,
                     local_position_y_input_view,
@@ -212,10 +241,6 @@ impl Presenter {
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
-
-        ctx.view_instance_mut::<ScrollContainer>(eh.root_container_view)
-            .expect("query failed")
-            .set_content_size(Size::new_logical(128.0, 8.0 + 12.0));
 
         Self { eh }
     }
@@ -244,9 +269,9 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
             .expect("query failed")
             .resize(*new_size);
         context
-            .view_instance_mut::<ScrollContainer>(self.eh.root_container_view)
+            .view_layout_mut(self.eh.root_content_view)
             .expect("query failed")
-            .set_content_size(Size::new_logical(new_size.width.max(128.0), 8.0 + 12.0));
+            .width = ViewSize::Fixed(new_size.width.max(128.0));
         context
             .view_instance_mut::<ScrollContainer>(self.eh.items_container_view)
             .expect("query failed")
@@ -255,9 +280,9 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
                 new_size.height - 8.0 - 12.0 - 12.0,
             ));
         context
-            .view_instance_mut::<ScrollContainer>(self.eh.items_container_view)
+            .view_layout_mut(self.eh.items_content_view)
             .expect("query failed")
-            .set_content_size(Size::new_logical(new_size.width.max(128.0), 8.0 + 12.0));
+            .width = ViewSize::Fixed(new_size.width.max(128.0));
         context.schedule_view_render(self.eh.root_container_view);
     }
 }
@@ -266,9 +291,11 @@ struct EventHandler {
     object_selection_changed: Cell<bool>,
     items_container_mounted: Cell<bool>,
     root_container_view: ViewIdentifier,
+    root_content_view: ViewIdentifier,
     selected_object_label: ViewIdentifier,
     selected_object_name_label: ViewIdentifier,
     items_container_view: ViewIdentifier,
+    items_content_view: ViewIdentifier,
     numeric_input_view_ids: Vec<ViewIdentifier>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
@@ -290,10 +317,6 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
                         .expect("query failed")
                         .set_text(String::new());
-                    context
-                        .view_instance_mut::<ScrollContainer>(self.root_container_view)
-                        .expect("query failed")
-                        .set_content_size(Size::new_logical(128.0, 8.0 + 12.0));
 
                     // remove items_container_view from tree
                     context.teardown_view_recursive(self.items_container_view);
@@ -318,10 +341,6 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
                         .expect("query failed")
                         .set_text(name_label_text);
-                    context
-                        .view_instance_mut::<ScrollContainer>(self.root_container_view)
-                        .expect("query failed")
-                        .set_content_size(Size::new_logical(128.0, 8.0 + 12.0 + 12.0));
 
                     if !self.items_container_mounted.replace(true) {
                         context
@@ -344,10 +363,6 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
                         .expect("query failed")
                         .set_text(String::new());
-                    context
-                        .view_instance_mut::<ScrollContainer>(self.root_container_view)
-                        .expect("query failed")
-                        .set_content_size(Size::new_logical(128.0, 8.0 + 12.0));
 
                     // remove items_container_view from tree
                     context.teardown_view_recursive(self.items_container_view);

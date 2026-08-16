@@ -211,6 +211,10 @@ pub fn layout_view_recursive(
     cb_perform_target_relayout(target);
 
     let target_inst = instance_store.get(target);
+    if !target_inst.active {
+        // skip children layout
+        return;
+    }
     let base_point = if target_inst
         .instance
         .as_ref()
@@ -464,12 +468,12 @@ pub fn layout_view_recursive(
                 }
             }
 
-            tracing::debug!(
-                ?col_widths,
-                ?row_heights,
-                ?child_available_rect,
-                "grid layout in"
-            );
+            // tracing::debug!(
+            //     ?col_widths,
+            //     ?row_heights,
+            //     ?child_available_rect,
+            //     "grid layout in"
+            // );
 
             let mut left_placement = 0.0;
             let mut top_placement = 0.0;

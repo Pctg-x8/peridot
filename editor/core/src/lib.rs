@@ -52,16 +52,16 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
-        MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources, MenuItemView, MountContext,
-        MountTarget, NumericInputView, NumericInputViewIO, NumericInputViewInit, PopupID,
-        PopupManager, RadioButtonView, RenderContext, ScrollContainer, SimpleButtonEventHandler,
-        SimpleButtonView, StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View,
-        ViewElementSize, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegistry,
-        ViewGroupID, ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator,
-        ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
-        ViewLayoutStateStore, ViewLocation, ViewPlacement, ViewRegisterable,
+        ContainerView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources,
+        MenuItemView, MountContext, MountTarget, NumericInputView, NumericInputViewIO,
+        NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
+        ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
+        TeardownContext, TextInputView, TextInputViewIO, View, ViewFeedbackContext,
+        ViewFeedbackHandler, ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore,
+        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
+        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
+        ViewLayoutGridCell, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
         ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize,
         ViewTreeRelationStore,
     },
@@ -1362,6 +1362,7 @@ impl View for ColorPickerView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
         // TODO: ViewがViewをもつパターン(これなしにしたほうがいいかも)
         // self.eh.hex_text_input_view.borrow_mut().render(
@@ -1372,6 +1373,12 @@ impl View for ColorPickerView {
         //     },
         //     kf_group,
         // );
+        ctx.composite_tree
+            .begin_mod_chain(self.eh.ct_root)
+            .offset_imm(layout_rect.left, layout_rect.top)
+            .apply();
+        ctx.ht_manager.get_data_mut(self.eh.ht_root).left = layout_rect.left;
+        ctx.ht_manager.get_data_mut(self.eh.ht_root).top = layout_rect.top;
 
         uikit::ViewRenderElements {
             composite_tree: Some(self.eh.ct_root),
@@ -1383,7 +1390,7 @@ impl View for ColorPickerView {
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 
     fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(0.0, 0.0)
+        Size::new_logical(128.0, 128.0 + 32.0 + 16.0 + 20.0)
     }
 }
 
@@ -1860,6 +1867,7 @@ impl View for ColorPickerHexTextInputView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
         let e = match self.eh {
             Some(ref e) => {
@@ -2109,6 +2117,7 @@ impl View for EditableColorButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
         let e = match self.eh {
             Some(ref e) => {
@@ -2385,6 +2394,7 @@ crate::perf_section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
 pub struct UIKitPreviewPanePresenter {
     kf_group: KeyboardFocusGroupRef,
     scroll_container: ViewIdentifier,
+    content_view: ViewIdentifier,
     text_input_backing_store1: Rc<UIKitPreviewTextInputValueStore>,
     text_input_backing_store2: Rc<UIKitPreviewTextInputValueStore>,
     color_picker_backing_store: Rc<ColorPickerTestBackingStore>,
@@ -2400,20 +2410,12 @@ impl UIKitPreviewPanePresenter {
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
 
-        let scroll_container = ctx.construct_view(|id| {
-            Box::new(ScrollContainer::new(
-                id,
-                Rect::from_lt_size(
-                    Point::new_logical(0.0, 0.0),
-                    Size::new_logical(256.0, 128.0),
-                ),
-            ))
-        });
+        let content_view = ctx.construct_view(|id| Box::new(ContainerView));
         {
-            let scroll_container = ctx.view_layout_mut(scroll_container).expect("query failed");
-            scroll_container.width = ViewSize::Fixed(256.0);
-            scroll_container.padding.set_all(8.0);
-            scroll_container.child = ViewLayoutChild::Flow {
+            let l = ctx.view_layout_mut(content_view).expect("query failed");
+            l.width = ViewSize::Fixed(256.0);
+            l.padding.set_all(8.0);
+            l.child = ViewLayoutChild::Flow {
                 direction: ViewLayoutFlowDirection::Vertical,
                 alignment: ViewLayoutFlowAlignment::Start,
                 justify: ViewLayoutFlowJustify::Start,
@@ -2436,7 +2438,7 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
-        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        let container = ctx.construct_view(|_| Box::new(ContainerView));
         {
             let container = ctx.view_layout_mut(container).expect("query failed");
             container.child = ViewLayoutChild::Flow {
@@ -2447,12 +2449,12 @@ impl UIKitPreviewPanePresenter {
                 gap: 0.0,
             };
         }
-        ctx.view_set_parent(container, scroll_container);
+        ctx.view_set_parent(container, content_view);
         let label = ctx.construct_view(|_| {
             Box::new(StaticTextView::new("Simple Buttons + Alert Dialog".into()))
         });
         ctx.view_set_parent(label, container);
-        let button_container = ctx.construct_view(|_| Box::new(EmptyView));
+        let button_container = ctx.construct_view(|_| Box::new(ContainerView));
         {
             let button_container = ctx.view_layout_mut(button_container).expect("query failed");
             button_container.padding.left = 8.0;
@@ -2486,7 +2488,7 @@ impl UIKitPreviewPanePresenter {
         let text_input_backing_store2 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
 
-        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        let container = ctx.construct_view(|_| Box::new(ContainerView));
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Flow {
             direction: ViewLayoutFlowDirection::Vertical,
             alignment: ViewLayoutFlowAlignment::Start,
@@ -2494,11 +2496,11 @@ impl UIKitPreviewPanePresenter {
             overflow: ViewLayoutOverflow::Overflow,
             gap: 0.0,
         };
-        ctx.view_set_parent(container, scroll_container);
+        ctx.view_set_parent(container, content_view);
         let label =
             ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input(Single Line)".into())));
         ctx.view_set_parent(label, container);
-        let controls_container = ctx.construct_view(|_| Box::new(EmptyView));
+        let controls_container = ctx.construct_view(|_| Box::new(ContainerView));
         {
             let controls_view = ctx
                 .view_layout_mut(controls_container)
@@ -2538,7 +2540,7 @@ impl UIKitPreviewPanePresenter {
         }
         ctx.view_set_parent(text_input_view2, controls_container);
 
-        let container = ctx.construct_view(|_| Box::new(EmptyView));
+        let container = ctx.construct_view(|_| Box::new(ContainerView));
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Flow {
             direction: ViewLayoutFlowDirection::Vertical,
             alignment: ViewLayoutFlowAlignment::Start,
@@ -2547,7 +2549,7 @@ impl UIKitPreviewPanePresenter {
             gap: 0.0,
         };
         ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillParent;
-        ctx.view_set_parent(container, scroll_container);
+        ctx.view_set_parent(container, content_view);
         let label =
             ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input (Multiline)".into())));
         ctx.view_set_parent(label, container);
@@ -2566,27 +2568,24 @@ impl UIKitPreviewPanePresenter {
         let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
             color: Cell::new(0xffffffff),
         });
-        let label = StaticTextView::new("Color Picker(Standalone)".into());
-        let label = ctx.construct_view(|_| Box::new(label));
+        let label = ctx
+            .construct_view(|_| Box::new(StaticTextView::new("Color Picker(Standalone)".into())));
+        ctx.view_set_parent(label, content_view);
         let color_picker = ColorPickerView::new(
             ctx,
             Point::new_logical(16.0, ytop),
             &Rc::downgrade(&color_picker_backing_store),
         );
         let color_picker = ctx.construct_view(|_| Box::new(color_picker));
-        ctx.view_set_parent(label, scroll_container);
-        ctx.view_set_parent(color_picker, scroll_container);
-        ytop += 128.0 + 32.0 + 16.0 + 20.0;
-
-        ytop += 8.0;
+        ctx.view_set_parent(color_picker, content_view);
 
         let toggle_button =
             ctx.construct_view(|_| Box::new(uikit::ToggleButtonView::new("Toggle".into())));
-        ctx.view_set_parent(toggle_button, scroll_container);
+        ctx.view_set_parent(toggle_button, content_view);
 
         // inline controls preview
-        let container = ctx.construct_view(|_| Box::new(EmptyView));
-        ctx.view_set_parent(container, scroll_container);
+        let container = ctx.construct_view(|_| Box::new(ContainerView));
+        ctx.view_set_parent(container, content_view);
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Grid {
             cols: vec![
                 ViewLayoutGridCell::Flexible(1.0),
@@ -2680,13 +2679,22 @@ impl UIKitPreviewPanePresenter {
         let radio_button4 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.view_set_parent(radio_button4, container);
 
-        ctx.view_instance_mut::<ScrollContainer>(scroll_container)
-            .expect("query failed")
-            .set_content_size(Size::new_logical(content_width, ytop + 8.0));
+        let scroll_container = ctx.construct_view(|id| {
+            Box::new(ScrollContainer::new(
+                id,
+                Rect::from_lt_size(
+                    Point::new_logical(0.0, 0.0),
+                    Size::new_logical(256.0, 128.0),
+                ),
+                content_view,
+            ))
+        });
+        ctx.view_set_parent(content_view, scroll_container);
 
         Self {
             kf_group,
             scroll_container,
+            content_view,
             text_input_backing_store1,
             text_input_backing_store2,
             color_picker_backing_store,
@@ -2709,35 +2717,17 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
-        tracing::debug!(?new_size, "resize pane");
+        // tracing::debug!(?new_size, "resize pane");
         context
             .view_instance_mut::<ScrollContainer>(self.scroll_container)
             .expect("query failed")
             .resize(new_size.clone());
         let content_width = new_size.width.max(128.0);
         context
-            .view_layout_mut(self.scroll_container)
+            .view_layout_mut(self.content_view)
             .expect("query failed")
             .width = ViewSize::Fixed(content_width);
         context.schedule_view_render(self.scroll_container);
-    }
-}
-
-/// なにもしないView
-struct EmptyView;
-impl View for EmptyView {
-    fn render(
-        &mut self,
-        _layout_rect: Rect<LogicalUnit>,
-        _ctx: &mut RenderContext,
-    ) -> uikit::ViewRenderElements {
-        uikit::ViewRenderElements::EMPTY
-    }
-
-    fn teardown(&mut self, _ctx: &mut TeardownContext) {}
-
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(0.0, 0.0)
     }
 }
 
@@ -2749,7 +2739,7 @@ impl TimelinePanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -2777,7 +2767,7 @@ impl AssetExplorerPanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -2805,7 +2795,7 @@ impl ProjectSettingsPanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -2833,7 +2823,7 @@ impl AssetPreviewPanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(EmptyView)),
+            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -3187,6 +3177,7 @@ impl View for WindowRootView {
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
         uikit::ViewRenderElements::EMPTY
     }
@@ -8422,6 +8413,7 @@ impl View for PreviewToolSelectorButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
@@ -8794,6 +8786,7 @@ impl View for PreviewView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,

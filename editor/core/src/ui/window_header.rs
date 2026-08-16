@@ -22,8 +22,8 @@ use crate::{
         text::FontID,
     },
     uikit::{
-        RenderContext, ViewIdentifier, ViewInstanceQueryableMut, ViewRegisterable,
-        ViewRelationControllable, ViewRenderer,
+        RenderContext, ViewIdentifier, ViewInstanceQueryableMut, ViewLayoutStateStore,
+        ViewRegisterable, ViewRelationControllable, ViewRenderer,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -125,6 +125,7 @@ impl crate::uikit::View for View {
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> crate::uikit::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,
@@ -251,6 +252,7 @@ impl crate::uikit::View for SystemCommandButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> crate::uikit::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {

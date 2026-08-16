@@ -81,6 +81,7 @@ impl crate::uikit::View for View {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
+        _layout_state: &crate::uikit::ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,
@@ -262,6 +263,7 @@ impl crate::uikit::View for ObjectRowView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
+        _layout_state: &crate::uikit::ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let selected = ctx.application.object_is_selected(self.assigned_object);
 

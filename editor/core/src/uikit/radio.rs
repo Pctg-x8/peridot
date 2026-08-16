@@ -15,7 +15,7 @@ use crate::{
     },
     uikit::{
         RenderContext, TeardownContext, View, ViewElementSize, ViewIdentifier,
-        ViewInstanceQueryableMut, ViewRenderElements,
+        ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRenderElements,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -39,6 +39,7 @@ impl View for RadioButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.eh {
             Some(ref eh) => {

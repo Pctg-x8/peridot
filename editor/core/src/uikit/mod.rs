@@ -481,6 +481,7 @@ pub trait View: core::any::Any {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements;
 
     /// Teardown(アンマウント)時に呼ばれる
@@ -492,6 +493,25 @@ pub trait View: core::any::Any {
     /// 新しいLayout Layer(基準点を0, 0にもどす)をつくるかどうか
     fn create_new_layout_layer(&self) -> bool {
         false
+    }
+}
+
+/// なにもしないView(他のViewをいれるためだけに使う)
+pub struct ContainerView;
+impl View for ContainerView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        _ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> ViewRenderElements {
+        ViewRenderElements::EMPTY
+    }
+
+    fn teardown(&mut self, _ctx: &mut TeardownContext) {}
+
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
     }
 }
 
@@ -1004,7 +1024,11 @@ fn render_view_instance1(
         return None;
     };
 
-    let render_elements = instance.render(layout_state_store.get(target).layout_rect.clone(), ctx);
+    let render_elements = instance.render(
+        layout_state_store.get(target).layout_rect.clone(),
+        ctx,
+        layout_state_store,
+    );
 
     let render_state = &mut render_state_store.0[target.into_array_index()];
     // update render elements relations

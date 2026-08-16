@@ -22,7 +22,7 @@ use crate::{
     },
     uikit::{
         MountContext, MountTarget, RenderContext, TeardownContext, ViewElementSize,
-        ViewInitContext, ViewPlacement,
+        ViewInitContext, ViewLayoutStateStore, ViewPlacement,
     },
     utils::{LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -61,6 +61,7 @@ impl super::View for View {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> super::ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {

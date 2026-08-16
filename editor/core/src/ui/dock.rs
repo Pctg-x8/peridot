@@ -24,8 +24,8 @@ use crate::{
         CompositeTreeMutableAccess, DeriveTeardownContext, HitTestTreeMutableAccess, MountContext,
         RenderContext, SystemLinkAccess, TeardownContext, View, ViewIdentifier,
         ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewRegisterable, ViewRelationControllable,
-        ViewRenderElements, ViewRenderQueue, ViewRenderer,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewRegisterable,
+        ViewRelationControllable, ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -651,6 +651,7 @@ impl View for WindowDockRootView {
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         ViewRenderElements::EMPTY
     }
@@ -1620,6 +1621,7 @@ impl View for DockedPaneSplitterView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
@@ -1931,6 +1933,7 @@ impl View for PaneGroupContainerView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
@@ -2050,6 +2053,7 @@ impl View for PaneGroupTabStripView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
@@ -2604,6 +2608,7 @@ impl View for PaneGroupTabView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {

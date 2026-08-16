@@ -21,7 +21,8 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        RenderContext, TeardownContext, View, ViewElementSize, ViewPlacement, ViewRenderElements,
+        RenderContext, TeardownContext, View, ViewElementSize, ViewLayoutStateStore, ViewPlacement,
+        ViewRenderElements,
     },
     utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
@@ -76,6 +77,7 @@ impl View for ToggleButtonView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
@@ -307,6 +309,7 @@ impl View for CheckboxView {
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
