@@ -1,0 +1,15 @@
+[package]
+name = "profiler"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+active = ["profiler-attr/active"]
+
+[dependencies]
+tracing.workspace = true
+time = { version = "0.3", features = ["formatting", "std", "macros"] }
+profiler-attr.path = "../profiler-attr"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

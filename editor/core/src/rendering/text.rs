@@ -444,8 +444,8 @@ pub struct TextRun<'s> {
     pub spacing_inline_start: f32,
 }
 
-crate::perf_section!(CREATE_TEXT_LAYOUT = "TextLayout.New");
-crate::perf_section!(RASTERIZE_AND_PLACE_GLYPHS = "TextLayout.RasterizeAndPlaceGlyphs");
+profiler::section!(CREATE_TEXT_LAYOUT = "TextLayout.New");
+profiler::section!(RASTERIZE_AND_PLACE_GLYPHS = "TextLayout.RasterizeAndPlaceGlyphs");
 
 pub struct TextLayout {
     #[cfg(feature = "harfbuzz")]
@@ -482,7 +482,7 @@ impl TextLayout {
         alignment: CompositeRectTextHorizontalAlignment,
         max_width: Option<f32>,
     ) -> Self {
-        crate::perf_scope!(CREATE_TEXT_LAYOUT);
+        profiler::scope!(CREATE_TEXT_LAYOUT);
 
         Self {
             #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
@@ -503,7 +503,7 @@ impl TextLayout {
         atlas: &mut MaskTextureAtlasManager,
         render_scale: f32,
     ) -> Vec<GlyphPlacementBox> {
-        crate::perf_scope!(RASTERIZE_AND_PLACE_GLYPHS);
+        profiler::scope!(RASTERIZE_AND_PLACE_GLYPHS);
 
         #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
         return self.internal.rasterize_and_place_glyphs(

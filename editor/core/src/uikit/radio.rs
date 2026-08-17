@@ -14,8 +14,8 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
     },
     uikit::{
-        RenderContext, TeardownContext, View, ViewElementSize, ViewIdentifier,
-        ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRenderElements,
+        RenderContext, TeardownContext, View, ViewIdentifier, ViewInstanceQueryableMut,
+        ViewLayoutStateStore, ViewRenderElements,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };

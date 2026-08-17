@@ -75,7 +75,6 @@ use crate::{
 mod bindgen;
 mod graphics;
 mod input;
-mod perf;
 mod platform;
 mod proto;
 mod rendering;
@@ -112,7 +111,7 @@ pub fn launch() {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    crate::perf::init_profiler();
+    profiler::init_profiler();
 
     let mut event_store = VecDeque::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
@@ -201,7 +200,7 @@ pub fn launch() {
         &dbus,
     );
 
-    crate::perf::fini_profiler();
+    profiler::fini_profiler();
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
@@ -221,7 +220,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     #[cfg(feature = "wayland")] static_pixbufs: &'sys platform::unix::wayland::StaticPixbufs,
     #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
 ) {
-    perf_sample_memory!();
+    profiler::sample_memory!();
 
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -374,7 +373,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .spawn_scoped(thread_scope, || render_thread.run())
             .expect("render_thread spawn");
 
-        perf_sample_memory!();
+        profiler::sample_memory!();
 
         #[cfg(target_os = "linux")]
         let epoll = Epoll::new(0).expect("epoll.new");
@@ -485,7 +484,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                         tracing::error!(reason = %std::io::Error::last_os_error(), "read memory_sample_timer_fd failed");
                     }
 
-                    crate::perf_sample_memory!();
+                    profiler::sample_memory!();
                 }
             }
 
@@ -2390,7 +2389,7 @@ impl TextInputViewIO for UIKitPreviewTextInputValueStore {
     }
 }
 
-crate::perf_section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
+profiler::section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
 pub struct UIKitPreviewPanePresenter {
     kf_group: KeyboardFocusGroupRef,
     scroll_container: ViewIdentifier,
@@ -2405,7 +2404,7 @@ impl UIKitPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("UIKitPreview");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
-        crate::perf_scope!(PANE_INIT_UIKIT_PREVIEW);
+        profiler::scope!(PANE_INIT_UIKIT_PREVIEW);
 
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
@@ -3197,9 +3196,9 @@ struct LaunchArgs<'sys> {
     pub committed_preview_state: &'sys Mutex<rendering::preview::CommittedState>,
 }
 
-crate::perf_section!(INITIALIZE = "LogicFiber.Initialize");
-crate::perf_section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
-crate::perf_section!(LOCK_WAIT = "Mutex.LockWait");
+profiler::section!(INITIALIZE = "LogicFiber.Initialize");
+profiler::section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
+profiler::section!(LOCK_WAIT = "Mutex.LockWait");
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(
@@ -3213,7 +3212,7 @@ async fn run<'sys>(
     mut system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
-    crate::perf_begin!(perf = INITIALIZE);
+    profiler::begin!(perf = INITIALIZE);
 
     let mut application = Application::new();
     let mut view_feedback_store = VecDeque::new();
@@ -3726,7 +3725,7 @@ async fn run<'sys>(
 
     // initial push test
     let mut preview_state =
-        crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
+        profiler::wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
     let mut vbuf_bytes = vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * 24];
     let mut ibuf_bytes = vec![0u8; size_of::<u16>() * 36];
     unsafe {
@@ -3870,11 +3869,11 @@ async fn run<'sys>(
     drop(preview_state);
 
     system_link.prelaunch(main_window);
-    crate::perf_end!(perf);
+    profiler::end!(perf);
     loop {
         let e = event_queue.next_event().await;
         tracing::trace!(target: "event-trace", event = ?e);
-        crate::perf_scope!(PROCESS_EVENT, str e.p_name());
+        profiler::scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
             Event::SubWindowClose { mut window } => {
@@ -6535,7 +6534,7 @@ async fn run<'sys>(
             Event::Sync(SyncEvent::NewPresentID { .. }) => {
                 // vsync update period
                 let mut preview_state =
-                    crate::perf_wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
+                    profiler::wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
 
                 if let Some(new_viewport_size) = preview_input_state.new_viewport_size.take() {
                     preview_state.viewport_size = new_viewport_size;
@@ -7632,7 +7631,7 @@ pub use platform::windows::{
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 
-crate::perf_section!(SYNC_EVENT_BUS_PUSH = "SyncEventBus.Push");
+profiler::section!(SYNC_EVENT_BUS_PUSH = "SyncEventBus.Push");
 
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,
@@ -7662,7 +7661,7 @@ impl SyncEventBus {
     }
 
     pub fn push(&self, e: SyncEvent) {
-        crate::perf_scope!(SYNC_EVENT_BUS_PUSH);
+        profiler::scope!(SYNC_EVENT_BUS_PUSH);
 
         self.queue.lock().expect("poisoned").push_back(e);
         #[cfg(target_os = "linux")]

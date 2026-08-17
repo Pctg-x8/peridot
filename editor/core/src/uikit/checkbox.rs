@@ -20,10 +20,7 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{
-        RenderContext, TeardownContext, View, ViewElementSize, ViewLayoutStateStore, ViewPlacement,
-        ViewRenderElements,
-    },
+    uikit::{RenderContext, TeardownContext, View, ViewLayoutStateStore, ViewRenderElements},
     utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 

@@ -160,19 +160,19 @@ impl MainThreadTextureIDIssuer {
     }
 }
 
-crate::perf_event!(SYNCPOINT = "RenderSyncPoint");
-crate::perf_section!(INITIALIZATION = "RenderThread.Initialize");
-crate::perf_section!(RENDERLOOP = "RenderLoop");
-crate::perf_section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
-crate::perf_section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
-crate::perf_section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
-crate::perf_section!(ACQUIRE_WINDOW_BACKBUFFER = "RenderLoop.UpdateWindow.AcquireBackbuffer");
-crate::perf_section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
-crate::perf_section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
-crate::perf_section!(VALIDATE_PREVIEW_RENDERING = "RenderLoop.ValidatePreviewRendering");
-crate::perf_section!(UPDATE_PREVIEW = "RenderLoop.UpdatePreview");
-crate::perf_section!(POST_QUEUE = "RenderLoop.PostQueue");
-crate::perf_section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
+profiler::event!(SYNCPOINT = "RenderSyncPoint");
+profiler::section!(INITIALIZATION = "RenderThread.Initialize");
+profiler::section!(RENDERLOOP = "RenderLoop");
+profiler::section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
+profiler::section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
+profiler::section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
+profiler::section!(ACQUIRE_WINDOW_BACKBUFFER = "RenderLoop.UpdateWindow.AcquireBackbuffer");
+profiler::section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
+profiler::section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
+profiler::section!(VALIDATE_PREVIEW_RENDERING = "RenderLoop.ValidatePreviewRendering");
+profiler::section!(UPDATE_PREVIEW = "RenderLoop.UpdatePreview");
+profiler::section!(POST_QUEUE = "RenderLoop.PostQueue");
+profiler::section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
 #[cfg(windows)]
 crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 
@@ -197,7 +197,7 @@ impl<'main> RenderThread<'main> {
     pub fn run(mut self) {
         tracing::info!("Starting RenderThread...");
 
-        crate::perf_begin!(perf = INITIALIZATION);
+        profiler::begin!(perf = INITIALIZATION);
 
         let mut render_queue = self.gfx.queue(self.gfx.present_queue_family_index(), 0);
 
@@ -334,20 +334,20 @@ impl<'main> RenderThread<'main> {
             },
         );
 
-        crate::perf_end!(perf);
+        profiler::end!(perf);
 
         let mut any_swapchain_invalidated = false;
         'lp: while !self
             .shutdown_signal
             .load(std::sync::atomic::Ordering::Acquire)
         {
-            crate::perf_scope!(RENDERLOOP);
+            profiler::scope!(RENDERLOOP);
             // unsafe {
             //     w.manual_capture_begin();
             // }
 
             loop {
-                crate::perf_scope!(PROCESS_MESSAGE);
+                profiler::scope!(PROCESS_MESSAGE);
                 match self.message_receiver.try_recv() {
                     Ok(RenderMessage::NewWindow(wd)) => {
                         let init_scale =
@@ -458,7 +458,7 @@ impl<'main> RenderThread<'main> {
             }
 
             // TODO: 必要なら後で最適化する
-            crate::perf_begin!(perf = UPDATE_GRADIENT);
+            profiler::begin!(perf = UPDATE_GRADIENT);
             composite_tree.update_gradients(self.gfx, &composite_shared_buffers);
             unsafe {
                 shared_update_cp
@@ -485,7 +485,7 @@ impl<'main> RenderThread<'main> {
                 )
                 .expect("shared_update.submit");
             render_queue.wait().expect("shared_update.wait");
-            crate::perf_end!(perf);
+            profiler::end!(perf);
 
             for x in windows.values_mut() {
                 if x.take_swapchain_externally_invalidation_signal() {
@@ -528,7 +528,7 @@ impl<'main> RenderThread<'main> {
             }
 
             // flush synchronizing buffers
-            crate::perf_emit!(SYNCPOINT);
+            profiler::emit!(SYNCPOINT);
             {
                 let mut renderer_sync = self.renderer_sync.lock().expect("poisoned");
                 renderer_sync.composite_buffer.clean(&mut composite_tree);
@@ -564,7 +564,7 @@ impl<'main> RenderThread<'main> {
             let mut present_swapchains = Vec::with_capacity(context_menus.len());
             let mut preview_composition_required = false;
             for (k, x) in windows.iter_mut() {
-                crate::perf_scope!(UPDATE_WINDOW);
+                profiler::scope!(UPDATE_WINDOW);
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
@@ -708,7 +708,7 @@ impl<'main> RenderThread<'main> {
                     self.font_set,
                     &mut preview_composite,
                     |preview_composite, ctx| {
-                        crate::perf_scope!(VALIDATE_PREVIEW_RENDERING);
+                        profiler::scope!(VALIDATE_PREVIEW_RENDERING);
                         let mut committed_state = self.preview_state.lock().expect("poisoned");
                         let resource_recreated = preview_rt_buffer.validate(
                             self.gfx,
@@ -766,7 +766,7 @@ impl<'main> RenderThread<'main> {
                 });
             }
             for (k, x) in context_menus.iter_mut() {
-                crate::perf_scope!(UPDATE_CONTEXT_MENU);
+                profiler::scope!(UPDATE_CONTEXT_MENU);
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
@@ -955,7 +955,7 @@ impl<'main> RenderThread<'main> {
             for (s, x) in glyph_atlas_per_scale.iter_mut() {
                 if !x.vector_raster_state.is_empty() {
                     // vector rasterization required
-                    crate::perf_scope!(RENDER_VG_MASK);
+                    profiler::scope!(RENDER_VG_MASK);
                     x.manager.perform_render(
                         &x.vector_raster_state,
                         &vg_render_formats,
@@ -981,7 +981,7 @@ impl<'main> RenderThread<'main> {
             if preview_composition_required {
                 // preview may still updating on main thread...
                 if let Ok(mut st) = self.preview_state.try_lock() {
-                    crate::perf_scope!(UPDATE_PREVIEW);
+                    profiler::scope!(UPDATE_PREVIEW);
                     preview_renderer.update(self.gfx, &mut st);
                     preview_renderer.validate(self.gfx, &preview_rt_buffer, &mut st);
                 }
@@ -992,7 +992,7 @@ impl<'main> RenderThread<'main> {
             self.event_bus
                 .push(SyncEvent::NewPresentID { id: present_id });
 
-            crate::perf_begin!(perf = POST_QUEUE);
+            profiler::begin!(perf = POST_QUEUE);
             if preview_composition_required {
                 let mut render_waits = Vec::with_capacity(2);
                 let mut render_wait_stages = Vec::with_capacity(2);
@@ -1053,8 +1053,8 @@ impl<'main> RenderThread<'main> {
                     .expect("queue submit");
             }
 
-            crate::perf_wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
-            crate::perf_end!(perf);
+            profiler::wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
+            profiler::end!(perf);
 
             if !present_parameters.is_empty() {
                 let mut results = present_parameters
@@ -1102,7 +1102,7 @@ impl<'main> RenderThread<'main> {
                 }
             }
 
-            crate::perf_wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
+            profiler::wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
 
             #[cfg(windows)]
             crate::perf_begin!(perf = WIN32_DX_PRESENT);
@@ -2013,7 +2013,7 @@ impl<'d> WindowRenderer<'d> {
     }
 
     pub fn acquire_backbuffer_with_wait(&mut self) -> br::Result<u32> {
-        crate::perf_scope!(ACQUIRE_WINDOW_BACKBUFFER);
+        profiler::scope!(ACQUIRE_WINDOW_BACKBUFFER);
         let backbuffer_index = self.swapchain.acquire_next(
             None,
             br::CompletionHandlerMut::Queue(

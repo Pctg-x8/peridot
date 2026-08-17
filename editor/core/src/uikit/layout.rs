@@ -158,10 +158,7 @@ impl ViewLayoutStateStore {
     }
 }
 
-crate::perf_section!(LAYOUT_VIEW_PARTIAL = "View.LayoutPartial");
-crate::perf_section!(LAYOUT_VIEW = "View.Layout");
-crate::perf_section!(COMPUTE_CONTENT_SIZE = "View.Layout.ComputeContentSize");
-
+#[profiler::instrument("View.LayoutPartial")]
 pub fn layout_view_partial_recursive(
     target: ViewIdentifier,
     ctx: &mut MeasureContext,
@@ -170,8 +167,6 @@ pub fn layout_view_partial_recursive(
     layout_state_store: &mut ViewLayoutStateStore,
     mut cb_perform_target_relayout: impl FnMut(ViewIdentifier),
 ) {
-    crate::perf_scope!(LAYOUT_VIEW_PARTIAL);
-
     let available_rect = layout_state_store.get(target).layout_rect.clone();
 
     layout_view_recursive(
@@ -185,6 +180,7 @@ pub fn layout_view_partial_recursive(
     )
 }
 
+#[profiler::instrument("View.Layout")]
 #[tracing::instrument(skip(
     ctx,
     instance_store,
@@ -201,8 +197,6 @@ pub fn layout_view_recursive(
     layout_state_store: &mut ViewLayoutStateStore,
     cb_perform_target_relayout: &mut impl FnMut(ViewIdentifier),
 ) {
-    crate::perf_scope!(LAYOUT_VIEW);
-
     let content_size = compute_actual_content_size(
         target,
         ctx,
@@ -581,6 +575,7 @@ pub fn layout_view_recursive(
     }
 }
 
+#[profiler::instrument("View.Layout.ComputeContentSize")]
 fn compute_actual_content_size(
     target: ViewIdentifier,
     ctx: &mut MeasureContext,
@@ -588,8 +583,6 @@ fn compute_actual_content_size(
     instance_store: &ViewInstanceStore,
     tree_relation_store: &ViewTreeRelationStore,
 ) -> Size<LogicalUnit> {
-    crate::perf_scope!(COMPUTE_CONTENT_SIZE);
-
     let target_inst = instance_store.get(target);
     let inner_size = if matches!(target_inst.layout.width, ViewSize::FitContent)
         || matches!(target_inst.layout.height, ViewSize::FitContent)

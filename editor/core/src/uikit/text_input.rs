@@ -26,8 +26,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        RenderContext, View, ViewIdentifier, ViewLayoutStateStore, ViewPlacement,
-        ViewRenderElements, ViewRenderQueue, ViewRenderer,
+        RenderContext, View, ViewIdentifier, ViewLayoutStateStore, ViewRenderElements,
+        ViewRenderQueue, ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,

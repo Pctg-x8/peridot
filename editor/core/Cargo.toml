@@ -12,7 +12,7 @@ wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
 freetype = ["dep:peridot-tp-freetype"]
 fontconfig = ["dep:peridot-tp-fontconfig"]
 harfbuzz = ["dep:peridot-tp-harfbuzz"]
-enable-profiling = ["windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
+enable-profiling = ["profiler/active", "windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
 
 [dependencies]
 bedrock = { workspace = true, features = [
@@ -36,6 +36,7 @@ uuid = { version = "1.22.0", features = ["v4"] }
 unicode-segmentation = "1"
 time = { version = "0.3", features = ["formatting", "std", "macros"] }
 thiserror = "2"
+profiler.path = "./profiler"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"

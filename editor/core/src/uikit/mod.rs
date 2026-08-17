@@ -371,86 +371,6 @@ impl RawMountTarget {
     }
 }
 
-/// Viewの位置の指定 デフォルトでは親コンテナに対して(0, 0)に配置される
-#[derive(Clone)]
-pub struct ViewLocation {
-    /// 親コンテナ内での基準となる(大きさに対する)相対位置
-    pub parent_anchor: [f32; 2],
-    /// 自身のサイズに対する相対位置([1.0, 0,0]を指定すると右橋基準で配置される)
-    pub anchor: [f32; 2],
-    /// オフセット量
-    pub offset: Point<LogicalUnit>,
-}
-impl Default for ViewLocation {
-    fn default() -> Self {
-        Self {
-            parent_anchor: [0.0; 2],
-            anchor: [0.0; 2],
-            offset: Point::new_logical(0.0, 0.0),
-        }
-    }
-}
-impl ViewLocation {
-    pub const fn new_left_top(x: f32, y: f32) -> Self {
-        Self {
-            parent_anchor: [0.0, 0.0],
-            anchor: [0.0, 0.0],
-            offset: Point::new_logical(x, y),
-        }
-    }
-
-    pub const fn compute(&self, size: &Size<LogicalUnit>) -> Point<LogicalUnit> {
-        Point::new_logical(
-            self.offset.x - size.width * self.anchor[0],
-            self.offset.y - size.height * self.anchor[1],
-        )
-    }
-}
-
-#[derive(Clone)]
-pub enum ViewElementSize {
-    Automatic,
-    Fixed(Size<LogicalUnit>),
-}
-impl ViewElementSize {
-    pub const fn fixed(width: f32, height: f32) -> Self {
-        Self::Fixed(Size::new_logical(width, height))
-    }
-}
-
-#[derive(Clone)]
-pub struct ViewPlacement {
-    pub location: ViewLocation,
-    pub size: ViewElementSize,
-    pub size_anchor: [f32; 2],
-}
-impl Default for ViewPlacement {
-    fn default() -> Self {
-        Self {
-            location: ViewLocation::new_left_top(0.0, 0.0),
-            size: ViewElementSize::Automatic,
-            size_anchor: [0.0; 2],
-        }
-    }
-}
-impl ViewPlacement {
-    /// 実際に配置されるサイズを計算する 引数にはAutomatic指定時の算出ロジックを渡す(Viewによって異なる)
-    pub fn actual_size(&self, automatic: impl FnOnce() -> Size<LogicalUnit>) -> Size<LogicalUnit> {
-        match self.size {
-            ViewElementSize::Fixed(x) => x,
-            ViewElementSize::Automatic => automatic(),
-        }
-    }
-
-    /// 実際に配置されるオフセット位置を計算する
-    pub fn actual_offset(&self, actual_size: &Size<LogicalUnit>) -> Point<LogicalUnit> {
-        Point::new_logical(
-            self.location.offset.x - actual_size.width * self.location.anchor[0],
-            self.location.offset.y - actual_size.height * self.location.anchor[1],
-        )
-    }
-}
-
 /// Viewの描画要素
 pub struct ViewRenderElements {
     /// CompositeTree
@@ -545,8 +465,6 @@ impl ViewGroupID {
     }
 }
 
-crate::perf_section!(VIEW_RENDER_QUEUE_PERFORM = "View.RenderQueue.Perform");
-
 pub struct ViewRenderQueue {
     pending: BTreeSet<ViewIdentifier>,
 }
@@ -561,6 +479,7 @@ impl ViewRenderQueue {
         self.pending.insert(id);
     }
 
+    #[profiler::instrument("View.RenderQueue.Perform")]
     pub fn perform(
         &mut self,
         ctx: &mut RenderContext,
@@ -569,8 +488,6 @@ impl ViewRenderQueue {
         layout_state_store: &mut ViewLayoutStateStore,
         render_state_store: &mut ViewRenderStateStore,
     ) {
-        crate::perf_scope!(VIEW_RENDER_QUEUE_PERFORM);
-
         while let Some(mut target) = self.pending.pop_first() {
             let (mount_target, kf_group) = loop {
                 let Some(p) = tree_relation_store.relations[target.into_array_index()].parent
@@ -963,8 +880,7 @@ pub fn view_iter_self_group_participants(
         .flat_map(|x| x.iter().copied())
 }
 
-crate::perf_section!(RENDER_WITH_BASE = "View.RenderWithBase");
-
+#[profiler::instrument("View.RenderWithBase")]
 pub fn render_view_with_base(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
@@ -976,8 +892,6 @@ pub fn render_view_with_base(
     layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) {
-    crate::perf_scope!(RENDER_WITH_BASE);
-
     layout_view_recursive(
         target,
         &mut MeasureContext {
@@ -1013,8 +927,7 @@ pub fn render_view_with_base(
     }
 }
 
-crate::perf_section!(RENDER_VIEW_INSTANCE1 = "View.Render.Instance");
-
+#[profiler::instrument("View.Instance.Render")]
 fn render_view_instance1(
     target: ViewIdentifier,
     ctx: &mut RenderContext,
@@ -1024,8 +937,6 @@ fn render_view_instance1(
     layout_state_store: &ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
 ) -> Option<RawMountTarget> {
-    crate::perf_scope!(RENDER_VIEW_INSTANCE1);
-
     let Some(&mut ViewInstanceCell {
         instance: Some(ref mut instance),
         active,
