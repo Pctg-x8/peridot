@@ -21,11 +21,11 @@ use crate::{
         text::{FontID, TextLayout},
     },
     uikit::{
-        CompositeTreeMutableAccess, DeriveTeardownContext, HitTestTreeMutableAccess, MountContext,
-        RenderContext, SystemLinkAccess, TeardownContext, View, ViewIdentifier,
-        ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewRegisterable,
-        ViewRelationControllable, ViewRenderElements, ViewRenderQueue, ViewRenderer,
+        DeriveTeardownContext, MountContext, RenderContext, SystemLinkAccess, TeardownContext,
+        View, ViewIdentifier, ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore,
+        ViewRegisterable, ViewRelationControllable, ViewRenderElements, ViewRenderQueue,
+        ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -407,12 +407,7 @@ impl Dock {
     fn teardown<'h>(
         self,
         env: &mut (
-                 impl ViewRegisterable
-                 + ViewImmediateTeardownable
-                 + DeriveTeardownContext<'h>
-                 + CompositeTreeMutableAccess<SyncEvent>
-                 + HitTestTreeMutableAccess<'h>
-                 + ?Sized
+                 impl ViewRegisterable + ViewImmediateTeardownable + DeriveTeardownContext<'h> + ?Sized
              ),
     ) {
         match self {
@@ -614,18 +609,6 @@ impl SystemLinkAccess for RedockingContext<'_, '_> {
     #[inline(always)]
     fn system_link<'a>(&'a self) -> &'a SystemLink<'a> {
         self.view_init_ctx.system_link
-    }
-}
-impl CompositeTreeMutableAccess<SyncEvent> for RedockingContext<'_, '_> {
-    #[inline(always)]
-    fn composite_tree_mut(&mut self) -> &mut CompositeTree<SyncEvent> {
-        self.view_init_ctx.mount_context.composite_tree
-    }
-}
-impl<'h> HitTestTreeMutableAccess<'h> for RedockingContext<'_, 'h> {
-    #[inline(always)]
-    fn hit_test_tree_mut(&mut self) -> &mut HitTestTreeManager<'h> {
-        self.view_init_ctx.mount_context.ht_manager
     }
 }
 impl<'a, 'h> core::ops::Deref for RedockingContext<'a, 'h> {
@@ -902,8 +885,6 @@ fn undock<'h>(
     env: &mut (
              impl ViewRegisterable
              + ViewImmediateTeardownable
-             + CompositeTreeMutableAccess<SyncEvent>
-             + HitTestTreeMutableAccess<'h>
              + DeriveTeardownContext<'h>
              + DerivePaneContentResizeContext<'h>
              + ViewInstanceQueryableMut
@@ -1882,18 +1863,6 @@ impl<'a, 'h> core::ops::DerefMut for PaneGroupCreateContext<'_, 'a, 'h> {
         &mut self.view_init_context.mount_context
     }
 }
-impl CompositeTreeMutableAccess<SyncEvent> for PaneGroupCreateContext<'_, '_, '_> {
-    #[inline(always)]
-    fn composite_tree_mut(&mut self) -> &mut CompositeTree<SyncEvent> {
-        self.view_init_context.mount_context.composite_tree
-    }
-}
-impl<'h> HitTestTreeMutableAccess<'h> for PaneGroupCreateContext<'_, '_, 'h> {
-    #[inline(always)]
-    fn hit_test_tree_mut(&mut self) -> &mut HitTestTreeManager<'h> {
-        self.view_init_context.mount_context.ht_manager
-    }
-}
 impl SystemLinkAccess for PaneGroupCreateContext<'_, '_, '_> {
     #[inline(always)]
     fn system_link<'a>(&'a self) -> &'a SystemLink<'a> {
@@ -2204,12 +2173,7 @@ impl PaneGroupViewController {
     fn teardown<'h>(
         mut self,
         env: &mut (
-                 impl ViewRegisterable
-                 + ViewImmediateTeardownable
-                 + DeriveTeardownContext<'h>
-                 + CompositeTreeMutableAccess<SyncEvent>
-                 + HitTestTreeMutableAccess<'h>
-                 + ?Sized
+                 impl ViewRegisterable + ViewImmediateTeardownable + DeriveTeardownContext<'h> + ?Sized
              ),
     ) {
         for mut x in self.contents.drain(..) {

@@ -6,8 +6,8 @@ use std::{
 };
 
 use bedrock::{
-    self as br, CommandBufferMut, DescriptorPoolMut, Device, Image, ImageChild, MemoryBound,
-    QueueMut, RenderPass, ShaderModule, TypedVulkanStructure, VkHandle,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, MemoryBound, QueueMut, RenderPass,
+    ShaderModule, TypedVulkanStructure, VkHandle,
 };
 use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
 

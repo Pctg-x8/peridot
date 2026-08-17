@@ -16,19 +16,11 @@ use crate::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Rect, Size},
 };
 
 pub trait SystemLinkAccess {
     fn system_link<'a>(&'a self) -> &'a SystemLink<'a>;
-}
-
-pub trait CompositeTreeMutableAccess<Event> {
-    fn composite_tree_mut(&mut self) -> &mut CompositeTree<Event>;
-}
-
-pub trait HitTestTreeMutableAccess<'h> {
-    fn hit_test_tree_mut(&mut self) -> &mut HitTestTreeManager<'h>;
 }
 
 pub struct MountContext<'a, 'h> {
@@ -36,10 +28,6 @@ pub struct MountContext<'a, 'h> {
     pub ht_manager: &'a mut HitTestTreeManager<'h>,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
-}
-
-pub trait DeriveMountContext<'h> {
-    fn derive_mount_context<'env2>(&'env2 mut self) -> MountContext<'env2, 'h>;
 }
 
 pub struct MeasureContext<'env> {
@@ -80,19 +68,6 @@ impl<'h> RenderContext<'_, 'h> {
     ) {
         self.view_feedback_subscription_delayed_ops
             .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
-    }
-}
-
-pub struct RenderChildScheduler {
-    mount_on: Option<RawMountTarget>,
-}
-impl RenderChildScheduler {
-    pub fn new() -> Self {
-        Self { mount_on: None }
-    }
-
-    pub fn schedule_render_children(&mut self, mount_on: RawMountTarget) {
-        self.mount_on = Some(mount_on);
     }
 }
 

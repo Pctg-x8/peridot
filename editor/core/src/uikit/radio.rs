@@ -17,7 +17,7 @@ use crate::{
         RenderContext, TeardownContext, View, ViewIdentifier, ViewInstanceQueryableMut,
         ViewLayoutStateStore, ViewRenderElements,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct RadioButtonView {
