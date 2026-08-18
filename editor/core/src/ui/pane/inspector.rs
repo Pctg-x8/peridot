@@ -1,6 +1,6 @@
 use std::{cell::Cell, rc::Rc};
 
-use peridot_math::{Vector3, Vector3F32};
+use peridot_math::Vector3;
 
 use crate::{
     model::{
@@ -288,7 +288,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
         let object_selection_changed = self.object_selection_changed.replace(false);
 
         if object_selection_changed {
-            match context.application.selection_state() {
+            match crate::model::selection_state(context) {
                 ObjectSelectionState::None => {
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_label)
@@ -305,11 +305,13 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                     self.items_container_mounted.set(false);
                 }
                 ObjectSelectionState::Single { id, name } => {
+                    let object_label_text = format!("Object {id}");
+                    let name_label_text = format!("Name: {name}");
+
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_label)
                         .expect("query failed")
-                        .set_text(format!("Object {id}"));
-                    let name_label_text = format!("Name: {name}");
+                        .set_text(object_label_text);
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
                         .expect("query failed")
@@ -375,31 +377,58 @@ impl TextInputViewIO for EventHandler {
     fn text(&self, requester: ViewIdentifier, application: &Application) -> String {
         if requester == self.vec3_editors[0].x {
             // pos x
-            format!("{:.3}", application.selected_object_local_translate_x())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_translate_x(application)
+            )
         } else if requester == self.vec3_editors[0].y {
             // pos y
-            format!("{:.3}", application.selected_object_local_translate_y())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_translate_y(application)
+            )
         } else if requester == self.vec3_editors[0].z {
             // pos z
-            format!("{:.3}", application.selected_object_local_translate_z())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_translate_z(application)
+            )
         } else if requester == self.vec3_editors[1].x {
             // rotate x
-            format!("{:.3}", application.selected_object_local_rotate_x())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_rotate_x(application)
+            )
         } else if requester == self.vec3_editors[1].y {
             // rotate y
-            format!("{:.3}", application.selected_object_local_rotate_y())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_rotate_y(application)
+            )
         } else if requester == self.vec3_editors[1].z {
             // rotate z
-            format!("{:.3}", application.selected_object_local_rotate_z())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_rotate_z(application)
+            )
         } else if requester == self.vec3_editors[2].x {
             // scale x
-            format!("{:.3}", application.selected_object_local_scale_x())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_scale_x(application)
+            )
         } else if requester == self.vec3_editors[2].y {
             // scale y
-            format!("{:.3}", application.selected_object_local_scale_y())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_scale_y(application)
+            )
         } else if requester == self.vec3_editors[2].z {
             // scale z
-            format!("{:.3}", application.selected_object_local_scale_z())
+            format!(
+                "{:.3}",
+                crate::model::selected_object_local_scale_z(application)
+            )
         } else {
             "-".into()
         }
@@ -417,63 +446,63 @@ impl TextInputViewIO for EventHandler {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_translate_x(v);
+            crate::model::set_selected_object_local_translate_x(application, v);
         } else if sender == self.vec3_editors[0].y {
             // pos y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_translate_y(v);
+            crate::model::set_selected_object_local_translate_y(application, v);
         } else if sender == self.vec3_editors[0].z {
             // pos z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_translate_z(v);
+            crate::model::set_selected_object_local_translate_z(application, v);
         } else if sender == self.vec3_editors[1].x {
             // rotate x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_rotation_x(v);
+            crate::model::set_selected_object_local_rotation_x(application, v);
         } else if sender == self.vec3_editors[1].y {
             // rotate y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_rotation_y(v);
+            crate::model::set_selected_object_local_rotation_y(application, v);
         } else if sender == self.vec3_editors[1].z {
             // rotate z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_rotation_z(v);
+            crate::model::set_selected_object_local_rotation_z(application, v);
         } else if sender == self.vec3_editors[2].x {
             // scale x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_scale_x(v);
+            crate::model::set_selected_object_local_scale_x(application, v);
         } else if sender == self.vec3_editors[2].y {
             // scale y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_scale_y(v);
+            crate::model::set_selected_object_local_scale_y(application, v);
         } else if sender == self.vec3_editors[2].z {
             // scale z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.set_selected_object_local_scale_z(v);
+            crate::model::set_selected_object_local_scale_z(application, v);
         }
     }
 }
@@ -481,31 +510,58 @@ impl NumericInputViewIO for EventHandler {
     fn set_delta(&self, sender: ViewIdentifier, application: &mut ApplicationMutation, delta: f32) {
         if sender == self.vec3_editors[0].x {
             // pos x
-            application.apply_selected_object_local_translate_delta(Vector3(delta * 0.1, 0.0, 0.0));
+            crate::model::apply_selected_object_local_translate_delta(
+                application,
+                Vector3(delta * 0.1, 0.0, 0.0),
+            );
         } else if sender == self.vec3_editors[0].y {
             // pos y
-            application.apply_selected_object_local_translate_delta(Vector3(0.0, delta * 0.1, 0.0));
+            crate::model::apply_selected_object_local_translate_delta(
+                application,
+                Vector3(0.0, delta * 0.1, 0.0),
+            );
         } else if sender == self.vec3_editors[0].z {
             // pos z
-            application.apply_selected_object_local_translate_delta(Vector3(0.0, 0.0, delta * 0.1));
+            crate::model::apply_selected_object_local_translate_delta(
+                application,
+                Vector3(0.0, 0.0, delta * 0.1),
+            );
         } else if sender == self.vec3_editors[1].x {
             // rotate x
-            application.apply_selected_object_local_rotate_delta(Vector3(delta, 0.0, 0.0));
+            crate::model::apply_selected_object_local_rotate_delta(
+                application,
+                Vector3(delta, 0.0, 0.0),
+            );
         } else if sender == self.vec3_editors[1].y {
             // rotate y
-            application.apply_selected_object_local_rotate_delta(Vector3(0.0, delta, 0.0));
+            crate::model::apply_selected_object_local_rotate_delta(
+                application,
+                Vector3(0.0, delta, 0.0),
+            );
         } else if sender == self.vec3_editors[1].z {
             // rotate z
-            application.apply_selected_object_local_rotate_delta(Vector3(0.0, 0.0, delta));
+            crate::model::apply_selected_object_local_rotate_delta(
+                application,
+                Vector3(0.0, 0.0, delta),
+            );
         } else if sender == self.vec3_editors[2].x {
             // scale x
-            application.apply_selected_object_local_scale_delta(Vector3(delta * 0.1, 0.0, 0.0));
+            crate::model::apply_selected_object_local_scale_delta(
+                application,
+                Vector3(delta * 0.1, 0.0, 0.0),
+            );
         } else if sender == self.vec3_editors[2].y {
             // scale y
-            application.apply_selected_object_local_scale_delta(Vector3(0.0, delta * 0.1, 0.0));
+            crate::model::apply_selected_object_local_scale_delta(
+                application,
+                Vector3(0.0, delta * 0.1, 0.0),
+            );
         } else if sender == self.vec3_editors[2].z {
             // scale z
-            application.apply_selected_object_local_scale_delta(Vector3(0.0, 0.0, delta * 0.1));
+            crate::model::apply_selected_object_local_scale_delta(
+                application,
+                Vector3(0.0, 0.0, delta * 0.1),
+            );
         }
     }
 }

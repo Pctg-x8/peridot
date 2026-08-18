@@ -12,7 +12,7 @@ use crate::{
         FocusTargetToken, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
-    model::Application,
+    model::{Application, ApplicationAccess},
     rendering::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
@@ -44,6 +44,12 @@ pub struct RenderContext<'env, 'h> {
     pub main_thread_texture_id_issuer: &'env mut MainThreadTextureIDIssuer,
     pub application: &'env Application,
     pub view_feedback_subscription_delayed_ops: &'env mut VecDeque<ViewFeedbackRegistryDelayedOps>,
+}
+impl ApplicationAccess for RenderContext<'_, '_> {
+    #[inline(always)]
+    fn application(&self) -> &Application {
+        self.application
+    }
 }
 impl<'h> RenderContext<'_, 'h> {
     pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env, 'h> {
@@ -1279,6 +1285,12 @@ pub struct ViewFeedbackContext<'a, 'h> {
     pub application: &'a Application,
     pub view_init_context: ViewInitContext<'a, 'h>,
     pub view_render_queue: &'a mut ViewRenderQueue,
+}
+impl ApplicationAccess for ViewFeedbackContext<'_, '_> {
+    #[inline(always)]
+    fn application(&self) -> &Application {
+        self.application
+    }
 }
 impl ViewFeedbackContext<'_, '_> {
     #[inline(always)]

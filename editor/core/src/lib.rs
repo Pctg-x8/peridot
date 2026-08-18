@@ -5839,46 +5839,58 @@ async fn run<'sys>(
 
                 match id {
                     MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
-                        ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        }
-                        .object_create("New Plane".into());
+                        crate::model::object_create(
+                            &mut ApplicationMutation {
+                                state: &mut application,
+                                view_feedbacks: &mut view_feedback_store,
+                            },
+                            "New Plane".into(),
+                        );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
-                        ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        }
-                        .object_create("New Cube".into());
+                        crate::model::object_create(
+                            &mut ApplicationMutation {
+                                state: &mut application,
+                                view_feedbacks: &mut view_feedback_store,
+                            },
+                            "New Cube".into(),
+                        );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
-                        ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        }
-                        .object_create("New Sphere".into());
+                        crate::model::object_create(
+                            &mut ApplicationMutation {
+                                state: &mut application,
+                                view_feedbacks: &mut view_feedback_store,
+                            },
+                            "New Sphere".into(),
+                        );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
-                        ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        }
-                        .object_create("New Cylinder".into());
+                        crate::model::object_create(
+                            &mut ApplicationMutation {
+                                state: &mut application,
+                                view_feedbacks: &mut view_feedback_store,
+                            },
+                            "New Cylinder".into(),
+                        );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
-                        ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        }
-                        .object_create("New Capsule".into());
+                        crate::model::object_create(
+                            &mut ApplicationMutation {
+                                state: &mut application,
+                                view_feedbacks: &mut view_feedback_store,
+                            },
+                            "New Capsule".into(),
+                        );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
-                        ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        }
-                        .object_create("New Terrain".into());
+                        crate::model::object_create(
+                            &mut ApplicationMutation {
+                                state: &mut application,
+                                view_feedbacks: &mut view_feedback_store,
+                            },
+                            "New Terrain".into(),
+                        );
                     }
                     _ => {
                         tracing::warn!(id, "unhandled menu command");
@@ -6344,7 +6356,8 @@ async fn run<'sys>(
                     preview_latched_key_motion_amplifier = None;
                 }
 
-                let current_handle_shape = match application.preview_edit_tool_type() {
+                let current_handle_shape = match crate::model::preview_edit_tool_type(&application)
+                {
                     PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
                     PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
                     PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
@@ -8339,9 +8352,7 @@ impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        context
-            .application
-            .set_preview_edit_tool_type(self.bound_tool_type);
+        crate::model::set_preview_edit_tool_type(context, self.bound_tool_type);
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -8442,7 +8453,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         let is_selecting =
-            context.application.preview_edit_tool_type() == PreviewEditToolType::Translate;
+            crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Translate;
         context
             .view_instance_mut::<PreviewToolSelectorButtonView>(self.translate_tool_button_view_id)
             .expect("query failed")
@@ -8450,7 +8461,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
         context.schedule_render(self.translate_tool_button_view_id);
 
         let is_selecting =
-            context.application.preview_edit_tool_type() == PreviewEditToolType::Rotate;
+            crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Rotate;
         context
             .view_instance_mut::<PreviewToolSelectorButtonView>(self.rotate_tool_button_view_id)
             .expect("query failed")
@@ -8458,7 +8469,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
         context.schedule_render(self.rotate_tool_button_view_id);
 
         let is_selecting =
-            context.application.preview_edit_tool_type() == PreviewEditToolType::Scale;
+            crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Scale;
         context
             .view_instance_mut::<PreviewToolSelectorButtonView>(self.scale_tool_button_view_id)
             .expect("query failed")

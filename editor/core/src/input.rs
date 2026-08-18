@@ -12,7 +12,7 @@ use crate::{
         CursorShape, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
-    model::ApplicationMutation,
+    model::{Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation},
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uikit::{
@@ -77,6 +77,23 @@ impl ViewRenderer for InputEventContext<'_, '_, '_> {
     #[inline(always)]
     fn schedule_view_render(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
+    }
+}
+impl ApplicationAccess for InputEventContext<'_, '_, '_> {
+    #[inline(always)]
+    fn application(&self) -> &Application {
+        self.application.application()
+    }
+}
+impl ApplicationMutableAccess for InputEventContext<'_, '_, '_> {
+    #[inline(always)]
+    fn application_mut(&mut self) -> &mut Application {
+        self.application.application_mut()
+    }
+
+    #[inline(always)]
+    fn dispatch_view_feedback(&mut self, feedback: crate::model::ViewFeedback) {
+        self.application.dispatch_view_feedback(feedback);
     }
 }
 

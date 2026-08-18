@@ -210,7 +210,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 context.teardown_view_recursive(x);
                 context.view_init_context.free_view(x);
             }
-            for (n, x, name) in context.application.object_tree_content() {
+            for (n, x, name) in crate::model::object_tree_content(context.application) {
                 let rv = context.view_init_context.construct_view(|id| {
                     Box::new(ObjectRowView::new(
                         id,
@@ -264,7 +264,7 @@ impl crate::uikit::View for ObjectRowView {
         ctx: &mut crate::uikit::RenderContext,
         _layout_state: &crate::uikit::ViewLayoutStateStore,
     ) -> ViewRenderElements {
-        let selected = ctx.application.object_is_selected(self.assigned_object);
+        let selected = crate::model::object_is_selected(ctx, self.assigned_object);
 
         let e = match self.eh {
             // TODO: reflect state changes
@@ -443,11 +443,9 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
     ) -> EventContinueControl {
         if args.button == PointerButton::Primary {
             if args.key_modifier.contains(ModifierKey::CONTROL) {
-                context
-                    .application
-                    .toggle_object_selection_additive(self.assigned_object);
+                crate::model::toggle_object_selection_additive(context, self.assigned_object);
             } else {
-                context.application.select_object(self.assigned_object);
+                crate::model::select_object(context, self.assigned_object);
             }
 
             return EventContinueControl::STOP_PROPAGATION;

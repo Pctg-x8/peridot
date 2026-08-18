@@ -65,12 +65,6 @@ impl Object {
     }
 }
 
-pub enum ObjectSelectionState<'a> {
-    None,
-    Single { id: ObjectID, name: &'a str },
-    Multiple,
-}
-
 /// Logical Application Model
 pub struct Application {
     objects: Vec<Object>,
@@ -143,127 +137,403 @@ impl Application {
     pub fn object(&self, id: ObjectID) -> &Object {
         &self.objects[id.into_array_index()]
     }
+}
 
-    pub fn object_is_selected(&self, id: ObjectID) -> bool {
-        self.selected_objects.contains(&id)
+pub trait ApplicationAccess {
+    fn application(&self) -> &Application;
+}
+impl ApplicationAccess for Application {
+    #[inline(always)]
+    fn application(&self) -> &Application {
+        self
     }
+}
 
-    pub fn object_tree_content(&self) -> impl Iterator<Item = (usize, ObjectID, &str)> {
-        self.root_objects
-            .iter()
-            .enumerate()
-            .map(|(n, &id)| (n, id, self.object(id).name.as_str()))
-    }
+pub trait ApplicationMutableAccess: ApplicationAccess {
+    fn application_mut(&mut self) -> &mut Application;
+    fn dispatch_view_feedback(&mut self, feedback: ViewFeedback);
+}
 
-    pub fn selection_state<'a>(&'a self) -> ObjectSelectionState<'a> {
-        match self.selected_objects.len() {
-            0 => ObjectSelectionState::None,
-            1 => {
-                let id = *self.selected_objects.iter().next().expect("no selection?");
+pub fn object_is_selected(env: &(impl ApplicationAccess + ?Sized), id: ObjectID) -> bool {
+    env.application().selected_objects.contains(&id)
+}
 
-                ObjectSelectionState::Single {
-                    id,
-                    name: &self.object(id).name,
-                }
+pub fn object_tree_content(
+    env: &(impl ApplicationAccess + ?Sized),
+) -> impl Iterator<Item = (usize, ObjectID, &str)> {
+    env.application()
+        .root_objects
+        .iter()
+        .enumerate()
+        .map(move |(n, &id)| (n, id, env.application().object(id).name.as_str()))
+}
+
+pub enum ObjectSelectionState<'a> {
+    None,
+    Single { id: ObjectID, name: &'a str },
+    Multiple,
+}
+pub fn selection_state<'a>(env: &'a (impl ApplicationAccess + ?Sized)) -> ObjectSelectionState<'a> {
+    match env.application().selected_objects.len() {
+        0 => ObjectSelectionState::None,
+        1 => {
+            let id = *env
+                .application()
+                .selected_objects
+                .iter()
+                .next()
+                .expect("no selection?");
+
+            ObjectSelectionState::Single {
+                id,
+                name: &env.application().object(id).name,
             }
-            _ => ObjectSelectionState::Multiple,
+        }
+        _ => ObjectSelectionState::Multiple,
+    }
+}
+
+pub fn preview_edit_tool_type(env: &(impl ApplicationAccess + ?Sized)) -> PreviewEditToolType {
+    env.application().preview_edit_tool_type
+}
+
+// TODO: multiple selection
+pub fn selected_object_local_translate_x(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_position.0
+}
+
+pub fn selected_object_local_translate_y(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_position.1
+}
+
+pub fn selected_object_local_translate_z(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_position.2
+}
+
+pub fn selected_object_local_rotate_x(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_rotation_euler.0
+}
+
+pub fn selected_object_local_rotate_y(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_rotation_euler.1
+}
+
+pub fn selected_object_local_rotate_z(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_rotation_euler.2
+}
+
+pub fn selected_object_local_scale_x(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_scale.0
+}
+
+pub fn selected_object_local_scale_y(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_scale.1
+}
+
+pub fn selected_object_local_scale_z(env: &(impl ApplicationAccess + ?Sized)) -> f32 {
+    let id = env
+        .application()
+        .selected_objects
+        .iter()
+        .next()
+        .copied()
+        .expect("no selection");
+    env.application().object(id).local_scale.2
+}
+
+pub fn object_create(env: &mut (impl ApplicationMutableAccess + ?Sized), name: String) -> ObjectID {
+    let id = env.application_mut().alloc_object(Object::new(name));
+    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    id
+}
+
+pub fn object_destroy(env: &mut (impl ApplicationMutableAccess + ?Sized), id: ObjectID) {
+    env.application_mut().free_object(id);
+    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+}
+
+pub fn object_set_parent(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    id: ObjectID,
+    parent: ObjectID,
+) {
+    match env.application_mut().objects[id.into_array_index()]
+        .parent
+        .replace(parent)
+    {
+        None => {
+            // detach from root
+            env.application_mut().root_objects.retain(|&oid| oid != id);
+        }
+        Some(old_parent) if old_parent == parent => {
+            // already linked
+            return;
+        }
+        Some(old_parent) => {
+            // detach from old parent
+            env.application_mut().objects[old_parent.into_array_index()]
+                .children
+                .retain(|&oid| oid != id);
         }
     }
 
-    pub const fn preview_edit_tool_type(&self) -> PreviewEditToolType {
-        self.preview_edit_tool_type
-    }
+    env.application_mut().objects[parent.into_array_index()]
+        .children
+        .push(id);
+    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+}
 
-    // TODO: multiple selection
-    pub fn selected_object_local_translate_x(&self) -> f32 {
-        let id = self
+pub fn object_detach_parent(env: &mut (impl ApplicationMutableAccess + ?Sized), child: ObjectID) {
+    let Some(parent) = env.application_mut().objects[child.into_array_index()]
+        .parent
+        .take()
+    else {
+        // already on root
+        return;
+    };
+
+    env.application_mut().objects[parent.into_array_index()]
+        .children
+        .retain(|&id| id != child);
+    env.application_mut().root_objects.push(parent);
+
+    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+}
+
+pub fn object_modify_data(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    id: ObjectID,
+    updater: impl FnOnce(&mut Object),
+) {
+    updater(&mut env.application_mut().objects[id.into_array_index()]);
+    env.dispatch_view_feedback(ViewFeedback::object_data_changed(id));
+}
+
+// TODO: multiple selection
+pub fn set_selected_object_local_translate_x(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_position.0 = v);
+}
+
+pub fn set_selected_object_local_translate_y(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_position.1 = v);
+}
+
+pub fn set_selected_object_local_translate_z(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_position.2 = v);
+}
+
+pub fn set_selected_object_local_rotation_x(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_rotation_euler.0 = v);
+}
+
+pub fn set_selected_object_local_rotation_y(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_rotation_euler.1 = v);
+}
+
+pub fn set_selected_object_local_rotation_z(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_rotation_euler.2 = v);
+}
+
+pub fn set_selected_object_local_scale_x(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_scale.0 = v);
+}
+
+pub fn set_selected_object_local_scale_y(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_scale.1 = v);
+}
+
+pub fn set_selected_object_local_scale_z(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: f32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_scale.2 = v);
+}
+
+pub fn apply_selected_object_local_translate_delta(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    delta: Vector3F32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_position += delta);
+}
+
+pub fn apply_selected_object_local_rotate_delta(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    delta: Vector3F32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_rotation_euler += delta);
+}
+
+pub fn apply_selected_object_local_scale_delta(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    delta: Vector3F32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_scale += delta);
+}
+
+pub fn select_object(env: &mut (impl ApplicationMutableAccess + ?Sized), id: ObjectID) {
+    if env.application_mut().selected_objects.len() == 1
+        && env
+            .application_mut()
             .selected_objects
             .iter()
             .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_position.0
+            .is_some_and(|&x| x == id)
+    {
+        // already selected
+        return;
     }
 
-    pub fn selected_object_local_translate_y(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_position.1
+    env.application_mut().selected_objects.clear();
+    env.application_mut().selected_objects.insert(id);
+    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+}
+
+pub fn toggle_object_selection_additive(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    id: ObjectID,
+) {
+    if !env.application_mut().selected_objects.insert(id) {
+        // selecting
+        env.application_mut().selected_objects.remove(&id);
     }
 
-    pub fn selected_object_local_translate_z(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_position.2
-    }
+    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+}
 
-    pub fn selected_object_local_rotate_x(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_rotation_euler.0
-    }
-
-    pub fn selected_object_local_rotate_y(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_rotation_euler.1
-    }
-
-    pub fn selected_object_local_rotate_z(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_rotation_euler.2
-    }
-
-    pub fn selected_object_local_scale_x(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_scale.0
-    }
-
-    pub fn selected_object_local_scale_y(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_scale.1
-    }
-
-    pub fn selected_object_local_scale_z(&self) -> f32 {
-        let id = self
-            .selected_objects
-            .iter()
-            .next()
-            .copied()
-            .expect("no selection");
-        self.object(id).local_scale.2
-    }
+pub fn set_preview_edit_tool_type(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    tool_type: PreviewEditToolType,
+) {
+    env.application_mut().preview_edit_tool_type = tool_type;
+    env.dispatch_view_feedback(ViewFeedback::preview_edit_tool_type_changed());
 }
 
 pub struct ApplicationMutation<'a> {
@@ -278,210 +548,21 @@ impl core::ops::Deref for ApplicationMutation<'_> {
         self.state
     }
 }
-impl ApplicationMutation<'_> {
-    pub fn object_create(&mut self, name: String) -> ObjectID {
-        let id = self.state.alloc_object(Object::new(name));
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_tree_changed());
-        id
+impl ApplicationAccess for ApplicationMutation<'_> {
+    #[inline(always)]
+    fn application(&self) -> &Application {
+        self.state
+    }
+}
+impl ApplicationMutableAccess for ApplicationMutation<'_> {
+    #[inline(always)]
+    fn application_mut(&mut self) -> &mut Application {
+        self.state
     }
 
-    pub fn object_destroy(&mut self, id: ObjectID) {
-        self.state.free_object(id);
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_tree_changed());
-    }
-
-    pub fn object_set_parent(&mut self, id: ObjectID, parent: ObjectID) {
-        match self.state.objects[id.into_array_index()]
-            .parent
-            .replace(parent)
-        {
-            None => {
-                // detach from root
-                self.state.root_objects.retain(|&oid| oid != id);
-            }
-            Some(old_parent) if old_parent == parent => {
-                // already linked
-                return;
-            }
-            Some(old_parent) => {
-                // detach from old parent
-                self.state.objects[old_parent.into_array_index()]
-                    .children
-                    .retain(|&oid| oid != id);
-            }
-        }
-
-        self.state.objects[parent.into_array_index()]
-            .children
-            .push(id);
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_tree_changed());
-    }
-
-    pub fn object_detach_parent(&mut self, child: ObjectID) {
-        let Some(parent) = self.state.objects[child.into_array_index()].parent.take() else {
-            // already on root
-            return;
-        };
-
-        self.state.objects[parent.into_array_index()]
-            .children
-            .retain(|&id| id != child);
-        self.state.root_objects.push(parent);
-
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_tree_changed());
-    }
-
-    pub fn object_modify_data(&mut self, id: ObjectID, updater: impl FnOnce(&mut Object)) {
-        updater(&mut self.state.objects[id.into_array_index()]);
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_data_changed(id));
-    }
-
-    // TODO: multiple selection
-    pub fn set_selected_object_local_translate_x(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_position.0 = v);
-    }
-
-    pub fn set_selected_object_local_translate_y(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_position.1 = v);
-    }
-
-    pub fn set_selected_object_local_translate_z(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_position.2 = v);
-    }
-
-    pub fn set_selected_object_local_rotation_x(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_rotation_euler.0 = v);
-    }
-
-    pub fn set_selected_object_local_rotation_y(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_rotation_euler.1 = v);
-    }
-
-    pub fn set_selected_object_local_rotation_z(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_rotation_euler.2 = v);
-    }
-
-    pub fn set_selected_object_local_scale_x(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_scale.0 = v);
-    }
-
-    pub fn set_selected_object_local_scale_y(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_scale.1 = v);
-    }
-
-    pub fn set_selected_object_local_scale_z(&mut self, v: f32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_scale.2 = v);
-    }
-
-    pub fn apply_selected_object_local_translate_delta(&mut self, delta: Vector3F32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_position += delta);
-    }
-
-    pub fn apply_selected_object_local_rotate_delta(&mut self, delta: Vector3F32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_rotation_euler += delta);
-    }
-
-    pub fn apply_selected_object_local_scale_delta(&mut self, delta: Vector3F32) {
-        let Some(&selected) = self.selected_objects.iter().next() else {
-            return;
-        };
-
-        self.object_modify_data(selected, |o| o.local_scale += delta);
-    }
-
-    pub fn select_object(&mut self, id: ObjectID) {
-        if self.state.selected_objects.len() == 1
-            && self
-                .state
-                .selected_objects
-                .iter()
-                .next()
-                .is_some_and(|&x| x == id)
-        {
-            // already selected
-            return;
-        }
-
-        self.state.selected_objects.clear();
-        self.state.selected_objects.insert(id);
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_selection_changed());
-    }
-
-    pub fn toggle_object_selection_additive(&mut self, id: ObjectID) {
-        if !self.state.selected_objects.insert(id) {
-            // selecting
-            self.state.selected_objects.remove(&id);
-        }
-
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_selection_changed());
-    }
-
-    pub fn clear_selection(&mut self) {
-        if self.state.selected_objects.is_empty() {
-            // already cleared
-            return;
-        }
-
-        self.state.selected_objects.clear();
-        self.view_feedbacks
-            .push_back(ViewFeedback::object_selection_changed());
-    }
-
-    pub fn set_preview_edit_tool_type(&mut self, tool_type: PreviewEditToolType) {
-        self.state.preview_edit_tool_type = tool_type;
-        self.view_feedbacks
-            .push_back(ViewFeedback::preview_edit_tool_type_changed());
+    #[inline(always)]
+    fn dispatch_view_feedback(&mut self, feedback: ViewFeedback) {
+        self.view_feedbacks.push_back(feedback);
     }
 }
 
