@@ -14,8 +14,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
-    num::NonZeroUsize,
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,

@@ -10,13 +10,14 @@ use crate::{
         },
     },
     rendering::{
-        Normalized2DStaticMeshTexture, Normalized2DStaticMeshTextureLazyInit,
+        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture,
+        Normalized2DStaticMeshTextureLazyInit, RenderMessageSender,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectScaleFactor, CompositeRectText, CompositeRectTextHorizontalAlignment,
             CompositeRectTextRun, CompositeRectTextVerticalAlignment, CompositeTexture,
-            CompositeTreeRef, CornerRadius, FloatAnimationTemplate, TextureMappingMode,
-            TextureType,
+            CompositeTree, CompositeTreeRef, CornerRadius, FloatAnimationTemplate,
+            TextureMappingMode, TextureType,
         },
         text::{FontID, TextLayout},
     },
@@ -57,6 +58,76 @@ static SHARED_CHECK_ICON: Normalized2DStaticMeshTextureLazyInit =
         indices: &[0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5],
     });
 
+pub struct CheckmarkVisual {
+    ct_check: CompositeTreeRef,
+    current: Cell<bool>,
+}
+impl CheckmarkVisual {
+    pub fn new<E>(
+        composite_tree: &mut CompositeTree<E>,
+        main_thread_texture_id_issuer: &mut MainThreadTextureIDIssuer,
+        rt_sender: &RenderMessageSender,
+        ct_external_config: impl FnOnce() -> CompositeRect<E>,
+    ) -> Self {
+        let ct_root = composite_tree.create(CompositeRect {
+            pivot: [0.5, 0.5],
+            has_bitmap: true,
+            composite_mode: CompositeMode::ColorTint(
+                AnimatableColor::Value([1.0; 4]),
+                CompositeTexture {
+                    id: SHARED_CHECK_ICON.get(main_thread_texture_id_issuer, rt_sender),
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0; 4],
+                },
+            ),
+            opacity: AnimatableFloat::Value(0.0),
+            ..ct_external_config()
+        });
+
+        Self {
+            ct_check: ct_root,
+            current: Cell::new(false),
+        }
+    }
+
+    pub const fn ct(&self) -> CompositeTreeRef {
+        self.ct_check
+    }
+
+    pub fn set<E: Clone>(
+        &self,
+        checked: bool,
+        composite_tree: &mut CompositeTree<E>,
+        current_sec: f32,
+    ) {
+        if self.current.replace(checked) == checked {
+            // no changes
+            return;
+        }
+
+        composite_tree
+            .begin_mod_chain(self.ct_check)
+            .opacity_animated_from_template(
+                if checked {
+                    &CHECKMARK_ACTIVATE_OPACITY_ANIM
+                } else {
+                    &CHECKMARK_DEACTIVATE_OPACITY_ANIM
+                },
+                current_sec,
+            )
+            .scale_animated_from_template(
+                if checked {
+                    &CHECKMARK_ACTIVATE_SCALE_ANIM
+                } else {
+                    &CHECKMARK_DEACTIVATE_SCALE_ANIM
+                },
+                current_sec,
+            )
+            .apply();
+    }
+}
+
 pub struct ToggleButtonView {
     entity: Option<Rc<ToggleButtonEventHandler>>,
     label: String,
@@ -92,11 +163,6 @@ impl View for ToggleButtonView {
             }
             None => {
                 // first render
-                let check_icon = SHARED_CHECK_ICON.get(
-                    ctx.main_thread_texture_id_issuer,
-                    ctx.system_link.rt_sender(),
-                );
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
@@ -130,31 +196,6 @@ impl View for ToggleButtonView {
                     }),
                     ..Default::default()
                 });
-                let ct_check = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(6.0),
-                        AnimatableFloat::Value(-SHARED_CHECK_ICON.height() * 0.5),
-                    ],
-                    relative_offset_adjustment: [0.0, 0.5],
-                    size: [
-                        AnimatableFloat::Value(SHARED_CHECK_ICON.width()),
-                        AnimatableFloat::Value(SHARED_CHECK_ICON.height()),
-                    ],
-                    pivot: [0.5, 0.5],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::ColorTint(
-                        AnimatableColor::Value([1.0; 4]),
-                        CompositeTexture {
-                            id: check_icon,
-                            r#type: TextureType::Mask,
-                            mapping: TextureMappingMode::Stretch,
-                            slice_borders: [0.0; 4],
-                        },
-                    ),
-                    opacity: AnimatableFloat::Value(0.0),
-                    ..Default::default()
-                });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
                     left: layout_rect.left,
                     top: layout_rect.top,
@@ -164,13 +205,31 @@ impl View for ToggleButtonView {
                     ..Default::default()
                 });
 
-                ctx.composite_tree.add_child(ct_root, ct_check);
+                let checkvis = CheckmarkVisual::new(
+                    ctx.composite_tree,
+                    ctx.main_thread_texture_id_issuer,
+                    ctx.system_link.rt_sender(),
+                    || CompositeRect {
+                        scale_factor: CompositeRectScaleFactor::UI,
+                        offset: [
+                            AnimatableFloat::Value(SHARED_CHECK_ICON.width() * 0.5),
+                            AnimatableFloat::Value(-SHARED_CHECK_ICON.height() * 0.5),
+                        ],
+                        relative_offset_adjustment: [0.0, 0.5],
+                        size: [
+                            AnimatableFloat::Value(SHARED_CHECK_ICON.width()),
+                            AnimatableFloat::Value(SHARED_CHECK_ICON.height()),
+                        ],
+                        ..Default::default()
+                    },
+                );
+
+                ctx.composite_tree.add_child(ct_root, checkvis.ct());
 
                 let eh = Rc::new(ToggleButtonEventHandler {
                     ct_root,
-                    ct_check,
+                    checkvis,
                     ht_root,
-                    current: Cell::new(false),
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
@@ -212,9 +271,8 @@ impl View for ToggleButtonView {
 
 struct ToggleButtonEventHandler {
     ct_root: CompositeTreeRef,
-    ct_check: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    current: Cell<bool>,
+    checkvis: CheckmarkVisual,
 }
 impl HitTestTreeActionHandler for ToggleButtonEventHandler {
     fn on_pointer_enter(
@@ -265,29 +323,11 @@ impl HitTestTreeActionHandler for ToggleButtonEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.current.update(|x| !x);
-        let active = self.current.get();
-
-        context
-            .composite_tree
-            .begin_mod_chain(self.ct_check)
-            .opacity_animated_from_template(
-                if active {
-                    &CHECKMARK_ACTIVATE_OPACITY_ANIM
-                } else {
-                    &CHECKMARK_DEACTIVATE_OPACITY_ANIM
-                },
-                context.current_sec,
-            )
-            .scale_animated_from_template(
-                if active {
-                    &CHECKMARK_ACTIVATE_SCALE_ANIM
-                } else {
-                    &CHECKMARK_DEACTIVATE_SCALE_ANIM
-                },
-                context.current_sec,
-            )
-            .apply();
+        self.checkvis.set(
+            !self.checkvis.current.get(),
+            context.composite_tree,
+            context.current_sec,
+        );
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -324,11 +364,6 @@ impl View for CheckboxView {
             }
             None => {
                 // first render
-                let check_icon = SHARED_CHECK_ICON.get(
-                    ctx.main_thread_texture_id_issuer,
-                    ctx.system_link.rt_sender(),
-                );
-
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
@@ -351,31 +386,6 @@ impl View for CheckboxView {
                     corner_radius: CornerRadius::all(2.0),
                     ..Default::default()
                 });
-                let ct_check = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(-SHARED_CHECK_ICON.width() * 0.5),
-                        AnimatableFloat::Value(-SHARED_CHECK_ICON.height() * 0.5),
-                    ],
-                    relative_offset_adjustment: [0.5, 0.5],
-                    pivot: [0.5, 0.5],
-                    size: [
-                        AnimatableFloat::Value(SHARED_CHECK_ICON.width()),
-                        AnimatableFloat::Value(SHARED_CHECK_ICON.height()),
-                    ],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::ColorTint(
-                        AnimatableColor::Value([1.0; 4]),
-                        CompositeTexture {
-                            id: check_icon,
-                            r#type: TextureType::Mask,
-                            mapping: TextureMappingMode::Stretch,
-                            slice_borders: [0.0; 4],
-                        },
-                    ),
-                    opacity: AnimatableFloat::Value(0.0),
-                    ..Default::default()
-                });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
                     left: layout_rect.left,
                     top: layout_rect.top,
@@ -385,13 +395,31 @@ impl View for CheckboxView {
                     ..Default::default()
                 });
 
-                ctx.composite_tree.add_child(ct_root, ct_check);
+                let checkvis = CheckmarkVisual::new(
+                    ctx.composite_tree,
+                    ctx.main_thread_texture_id_issuer,
+                    ctx.system_link.rt_sender(),
+                    || CompositeRect {
+                        scale_factor: CompositeRectScaleFactor::UI,
+                        offset: [
+                            AnimatableFloat::Value(-SHARED_CHECK_ICON.width() * 0.5),
+                            AnimatableFloat::Value(-SHARED_CHECK_ICON.height() * 0.5),
+                        ],
+                        relative_offset_adjustment: [0.5, 0.5],
+                        size: [
+                            AnimatableFloat::Value(SHARED_CHECK_ICON.width()),
+                            AnimatableFloat::Value(SHARED_CHECK_ICON.height()),
+                        ],
+                        ..Default::default()
+                    },
+                );
+
+                ctx.composite_tree.add_child(ct_root, checkvis.ct());
 
                 let eh = Rc::new(CheckboxEventHandler {
                     ct_root,
-                    ct_check,
+                    check_vis: checkvis,
                     ht_root,
-                    current: Cell::new(false),
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
@@ -416,16 +444,18 @@ impl View for CheckboxView {
         ctx.mount_context.ht_manager.free_all(e.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(16.0, 16.0)
     }
 }
 
 struct CheckboxEventHandler {
     ct_root: CompositeTreeRef,
-    ct_check: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    current: Cell<bool>,
+    check_vis: CheckmarkVisual,
 }
 impl HitTestTreeActionHandler for CheckboxEventHandler {
     fn on_pointer_enter(
@@ -482,29 +512,11 @@ impl HitTestTreeActionHandler for CheckboxEventHandler {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.current.update(|x| !x);
-        let active = self.current.get();
-
-        context
-            .composite_tree
-            .begin_mod_chain(self.ct_check)
-            .opacity_animated_from_template(
-                if active {
-                    &CHECKMARK_ACTIVATE_OPACITY_ANIM
-                } else {
-                    &CHECKMARK_DEACTIVATE_OPACITY_ANIM
-                },
-                context.current_sec,
-            )
-            .scale_animated_from_template(
-                if active {
-                    &CHECKMARK_ACTIVATE_SCALE_ANIM
-                } else {
-                    &CHECKMARK_DEACTIVATE_SCALE_ANIM
-                },
-                context.current_sec,
-            )
-            .apply();
+        self.check_vis.set(
+            !self.check_vis.current.get(),
+            context.composite_tree,
+            context.current_sec,
+        );
 
         EventContinueControl::STOP_PROPAGATION
     }
