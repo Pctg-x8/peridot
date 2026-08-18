@@ -686,7 +686,9 @@ impl DockingManager {
                     ..
                 } => {
                     env.view_set_parent(group_view_controller.tab_strip_view, root_view);
-                    env.view_set_parent(group_view_controller.content_container_view, root_view);
+                    for x in group_view_controller.contents.iter() {
+                        env.view_set_parent(x.container, root_view);
+                    }
                 }
                 &Dock::Splitted {
                     docked,
@@ -844,7 +846,9 @@ fn split_new(
                     0,
                 );
                 view_init_ctx.view_set_parent(vc.tab_strip_view, manager.root_view_id);
-                view_init_ctx.view_set_parent(vc.content_container_view, manager.root_view_id);
+                for x in vc.contents.iter() {
+                    view_init_ctx.view_set_parent(x.container, manager.root_view_id);
+                }
 
                 Dock::Fill {
                     parent: parent_id,
@@ -989,7 +993,7 @@ fn redock(
                 unreachable!("merge into non-fill dock");
             };
 
-            target_group_view_controller.add_content(content, true, ctx);
+            target_group_view_controller.add_content(manager.root_view_id, content, true, ctx);
             let target_rect = store.get_computed_state(target).rect.clone();
             relayout_dock(
                 target,
@@ -1018,7 +1022,13 @@ fn redock(
                 unreachable!("merge into non-fill dock");
             };
 
-            target_group_view_controller.insert_content(content, index, true, ctx);
+            target_group_view_controller.insert_content(
+                manager.root_view_id,
+                content,
+                index,
+                true,
+                ctx,
+            );
             let target_rect = store.get_computed_state(target).rect.clone();
             relayout_dock(
                 target,
@@ -2112,8 +2122,6 @@ pub struct PaneGroupViewController {
     dock: DockID,
     /// タブ部分
     tab_strip_view: ViewIdentifier,
-    /// 内容
-    content_container_view: ViewIdentifier,
     /// このグループに所属しているタブとPresenterのインスタンスのリスト
     contents: Vec<PaneGroupContent>,
     /// 現在アクティブなタブのViewID
@@ -2128,8 +2136,6 @@ impl PaneGroupViewController {
         initial_active_index: usize,
     ) -> Self {
         let tab_strip_view = ctx.construct_view(|_| Box::new(PaneGroupTabStripView::new()));
-        let content_container_view =
-            ctx.construct_view(|_| Box::new(PaneGroupContainerView::new()));
 
         let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let contents = contents
@@ -2146,11 +2152,13 @@ impl PaneGroupViewController {
                         index == initial_active_index,
                     ))
                 });
-                ctx.view_set_visibility(c.root_view_id(), index == initial_active_index);
+                let container = ctx.construct_view(|_| Box::new(PaneGroupContainerView::new()));
+                ctx.view_set_parent(c.root_view_id(), container);
+                ctx.view_set_visibility(container, index == initial_active_index);
                 ctx.view_set_parent(tab_view, tab_strip_view);
-                ctx.view_set_parent(c.root_view_id(), content_container_view);
 
                 PaneGroupContent {
+                    container,
                     presenter: c,
                     tab_view,
                     tab_width,
@@ -2164,7 +2172,6 @@ impl PaneGroupViewController {
             current_active_tab_view: contents[initial_active_index].tab_view,
             dock,
             tab_strip_view,
-            content_container_view,
             contents,
         }
     }
@@ -2181,11 +2188,9 @@ impl PaneGroupViewController {
             env.free_view(x.tab_view);
 
             x.presenter.teardown(&mut env.derive_teardown_context());
-            env.teardown_view_recursive(x.presenter.root_view_id());
+            env.teardown_view_recursive(x.container);
         }
 
-        env.teardown_view_recursive(self.content_container_view);
-        env.free_view(self.content_container_view);
         env.teardown_view_recursive(self.tab_strip_view);
         env.free_view(self.tab_strip_view);
     }
@@ -2197,17 +2202,17 @@ impl PaneGroupViewController {
         let content_size = content_rect.size();
 
         context
-            .view_instance_mut::<PaneGroupContainerView>(self.content_container_view)
-            .expect("query failed")
-            .set_rect(content_rect);
-        context.schedule_view_render(self.content_container_view);
-        context
             .view_instance_mut::<PaneGroupTabStripView>(self.tab_strip_view)
             .expect("query failed")
             .set_rect(tab_strip_rect);
         context.schedule_view_render(self.tab_strip_view);
 
         for x in self.contents.iter() {
+            context
+                .view_instance_mut::<PaneGroupContainerView>(x.container)
+                .expect("query failed")
+                .set_rect(content_rect.clone());
+            context.schedule_view_render(x.container);
             x.presenter.resize(&content_size, context);
         }
     }
@@ -2242,6 +2247,7 @@ impl PaneGroupViewController {
     /// コンテンツを追加する
     fn add_content<'a, 'h: 'a>(
         &mut self,
+        dock_root_view: ViewIdentifier,
         content: Box<dyn PaneContentPresenter>,
         with_activate: bool,
         env: &mut (
@@ -2264,10 +2270,13 @@ impl PaneGroupViewController {
                 with_activate,
             ))
         });
+        let container = env.construct_view(|_| Box::new(PaneGroupContainerView::new()));
+        env.view_set_parent(content.root_view_id(), container);
         env.view_set_parent(tab_view, self.tab_strip_view);
-        env.view_set_parent(content.root_view_id(), self.content_container_view);
+        env.view_set_parent(container, dock_root_view);
 
         self.contents.push(PaneGroupContent {
+            container,
             presenter: content,
             tab_view,
             tab_width,
@@ -2282,6 +2291,7 @@ impl PaneGroupViewController {
     /// コンテンツを挿入する
     fn insert_content<'a, 'h: 'a>(
         &mut self,
+        dock_root_view: ViewIdentifier,
         content: Box<dyn PaneContentPresenter>,
         index: usize,
         with_activate: bool,
@@ -2305,12 +2315,15 @@ impl PaneGroupViewController {
                 with_activate,
             ))
         });
+        let container = env.construct_view(|_| Box::new(PaneGroupContainerView::new()));
         env.view_set_parent(tab_view, self.tab_strip_view);
-        env.view_set_parent(content.root_view_id(), self.content_container_view);
+        env.view_set_parent(content.root_view_id(), container);
+        env.view_set_parent(container, dock_root_view);
 
         self.contents.insert(
             index,
             PaneGroupContent {
+                container,
                 presenter: content,
                 tab_view,
                 tab_width,
@@ -2420,11 +2433,10 @@ impl PaneGroupViewController {
                 .iter()
                 .position(|x| x.tab_view == self.current_active_tab_view)
                 .expect("invalid tab selected");
-            // TODO: rootがRenderElementをもたないViewの場合(ContainerViewとか)だとvisibility制御がきかないのでなんとかする必要がある
-            env.view_set_visibility(self.contents[old_index].presenter.root_view_id(), false);
-            env.schedule_view_render(self.contents[old_index].presenter.root_view_id());
-            env.view_set_visibility(self.contents[new_index].presenter.root_view_id(), true);
-            env.schedule_view_render(self.contents[new_index].presenter.root_view_id());
+            env.view_set_visibility(self.contents[old_index].container, false);
+            env.schedule_view_render(self.contents[old_index].container);
+            env.view_set_visibility(self.contents[new_index].container, true);
+            env.schedule_view_render(self.contents[new_index].container);
         }
     }
 
@@ -2499,6 +2511,8 @@ impl PaneGroupViewController {
 
 /// PaneGroupのコンテンツごとの情報
 struct PaneGroupContent {
+    /// Containre View
+    container: ViewIdentifier,
     /// Presenter
     presenter: Box<dyn PaneContentPresenter>,
     /// タブViewのID
@@ -2927,8 +2941,8 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             unreachable!("tab on non-fill dock?");
         };
 
-        let content_ht_root = crate::uikit::view_instance::<PaneGroupContainerView>(
-            group_view_controller.content_container_view,
+        let content_ht_root = crate::uikit::view_instance::<PaneGroupTabStripView>(
+            group_view_controller.tab_strip_view,
             context.view_instance_store,
         )
         .expect("query failed")
