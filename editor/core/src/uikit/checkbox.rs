@@ -126,6 +126,23 @@ impl CheckmarkVisual {
             )
             .apply();
     }
+
+    pub fn set_without_transition<E: Clone>(
+        &self,
+        checked: bool,
+        composite_tree: &mut CompositeTree<E>,
+    ) {
+        if self.current.replace(checked) == checked {
+            // no changes
+            return;
+        }
+
+        composite_tree
+            .begin_mod_chain(self.ct_check)
+            .opacity_imm(if checked { 1.0 } else { 0.0 })
+            .scale_imm(1.0)
+            .apply();
+    }
 }
 
 pub struct ToggleButtonView {

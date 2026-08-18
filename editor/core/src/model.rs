@@ -53,7 +53,7 @@ impl Object {
             local_rotation_euler: peridot_math::Vector3(0.0, 0.0, 0.0),
             local_scale: peridot_math::Vector3(1.0, 1.0, 1.0),
             world_matrix: peridot_math::Matrix4F32::ONE,
-            render_enabled: false,
+            render_enabled: true,
             render_shape: ObjectRenderShape::Cube,
         }
     }
@@ -496,6 +496,22 @@ pub fn apply_selected_object_local_scale_delta(
     };
 
     object_modify_data(env, selected, |o| o.local_scale += delta);
+}
+
+pub fn selected_object_render_is_enabled(env: &(impl ApplicationAccess + ?Sized)) -> bool {
+    let Some(&selected) = env.application().selected_objects.iter().next() else {
+        return false;
+    };
+
+    env.application().object(selected).render_enabled
+}
+
+pub fn toggle_selected_object_render_enable(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.render_enabled = !o.render_enabled);
 }
 
 pub fn select_object(env: &mut (impl ApplicationMutableAccess + ?Sized), id: ObjectID) {

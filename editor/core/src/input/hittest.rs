@@ -162,6 +162,15 @@ impl<'h> HitTestTreeManager<'h> {
     }
 
     #[inline]
+    pub fn set_action_handler_weak(
+        &mut self,
+        r: HitTestTreeRef,
+        h: std::rc::Weak<impl HitTestTreeActionHandler + 'h>,
+    ) {
+        self.data[r.0].action_handler = Some(h as _);
+    }
+
+    #[inline]
     pub fn replace_action_handler(
         &mut self,
         r: HitTestTreeRef,

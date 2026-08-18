@@ -3,18 +3,30 @@ use std::{cell::Cell, rc::Rc};
 use peridot_math::Vector3;
 
 use crate::{
-    model::{
-        Application, ApplicationMutation, ObjectSelectionState, ViewFeedbackObjectSelectionChanged,
+    input::{
+        EventContinueControl,
+        hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
     },
-    rendering::text::FontID,
+    model::{
+        Application, ApplicationMutableAccess, ApplicationMutation, ObjectSelectionState,
+        ViewFeedbackObjectDataChanged, ViewFeedbackObjectSelectionChanged,
+    },
+    rendering::{
+        composite::{
+            AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
+            CompositeRectTextVerticalAlignment, CompositeTreeRef,
+        },
+        text::FontID,
+    },
     ui::dock::PaneContentResizeContext,
     uikit::{
-        CheckboxView, ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit,
-        ScrollContainer, StaticTextView, TeardownContext, TextInputViewIO, ViewFeedbackContext,
+        ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit, ScrollContainer,
+        StaticTextView, TeardownContext, TextInputViewIO, View, ViewFeedbackContext,
         ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext,
         ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
-        ViewRelationControllable, ViewRenderer, ViewSize,
+        ViewRelationControllable, ViewRenderer, ViewSize, checkbox::CheckmarkVisual,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -90,11 +102,12 @@ impl Presenter {
             let scale_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(scale_editor.root_view, content_view);
 
-            let render_checkbox = ctx.construct_view(|_| Box::new(CheckboxView::new()));
-            let section_label =
-                ctx.construct_view(|_| Box::new(StaticTextView::new("Render".into())));
-            ctx.view_set_parent(render_checkbox, content_view);
-            ctx.view_set_parent(section_label, content_view);
+            let render_section_header = ctx
+                .construct_view(|_| Box::new(SectionHeaderView::new("Render".into(), eh.clone())));
+            ctx.view_layout_mut(render_section_header)
+                .expect("query failed")
+                .width = ViewSize::FillAvailable;
+            ctx.view_set_parent(render_section_header, content_view);
 
             let label = ctx.construct_view(|_| {
                 let mut v = Box::new(StaticTextView::new("SHAPE".into()));
@@ -141,10 +154,12 @@ impl Presenter {
                 items_content_view: content_view,
                 vec3_editors: vec![position_editor, rotation_editor, scale_editor],
                 numeric_input_view_ids: vec![],
+                render_section_header_view: render_section_header,
             }
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
+        ctx.subscribe_view_feedback::<ViewFeedbackObjectDataChanged>(&eh);
 
         Self { eh }
     }
@@ -165,6 +180,7 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
         ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectDataChanged>(&self.eh);
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
@@ -268,6 +284,251 @@ impl Vec3EditorComponent {
     }
 }
 
+struct SectionHeaderView {
+    name: String,
+    event_handler: std::rc::Weak<EventHandler>,
+    entity: Option<Rc<SectionHeaderViewEntity>>,
+    checked: bool,
+    next_checked_with_transition: bool,
+}
+impl SectionHeaderView {
+    pub fn new(name: String, event_handler: std::rc::Weak<EventHandler>) -> Self {
+        Self {
+            name,
+            event_handler,
+            entity: None,
+            checked: false,
+            next_checked_with_transition: true,
+        }
+    }
+
+    /// Returns `true` if the checked state changed.
+    pub fn set_checked(&mut self, checked: bool, with_transition: bool) -> bool {
+        let changed = core::mem::replace(&mut self.checked, checked) != checked;
+        self.next_checked_with_transition = with_transition;
+        changed
+    }
+}
+impl View for SectionHeaderView {
+    fn render(
+        &mut self,
+        layout_rect: Rect<LogicalUnit>,
+        ctx: &mut crate::uikit::RenderContext,
+        _layout_state: &crate::uikit::ViewLayoutStateStore,
+    ) -> crate::uikit::ViewRenderElements {
+        let entity = match self.entity {
+            Some(ref e) => {
+                if core::mem::replace(&mut self.next_checked_with_transition, true) {
+                    e.checkmark
+                        .set(self.checked, ctx.composite_tree, ctx.current_sec);
+                } else {
+                    e.checkmark
+                        .set_without_transition(self.checked, ctx.composite_tree);
+                }
+
+                e
+            }
+            None => {
+                // first render
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
+                    ],
+                    size: [
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.0,
+                    ])),
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: self.name.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        offset: [24.0, 0.0],
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_topline = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
+                    relative_size_adjustment: [1.0, 0.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.25,
+                    ])),
+                    ..Default::default()
+                });
+                let ct_bottomline = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
+                    relative_size_adjustment: [1.0, 0.0],
+                    relative_offset_adjustment: [0.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        1.0, 1.0, 1.0, 0.25,
+                    ])),
+                    ..Default::default()
+                });
+                let checkmark = CheckmarkVisual::new(
+                    ctx.composite_tree,
+                    ctx.main_thread_texture_id_issuer,
+                    ctx.system_link.rt_sender(),
+                    || CompositeRect {
+                        scale_factor: CompositeRectScaleFactor::UI,
+                        relative_offset_adjustment: [0.0, 0.5],
+                        offset: [
+                            AnimatableFloat::Value((24.0 - 12.0) * 0.5),
+                            AnimatableFloat::Value(-6.0),
+                        ],
+                        size: [AnimatableFloat::Value(12.0), AnimatableFloat::Value(12.0)],
+                        ..Default::default()
+                    },
+                );
+                ctx.composite_tree.add_child(ct_root, ct_topline);
+                ctx.composite_tree.add_child(ct_root, ct_bottomline);
+                ctx.composite_tree.add_child(ct_root, checkmark.ct());
+
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
+                    cursor_shape: CursorShape::Pointer,
+                    ..Default::default()
+                });
+
+                let entity = Rc::new(SectionHeaderViewEntity {
+                    parent_event_handler: self.event_handler.clone(),
+                    ct_root,
+                    ht_root,
+                    checkmark,
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &entity);
+
+                // 最初はトランジションなしでマークを反映する
+                entity
+                    .checkmark
+                    .set_without_transition(self.checked, ctx.composite_tree);
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        crate::uikit::ViewRenderElements {
+            composite_tree: Some(entity.ct_root),
+            hit_tree: Some(entity.ht_root),
+            ..crate::uikit::ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 24.0)
+    }
+}
+
+struct SectionHeaderViewEntity {
+    parent_event_handler: std::rc::Weak<EventHandler>,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    checkmark: CheckmarkVisual,
+}
+impl HitTestTreeActionHandler for SectionHeaderViewEntity {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.125],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerActionArgs,
+    ) -> EventContinueControl {
+        context
+            .composite_tree
+            .begin_mod_chain(self.ct_root)
+            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.125],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+            }))
+            .apply();
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_down(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_up(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        let Some(parent) = self.parent_event_handler.upgrade() else {
+            return EventContinueControl::empty();
+        };
+
+        parent.on_toggle_render_enable(context);
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
 struct EventHandler {
     object_selection_changed: Cell<bool>,
     items_container_mounted: Cell<bool>,
@@ -278,6 +539,12 @@ struct EventHandler {
     items_content_view: ViewIdentifier,
     vec3_editors: Vec<Vec3EditorComponent>,
     numeric_input_view_ids: Vec<ViewIdentifier>,
+    render_section_header_view: ViewIdentifier,
+}
+impl EventHandler {
+    fn on_toggle_render_enable(&self, ctx: &mut (impl ApplicationMutableAccess + ?Sized)) {
+        crate::model::toggle_selected_object_render_enable(ctx);
+    }
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
     fn accept_feedback<'a, 'h>(
@@ -342,6 +609,16 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                             .expect("query failed")
                             .revalidate();
                     }
+
+                    let render_enabled = crate::model::selected_object_render_is_enabled(context);
+                    if context
+                        .view_instance_mut::<SectionHeaderView>(self.render_section_header_view)
+                        .expect("query failed")
+                        .set_checked(render_enabled, false)
+                    {
+                        // should re-render
+                        context.schedule_render(self.render_section_header_view);
+                    }
                 }
                 ObjectSelectionState::Multiple => {
                     context
@@ -371,6 +648,23 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for EventHandler {
         _context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.object_selection_changed.set(true);
+    }
+}
+impl ViewFeedbackHandler<ViewFeedbackObjectDataChanged> for EventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackObjectDataChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        let render_enabled = crate::model::selected_object_render_is_enabled(context);
+        if context
+            .view_instance_mut::<SectionHeaderView>(self.render_section_header_view)
+            .expect("query failed")
+            .set_checked(render_enabled, true)
+        {
+            // should re-render
+            context.schedule_render(self.render_section_header_view);
+        }
     }
 }
 impl TextInputViewIO for EventHandler {
