@@ -6,7 +6,7 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    Application, ApplicationMutation, LogicFiberEventDispatcher, SystemLink,
+    LogicFiberEventDispatcher, SystemLink,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputCode,
         KeyInputEventHandler, ModifierKey, PointerInputUnit,
@@ -16,6 +16,7 @@ use crate::{
             PointerButtonActionArgs, ScrollWheelActionArgs, ScrollWheelActionResponse,
         },
     },
+    model::{Application, ApplicationMutation},
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,

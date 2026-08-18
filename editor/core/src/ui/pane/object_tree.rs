@@ -6,8 +6,7 @@ use std::{
 use crate::{
     Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
-    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE, ObjectID,
-    ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged,
+    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -15,6 +14,7 @@ use crate::{
             PointerActionArgs, PointerButton, PointerButtonActionArgs,
         },
     },
+    model::{ObjectID, ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged},
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
         CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
@@ -210,13 +210,12 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 context.teardown_view_recursive(x);
                 context.view_init_context.free_view(x);
             }
-            for (n, &x) in context.application.root_objects.iter().enumerate() {
-                let o = context.application.object(x);
+            for (n, x, name) in context.application.object_tree_content() {
                 let rv = context.view_init_context.construct_view(|id| {
                     Box::new(ObjectRowView::new(
                         id,
                         x,
-                        o.name.clone(),
+                        name.into(),
                         n as f32 * ObjectRowView::ITEM_HEIGHT,
                     ))
                 });

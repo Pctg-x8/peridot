@@ -7,11 +7,12 @@ use std::{
 use bitflags::bitflags;
 
 use crate::{
-    ApplicationMutation, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
+    FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
+    model::ApplicationMutation,
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uikit::{

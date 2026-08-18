@@ -2420,6 +2420,7 @@ impl PaneGroupViewController {
                 .iter()
                 .position(|x| x.tab_view == self.current_active_tab_view)
                 .expect("invalid tab selected");
+            // TODO: rootがRenderElementをもたないViewの場合(ContainerViewとか)だとvisibility制御がきかないのでなんとかする必要がある
             env.view_set_visibility(self.contents[old_index].presenter.root_view_id(), false);
             env.schedule_view_render(self.contents[old_index].presenter.root_view_id());
             env.view_set_visibility(self.contents[new_index].presenter.root_view_id(), true);

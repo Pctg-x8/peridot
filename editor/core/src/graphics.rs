@@ -46,6 +46,7 @@ pub struct Graphics<'fs> {
     graphics_queue_family_index: u32,
     pipeline_cache_path: PathBuf,
     pipeline_cache: br::vk::VkPipelineCache,
+    min_uniform_buffer_offset_alignment: u64,
     fp_cmd_pipeline_barrier2: br::vk::PFN_vkCmdPipelineBarrier2KHR,
     fp_create_render_pass2: br::vk::PFN_vkCreateRenderPass2KHR,
     fp_cmd_begin_render_pass2: br::vk::PFN_vkCmdBeginRenderPass2KHR,
@@ -320,6 +321,9 @@ impl<'fs> Graphics<'fs> {
         let graphics_queue_family_index = vk_adapter_queue_family_properties
             .find_matching_index(br::QueueFlags::GRAPHICS)
             .expect("no graphics queue");
+        let vk_adapter_properties = vk_adapter.properties();
+        let min_uniform_buffer_offset_alignment =
+            vk_adapter_properties.limits.minUniformBufferOffsetAlignment;
 
         let mut device_features =
             br::PhysicalDeviceFeatures2::new(br::vk::VkPhysicalDeviceFeatures {
@@ -409,6 +413,7 @@ impl<'fs> Graphics<'fs> {
             fp_get_memory_win32_handle_properties: unsafe {
                 br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
+            min_uniform_buffer_offset_alignment,
             pipeline_cache: pipeline_cache.unmanage().0,
             pipeline_cache_path,
             memory_properties: vk_adapter_memory_properties,
@@ -423,6 +428,11 @@ impl<'fs> Graphics<'fs> {
     #[inline(always)]
     pub const fn primary_adapter_ref<'s>(&'s self) -> VulkanDeviceAdapterRef<'s, 'fs> {
         VulkanDeviceAdapterRef(self.adapter, self)
+    }
+
+    #[inline(always)]
+    pub const fn min_uniform_buffer_offset_alignment(&self) -> u64 {
+        self.min_uniform_buffer_offset_alignment
     }
 
     #[inline(always)]

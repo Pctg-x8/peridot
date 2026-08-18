@@ -1,7 +1,11 @@
 use std::{cell::Cell, rc::Rc};
 
+use peridot_math::{Vector3, Vector3F32};
+
 use crate::{
-    Application, ApplicationMutation, ViewFeedbackObjectSelectionChanged,
+    model::{
+        Application, ApplicationMutation, ObjectSelectionState, ViewFeedbackObjectSelectionChanged,
+    },
     rendering::text::FontID,
     ui::dock::PaneContentResizeContext,
     uikit::{
@@ -284,8 +288,8 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
         let object_selection_changed = self.object_selection_changed.replace(false);
 
         if object_selection_changed {
-            match context.application.selected_objects.len() {
-                0 => {
+            match context.application.selection_state() {
+                ObjectSelectionState::None => {
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_label)
                         .expect("query failed")
@@ -300,20 +304,12 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                     context.view_detach_parent(self.items_container_view);
                     self.items_container_mounted.set(false);
                 }
-                1 => {
-                    let id = *unsafe {
-                        context
-                            .application
-                            .selected_objects
-                            .iter()
-                            .next()
-                            .unwrap_unchecked()
-                    };
+                ObjectSelectionState::Single { id, name } => {
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_label)
                         .expect("query failed")
                         .set_text(format!("Object {id}"));
-                    let name_label_text = format!("Name: {}", context.application.object(id).name);
+                    let name_label_text = format!("Name: {name}");
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
                         .expect("query failed")
@@ -345,7 +341,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                             .revalidate();
                     }
                 }
-                _ => {
+                ObjectSelectionState::Multiple => {
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_label)
                         .expect("query failed")
@@ -377,38 +373,33 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for EventHandler {
 }
 impl TextInputViewIO for EventHandler {
     fn text(&self, requester: ViewIdentifier, application: &Application) -> String {
-        // TODO: multi-select
-        let Some(&selected) = application.selected_objects.iter().next() else {
-            return "-".into();
-        };
-
         if requester == self.vec3_editors[0].x {
             // pos x
-            format!("{:.3}", application.object(selected).local_position.0)
+            format!("{:.3}", application.selected_object_local_translate_x())
         } else if requester == self.vec3_editors[0].y {
             // pos y
-            format!("{:.3}", application.object(selected).local_position.1)
+            format!("{:.3}", application.selected_object_local_translate_y())
         } else if requester == self.vec3_editors[0].z {
             // pos z
-            format!("{:.3}", application.object(selected).local_position.2)
+            format!("{:.3}", application.selected_object_local_translate_z())
         } else if requester == self.vec3_editors[1].x {
             // rotate x
-            format!("{:.3}", application.object(selected).local_rotation_euler.0)
+            format!("{:.3}", application.selected_object_local_rotate_x())
         } else if requester == self.vec3_editors[1].y {
             // rotate y
-            format!("{:.3}", application.object(selected).local_rotation_euler.1)
+            format!("{:.3}", application.selected_object_local_rotate_y())
         } else if requester == self.vec3_editors[1].z {
             // rotate z
-            format!("{:.3}", application.object(selected).local_rotation_euler.2)
+            format!("{:.3}", application.selected_object_local_rotate_z())
         } else if requester == self.vec3_editors[2].x {
             // scale x
-            format!("{:.3}", application.object(selected).local_scale.0)
+            format!("{:.3}", application.selected_object_local_scale_x())
         } else if requester == self.vec3_editors[2].y {
             // scale y
-            format!("{:.3}", application.object(selected).local_scale.1)
+            format!("{:.3}", application.selected_object_local_scale_y())
         } else if requester == self.vec3_editors[2].z {
             // scale z
-            format!("{:.3}", application.object(selected).local_scale.2)
+            format!("{:.3}", application.selected_object_local_scale_z())
         } else {
             "-".into()
         }
@@ -420,111 +411,101 @@ impl TextInputViewIO for EventHandler {
         application: &mut ApplicationMutation,
         input: String,
     ) {
-        // TODO: multi-select
-        let Some(&selected) = application.selected_objects.iter().next() else {
-            return;
-        };
-
         if sender == self.vec3_editors[0].x {
             // pos x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_position.0 = v);
+            application.set_selected_object_local_translate_x(v);
         } else if sender == self.vec3_editors[0].y {
             // pos y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_position.1 = v);
+            application.set_selected_object_local_translate_y(v);
         } else if sender == self.vec3_editors[0].z {
             // pos z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_position.2 = v);
+            application.set_selected_object_local_translate_z(v);
         } else if sender == self.vec3_editors[1].x {
             // rotate x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_rotation_euler.0 = v);
+            application.set_selected_object_local_rotation_x(v);
         } else if sender == self.vec3_editors[1].y {
             // rotate y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_rotation_euler.1 = v);
+            application.set_selected_object_local_rotation_y(v);
         } else if sender == self.vec3_editors[1].z {
             // rotate z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_rotation_euler.2 = v);
+            application.set_selected_object_local_rotation_z(v);
         } else if sender == self.vec3_editors[2].x {
             // scale x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_scale.0 = v);
+            application.set_selected_object_local_scale_x(v);
         } else if sender == self.vec3_editors[2].y {
             // scale y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_scale.1 = v);
+            application.set_selected_object_local_scale_y(v);
         } else if sender == self.vec3_editors[2].z {
             // scale z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            application.object_modify_data(selected, |o| o.local_scale.2 = v);
+            application.set_selected_object_local_scale_z(v);
         }
     }
 }
 impl NumericInputViewIO for EventHandler {
     fn set_delta(&self, sender: ViewIdentifier, application: &mut ApplicationMutation, delta: f32) {
-        // TODO: multi-select
-        let Some(&selected) = application.selected_objects.iter().next() else {
-            return;
-        };
-
         if sender == self.vec3_editors[0].x {
             // pos x
-            application.object_modify_data(selected, |o| o.local_position.0 += delta * 0.1);
+            application.apply_selected_object_local_translate_delta(Vector3(delta * 0.1, 0.0, 0.0));
         } else if sender == self.vec3_editors[0].y {
             // pos y
-            application.object_modify_data(selected, |o| o.local_position.1 += delta * 0.1);
+            application.apply_selected_object_local_translate_delta(Vector3(0.0, delta * 0.1, 0.0));
         } else if sender == self.vec3_editors[0].z {
             // pos z
-            application.object_modify_data(selected, |o| o.local_position.2 += delta * 0.1);
+            application.apply_selected_object_local_translate_delta(Vector3(0.0, 0.0, delta * 0.1));
         } else if sender == self.vec3_editors[1].x {
             // rotate x
-            application.object_modify_data(selected, |o| o.local_rotation_euler.0 += delta);
+            application.apply_selected_object_local_rotate_delta(Vector3(delta, 0.0, 0.0));
         } else if sender == self.vec3_editors[1].y {
             // rotate y
-            application.object_modify_data(selected, |o| o.local_rotation_euler.1 += delta);
+            application.apply_selected_object_local_rotate_delta(Vector3(0.0, delta, 0.0));
         } else if sender == self.vec3_editors[1].z {
             // rotate z
-            application.object_modify_data(selected, |o| o.local_rotation_euler.2 += delta);
+            application.apply_selected_object_local_rotate_delta(Vector3(0.0, 0.0, delta));
         } else if sender == self.vec3_editors[2].x {
             // scale x
-            application.object_modify_data(selected, |o| o.local_scale.0 += delta * 0.1);
+            application.apply_selected_object_local_scale_delta(Vector3(delta * 0.1, 0.0, 0.0));
         } else if sender == self.vec3_editors[2].y {
             // scale y
-            application.object_modify_data(selected, |o| o.local_scale.1 += delta * 0.1);
+            application.apply_selected_object_local_scale_delta(Vector3(0.0, delta * 0.1, 0.0));
         } else if sender == self.vec3_editors[2].z {
             // scale z
-            application.object_modify_data(selected, |o| o.local_scale.2 += delta * 0.1);
+            application.apply_selected_object_local_scale_delta(Vector3(0.0, 0.0, delta * 0.1));
         }
     }
 }

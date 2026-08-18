@@ -7,11 +7,12 @@ use std::{
 };
 
 use crate::{
-    Application, SyncEvent, SystemLink,
+    SyncEvent, SystemLink,
     input::{
         FocusTargetToken, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
+    model::Application,
     rendering::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},

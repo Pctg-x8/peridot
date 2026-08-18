@@ -9,7 +9,7 @@ use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, ImageChild,
     MemoryBound, VkHandle,
 };
-use peridot_math::{Camera, Matrix4, Matrix4F32, One};
+use peridot_math::{Camera, Matrix4, Matrix4F32, One, Vector3};
 
 use crate::{
     graphics::{
@@ -1346,6 +1346,7 @@ pub struct Renderer {
     object_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
     descriptor_pool: br::vk::VkDescriptorPool,
     common_descriptor_set: br::DescriptorSet,
+    offsettable_object_descriptor_set: br::DescriptorSet,
     dynamic_ubuf_object_descriptor_pool: br::vk::VkDescriptorPool,
     dynamic_ubuf_object_descriptor_sets: Vec<br::DescriptorSet>,
     dynamic_ubuf_object_descriptor_set_index_by_buffer_handle: HashMap<br::vk::VkBuffer, usize>,
@@ -1387,6 +1388,7 @@ pub struct Renderer {
     scale_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
+    handle_data_ubuf_range: core::ops::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
     dynamic_buffer: DynamicBuffer,
     dynamic_ubuf: DynamicBuffer,
@@ -1568,7 +1570,10 @@ impl Renderer {
         let unlit_colored_object_pipeline_layout = br::PipelineLayoutObject::new(
             device,
             &br::PipelineLayoutCreateInfo::new(
-                &[common_descriptor_set_layout.as_transparent_ref()],
+                &[
+                    common_descriptor_set_layout.as_transparent_ref(),
+                    object_descriptor_set_layout.as_transparent_ref(),
+                ],
                 &[],
             ),
         )
@@ -1623,10 +1628,17 @@ impl Renderer {
         let camera_data_ubuf_range = 0..size_of::<CameraData>() as br::DeviceSize;
         let gizmos_camera_data_ubuf_range =
             range_from_len_u64(camera_data_ubuf_range.end, size_of::<CameraData>() as _);
+        let handle_data_ubuf_range = range_from_len_u64(
+            rup2_u64(
+                gizmos_camera_data_ubuf_range.end,
+                device.min_uniform_buffer_offset_alignment(),
+            ),
+            size_of::<Matrix4F32>() as _,
+        );
         let mut internal_uniform_buffer = br::BufferObject::new(
             device,
             &br::BufferCreateInfo::new(
-                gizmos_camera_data_ubuf_range.end,
+                handle_data_ubuf_range.end,
                 br::BufferUsage::UNIFORM_BUFFER | br::BufferUsage::TRANSFER_DEST,
             ),
         )
@@ -1652,6 +1664,7 @@ impl Renderer {
         struct UploadBufferData {
             origin_axes_vbuf: [OriginAxesVertex; VS_ORIGIN_AXES.len()],
             camera_data_ubuf: CameraData,
+            handle_data_ubuf: Matrix4F32,
         }
         let translate_handle_vbuf_upload_offset =
             rup2(size_of::<UploadBufferData>(), align_of::<HandleVertex>());
@@ -1709,6 +1722,10 @@ impl Renderer {
             core::ptr::write(
                 &raw mut (*p).camera_data_ubuf,
                 CameraData::new(&init_state.main_camera, init_rt.aspect_wh()),
+            );
+            core::ptr::write(
+                &raw mut (*p).handle_data_ubuf,
+                Matrix4F32::translation(Vector3(1.0, 0.0, 0.0)).transpose(),
             );
 
             gen_translate_handle_mesh(
@@ -1807,10 +1824,16 @@ impl Renderer {
         .copy_buffer(
             &upload_buffer,
             &internal_uniform_buffer,
-            &[br::BufferCopy::copy_data::<CameraData>(
-                core::mem::offset_of!(UploadBufferData, camera_data_ubuf) as _,
-                camera_data_ubuf_range.start,
-            )],
+            &[
+                br::BufferCopy::copy_data::<CameraData>(
+                    core::mem::offset_of!(UploadBufferData, camera_data_ubuf) as _,
+                    camera_data_ubuf_range.start,
+                ),
+                br::BufferCopy::copy_data::<Matrix4F32>(
+                    core::mem::offset_of!(UploadBufferData, handle_data_ubuf) as _,
+                    handle_data_ubuf_range.start,
+                ),
+            ],
         )
         .inject(|r| {
             device.cmd_pipeline_barrier(
@@ -1851,21 +1874,35 @@ impl Renderer {
         let mut descriptor_pool = br::DescriptorPoolObject::new(
             device,
             &br::DescriptorPoolCreateInfo::new(
-                1,
-                &[br::DescriptorType::UniformBuffer.make_size(1)],
+                2,
+                &[
+                    br::DescriptorType::UniformBuffer.make_size(1),
+                    br::DescriptorType::UniformBufferDynamic.make_size(1),
+                ],
             ),
         )
         .expect("preview.descriptor_pool.create");
-        let [common_descriptor_set] = descriptor_pool
-            .alloc_array(&[common_descriptor_set_layout.as_transparent_ref()])
+        let [common_descriptor_set, offsettable_object_descriptor_set] = descriptor_pool
+            .alloc_array(&[
+                common_descriptor_set_layout.as_transparent_ref(),
+                object_descriptor_set_layout.as_transparent_ref(),
+            ])
             .expect("preview.descriptor.alloc");
         device.update_descriptor_sets(
-            &[common_descriptor_set
-                .binding_at(0)
-                .write(br::DescriptorContents::uniform_buffer(
-                    &internal_uniform_buffer,
-                    camera_data_ubuf_range.clone(),
-                ))],
+            &[
+                common_descriptor_set
+                    .binding_at(0)
+                    .write(br::DescriptorContents::uniform_buffer(
+                        &internal_uniform_buffer,
+                        camera_data_ubuf_range.clone(),
+                    )),
+                offsettable_object_descriptor_set.binding_at(0).write(
+                    br::DescriptorContents::uniform_buffer_dynamic(
+                        &internal_uniform_buffer,
+                        handle_data_ubuf_range.clone(),
+                    ),
+                ),
+            ],
             &[],
         );
 
@@ -1946,6 +1983,7 @@ impl Renderer {
             object_descriptor_set_layout,
             descriptor_pool,
             common_descriptor_set,
+            offsettable_object_descriptor_set,
             dynamic_ubuf_object_descriptor_pool,
             dynamic_ubuf_object_descriptor_sets,
             dynamic_ubuf_object_descriptor_set_index_by_buffer_handle: HashMap::new(),
@@ -1980,6 +2018,7 @@ impl Renderer {
             scale_handle_ibuf_range,
             internal_uniform_buffer,
             camera_data_ubuf_range,
+            handle_data_ubuf_range,
             internal_data_memory,
             scratch_staging,
             pending_camera_data_updates: None,
@@ -2824,8 +2863,11 @@ impl Renderer {
                                 &self.unlit_colored_object_pipeline_layout,
                             ),
                             0,
-                            &[self.common_descriptor_set],
-                            &[],
+                            &[
+                                self.common_descriptor_set,
+                                self.offsettable_object_descriptor_set,
+                            ],
+                            &[0],
                         )
                         .bind_vertex_buffer_array(
                             0,
@@ -2851,8 +2893,11 @@ impl Renderer {
                                 &self.unlit_colored_object_pipeline_layout,
                             ),
                             0,
-                            &[self.common_descriptor_set],
-                            &[],
+                            &[
+                                self.common_descriptor_set,
+                                self.offsettable_object_descriptor_set,
+                            ],
+                            &[0],
                         )
                         .bind_vertex_buffer_array(
                             0,
@@ -2878,8 +2923,11 @@ impl Renderer {
                                 &self.unlit_colored_object_pipeline_layout,
                             ),
                             0,
-                            &[self.common_descriptor_set],
-                            &[],
+                            &[
+                                self.common_descriptor_set,
+                                self.offsettable_object_descriptor_set,
+                            ],
+                            &[0],
                         )
                         .bind_vertex_buffer_array(
                             0,
