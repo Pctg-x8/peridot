@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashSet,
     rc::Rc,
 };
 
@@ -15,16 +16,22 @@ use crate::{
             PointerActionArgs, PointerButton, PointerButtonActionArgs,
         },
     },
-    model::{ObjectID, ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged},
+    model::{
+        ObjectID, ViewFeedbackObjectNameChanged, ViewFeedbackObjectSelectionChanged,
+        ViewFeedbackObjectTreeChanged,
+    },
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
         CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
         CompositeRectTextVerticalAlignment, CompositeTreeRef,
     },
+    ui::dock::PaneContentResizeContext,
     uikit::{
         MenuItem, TeardownContext, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext, ViewRegisterable,
-        ViewRenderElements,
+        ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowDirection, ViewRegisterable,
+        ViewRelationControllable, ViewRenderElements, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -38,14 +45,26 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let root_view_id = ctx.construct_view(|_| Box::new(View::new()));
+        {
+            let l = ctx.view_layout_mut(root_view_id).expect("query failed");
+            l.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: Default::default(),
+                justify: Default::default(),
+                overflow: Default::default(),
+                gap: 0.0,
+            };
+        }
 
         let eh = Rc::new(ObjectTreePaneEventHandler {
             root_view_id,
             object_tree_changed: Cell::new(false),
+            changed_object_ids: RefCell::new(HashSet::new()),
             row_views: RefCell::new(Vec::new()),
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
         ctx.subscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
+        ctx.subscribe_view_feedback::<ViewFeedbackObjectNameChanged>(&eh);
 
         Self { eh, root_view_id }
     }
@@ -66,6 +85,15 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
         ctx.unsubscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectNameChanged>(&self.eh);
+    }
+
+    fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
+        context
+            .view_layout_mut(self.root_view_id)
+            .expect("query failed")
+            .width = ViewSize::Fixed(new_size.width);
+        context.schedule_view_render(self.root_view_id);
     }
 }
 
@@ -195,6 +223,7 @@ impl HitTestTreeActionHandler for ViewEntity {
 struct ObjectTreePaneEventHandler {
     root_view_id: ViewIdentifier,
     object_tree_changed: Cell<bool>,
+    changed_object_ids: RefCell<HashSet<ObjectID>>,
     row_views: RefCell<Vec<ViewIdentifier>>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandler {
@@ -204,27 +233,47 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         let object_tree_changed = self.object_tree_changed.replace(false);
+        let changed_object_ids = self
+            .changed_object_ids
+            .borrow_mut()
+            .drain()
+            .collect::<Vec<_>>();
 
         if object_tree_changed {
             let mut row_views = self.row_views.borrow_mut();
             for x in row_views.drain(..) {
                 context.teardown_view_recursive(x);
-                context.view_init_context.free_view(x);
+                context.free_view(x);
             }
             for (n, x, name) in crate::model::object_tree_content(context.application) {
-                let rv = context.view_init_context.construct_view(|id| {
-                    Box::new(ObjectRowView::new(
-                        id,
-                        x,
-                        name.into(),
-                        n as f32 * ObjectRowView::ITEM_HEIGHT,
-                    ))
-                });
+                let rv =
+                    context.construct_view(|id| Box::new(ObjectRowView::new(id, x, name.into())));
+                context.view_layout_mut(rv).expect("query failed").width = ViewSize::FillAvailable;
                 context.view_set_parent(rv, self.root_view_id);
                 row_views.push(rv);
             }
 
-            context.schedule_render(self.root_view_id);
+            context.schedule_view_render(self.root_view_id);
+        } else {
+            for oid in changed_object_ids {
+                for &view in self.row_views.borrow().iter() {
+                    if context
+                        .view_instance::<ObjectRowView>(view)
+                        .expect("query failed")
+                        .assigned_object
+                        == oid
+                    {
+                        let name = crate::model::object_name(context, oid).into();
+
+                        context
+                            .view_instance_mut::<ObjectRowView>(view)
+                            .expect("query failed")
+                            .set_label(name);
+                        context.schedule_view_render(view);
+                        break;
+                    }
+                }
+            }
         }
     }
 }
@@ -237,25 +286,39 @@ impl ViewFeedbackHandler<ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventH
         self.object_tree_changed.set(true);
     }
 }
+impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for ObjectTreePaneEventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        feedback: &ViewFeedbackObjectNameChanged,
+        _context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        self.changed_object_ids.borrow_mut().insert(feedback.0);
+    }
+}
 
 struct ObjectRowView {
     id: ViewIdentifier,
     assigned_object: ObjectID,
     eh: Option<Rc<ObjectRowEventHandler>>,
     label: String,
-    y: f32,
+    label_changed: bool,
 }
 impl ObjectRowView {
     const ITEM_HEIGHT: f32 = 20.0;
 
-    fn new(id: ViewIdentifier, assigned_object: ObjectID, init_label: String, init_y: f32) -> Self {
+    fn new(id: ViewIdentifier, assigned_object: ObjectID, init_label: String) -> Self {
         Self {
             id,
             assigned_object,
             eh: None,
             label: init_label,
-            y: init_y,
+            label_changed: false,
         }
+    }
+
+    fn set_label(&mut self, label: String) {
+        self.label = label;
+        self.label_changed = true;
     }
 }
 impl crate::uikit::View for ObjectRowView {
@@ -270,6 +333,18 @@ impl crate::uikit::View for ObjectRowView {
         let e = match self.eh {
             // TODO: reflect state changes
             Some(ref e) => {
+                if core::mem::replace(&mut self.label_changed, false) {
+                    // label changed
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_label_hover)
+                        .text_run(CompositeRectTextRun {
+                            content: self.label.clone(),
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        })
+                        .apply();
+                }
+
                 if e.selection_lit.replace(selected) != selected {
                     // selected changed
                     if selected {
@@ -297,16 +372,29 @@ impl crate::uikit::View for ObjectRowView {
                     }
                 }
 
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
+
                 e
             }
             None => {
                 // first render
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(self.y)],
+                    offset: [
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
+                    ],
                     size: [
-                        AnimatableFloat::Value(0.0),
-                        AnimatableFloat::Value(Self::ITEM_HEIGHT),
+                        AnimatableFloat::Value(layout_rect.width),
+                        AnimatableFloat::Value(layout_rect.height),
                     ],
                     relative_size_adjustment: [1.0, 0.0],
                     has_bitmap: true,
@@ -335,9 +423,10 @@ impl crate::uikit::View for ObjectRowView {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    top: self.y,
-                    height: Self::ITEM_HEIGHT,
-                    width_adjustment_factor: 1.0,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     cursor_shape: CursorShape::Pointer,
                     ..Default::default()
                 });
@@ -503,6 +592,6 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventH
         _feedback: &ViewFeedbackObjectSelectionChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
-        context.schedule_render(self.view_id);
+        context.schedule_view_render(self.view_id);
     }
 }

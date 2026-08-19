@@ -194,6 +194,23 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
         )
     }
 }
+impl ViewFeedbackRegisterable for ViewInitContext<'_, '_> {
+    fn subscribe_view_feedback<T: 'static>(
+        &mut self,
+        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
+    ) {
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::subscribe(handler));
+    }
+
+    fn unsubscribe_view_feedback<T: 'static>(
+        &mut self,
+        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
+    ) {
+        self.view_feedback_subscription_delayed_ops
+            .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
+    }
+}
 impl<'a, 'h> ViewInitContext<'a, 'h> {
     #[deprecated = "use render-teardown based view lifecycle"]
     pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
@@ -264,30 +281,14 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             application: self.application,
         }
     }
-
-    pub fn subscribe_view_feedback<T: 'static>(
-        &mut self,
-        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
-    ) {
-        self.view_feedback_subscription_delayed_ops
-            .push_back(ViewFeedbackRegistryDelayedOps::subscribe(handler));
-    }
-
-    pub fn unsubscribe_view_feedback<T: 'static>(
-        &mut self,
-        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
-    ) {
-        self.view_feedback_subscription_delayed_ops
-            .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
-    }
 }
 
 pub struct TeardownContext<'a, 'h> {
     pub mount_context: MountContext<'a, 'h>,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
 }
-impl<'a, 'h> TeardownContext<'a, 'h> {
-    pub fn subscribe_view_feedback<T: 'static>(
+impl ViewFeedbackRegisterable for TeardownContext<'_, '_> {
+    fn subscribe_view_feedback<T: 'static>(
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
     ) {
@@ -295,7 +296,7 @@ impl<'a, 'h> TeardownContext<'a, 'h> {
             .push_back(ViewFeedbackRegistryDelayedOps::subscribe(handler));
     }
 
-    pub fn unsubscribe_view_feedback<T: 'static>(
+    fn unsubscribe_view_feedback<T: 'static>(
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
     ) {
@@ -1290,6 +1291,17 @@ impl ViewFeedbackRegistry {
     }
 }
 
+pub trait ViewFeedbackRegisterable {
+    fn subscribe_view_feedback<T: 'static>(
+        &mut self,
+        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
+    );
+    fn unsubscribe_view_feedback<T: 'static>(
+        &mut self,
+        handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
+    );
+}
+
 pub struct ViewFeedbackContext<'a, 'h> {
     pub application: &'a Application,
     pub view_init_context: ViewInitContext<'a, 'h>,
@@ -1301,29 +1313,72 @@ impl ApplicationAccess for ViewFeedbackContext<'_, '_> {
         self.application
     }
 }
-impl ViewFeedbackContext<'_, '_> {
+impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    pub fn view_instance<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_init_context.view_instance_store)
+    fn construct_view(
+        &mut self,
+        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+    ) -> ViewIdentifier {
+        construct_view(
+            ctor,
+            self.view_init_context.view_allocator,
+            self.view_init_context.view_instance_store,
+            self.view_init_context.view_tree_relation_store,
+            self.view_init_context.view_group_relation_store,
+            self.view_init_context.view_layout_state_store,
+            self.view_init_context.view_render_state_store,
+        )
     }
 
     #[inline(always)]
-    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+    fn free_view(&mut self, id: ViewIdentifier) {
+        free_view(
+            id,
+            self.view_init_context.view_allocator,
+            self.view_init_context.view_instance_store,
+            self.view_init_context.view_tree_relation_store,
+            self.view_init_context.view_group_relation_store,
+            self.view_init_context.view_layout_state_store,
+            self.view_init_context.view_render_state_store,
+        )
+    }
+}
+impl ViewInstanceQueryable for ViewFeedbackContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+        view_instance(id, self.view_init_context.view_instance_store)
+    }
+}
+impl ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_> {
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         view_instance_mut(id, self.view_init_context.view_instance_store)
     }
 
     #[inline(always)]
-    pub fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
+    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+        view_set_visibility(id, visible, self.view_init_context.view_instance_store);
+    }
+
+    #[inline(always)]
+    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+        view_layout_mut(id, self.view_init_context.view_instance_store)
+    }
+}
+impl ViewRelationControllable for ViewFeedbackContext<'_, '_> {
+    #[inline(always)]
+    fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         view_set_parent(id, parent, self.view_init_context.view_tree_relation_store);
     }
 
     #[inline(always)]
-    pub fn view_detach_parent(&mut self, id: ViewIdentifier) {
+    fn view_detach_parent(&mut self, id: ViewIdentifier) {
         view_detach_parent(id, self.view_init_context.view_tree_relation_store);
     }
-
+}
+impl ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    pub fn teardown_view_recursive(&mut self, target: ViewIdentifier) {
+    fn teardown_view_recursive(&mut self, target: ViewIdentifier) {
         teardown_view_recursive(
             target,
             &mut TeardownContext {
@@ -1345,9 +1400,10 @@ impl ViewFeedbackContext<'_, '_> {
             self.view_init_context.view_render_state_store,
         );
     }
-
+}
+impl ViewRenderer for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    pub fn schedule_render(&mut self, view: ViewIdentifier) {
+    fn schedule_view_render(&mut self, view: ViewIdentifier) {
         self.view_render_queue.schedule(view);
     }
 }

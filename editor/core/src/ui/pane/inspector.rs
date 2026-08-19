@@ -9,7 +9,8 @@ use crate::{
     },
     model::{
         Application, ApplicationMutableAccess, ApplicationMutation, ObjectSelectionState,
-        ViewFeedbackObjectDataChanged, ViewFeedbackObjectSelectionChanged,
+        ViewFeedbackObjectDataChanged, ViewFeedbackObjectNameChanged,
+        ViewFeedbackObjectSelectionChanged,
     },
     rendering::{
         composite::{
@@ -22,8 +23,9 @@ use crate::{
     ui::dock::PaneContentResizeContext,
     uikit::{
         ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit, ScrollContainer,
-        StaticTextView, TeardownContext, TextInputViewIO, View, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewIdentifier, ViewInitContext,
+        StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View, ViewFeedbackContext,
+        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
         ViewRelationControllable, ViewRenderer, ViewSize, checkbox::CheckmarkVisual,
@@ -56,10 +58,16 @@ impl Presenter {
 
             let selected_object_label =
                 ctx.construct_view(|_| Box::new(StaticTextView::new("No selection".into())));
-            let selected_object_name_label =
-                ctx.construct_view(|_| Box::new(StaticTextView::new(String::new())));
+            let selected_object_name =
+                ctx.construct_view(|id| Box::new(TextInputView::new(id, eh.clone())));
+            ctx.view_layout_mut(selected_object_name)
+                .expect("query failed")
+                .width = ViewSize::FillAvailable;
+            ctx.view_layout_mut(selected_object_name)
+                .expect("query failed")
+                .height = ViewSize::Fixed(20.0);
             ctx.view_set_parent(selected_object_label, root_content_view);
-            ctx.view_set_parent(selected_object_name_label, root_content_view);
+            ctx.view_set_parent(selected_object_name, root_content_view);
 
             let content_view = ctx.construct_view(|_| Box::new(ContainerView));
             {
@@ -132,7 +140,7 @@ impl Presenter {
                 Box::new(ScrollContainer::new(
                     id,
                     Rect::from_lt_size(
-                        Point::new_logical(0.0, 8.0 + 12.0 + 12.0 + 8.0),
+                        Point::new_logical(0.0, 8.0 + 12.0 + 20.0 + 8.0),
                         Size::new_logical(128.0, 128.0),
                     ),
                     content_view,
@@ -149,7 +157,8 @@ impl Presenter {
                 items_container_mounted: Cell::new(false),
                 root_content_view,
                 selected_object_label,
-                selected_object_name_label,
+                selected_object_name,
+                object_name_editing: Cell::new(false),
                 items_container_view,
                 items_content_view: content_view,
                 vec3_editors: vec![position_editor, rotation_editor, scale_editor],
@@ -157,9 +166,7 @@ impl Presenter {
                 render_section_header_view: render_section_header,
             }
         });
-        ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
-        ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
-        ctx.subscribe_view_feedback::<ViewFeedbackObjectDataChanged>(&eh);
+        eh.subscribe_view_feedbacks(ctx);
 
         Self { eh }
     }
@@ -178,9 +185,7 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
-        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&self.eh);
-        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectDataChanged>(&self.eh);
+        self.eh.unsubscribe_view_feedbacks(ctx);
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
@@ -456,9 +461,9 @@ struct SectionHeaderViewEntity {
 impl HitTestTreeActionHandler for SectionHeaderViewEntity {
     fn on_pointer_enter(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
+        _args: &crate::input::hittest::PointerActionArgs,
     ) -> EventContinueControl {
         context
             .composite_tree
@@ -477,9 +482,9 @@ impl HitTestTreeActionHandler for SectionHeaderViewEntity {
 
     fn on_pointer_leave(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerActionArgs,
+        _args: &crate::input::hittest::PointerActionArgs,
     ) -> EventContinueControl {
         context
             .composite_tree
@@ -498,27 +503,27 @@ impl HitTestTreeActionHandler for SectionHeaderViewEntity {
 
     fn on_pointer_down(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut crate::input::InputEventContext,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_pointer_up(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut crate::input::InputEventContext,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut crate::input::InputEventContext,
-        args: &crate::input::hittest::PointerButtonActionArgs,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
     ) -> EventContinueControl {
         let Some(parent) = self.parent_event_handler.upgrade() else {
             return EventContinueControl::empty();
@@ -534,7 +539,8 @@ struct EventHandler {
     items_container_mounted: Cell<bool>,
     root_content_view: ViewIdentifier,
     selected_object_label: ViewIdentifier,
-    selected_object_name_label: ViewIdentifier,
+    selected_object_name: ViewIdentifier,
+    object_name_editing: Cell<bool>,
     items_container_view: ViewIdentifier,
     items_content_view: ViewIdentifier,
     vec3_editors: Vec<Vec3EditorComponent>,
@@ -542,6 +548,26 @@ struct EventHandler {
     render_section_header_view: ViewIdentifier,
 }
 impl EventHandler {
+    fn subscribe_view_feedbacks(
+        self: &std::rc::Rc<Self>,
+        env: &mut (impl ViewFeedbackRegisterable + ?Sized),
+    ) {
+        env.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(self);
+        env.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(self);
+        env.subscribe_view_feedback::<ViewFeedbackObjectNameChanged>(self);
+        env.subscribe_view_feedback::<ViewFeedbackObjectDataChanged>(self);
+    }
+
+    fn unsubscribe_view_feedbacks(
+        self: &std::rc::Rc<Self>,
+        env: &mut (impl ViewFeedbackRegisterable + ?Sized),
+    ) {
+        env.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(self);
+        env.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(self);
+        env.unsubscribe_view_feedback::<ViewFeedbackObjectNameChanged>(self);
+        env.unsubscribe_view_feedback::<ViewFeedbackObjectDataChanged>(self);
+    }
+
     fn on_toggle_render_enable(&self, ctx: &mut (impl ApplicationMutableAccess + ?Sized)) {
         crate::model::toggle_selected_object_render_enable(ctx);
     }
@@ -562,27 +588,26 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         .expect("query failed")
                         .set_text("No selection".into());
                     context
-                        .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
+                        .view_instance_mut::<TextInputView>(self.selected_object_name)
                         .expect("query failed")
-                        .set_text(String::new());
+                        .revalidate();
 
                     // remove items_container_view from tree
                     context.teardown_view_recursive(self.items_container_view);
                     context.view_detach_parent(self.items_container_view);
                     self.items_container_mounted.set(false);
                 }
-                ObjectSelectionState::Single { id, name } => {
+                ObjectSelectionState::Single { id } => {
                     let object_label_text = format!("Object {id}");
-                    let name_label_text = format!("Name: {name}");
 
                     context
                         .view_instance_mut::<StaticTextView>(self.selected_object_label)
                         .expect("query failed")
                         .set_text(object_label_text);
                     context
-                        .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
+                        .view_instance_mut::<TextInputView>(self.selected_object_name)
                         .expect("query failed")
-                        .set_text(name_label_text);
+                        .revalidate();
 
                     if !self.items_container_mounted.replace(true) {
                         context.view_set_parent(self.items_container_view, self.root_content_view);
@@ -617,7 +642,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         .set_checked(render_enabled, false)
                     {
                         // should re-render
-                        context.schedule_render(self.render_section_header_view);
+                        context.schedule_view_render(self.render_section_header_view);
                     }
                 }
                 ObjectSelectionState::Multiple => {
@@ -626,9 +651,9 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         .expect("query failed")
                         .set_text("Multiple selection".into());
                     context
-                        .view_instance_mut::<StaticTextView>(self.selected_object_name_label)
+                        .view_instance_mut::<TextInputView>(self.selected_object_name)
                         .expect("query failed")
-                        .set_text(String::new());
+                        .revalidate();
 
                     // remove items_container_view from tree
                     context.teardown_view_recursive(self.items_container_view);
@@ -637,7 +662,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                 }
             }
 
-            context.schedule_render(self.root_content_view);
+            context.schedule_view_render(self.root_content_view);
         }
     }
 }
@@ -648,6 +673,22 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for EventHandler {
         _context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.object_selection_changed.set(true);
+    }
+}
+impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for EventHandler {
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &ViewFeedbackObjectNameChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        if !self.object_name_editing.replace(false) {
+            // 自分以外からの変更通知
+            context
+                .view_instance_mut::<TextInputView>(self.selected_object_name)
+                .expect("query failed")
+                .revalidate();
+            context.schedule_view_render(self.selected_object_name);
+        }
     }
 }
 impl ViewFeedbackHandler<ViewFeedbackObjectDataChanged> for EventHandler {
@@ -663,7 +704,7 @@ impl ViewFeedbackHandler<ViewFeedbackObjectDataChanged> for EventHandler {
             .set_checked(render_enabled, true)
         {
             // should re-render
-            context.schedule_render(self.render_section_header_view);
+            context.schedule_view_render(self.render_section_header_view);
         }
     }
 }
@@ -723,6 +764,10 @@ impl TextInputViewIO for EventHandler {
                 "{:.3}",
                 crate::model::selected_object_local_scale_z(application)
             )
+        } else if requester == self.selected_object_name {
+            crate::model::selected_object_name(application)
+                .unwrap_or("")
+                .into()
         } else {
             "-".into()
         }
@@ -797,6 +842,10 @@ impl TextInputViewIO for EventHandler {
                 return;
             };
             crate::model::set_selected_object_local_scale_z(application, v);
+        } else if sender == self.selected_object_name {
+            // Note: compositioning中にテキストセットするのを想定してないのでループバックしてこないようにする
+            self.object_name_editing.set(true);
+            crate::model::set_selected_object_name(application, input);
         }
     }
 }

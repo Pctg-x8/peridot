@@ -60,8 +60,8 @@ use crate::{
         NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
         ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
         TeardownContext, TextInputView, TextInputViewIO, View, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackRegistry, ViewGroupID, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
+        ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID,
+        ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
         ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
         ViewLayoutGridCell, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
@@ -1897,7 +1897,6 @@ impl View for ColorPickerHexTextInputView {
                         [0.0; 2],
                         self.id,
                         ht_root,
-                        eh.clone() as _,
                     ),
                     value_edit: RefCell::new("00000000".into()),
                     value: Cell::new(0),
@@ -8465,7 +8464,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
             .view_instance_mut::<PreviewToolSelectorButtonView>(self.translate_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
-        context.schedule_render(self.translate_tool_button_view_id);
+        context.schedule_view_render(self.translate_tool_button_view_id);
 
         let is_selecting =
             crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Rotate;
@@ -8473,7 +8472,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
             .view_instance_mut::<PreviewToolSelectorButtonView>(self.rotate_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
-        context.schedule_render(self.rotate_tool_button_view_id);
+        context.schedule_view_render(self.rotate_tool_button_view_id);
 
         let is_selecting =
             crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Scale;
@@ -8481,7 +8480,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
             .view_instance_mut::<PreviewToolSelectorButtonView>(self.scale_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
-        context.schedule_render(self.scale_tool_button_view_id);
+        context.schedule_view_render(self.scale_tool_button_view_id);
     }
 }
 

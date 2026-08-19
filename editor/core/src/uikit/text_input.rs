@@ -36,11 +36,6 @@ use crate::{
     },
 };
 
-pub trait TextInputViewIO {
-    fn text(&self, requester: ViewIdentifier, app: &Application) -> String;
-    fn set_text(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, text: String);
-}
-
 bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub struct SingleLineTextDirtyFlags : u8 {
@@ -474,7 +469,6 @@ impl TextInputViewCore {
         size_anchor: [f32; 2],
         delegated_view_id: ViewIdentifier,
         ht_root: HitTestTreeRef,
-        io: std::rc::Weak<dyn TextInputViewIO>,
     ) -> Self {
         let ct_root = ctx.composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
@@ -549,7 +543,6 @@ impl TextInputViewCore {
         ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
         let eh = Rc::new(TextInputViewCoreEventHandler {
-            io: io,
             ht_root,
             ct_root,
             ct_text,
@@ -608,7 +601,6 @@ impl TextInputViewCore {
 }
 
 pub struct TextInputViewCoreEventHandler {
-    io: std::rc::Weak<dyn TextInputViewIO>,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
@@ -1707,10 +1699,16 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for TextInputViewCo
     }
 }
 
+pub trait TextInputViewIO {
+    fn text(&self, requester: ViewIdentifier, app: &Application) -> String;
+    fn set_text(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, text: String);
+}
+
 pub struct TextInputView {
     id: ViewIdentifier,
     eh: Option<Rc<TextInputViewEventHandler>>,
     io: std::rc::Weak<dyn TextInputViewIO>,
+    should_revalidate_on_next_render: bool,
 }
 impl TextInputView {
     pub fn new(id: ViewIdentifier, io: std::rc::Weak<impl TextInputViewIO + 'static>) -> Self {
@@ -1718,7 +1716,12 @@ impl TextInputView {
             id,
             eh: None,
             io: io as _,
+            should_revalidate_on_next_render: false,
         }
+    }
+
+    pub fn revalidate(&mut self) {
+        self.should_revalidate_on_next_render = true;
     }
 }
 impl View for TextInputView {
@@ -1751,6 +1754,7 @@ impl View for TextInputView {
                     ..Default::default()
                 });
                 let eh = Rc::new(TextInputViewEventHandler {
+                    io: self.io.clone(),
                     core: TextInputViewCore::new(
                         ctx,
                         layout_rect.clone(),
@@ -1758,20 +1762,34 @@ impl View for TextInputView {
                         [0.0; 2],
                         self.id,
                         ht_root,
-                        self.io.clone() as _,
                     ),
                     id: self.id,
                     token: kf_token,
                     ht_root,
                 });
                 ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-                // sink some events to base impl
-                ctx.keyboard_focus_registry
-                    .set_event_handler(kf_token, &eh.core.eh);
+                ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
 
                 &*self.eh.insert(eh)
             }
         };
+
+        if core::mem::replace(&mut self.should_revalidate_on_next_render, false) {
+            eh.core.eh.update_views(
+                eh.core.eh.perform_external_state_update(|st| {
+                    st.set_content(
+                        self.io
+                            .upgrade()
+                            .expect("TextInputView has defunct")
+                            .text(self.id, ctx.application),
+                    )
+                }),
+                ctx.composite_tree,
+                ctx.system_link,
+                ctx.ht_manager,
+                ctx.current_sec,
+            );
+        }
 
         eh.core.eh.process_pending_updates_with_ht_mutation(
             ctx.composite_tree,
@@ -1805,10 +1823,73 @@ impl View for TextInputView {
 }
 
 struct TextInputViewEventHandler {
+    io: std::rc::Weak<dyn TextInputViewIO>,
     core: TextInputViewCore,
     id: ViewIdentifier,
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
+}
+impl KeyInputEventHandler for TextInputViewEventHandler {
+    #[inline(always)]
+    fn focus_taken(&self, context: &mut InputEventContext) {
+        self.core.eh.focus_taken(context)
+    }
+
+    #[inline(always)]
+    fn focus_released(&self, context: &mut InputEventContext) {
+        self.core.eh.focus_released(context);
+    }
+
+    fn r#char(&self, context: &mut InputEventContext, ch: char, modifier: ModifierKey) {
+        let r = self.core.eh.r#char(context, ch, modifier);
+        self.io
+            .upgrade()
+            .expect("TextInputView has defunct")
+            .set_text(
+                self.id,
+                &mut context.application,
+                self.core.eh.text_edit_state.borrow().content.clone(),
+            );
+        r
+    }
+
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        let r = self.core.eh.keydown(context, code, modifier);
+        self.io
+            .upgrade()
+            .expect("TextInputView has defunct")
+            .set_text(
+                self.id,
+                &mut context.application,
+                self.core.eh.text_edit_state.borrow().content.clone(),
+            );
+        r
+    }
+
+    #[inline(always)]
+    fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        self.core.eh.keyup(context, code, modifier)
+    }
+
+    #[cfg(feature = "wayland")]
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
+    ) {
+        self.core
+            .eh
+            .ime_state_changes(context, new_committed_string, new_preedit_string);
+        self.io
+            .upgrade()
+            .expect("TextInputView has defunct")
+            .set_text(
+                self.id,
+                &mut context.application,
+                self.core.eh.text_edit_state.borrow().content.clone(),
+            );
+    }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
     fn on_pointer_down(
@@ -1822,6 +1903,46 @@ impl HitTestTreeActionHandler for TextInputViewEventHandler {
 
         // 下の要素にフォーカス処理がいかないようにする
         EventContinueControl::STOP_PROPAGATION
+    }
+
+    #[inline(always)]
+    fn on_drag_start(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_drag_start(sender, context, args)
+    }
+
+    #[inline(always)]
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_drag_move(sender, context, args)
+    }
+
+    #[inline(always)]
+    fn on_drag_end(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_drag_end(sender, context, args)
+    }
+
+    #[inline(always)]
+    fn on_double_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_double_click(sender, context, args)
     }
 }
 
@@ -1907,7 +2028,6 @@ impl View for NumericInputView {
                         [0.0; 2],
                         self.id,
                         ht_root,
-                        self.value.clone(),
                     ),
                     value: self.value.clone(),
                     kf_token,
@@ -2061,6 +2181,11 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        if self.key_input_enabled.get() {
+            // delegate
+            return self.core.eh.on_drag_start(_sender, _context, _args);
+        }
+
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
     }
 
@@ -2089,12 +2214,31 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 
+    fn on_drag_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        if self.key_input_enabled.get() {
+            // delegate
+            return self.core.eh.on_drag_move(sender, context, args);
+        }
+
+        EventContinueControl::empty()
+    }
+
     fn on_drag_end(
         &self,
         _sender: HitTestTreeRef,
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
+        if self.key_input_enabled.get() {
+            // delegate
+            return self.core.eh.on_drag_end(_sender, _context, _args);
+        }
+
         EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
     }
 
@@ -2148,6 +2292,16 @@ impl HitTestTreeActionHandler for NumericInputViewEventHandler {
         );
 
         EventContinueControl::STOP_PROPAGATION
+    }
+
+    #[inline(always)]
+    fn on_double_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_double_click(sender, context, args)
     }
 }
 impl NumericInputViewEventHandler {
