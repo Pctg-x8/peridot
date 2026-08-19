@@ -7,6 +7,7 @@ use crate::{
     Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
+    MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -137,7 +138,7 @@ struct ViewEntity {
     ht_root: HitTestTreeRef,
 }
 impl HitTestTreeActionHandler for ViewEntity {
-    fn on_click(
+    fn on_pointer_down(
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
@@ -435,23 +436,65 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 
-    fn on_click(
+    fn on_pointer_down(
         &self,
         _sender: HitTestTreeRef,
         context: &mut InputEventContext,
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        if args.button == PointerButton::Primary {
-            if args.key_modifier.contains(ModifierKey::CONTROL) {
-                crate::model::toggle_object_selection_additive(context, self.assigned_object);
-            } else {
-                crate::model::select_object(context, self.assigned_object);
-            }
-
-            return EventContinueControl::STOP_PROPAGATION;
+        if args.key_modifier.contains(ModifierKey::CONTROL) {
+            crate::model::toggle_object_selection_additive(context, self.assigned_object);
+        } else {
+            crate::model::select_object(context, self.assigned_object);
         }
 
-        EventContinueControl::empty()
+        if args.button == PointerButton::Secondary {
+            context.system_link.dispatch_event(Event::MenuOpen {
+                parent: context
+                    .ht_manager
+                    .query_root_window(self.ht_root)
+                    .expect("not mounted"),
+                items: vec![
+                    MenuItem::Command {
+                        label: "Destroy".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED,
+                    },
+                    MenuItem::Heading {
+                        label: "Create Child Object".into(),
+                    },
+                    MenuItem::Command {
+                        label: "Plane".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
+                    },
+                    MenuItem::Command {
+                        label: "Cube".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
+                    },
+                    MenuItem::Command {
+                        label: "Sphere".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
+                    },
+                    MenuItem::Command {
+                        label: "Cylinder".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER,
+                    },
+                    MenuItem::Command {
+                        label: "Capsule".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE,
+                    },
+                    MenuItem::SubMenu {
+                        label: "Special".into(),
+                        items: vec![MenuItem::Command {
+                            label: "Terrain".into(),
+                            command_id: MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN,
+                        }],
+                    },
+                ],
+                surface_pos: args.client_pos,
+            });
+        }
+
+        EventContinueControl::STOP_PROPAGATION
     }
 }
 impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventHandler {

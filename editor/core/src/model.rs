@@ -125,9 +125,32 @@ impl Application {
         self.compaction_objects();
     }
 
+    fn free_object_selected(&mut self) {
+        for id in self.selected_objects.drain() {
+            // detach from registry
+            match self.objects[id.into_array_index()].parent.take() {
+                Some(parent) => {
+                    self.objects[parent.into_array_index()]
+                        .children
+                        .retain(|&oid| oid != id);
+                }
+                None => {
+                    self.root_objects.retain(|&oid| oid != id);
+                }
+            }
+
+            self.free_object_indices.insert(id.into_array_index());
+            self.objects[id.into_array_index()].reset();
+        }
+
+        // TODO: compactionの頻度を減らすかはあとで検討
+        self.compaction_objects();
+    }
+
     fn compaction_objects(&mut self) {
         // objectsのうしろにいるfreeを解放
-        while self.free_object_indices.remove(&(self.objects.len() - 1)) {
+        while !self.objects.is_empty() && self.free_object_indices.remove(&(self.objects.len() - 1))
+        {
             self.objects.pop();
         }
 
@@ -303,9 +326,10 @@ pub fn object_create(env: &mut (impl ApplicationMutableAccess + ?Sized), name: S
     id
 }
 
-pub fn object_destroy(env: &mut (impl ApplicationMutableAccess + ?Sized), id: ObjectID) {
-    env.application_mut().free_object(id);
+pub fn object_destroy_selected(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
+    env.application_mut().free_object_selected();
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
 }
 
 pub fn object_set_parent(

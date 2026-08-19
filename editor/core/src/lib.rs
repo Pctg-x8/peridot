@@ -1075,6 +1075,7 @@ pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 3;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
+pub const MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED: u64 = 20;
 
 pub struct ColorPickerSharedResources {
     ring_tex_id: TextureID,
@@ -5891,6 +5892,12 @@ async fn run<'sys>(
                             },
                             "New Terrain".into(),
                         );
+                    }
+                    MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED => {
+                        crate::model::object_destroy_selected(&mut ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        });
                     }
                     _ => {
                         tracing::warn!(id, "unhandled menu command");

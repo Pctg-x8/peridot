@@ -471,6 +471,15 @@ impl ViewRenderQueue {
         render_state_store: &mut ViewRenderStateStore,
     ) {
         while let Some(mut target) = self.pending.pop_first() {
+            if instance_store
+                .instances
+                .get(target.into_array_index())
+                .is_none_or(|x| x.instance.is_none())
+            {
+                // invalid(already freed) instance
+                continue;
+            }
+
             let (mount_target, kf_group) = loop {
                 let Some(p) = tree_relation_store.relations[target.into_array_index()].parent
                 else {
