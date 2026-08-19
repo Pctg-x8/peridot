@@ -22,12 +22,13 @@ use crate::{
     ui::dock::PaneContentResizeContext,
     uikit::{
         ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit, ScrollContainer,
-        StaticTextView, TeardownContext, TextInputView, TextInputViewIO, View, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
-        ViewRelationControllable, ViewRenderer, ViewSize, checkbox::CheckmarkVisual,
+        StaticTextView, TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
+        ViewFeedbackRegisterable, ViewIdentifier, ViewImmediateTeardownable, ViewInitContext,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowBasis, ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow,
+        ViewRegisterable, ViewRelationControllable, ViewRenderer, ViewSize,
+        checkbox::CheckmarkVisual,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -142,7 +143,7 @@ impl Presenter {
                         Point::new_logical(0.0, 8.0 + 12.0 + 20.0 + 8.0),
                         Size::new_logical(128.0, 128.0),
                     ),
-                    content_view,
+                    content_view.into_untyped(),
                 ))
             });
             ctx.view_set_parent(content_view, items_container_view);
@@ -180,7 +181,7 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.eh.root_content_view
+        self.eh.root_content_view.into_untyped()
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
@@ -198,7 +199,7 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
             .expect("query failed")
             .width = ViewSize::Fixed(content_width);
         context
-            .view_instance_mut::<ScrollContainer>(self.eh.items_container_view)
+            .view_instance_mut(self.eh.items_container_view)
             .expect("query failed")
             .resize(Size::new_logical(
                 new_size.width,
@@ -209,10 +210,10 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
 }
 
 struct Vec3EditorComponent {
-    root_view: ViewIdentifier,
-    x: ViewIdentifier,
-    y: ViewIdentifier,
-    z: ViewIdentifier,
+    root_view: TypedViewIdentifier<ContainerView>,
+    x: TypedViewIdentifier<NumericInputView>,
+    y: TypedViewIdentifier<NumericInputView>,
+    z: TypedViewIdentifier<NumericInputView>,
 }
 impl Vec3EditorComponent {
     pub fn new(
@@ -525,15 +526,15 @@ impl HitTestTreeActionHandler for SectionHeaderViewEntity {
 struct EventHandler {
     object_selection_changed: Cell<bool>,
     items_container_mounted: Cell<bool>,
-    root_content_view: ViewIdentifier,
-    selected_object_label: ViewIdentifier,
-    selected_object_name: ViewIdentifier,
+    root_content_view: TypedViewIdentifier<ContainerView>,
+    selected_object_label: TypedViewIdentifier<StaticTextView>,
+    selected_object_name: TypedViewIdentifier<TextInputView>,
     object_name_editing: Cell<bool>,
-    items_container_view: ViewIdentifier,
-    items_content_view: ViewIdentifier,
+    items_container_view: TypedViewIdentifier<ScrollContainer>,
+    items_content_view: TypedViewIdentifier<ContainerView>,
     vec3_editors: Vec<Vec3EditorComponent>,
-    numeric_input_view_ids: Vec<ViewIdentifier>,
-    render_section_header_view: ViewIdentifier,
+    numeric_input_view_ids: Vec<TypedViewIdentifier<NumericInputView>>,
+    render_section_header_view: TypedViewIdentifier<SectionHeaderView>,
 }
 impl EventHandler {
     fn subscribe_view_feedbacks(
@@ -572,11 +573,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
             match crate::model::selection_state(context) {
                 ObjectSelectionState::None => {
                     context
-                        .view_instance_mut::<StaticTextView>(self.selected_object_label)
+                        .view_instance_mut(self.selected_object_label)
                         .expect("query failed")
                         .set_text("No selection".into());
                     context
-                        .view_instance_mut::<TextInputView>(self.selected_object_name)
+                        .view_instance_mut(self.selected_object_name)
                         .expect("query failed")
                         .revalidate();
 
@@ -589,11 +590,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                     let object_label_text = format!("Object {id}");
 
                     context
-                        .view_instance_mut::<StaticTextView>(self.selected_object_label)
+                        .view_instance_mut(self.selected_object_label)
                         .expect("query failed")
                         .set_text(object_label_text);
                     context
-                        .view_instance_mut::<TextInputView>(self.selected_object_name)
+                        .view_instance_mut(self.selected_object_name)
                         .expect("query failed")
                         .revalidate();
 
@@ -603,29 +604,26 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
 
                     for x in self.vec3_editors.iter() {
                         context
-                            .view_instance::<NumericInputView>(x.x)
+                            .view_instance(x.x)
                             .expect("query failed")
                             .revalidate();
                         context
-                            .view_instance::<NumericInputView>(x.y)
+                            .view_instance(x.y)
                             .expect("query failed")
                             .revalidate();
                         context
-                            .view_instance::<NumericInputView>(x.z)
+                            .view_instance(x.z)
                             .expect("query failed")
                             .revalidate();
                     }
 
                     for &x in self.numeric_input_view_ids.iter() {
-                        context
-                            .view_instance::<NumericInputView>(x)
-                            .expect("query failed")
-                            .revalidate();
+                        context.view_instance(x).expect("query failed").revalidate();
                     }
 
                     let render_enabled = crate::model::selected_object_render_is_enabled(context);
                     if context
-                        .view_instance_mut::<SectionHeaderView>(self.render_section_header_view)
+                        .view_instance_mut(self.render_section_header_view)
                         .expect("query failed")
                         .set_checked(render_enabled, false)
                     {
@@ -635,11 +633,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                 }
                 ObjectSelectionState::Multiple => {
                     context
-                        .view_instance_mut::<StaticTextView>(self.selected_object_label)
+                        .view_instance_mut(self.selected_object_label)
                         .expect("query failed")
                         .set_text("Multiple selection".into());
                     context
-                        .view_instance_mut::<TextInputView>(self.selected_object_name)
+                        .view_instance_mut(self.selected_object_name)
                         .expect("query failed")
                         .revalidate();
 
@@ -672,7 +670,7 @@ impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for EventHandler {
         if !self.object_name_editing.replace(false) {
             // 自分以外からの変更通知
             context
-                .view_instance_mut::<TextInputView>(self.selected_object_name)
+                .view_instance_mut(self.selected_object_name)
                 .expect("query failed")
                 .revalidate();
             context.schedule_view_render(self.selected_object_name);
@@ -687,7 +685,7 @@ impl ViewFeedbackHandler<ViewFeedbackObjectDataChanged> for EventHandler {
     ) {
         let render_enabled = crate::model::selected_object_render_is_enabled(context);
         if context
-            .view_instance_mut::<SectionHeaderView>(self.render_section_header_view)
+            .view_instance_mut(self.render_section_header_view)
             .expect("query failed")
             .set_checked(render_enabled, true)
         {

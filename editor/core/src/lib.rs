@@ -59,9 +59,10 @@ use crate::{
         MenuItemView, MountContext, MountTarget, NumericInputView, NumericInputViewIO,
         NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
         ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
-        TeardownContext, TextInputView, TextInputViewIO, View, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID,
-        ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
+        TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry,
+        ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
+        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
         ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
         ViewLayoutGridCell, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
@@ -2100,14 +2101,14 @@ pub trait ColorPickerBackingStoreEvent {
 }
 
 pub struct EditableColorButtonView {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<EditableColorButtonView>,
     eh: Option<Rc<EditableColorButtonEventHandler>>,
     color: u32,
 }
 impl EditableColorButtonView {
     const COLOR_PREVIEW_MARGIN: f32 = 6.0;
 
-    pub fn new(id: ViewIdentifier, init_color: u32) -> Self {
+    pub fn new(id: TypedViewIdentifier<EditableColorButtonView>, init_color: u32) -> Self {
         Self {
             id,
             eh: None,
@@ -2259,7 +2260,7 @@ impl View for EditableColorButtonView {
 
 struct EditableColorButtonEventHandler {
     thisref: std::rc::Weak<EditableColorButtonEventHandler>,
-    view_id: ViewIdentifier,
+    view_id: TypedViewIdentifier<EditableColorButtonView>,
     ct_root: CompositeTreeRef,
     ct_color_base: CompositeTreeRef,
     ct_color: CompositeTreeRef,
@@ -2298,11 +2299,11 @@ impl ColorPickerBackingStoreEvent for EditableColorButtonEventHandler {
 
     fn new_value(&self, value: u32, view_render_queue: &mut ViewRenderQueue) {
         self.color.set(value);
-        view_render_queue.schedule(self.view_id);
+        view_render_queue.schedule(self.view_id.into_untyped());
     }
 }
 
-struct EditableColorButtonPickerFlyoutView(ViewIdentifier);
+struct EditableColorButtonPickerFlyoutView(TypedViewIdentifier<ColorPickerView>);
 impl EditableColorButtonPickerFlyoutView {
     fn new(
         ctx: &mut ViewInitContext,
@@ -2314,7 +2315,7 @@ impl EditableColorButtonPickerFlyoutView {
 }
 impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
     fn root_view_id(&self) -> ViewIdentifier {
-        self.0
+        self.0.into_untyped()
     }
 }
 
@@ -2396,8 +2397,8 @@ impl TextInputViewIO for UIKitPreviewTextInputValueStore {
 profiler::section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
 pub struct UIKitPreviewPanePresenter {
     kf_group: KeyboardFocusGroupRef,
-    scroll_container: ViewIdentifier,
-    content_view: ViewIdentifier,
+    scroll_container: TypedViewIdentifier<ScrollContainer>,
+    content_view: TypedViewIdentifier<ContainerView>,
     text_input_backing_store1: Rc<UIKitPreviewTextInputValueStore>,
     text_input_backing_store2: Rc<UIKitPreviewTextInputValueStore>,
     color_picker_backing_store: Rc<ColorPickerTestBackingStore>,
@@ -2657,7 +2658,7 @@ impl UIKitPreviewPanePresenter {
         let checkbox = ctx.construct_view(|_| Box::new(uikit::CheckboxView::new()));
         ctx.view_set_parent(checkbox, container);
 
-        let rgc1 = ctx.alloc_view_group();
+        let rgc1 = ctx.create_view_group();
         let label =
             ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
         ctx.view_set_parent(label, container);
@@ -2689,7 +2690,7 @@ impl UIKitPreviewPanePresenter {
                     Point::new_logical(0.0, 0.0),
                     Size::new_logical(256.0, 128.0),
                 ),
-                content_view,
+                content_view.into_untyped(),
             ))
         });
         ctx.view_set_parent(content_view, scroll_container);
@@ -2716,13 +2717,13 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.scroll_container
+        self.scroll_container.into_untyped()
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
         // tracing::debug!(?new_size, "resize pane");
         context
-            .view_instance_mut::<ScrollContainer>(self.scroll_container)
+            .view_instance_mut(self.scroll_container)
             .expect("query failed")
             .resize(new_size.clone());
         let content_width = new_size.width.max(128.0);
@@ -2735,7 +2736,7 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
 }
 
 struct TimelinePanePresenter {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<ContainerView>,
 }
 impl TimelinePanePresenter {
     const ID: &str = internal_pane_identifier!("Timeline");
@@ -2756,14 +2757,14 @@ impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.root_view_id.into_untyped()
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
 struct AssetExplorerPanePresenter {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<ContainerView>,
 }
 impl AssetExplorerPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetExplorer");
@@ -2784,14 +2785,14 @@ impl ui::dock::PaneContentPresenter for AssetExplorerPanePresenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.root_view_id.into_untyped()
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
 struct ProjectSettingsPanePresenter {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<ContainerView>,
 }
 impl ProjectSettingsPanePresenter {
     const ID: &str = internal_pane_identifier!("ProjectSettings");
@@ -2812,14 +2813,14 @@ impl ui::dock::PaneContentPresenter for ProjectSettingsPanePresenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.root_view_id.into_untyped()
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
 struct AssetPreviewPanePresenter {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<ContainerView>,
 }
 impl AssetPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetPreview");
@@ -2840,7 +2841,7 @@ impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.root_view_id.into_untyped()
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
@@ -2848,10 +2849,10 @@ impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
 
 struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
-    root_view: ViewIdentifier,
+    root_view: TypedViewIdentifier<WindowRootView>,
     header: ui::window_header::Component,
     appmenu: Option<ui::app_menu_bar::View>,
-    footer: Option<ViewIdentifier>,
+    footer: Option<TypedViewIdentifier<ui::window_footer::View>>,
     docking_manager: ui::dock::DockingManager,
 }
 impl PerWindowData {
@@ -3042,7 +3043,10 @@ async fn run<'sys>(
         },
         &mut view_init_ctx,
     );
-    view_init_ctx.view_set_parent(window_header.root_view(), main_window_root_view);
+    view_init_ctx.view_set_parent_untyped(
+        window_header.root_view(),
+        main_window_root_view.into_untyped(),
+    );
 
     let app_menu_view = if system_link.needs_app_menu_in_surface() {
         let app_menu_view = ui::app_menu_bar::View::new(
@@ -3246,7 +3250,7 @@ async fn run<'sys>(
     }));
 
     view_init_ctx.render_view_with_base(
-        main_window_root_view,
+        main_window_root_view.into_untyped(),
         &main_window,
         main_window.keyboard_focus_group(),
         Rect::from_lt_size(Point::new_logical(0.0, 0.0), main_window.client_size()),
@@ -3300,17 +3304,20 @@ async fn run<'sys>(
                         },
                         &mut view_init_ctx,
                     );
-                    view_init_ctx.view_set_parent(window_header_view.root_view(), root_view);
+                    view_init_ctx.view_set_parent_untyped(
+                        window_header_view.root_view(),
+                        root_view.into_untyped(),
+                    );
 
                     view_init_ctx.render_view_with_base(
-                        root_view,
+                        root_view.into_untyped(),
                         &w,
                         w.keyboard_focus_group(),
                         Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
                     );
 
                     w.associate_extra_data(Box::new(PerWindowData {
-                        root_view,
+                        root_view: root_view,
                         screen_reposition_interests: HashSet::new(),
                         header: window_header_view,
                         appmenu: None,
@@ -3587,7 +3594,7 @@ async fn run<'sys>(
                 let wd = unsafe { window.take_extra_data::<PerWindowData>() };
                 struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
                 impl ViewImmediateTeardownable for LocalContext<'_, '_> {
-                    fn teardown_view_recursive(&mut self, target: ViewIdentifier) {
+                    fn teardown_view_recursive_untyped(&mut self, target: ViewIdentifier) {
                         crate::uikit::teardown_view_recursive(
                             target,
                             &mut TeardownContext {
@@ -3611,10 +3618,10 @@ async fn run<'sys>(
                     }
                 }
                 impl ViewRegisterable for LocalContext<'_, '_> {
-                    fn construct_view(
+                    fn construct_view<T: View + 'static>(
                         &mut self,
-                        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
-                    ) -> ViewIdentifier {
+                        ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
+                    ) -> TypedViewIdentifier<T> {
                         crate::uikit::construct_view(
                             ctor,
                             self.0.view_allocator,
@@ -3626,7 +3633,7 @@ async fn run<'sys>(
                         )
                     }
 
-                    fn free_view(&mut self, id: ViewIdentifier) {
+                    fn free_view_untyped(&mut self, id: ViewIdentifier) {
                         crate::uikit::free_view(
                             id,
                             self.0.view_allocator,
@@ -3841,7 +3848,7 @@ async fn run<'sys>(
                 }
                 impl crate::uikit::ViewInstanceQueryableMut for LocalContext<'_> {
                     #[inline(always)]
-                    fn view_instance_mut<T: View + 'static>(
+                    fn view_instance_mut_of<T: View + 'static>(
                         &mut self,
                         id: ViewIdentifier,
                     ) -> Option<&mut T> {
@@ -3849,12 +3856,12 @@ async fn run<'sys>(
                     }
 
                     #[inline(always)]
-                    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+                    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
                         crate::uikit::view_set_visibility(id, visible, self.view_instance_store)
                     }
 
                     #[inline(always)]
-                    fn view_layout_mut(
+                    fn view_layout_mut_untyped(
                         &mut self,
                         id: ViewIdentifier,
                     ) -> Option<&mut crate::uikit::ViewLayout> {
@@ -3863,7 +3870,7 @@ async fn run<'sys>(
                 }
                 impl crate::uikit::ViewRenderer for LocalContext<'_> {
                     #[inline(always)]
-                    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+                    fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
                         self.view_render_queue.schedule(target)
                     }
                 }
@@ -6182,11 +6189,13 @@ async fn run<'sys>(
                                     },
                                     &mut view_init_ctx,
                                 );
-                                view_init_ctx
-                                    .view_set_parent(window_header_view.root_view(), root_view);
+                                view_init_ctx.view_set_parent_untyped(
+                                    window_header_view.root_view(),
+                                    root_view.into_untyped(),
+                                );
 
                                 view_init_ctx.render_view_with_base(
-                                    root_view,
+                                    root_view.into_untyped(),
                                     &w,
                                     w.keyboard_focus_group(),
                                     Rect::from_lt_size(
@@ -8365,7 +8374,7 @@ impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
 }
 
 pub struct PreviewPanePresenter {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<PreviewView>,
     feedback_receiver: Rc<PreviewPaneFeedbackReceiver>,
 }
 impl PreviewPanePresenter {
@@ -8427,13 +8436,13 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.root_view_id.into_untyped()
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
         unsafe {
             &mut *context
-                .view_instance_mut::<PreviewView>(self.root_view_id)
+                .view_instance_mut(self.root_view_id)
                 .expect("query failed")
                 .input_state
         }
@@ -8448,9 +8457,9 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
 }
 
 pub struct PreviewPaneFeedbackReceiver {
-    translate_tool_button_view_id: ViewIdentifier,
-    rotate_tool_button_view_id: ViewIdentifier,
-    scale_tool_button_view_id: ViewIdentifier,
+    translate_tool_button_view_id: TypedViewIdentifier<PreviewToolSelectorButtonView>,
+    rotate_tool_button_view_id: TypedViewIdentifier<PreviewToolSelectorButtonView>,
+    scale_tool_button_view_id: TypedViewIdentifier<PreviewToolSelectorButtonView>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPaneFeedbackReceiver {
     fn accept_feedback<'a, 'h>(
@@ -8461,7 +8470,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
         let is_selecting =
             crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Translate;
         context
-            .view_instance_mut::<PreviewToolSelectorButtonView>(self.translate_tool_button_view_id)
+            .view_instance_mut(self.translate_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
         context.schedule_view_render(self.translate_tool_button_view_id);
@@ -8469,7 +8478,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
         let is_selecting =
             crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Rotate;
         context
-            .view_instance_mut::<PreviewToolSelectorButtonView>(self.rotate_tool_button_view_id)
+            .view_instance_mut(self.rotate_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
         context.schedule_view_render(self.rotate_tool_button_view_id);
@@ -8477,7 +8486,7 @@ impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPane
         let is_selecting =
             crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Scale;
         context
-            .view_instance_mut::<PreviewToolSelectorButtonView>(self.scale_tool_button_view_id)
+            .view_instance_mut(self.scale_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
         context.schedule_view_render(self.scale_tool_button_view_id);

@@ -2,9 +2,12 @@
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    hash::Hash,
     num::NonZeroUsize,
     rc::{Rc, Weak},
 };
+
+use bedrock::TypedVulkanSinkStructure;
 
 use crate::{
     SyncEvent, SystemLink,
@@ -106,10 +109,10 @@ impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
     }
 }
 impl ViewRegisterable for ViewInitContext<'_, '_> {
-    fn construct_view(
+    fn construct_view<T: View + 'static>(
         &mut self,
-        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
-    ) -> ViewIdentifier {
+        ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
+    ) -> TypedViewIdentifier<T> {
         construct_view(
             ctor,
             self.view_allocator,
@@ -121,7 +124,7 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
         )
     }
 
-    fn free_view(&mut self, id: ViewIdentifier) {
+    fn free_view_untyped(&mut self, id: ViewIdentifier) {
         free_view(
             id,
             self.view_allocator,
@@ -134,33 +137,33 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
     }
 }
 impl ViewRelationControllable for ViewInitContext<'_, '_> {
-    fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
+    fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         view_set_parent(id, parent, self.view_tree_relation_store)
     }
 
-    fn view_detach_parent(&mut self, id: ViewIdentifier) {
+    fn view_detach_parent_untyped(&mut self, id: ViewIdentifier) {
         view_detach_parent(id, self.view_tree_relation_store);
     }
 }
 impl ViewInstanceQueryable for ViewInitContext<'_, '_> {
     #[inline(always)]
-    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+    fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         view_instance(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
     #[inline(always)]
-    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+    fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
-    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
         view_layout_mut(id, self.view_instance_store)
     }
 }
@@ -211,6 +214,28 @@ impl ViewFeedbackRegisterable for ViewInitContext<'_, '_> {
             .push_back(ViewFeedbackRegistryDelayedOps::unsubscribe(handler));
     }
 }
+impl ViewGroupRegisterable for ViewInitContext<'_, '_> {
+    #[inline(always)]
+    fn create_view_group(&mut self) -> ViewGroupID {
+        alloc_view_group(self.view_allocator, self.view_group_relation_store)
+    }
+
+    #[inline(always)]
+    fn destroy_view_group(&mut self, id: ViewGroupID) {
+        free_view_group(id, self.view_allocator, self.view_group_relation_store);
+    }
+}
+impl ViewGroupRelationControllable for ViewInitContext<'_, '_> {
+    #[inline(always)]
+    fn join_view_group_untyped(&mut self, id: ViewIdentifier, group: ViewGroupID) {
+        join_view_group(id, group, self.view_group_relation_store);
+    }
+
+    #[inline(always)]
+    fn leave_view_group_untyped(&mut self, id: ViewIdentifier) {
+        leave_view_group(id, self.view_group_relation_store);
+    }
+}
 impl<'a, 'h> ViewInitContext<'a, 'h> {
     #[deprecated = "use render-teardown based view lifecycle"]
     pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
@@ -222,16 +247,6 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
             self.view_layout_state_store,
             self.view_render_state_store,
         )
-    }
-
-    #[inline(always)]
-    pub fn alloc_view_group(&mut self) -> ViewGroupID {
-        alloc_view_group(self.view_allocator, self.view_group_relation_store)
-    }
-
-    #[inline(always)]
-    pub fn join_view_group(&mut self, id: ViewIdentifier, group: ViewGroupID) {
-        join_view_group(id, group, self.view_group_relation_store)
     }
 
     pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2, 'h> {
@@ -430,6 +445,58 @@ impl core::fmt::Debug for ViewIdentifier {
 impl ViewIdentifier {
     const fn into_array_index(self) -> usize {
         self.0.get() - 1
+    }
+}
+
+#[repr(transparent)]
+pub struct TypedViewIdentifier<T>(ViewIdentifier, core::marker::PhantomData<*mut T>);
+impl<T> Clone for TypedViewIdentifier<T> {
+    #[inline(always)]
+    fn clone(&self) -> Self {
+        Self(self.0, self.1)
+    }
+}
+impl<T> Copy for TypedViewIdentifier<T> {}
+impl<T> PartialEq for TypedViewIdentifier<T> {
+    #[inline(always)]
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<T> Eq for TypedViewIdentifier<T> {}
+impl<T> PartialOrd for TypedViewIdentifier<T> {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
+impl<T> Ord for TypedViewIdentifier<T> {
+    #[inline(always)]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+impl<T> Hash for TypedViewIdentifier<T> {
+    #[inline(always)]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
+}
+impl<T> PartialEq<ViewIdentifier> for TypedViewIdentifier<T> {
+    #[inline(always)]
+    fn eq(&self, other: &ViewIdentifier) -> bool {
+        self.0 == *other
+    }
+}
+impl<T> PartialEq<TypedViewIdentifier<T>> for ViewIdentifier {
+    #[inline(always)]
+    fn eq(&self, other: &TypedViewIdentifier<T>) -> bool {
+        *self == other.0
+    }
+}
+impl<T> TypedViewIdentifier<T> {
+    pub const fn into_untyped(self) -> ViewIdentifier {
+        self.0
     }
 }
 
@@ -686,30 +753,34 @@ pub fn alloc_view_id_without_instance(
     id
 }
 
-pub fn construct_view(
-    ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
+pub fn construct_view<T: View + 'static>(
+    ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     allocator: &mut ViewIdentifierAllocator,
     instance_store: &mut ViewInstanceStore,
     tree_relation_store: &mut ViewTreeRelationStore,
     group_relation_store: &mut ViewGroupRelationStore,
     layout_state_store: &mut ViewLayoutStateStore,
     render_state_store: &mut ViewRenderStateStore,
-) -> ViewIdentifier {
+) -> TypedViewIdentifier<T> {
     if let Some(id) = allocator.free_identifier.pop_first() {
         // reuse
-        instance_store.instances[id.into_array_index()] = ViewInstanceCell::new(Some(ctor(id)));
-        tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
+        let id = TypedViewIdentifier(id, core::marker::PhantomData);
+        instance_store.instances[id.0.into_array_index()] = ViewInstanceCell::new(Some(ctor(id)));
+        tree_relation_store.relations[id.0.into_array_index()] = ViewTreeRelation {
             parent: None,
             children: Vec::new(),
         };
-        group_relation_store.joining_group[id.into_array_index()] = None;
-        layout_state_store.set_empty(id);
-        render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
+        group_relation_store.joining_group[id.0.into_array_index()] = None;
+        layout_state_store.set_empty(id.0);
+        render_state_store.0[id.0.into_array_index()] = ViewRenderState::EMPTY;
 
         return id;
     }
 
-    let id = ViewIdentifier(allocator.last_free_identifier);
+    let id = TypedViewIdentifier(
+        ViewIdentifier(allocator.last_free_identifier),
+        core::marker::PhantomData,
+    );
     allocator.last_free_identifier = allocator
         .last_free_identifier
         .checked_add(1)
@@ -1130,11 +1201,16 @@ pub fn view_layout_mut(
 }
 
 pub trait ViewRegisterable {
-    fn construct_view(
+    fn construct_view<T: View + 'static>(
         &mut self,
-        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
-    ) -> ViewIdentifier;
-    fn free_view(&mut self, id: ViewIdentifier);
+        ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
+    ) -> TypedViewIdentifier<T>;
+    fn free_view_untyped(&mut self, id: ViewIdentifier);
+
+    #[inline(always)]
+    fn free_view<T>(&mut self, id: TypedViewIdentifier<T>) {
+        self.free_view_untyped(id.into_untyped());
+    }
 }
 
 pub trait ViewGroupRegisterable {
@@ -1142,18 +1218,83 @@ pub trait ViewGroupRegisterable {
     fn destroy_view_group(&mut self, id: ViewGroupID);
 }
 
+pub trait ViewGroupRelationControllable {
+    fn join_view_group_untyped(&mut self, id: ViewIdentifier, group: ViewGroupID);
+    fn leave_view_group_untyped(&mut self, id: ViewIdentifier);
+
+    #[inline(always)]
+    fn join_view_group<T: View + 'static>(
+        &mut self,
+        id: TypedViewIdentifier<T>,
+        group: ViewGroupID,
+    ) {
+        self.join_view_group_untyped(id.into_untyped(), group);
+    }
+
+    #[inline(always)]
+    fn leave_view_group<T: View + 'static>(&mut self, id: TypedViewIdentifier<T>) {
+        self.leave_view_group_untyped(id.into_untyped());
+    }
+}
+
 pub trait ViewInstanceQueryable {
-    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T>;
+    fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T>;
+
+    #[inline(always)]
+    fn view_instance<T: View + 'static>(&self, id: TypedViewIdentifier<T>) -> Option<&T> {
+        self.view_instance_of::<T>(id.into_untyped())
+    }
 }
 pub trait ViewInstanceQueryableMut {
-    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T>;
-    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool);
-    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout>;
+    fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T>;
+    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool);
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout>;
+
+    #[inline(always)]
+    fn view_instance_mut<T: View + 'static>(
+        &mut self,
+        id: TypedViewIdentifier<T>,
+    ) -> Option<&mut T> {
+        self.view_instance_mut_of::<T>(id.into_untyped())
+    }
+
+    #[inline(always)]
+    fn view_set_visibility<T>(&mut self, id: TypedViewIdentifier<T>, visible: bool) {
+        self.view_set_visibility_untyped(id.into_untyped(), visible)
+    }
+
+    #[inline(always)]
+    fn view_layout_mut<T>(&mut self, id: TypedViewIdentifier<T>) -> Option<&mut ViewLayout> {
+        self.view_layout_mut_untyped(id.into_untyped())
+    }
 }
 
 pub trait ViewRelationControllable {
-    fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier);
-    fn view_detach_parent(&mut self, id: ViewIdentifier);
+    fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier);
+    fn view_detach_parent_untyped(&mut self, id: ViewIdentifier);
+
+    #[inline(always)]
+    fn view_set_parent<T, U>(
+        &mut self,
+        id: TypedViewIdentifier<T>,
+        parent: TypedViewIdentifier<U>,
+    ) {
+        self.view_set_parent_untyped(id.into_untyped(), parent.into_untyped())
+    }
+
+    #[inline(always)]
+    fn view_detach_parent<T>(&mut self, id: TypedViewIdentifier<T>) {
+        self.view_detach_parent_untyped(id.into_untyped())
+    }
+}
+
+pub trait ViewRenderer {
+    fn schedule_view_render_untyped(&mut self, target: ViewIdentifier);
+
+    #[inline(always)]
+    fn schedule_view_render<T>(&mut self, target: TypedViewIdentifier<T>) {
+        self.schedule_view_render_untyped(target.into_untyped());
+    }
 }
 
 pub trait ViewImmediateRenderable {
@@ -1166,12 +1307,13 @@ pub trait ViewImmediateRenderable {
     );
 }
 
-pub trait ViewRenderer {
-    fn schedule_view_render(&mut self, target: ViewIdentifier);
-}
-
 pub trait ViewImmediateTeardownable {
-    fn teardown_view_recursive(&mut self, target: ViewIdentifier);
+    fn teardown_view_recursive_untyped(&mut self, target: ViewIdentifier);
+
+    #[inline(always)]
+    fn teardown_view_recursive<T>(&mut self, target: TypedViewIdentifier<T>) {
+        self.teardown_view_recursive_untyped(target.into_untyped());
+    }
 }
 
 pub enum ViewFeedbackRegistryDelayedOps {
@@ -1315,10 +1457,10 @@ impl ApplicationAccess for ViewFeedbackContext<'_, '_> {
 }
 impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn construct_view(
+    fn construct_view<T: View + 'static>(
         &mut self,
-        ctor: impl FnOnce(ViewIdentifier) -> Box<dyn View>,
-    ) -> ViewIdentifier {
+        ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
+    ) -> TypedViewIdentifier<T> {
         construct_view(
             ctor,
             self.view_init_context.view_allocator,
@@ -1331,7 +1473,7 @@ impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
     }
 
     #[inline(always)]
-    fn free_view(&mut self, id: ViewIdentifier) {
+    fn free_view_untyped(&mut self, id: ViewIdentifier) {
         free_view(
             id,
             self.view_init_context.view_allocator,
@@ -1345,40 +1487,40 @@ impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
 }
 impl ViewInstanceQueryable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+    fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         view_instance(id, self.view_init_context.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+    fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         view_instance_mut(id, self.view_init_context.view_instance_store)
     }
 
     #[inline(always)]
-    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
         view_set_visibility(id, visible, self.view_init_context.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
         view_layout_mut(id, self.view_init_context.view_instance_store)
     }
 }
 impl ViewRelationControllable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn view_set_parent(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
+    fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         view_set_parent(id, parent, self.view_init_context.view_tree_relation_store);
     }
 
     #[inline(always)]
-    fn view_detach_parent(&mut self, id: ViewIdentifier) {
+    fn view_detach_parent_untyped(&mut self, id: ViewIdentifier) {
         view_detach_parent(id, self.view_init_context.view_tree_relation_store);
     }
 }
 impl ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn teardown_view_recursive(&mut self, target: ViewIdentifier) {
+    fn teardown_view_recursive_untyped(&mut self, target: ViewIdentifier) {
         teardown_view_recursive(
             target,
             &mut TeardownContext {
@@ -1403,7 +1545,7 @@ impl ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
 }
 impl ViewRenderer for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn schedule_view_render(&mut self, view: ViewIdentifier) {
+    fn schedule_view_render_untyped(&mut self, view: ViewIdentifier) {
         self.view_render_queue.schedule(view);
     }
 }

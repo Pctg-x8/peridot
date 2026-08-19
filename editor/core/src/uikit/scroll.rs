@@ -15,8 +15,8 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RenderContext, TeardownContext, View, ViewIdentifier, ViewLayoutStateStore,
-        ViewRenderElements, ViewRenderer,
+        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewIdentifier,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -62,14 +62,18 @@ const SCROLL_THUMB_DEACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate =
     &SCROLL_THUMB_ACTIVATE_OFFSET_ANIM.flip(AnimationCurve::Linear);
 
 pub struct ScrollContainer {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<Self>,
     offset: Point<LogicalUnit>,
     content_view: ViewIdentifier,
     eh: Option<Rc<ScrollContainerEventHandler>>,
     viewport_size: Size<LogicalUnit>,
 }
 impl ScrollContainer {
-    pub fn new(id: ViewIdentifier, rect: Rect<LogicalUnit>, content_view: ViewIdentifier) -> Self {
+    pub fn new(
+        id: TypedViewIdentifier<Self>,
+        rect: Rect<LogicalUnit>,
+        content_view: ViewIdentifier,
+    ) -> Self {
         Self {
             id,
             offset: rect.left_top(),
@@ -385,7 +389,7 @@ impl View for ScrollContainer {
 }
 
 struct ScrollContainerEventHandler {
-    view_id: ViewIdentifier,
+    view_id: TypedViewIdentifier<ScrollContainer>,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     ct_content_root: CompositeTreeRef,

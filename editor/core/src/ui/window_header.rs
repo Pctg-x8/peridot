@@ -22,8 +22,8 @@ use crate::{
         text::FontID,
     },
     uikit::{
-        RenderContext, ViewIdentifier, ViewInstanceQueryableMut, ViewLayoutStateStore,
-        ViewRegisterable, ViewRelationControllable, ViewRenderer,
+        RenderContext, TypedViewIdentifier, ViewIdentifier, ViewInstanceQueryableMut,
+        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderer,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -39,8 +39,8 @@ pub struct ComponentInit {
 }
 
 pub struct Component {
-    main: ViewIdentifier,
-    command_buttons: Option<[ViewIdentifier; 3]>,
+    main: TypedViewIdentifier<View>,
+    command_buttons: Option<[TypedViewIdentifier<SystemCommandButtonView>; 3]>,
 }
 impl Component {
     pub fn new(
@@ -82,7 +82,7 @@ impl Component {
     }
 
     pub const fn root_view(&self) -> ViewIdentifier {
-        self.main
+        self.main.into_untyped()
     }
 
     pub fn set_maximize_state(
@@ -91,7 +91,7 @@ impl Component {
         ctx: &mut (impl ViewInstanceQueryableMut + ViewRenderer + ?Sized),
     ) {
         if let Some([_, v, _]) = self.command_buttons {
-            ctx.view_instance_mut::<SystemCommandButtonView>(v)
+            ctx.view_instance_mut(v)
                 .expect("query failed")
                 .replace_cmd(if is_maximized {
                     SystemCommand::Restore

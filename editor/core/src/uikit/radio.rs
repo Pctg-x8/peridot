@@ -14,19 +14,19 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
     },
     uikit::{
-        RenderContext, TeardownContext, View, ViewIdentifier, ViewInstanceQueryableMut,
-        ViewLayoutStateStore, ViewRenderElements,
+        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewInstanceQueryableMut,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
     utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct RadioButtonView {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<RadioButtonView>,
     eh: Option<Rc<RadioButtonEventHandler>>,
     selected_changes: Option<bool>,
 }
 impl RadioButtonView {
-    pub fn new(id: ViewIdentifier) -> Self {
+    pub fn new(id: TypedViewIdentifier<RadioButtonView>) -> Self {
         Self {
             id,
             eh: None,
@@ -149,13 +149,16 @@ impl View for RadioButtonView {
         ctx.mount_context.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(16.0, 16.0)
     }
 }
 
 struct RadioButtonEventHandler {
-    view_id: ViewIdentifier,
+    view_id: TypedViewIdentifier<RadioButtonView>,
     ct_root: CompositeTreeRef,
     ct_mark: CompositeTreeRef,
     ht_root: HitTestTreeRef,
@@ -218,18 +221,18 @@ impl HitTestTreeActionHandler for RadioButtonEventHandler {
     ) -> EventContinueControl {
         // 自分自身をtrueにする(ViewGroupに属していないViewの場合これをしないとONにならない)
         context
-            .view_instance_mut::<RadioButtonView>(self.view_id)
+            .view_instance_mut(self.view_id)
             .expect("query failed")
             .selected_changes = Some(true);
-        context.view_render_queue.schedule(self.view_id);
+        context.schedule_view_render(self.view_id);
 
         // 他をOFFに
         let other_participants = context
-            .view_iter_self_group_parcitipants(self.view_id)
+            .view_iter_self_group_parcitipants(self.view_id.into_untyped())
             .filter(|&x| x != self.view_id)
             .collect::<Vec<_>>();
         for x in other_participants {
-            if let Some(inst) = context.view_instance_mut::<RadioButtonView>(x) {
+            if let Some(inst) = context.view_instance_mut_of::<RadioButtonView>(x) {
                 inst.selected_changes = Some(false);
                 context.view_render_queue.schedule(x);
             }

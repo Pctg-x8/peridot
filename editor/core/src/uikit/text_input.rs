@@ -27,8 +27,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        RenderContext, View, ViewIdentifier, ViewLayoutStateStore, ViewRenderElements,
-        ViewRenderQueue, ViewRenderer,
+        RenderContext, TypedViewIdentifier, View, ViewIdentifier, ViewLayoutStateStore,
+        ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,
@@ -1705,13 +1705,16 @@ pub trait TextInputViewIO {
 }
 
 pub struct TextInputView {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<Self>,
     eh: Option<Rc<TextInputViewEventHandler>>,
     io: std::rc::Weak<dyn TextInputViewIO>,
     should_revalidate_on_next_render: bool,
 }
 impl TextInputView {
-    pub fn new(id: ViewIdentifier, io: std::rc::Weak<impl TextInputViewIO + 'static>) -> Self {
+    pub fn new(
+        id: TypedViewIdentifier<Self>,
+        io: std::rc::Weak<impl TextInputViewIO + 'static>,
+    ) -> Self {
         Self {
             id,
             eh: None,
@@ -1760,7 +1763,7 @@ impl View for TextInputView {
                         layout_rect.clone(),
                         [0.0; 2],
                         [0.0; 2],
-                        self.id,
+                        self.id.into_untyped(),
                         ht_root,
                     ),
                     id: self.id,
@@ -1781,7 +1784,7 @@ impl View for TextInputView {
                         self.io
                             .upgrade()
                             .expect("TextInputView has defunct")
-                            .text(self.id, ctx.application),
+                            .text(self.id.into_untyped(), ctx.application),
                     )
                 }),
                 ctx.composite_tree,
@@ -1825,7 +1828,7 @@ impl View for TextInputView {
 struct TextInputViewEventHandler {
     io: std::rc::Weak<dyn TextInputViewIO>,
     core: TextInputViewCore,
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<TextInputView>,
     token: FocusTargetToken,
     ht_root: HitTestTreeRef,
 }
@@ -1846,7 +1849,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .upgrade()
             .expect("TextInputView has defunct")
             .set_text(
-                self.id,
+                self.id.into_untyped(),
                 &mut context.application,
                 self.core.eh.text_edit_state.borrow().content.clone(),
             );
@@ -1859,7 +1862,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .upgrade()
             .expect("TextInputView has defunct")
             .set_text(
-                self.id,
+                self.id.into_untyped(),
                 &mut context.application,
                 self.core.eh.text_edit_state.borrow().content.clone(),
             );
@@ -1885,7 +1888,7 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
             .upgrade()
             .expect("TextInputView has defunct")
             .set_text(
-                self.id,
+                self.id.into_untyped(),
                 &mut context.application,
                 self.core.eh.text_edit_state.borrow().content.clone(),
             );
@@ -1962,14 +1965,14 @@ impl<ValueIO: NumericInputViewIO + 'static> Default for NumericInputViewInit<Val
 }
 
 pub struct NumericInputView {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<Self>,
     eh: Option<Rc<NumericInputViewEventHandler>>,
     value: std::rc::Weak<dyn NumericInputViewIO>,
     should_revalidate_on_next_render: Cell<bool>,
 }
 impl NumericInputView {
     pub fn new(
-        id: ViewIdentifier,
+        id: TypedViewIdentifier<Self>,
         init: NumericInputViewInit<impl NumericInputViewIO + 'static>,
     ) -> Self {
         Self {
@@ -2026,7 +2029,7 @@ impl View for NumericInputView {
                         layout_rect.clone(),
                         [0.0; 2],
                         [0.0; 2],
-                        self.id,
+                        self.id.into_untyped(),
                         ht_root,
                     ),
                     value: self.value.clone(),
@@ -2048,7 +2051,7 @@ impl View for NumericInputView {
                         eh.value
                             .upgrade()
                             .expect("NumericInputView has defunct")
-                            .text(self.id, ctx.application),
+                            .text(self.id.into_untyped(), ctx.application),
                     )
                 }),
                 ctx.composite_tree,
@@ -2391,11 +2394,11 @@ impl NumericInputViewEventHandler {
 }
 
 pub struct MultilineTextInputView {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<Self>,
     eh: Option<Rc<MultilineTextInputEventHandler>>,
 }
 impl MultilineTextInputView {
-    pub fn new(id: ViewIdentifier) -> Self {
+    pub fn new(id: TypedViewIdentifier<Self>) -> Self {
         Self { id, eh: None }
     }
 }
@@ -2596,7 +2599,7 @@ impl View for MultilineTextInputView {
 }
 
 struct MultilineTextInputEventHandler {
-    view_id: ViewIdentifier,
+    view_id: TypedViewIdentifier<MultilineTextInputView>,
     kf_token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,

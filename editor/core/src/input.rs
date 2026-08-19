@@ -53,29 +53,32 @@ impl InputEventContext<'_, '_, '_> {
 }
 impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {
     #[inline(always)]
-    fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+    fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uikit::view_instance(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
     #[inline(always)]
-    fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+    fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         crate::uikit::view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
-    fn view_set_visibility(&mut self, id: ViewIdentifier, visible: bool) {
+    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
         crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut(&mut self, id: ViewIdentifier) -> Option<&mut crate::uikit::ViewLayout> {
+    fn view_layout_mut_untyped(
+        &mut self,
+        id: ViewIdentifier,
+    ) -> Option<&mut crate::uikit::ViewLayout> {
         crate::uikit::view_layout_mut(id, self.view_instance_store)
     }
 }
 impl ViewRenderer for InputEventContext<'_, '_, '_> {
     #[inline(always)]
-    fn schedule_view_render(&mut self, target: ViewIdentifier) {
+    fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
     }
 }

@@ -13,9 +13,10 @@ use crate::{
     },
     uikit::{
         RenderContext, TeardownContext, View, ViewIdentifier, ViewImmediateRenderable,
-        ViewInitContext, ViewInstanceStore, ViewLayoutStateStore, ViewRenderElements,
-        ViewRenderStateStore, ViewTreeRelationStore, render_view_with_base,
-        teardown_view_recursive, view_instance, view_instance_mut,
+        ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderStateStore, ViewTreeRelationStore,
+        render_view_with_base, teardown_view_recursive, view_instance, view_instance_mut,
+        view_layout_mut, view_set_visibility,
     },
     utils::{LogicalUnit, Point, Rect, Size, range_helper::range_from_len},
 };
@@ -54,15 +55,26 @@ pub trait Popup {
 pub struct PopupCloseContext<'env> {
     pub view_instance_store: &'env mut ViewInstanceStore,
 }
-impl PopupCloseContext<'_> {
+impl ViewInstanceQueryable for PopupCloseContext<'_> {
     #[inline(always)]
-    pub fn view_instance<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
+    fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         view_instance(id, self.view_instance_store)
+    }
+}
+impl ViewInstanceQueryableMut for PopupCloseContext<'_> {
+    #[inline(always)]
+    fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
+        view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
-    pub fn view_instance_mut<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_instance_store)
+    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
+        view_set_visibility(id, visible, self.view_instance_store);
+    }
+
+    #[inline(always)]
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut super::ViewLayout> {
+        view_layout_mut(id, self.view_instance_store)
     }
 }
 

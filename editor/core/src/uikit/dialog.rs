@@ -8,19 +8,19 @@ use crate::{
     uikit::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
         SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView, TeardownContext,
-        ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutChild,
-        ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
-        ViewLayoutOverflow, ViewRegisterable, ViewRelationControllable, ViewSize,
-        popup::PopupCloseContext,
+        TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
+        ViewRelationControllable, ViewSize, popup::PopupCloseContext,
     },
-    utils::{Point, Size},
+    utils::Size,
 };
 
 pub struct AlertDialogPresenter {
     id: PopupID,
-    root_view_id: ViewIdentifier,
-    frame: ViewIdentifier,
-    confirm_button: ViewIdentifier,
+    mask: TypedViewIdentifier<OverlayPopupBasicMaskView>,
+    frame: TypedViewIdentifier<OverlayPopupBasicFrameView>,
+    confirm_button: TypedViewIdentifier<SimpleButtonView>,
 }
 impl AlertDialogPresenter {
     const AROUND_PADDING: f32 = 16.0;
@@ -91,7 +91,7 @@ impl AlertDialogPresenter {
 
         Self {
             id: popup_id,
-            root_view_id: mask,
+            mask,
             frame,
             confirm_button,
         }
@@ -99,7 +99,7 @@ impl AlertDialogPresenter {
 }
 impl Popup for AlertDialogPresenter {
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.mask.into_untyped()
     }
 
     fn close(
@@ -111,16 +111,16 @@ impl Popup for AlertDialogPresenter {
     ) {
         // disable button interaction while animating
         context
-            .view_instance_mut::<SimpleButtonView>(self.confirm_button)
+            .view_instance_mut(self.confirm_button)
             .expect("query failed")
             .set_interactive(false);
 
         context
-            .view_instance::<OverlayPopupBasicMaskView>(self.root_view_id)
+            .view_instance(self.mask)
             .expect("query failed")
             .play_close_animation(composite_tree, current_sec);
         context
-            .view_instance::<OverlayPopupBasicFrameView>(self.frame)
+            .view_instance(self.frame)
             .expect("query failed")
             .play_close_animation(
                 composite_tree,

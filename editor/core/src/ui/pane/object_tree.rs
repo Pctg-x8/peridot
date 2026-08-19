@@ -26,7 +26,7 @@ use crate::{
     },
     ui::dock::PaneContentResizeContext,
     uikit::{
-        MenuItem, TeardownContext, ViewFeedbackContext, ViewFeedbackHandler,
+        MenuItem, TeardownContext, TypedViewIdentifier, ViewFeedbackContext, ViewFeedbackHandler,
         ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowDirection, ViewRegisterable,
@@ -36,7 +36,7 @@ use crate::{
 };
 
 pub struct Presenter {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<View>,
     eh: Rc<ObjectTreePaneEventHandler>,
 }
 impl Presenter {
@@ -78,7 +78,7 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id
+        self.root_view_id.into_untyped()
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
@@ -219,10 +219,10 @@ impl HitTestTreeActionHandler for ViewEntity {
 }
 
 struct ObjectTreePaneEventHandler {
-    root_view_id: ViewIdentifier,
+    root_view_id: TypedViewIdentifier<View>,
     object_tree_changed: Cell<bool>,
     changed_object_ids: RefCell<HashSet<ObjectID>>,
-    row_views: RefCell<Vec<ViewIdentifier>>,
+    row_views: RefCell<Vec<TypedViewIdentifier<ObjectRowView>>>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandler {
     fn accept_feedback<'a, 'h>(
@@ -256,7 +256,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
             for oid in changed_object_ids {
                 for &view in self.row_views.borrow().iter() {
                     if context
-                        .view_instance::<ObjectRowView>(view)
+                        .view_instance(view)
                         .expect("query failed")
                         .assigned_object
                         == oid
@@ -264,7 +264,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                         let name = crate::model::object_name(context, oid).into();
 
                         context
-                            .view_instance_mut::<ObjectRowView>(view)
+                            .view_instance_mut(view)
                             .expect("query failed")
                             .set_label(name);
                         context.schedule_view_render(view);
@@ -295,7 +295,7 @@ impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for ObjectTreePaneEventH
 }
 
 struct ObjectRowView {
-    id: ViewIdentifier,
+    id: TypedViewIdentifier<Self>,
     assigned_object: ObjectID,
     eh: Option<Rc<ObjectRowEventHandler>>,
     label: String,
@@ -304,7 +304,7 @@ struct ObjectRowView {
 impl ObjectRowView {
     const ITEM_HEIGHT: f32 = 20.0;
 
-    fn new(id: ViewIdentifier, assigned_object: ObjectID, init_label: String) -> Self {
+    fn new(id: TypedViewIdentifier<Self>, assigned_object: ObjectID, init_label: String) -> Self {
         Self {
             id,
             assigned_object,
@@ -452,7 +452,7 @@ impl crate::uikit::View for ObjectRowView {
 }
 
 struct ObjectRowEventHandler {
-    view_id: ViewIdentifier,
+    view_id: TypedViewIdentifier<ObjectRowView>,
     assigned_object: ObjectID,
     selection_lit: Cell<bool>,
     ct_root: CompositeTreeRef,
