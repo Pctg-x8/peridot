@@ -122,13 +122,17 @@ impl Presenter {
                 v.set_font(FontID::UIFormLiftedLabel);
                 v
             });
-            let shape_selector = ctx.construct_view(|_| {
-                Box::new(crate::uikit::dropdown_box::View::new(vec![
-                    "Cube".into(),
-                    "Sphere".into(),
-                    "Cylinder".into(),
-                    "Capsule".into(),
-                ]))
+            let shape_selector = ctx.construct_view(|id| {
+                Box::new(crate::uikit::dropdown_box::View::new(
+                    id,
+                    eh.clone(),
+                    vec![
+                        "Cube".into(),
+                        "Sphere".into(),
+                        "Cylinder".into(),
+                        "Capsule".into(),
+                    ],
+                ))
             });
             ctx.view_set_parent(label, content_view);
             ctx.view_set_parent(shape_selector, content_view);
@@ -162,8 +166,8 @@ impl Presenter {
                 items_container_view,
                 items_content_view: content_view,
                 vec3_editors: vec![position_editor, rotation_editor, scale_editor],
-                numeric_input_view_ids: vec![],
                 render_section_header_view: render_section_header,
+                render_shape_selector_view: shape_selector,
             }
         });
         eh.subscribe_view_feedbacks(ctx);
@@ -533,8 +537,8 @@ struct EventHandler {
     items_container_view: TypedViewIdentifier<ScrollContainer>,
     items_content_view: TypedViewIdentifier<ContainerView>,
     vec3_editors: Vec<Vec3EditorComponent>,
-    numeric_input_view_ids: Vec<TypedViewIdentifier<NumericInputView>>,
     render_section_header_view: TypedViewIdentifier<SectionHeaderView>,
+    render_shape_selector_view: TypedViewIdentifier<crate::uikit::dropdown_box::View>,
 }
 impl EventHandler {
     fn subscribe_view_feedbacks(
@@ -617,10 +621,6 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                             .revalidate();
                     }
 
-                    for &x in self.numeric_input_view_ids.iter() {
-                        context.view_instance(x).expect("query failed").revalidate();
-                    }
-
                     let render_enabled = crate::model::selected_object_render_is_enabled(context);
                     if context
                         .view_instance_mut(self.render_section_header_view)
@@ -630,6 +630,11 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         // should re-render
                         context.schedule_view_render(self.render_section_header_view);
                     }
+
+                    context
+                        .view_instance_mut(self.render_shape_selector_view)
+                        .expect("query failed")
+                        .revalidate();
                 }
                 ObjectSelectionState::Multiple => {
                     context
@@ -892,5 +897,32 @@ impl NumericInputViewIO for EventHandler {
                 Vector3(0.0, 0.0, delta * 0.1),
             );
         }
+    }
+}
+impl crate::uikit::dropdown_box::IO for EventHandler {
+    fn selected_index(&self, requester: ViewIdentifier, application: &Application) -> usize {
+        if requester == self.render_shape_selector_view {
+            return crate::model::selected_object_render_shape(application)
+                .unwrap_or(crate::model::ObjectRenderShape::Cube) as _;
+        }
+
+        tracing::warn!(?requester, "receiving from unknown view");
+        0
+    }
+
+    fn on_selected_index_change(
+        &self,
+        sender: ViewIdentifier,
+        index: usize,
+        application: &mut ApplicationMutation,
+    ) {
+        if sender == self.render_shape_selector_view {
+            crate::model::set_selected_object_render_shape(application, unsafe {
+                core::mem::transmute(u8::try_from(index).expect("too large value"))
+            });
+            return;
+        }
+
+        tracing::warn!(?sender, "receiving from unknown view");
     }
 }

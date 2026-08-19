@@ -25,6 +25,8 @@ impl ObjectID {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(u8)]
 pub enum ObjectRenderShape {
     Cube,
     Sphere,
@@ -558,6 +560,28 @@ pub fn toggle_selected_object_render_enable(env: &mut (impl ApplicationMutableAc
     };
 
     object_modify_data(env, selected, |o| o.render_enabled = !o.render_enabled);
+}
+
+pub fn selected_object_render_shape(
+    env: &(impl ApplicationAccess + ?Sized),
+) -> Option<ObjectRenderShape> {
+    let Some(&selected) = env.application().selected_objects.iter().next() else {
+        return None;
+    };
+
+    Some(env.application().object(selected).render_shape)
+}
+
+/// TODO: multiple select
+pub fn set_selected_object_render_shape(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    shape: ObjectRenderShape,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.render_shape = shape);
 }
 
 pub fn select_object(env: &mut (impl ApplicationMutableAccess + ?Sized), id: ObjectID) {

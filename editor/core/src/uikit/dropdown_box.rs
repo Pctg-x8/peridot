@@ -9,20 +9,22 @@ use crate::{
             PointerButtonActionArgs,
         },
     },
+    model::{Application, ApplicationMutation},
     rendering::{
         Normalized2DStaticMeshTexture, Normalized2DStaticMeshTextureLazyInit,
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectScaleFactor, CompositeRectText,
             CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
-            CornerRadius, FloatAnimationTemplate, TextureMappingMode, TextureType,
+            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTreeRef, CornerRadius,
+            FloatAnimationTemplate, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        MountContext, MountTarget, RenderContext, TeardownContext, ViewInitContext,
-        ViewLayoutStateStore,
+        MountContext, MountTarget, RenderContext, TeardownContext, TypedViewIdentifier,
+        ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutStateStore,
+        ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -44,16 +46,40 @@ static DOWN_ARROW_ICON: Normalized2DStaticMeshTextureLazyInit =
         height: 16.0,
     });
 
+pub trait IO {
+    fn selected_index(&self, requester: ViewIdentifier, application: &Application) -> usize;
+    fn on_selected_index_change(
+        &self,
+        sender: ViewIdentifier,
+        index: usize,
+        application: &mut ApplicationMutation,
+    );
+}
+
 pub struct View {
+    id: TypedViewIdentifier<Self>,
+    io: std::rc::Weak<dyn IO>,
     entity: Option<Rc<EventHandler>>,
     items: Vec<String>,
+    should_revalidate_next_render: bool,
 }
 impl View {
-    pub fn new(items: Vec<String>) -> Self {
+    pub fn new(
+        id: TypedViewIdentifier<Self>,
+        io: std::rc::Weak<impl IO + 'static>,
+        items: Vec<String>,
+    ) -> Self {
         Self {
+            id,
+            io: io as _,
             entity: None,
             items,
+            should_revalidate_next_render: false,
         }
+    }
+
+    pub fn revalidate(&mut self) {
+        self.should_revalidate_next_render = true;
     }
 }
 impl super::View for View {
@@ -75,10 +101,34 @@ impl super::View for View {
                 ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
                 ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
 
+                if core::mem::replace(&mut self.should_revalidate_next_render, false)
+                    && !self.items.is_empty()
+                {
+                    // revalidate
+                    let current_index =
+                        e.io.upgrade()
+                            .expect("DropdownBox has defunct")
+                            .selected_index(e.id.into_untyped(), ctx.application);
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_text)
+                        .text_run(
+                            CompositeRectTextRun::build(self.items[current_index].clone())
+                                .color_imm([1.0, 1.0, 1.0, 1.0]),
+                        )
+                        .apply();
+                }
+
                 e
             }
             None => {
                 // first render
+                let current_index = self
+                    .io
+                    .upgrade()
+                    .expect("DropdownBox has defunct")
+                    .selected_index(self.id.into_untyped(), ctx.application);
+                self.should_revalidate_next_render = false;
+
                 let down_arrow_icon = DOWN_ARROW_ICON.get(
                     ctx.main_thread_texture_id_issuer,
                     ctx.system_link.rt_sender(),
@@ -124,11 +174,10 @@ impl super::View for View {
                     text: Some(CompositeRectText {
                         runs: vec![CompositeRectTextRun {
                             content: if self.items.is_empty() {
-                                ""
+                                String::new()
                             } else {
-                                self.items[0].as_str()
-                            }
-                            .into(),
+                                self.items[current_index].clone()
+                            },
                             color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                             ..Default::default()
                         }],
@@ -172,7 +221,9 @@ impl super::View for View {
                 });
 
                 let eh = Rc::new_cyclic(|w| EventHandler {
+                    id: self.id,
                     this_weakref: w.clone(),
+                    io: self.io.clone(),
                     ct_root,
                     ct_text,
                     ct_down_arrow,
@@ -228,6 +279,8 @@ impl super::View for View {
 
 pub struct EventHandler {
     this_weakref: std::rc::Weak<EventHandler>,
+    id: TypedViewIdentifier<View>,
+    io: std::rc::Weak<dyn IO>,
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
     ct_down_arrow: CompositeTreeRef,
@@ -346,25 +399,21 @@ impl HitTestTreeActionHandler for EventHandler {
     }
 }
 impl EventHandler {
-    pub fn set_selection_id<E>(&self, id: usize, composite_tree: &mut CompositeTree<E>) {
+    pub fn set_selection_id(
+        &self,
+        id: usize,
+        application: &mut ApplicationMutation,
+        env: &mut (impl ViewInstanceQueryableMut + ViewRenderer + ?Sized),
+    ) {
         self.current_selected.set(id);
-        self.update_text(composite_tree);
-    }
-
-    fn update_text<E>(&self, composite_tree: &mut CompositeTree<E>) {
-        let content = if self.items.is_empty() {
-            ""
-        } else {
-            self.items[self.current_selected.get()].as_str()
-        };
-        composite_tree
-            .get_mut(self.ct_text)
-            .text
-            .as_mut()
-            .expect("no text set?")
-            .runs[0]
-            .content = content.into();
-        composite_tree.mark_text_layout_dirty(self.ct_text);
+        self.io
+            .upgrade()
+            .expect("DropdownBox has defunct")
+            .on_selected_index_change(self.id.into_untyped(), id, application);
+        env.view_instance_mut(self.id)
+            .expect("query failed")
+            .revalidate();
+        env.schedule_view_render(self.id);
     }
 }
 

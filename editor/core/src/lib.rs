@@ -2394,7 +2394,22 @@ impl TextInputViewIO for UIKitPreviewTextInputValueStore {
     }
 }
 
-profiler::section!(PANE_INIT_UIKIT_PREVIEW = "PaneInitialize.UIKitPreview");
+struct UIKitPreviewDropdownValueStore(Cell<usize>);
+impl uikit::dropdown_box::IO for UIKitPreviewDropdownValueStore {
+    fn selected_index(&self, _requester: ViewIdentifier, _application: &Application) -> usize {
+        self.0.get()
+    }
+
+    fn on_selected_index_change(
+        &self,
+        _sender: ViewIdentifier,
+        index: usize,
+        _application: &mut ApplicationMutation,
+    ) {
+        self.0.set(index)
+    }
+}
+
 pub struct UIKitPreviewPanePresenter {
     kf_group: KeyboardFocusGroupRef,
     scroll_container: TypedViewIdentifier<ScrollContainer>,
@@ -2403,14 +2418,14 @@ pub struct UIKitPreviewPanePresenter {
     text_input_backing_store2: Rc<UIKitPreviewTextInputValueStore>,
     color_picker_backing_store: Rc<ColorPickerTestBackingStore>,
     numeric_input_view_backing_store: Rc<UIKitPreviewNumericInputValueStore>,
+    dropdown_value_store: Rc<UIKitPreviewDropdownValueStore>,
     rgc1: ViewGroupID,
 }
 impl UIKitPreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("UIKitPreview");
 
+    #[profiler::instrument("PaneInitialize.UIKitPreview")]
     pub fn new(ctx: &mut ViewInitContext) -> Self {
-        profiler::scope!(PANE_INIT_UIKIT_PREVIEW);
-
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
 
@@ -2637,14 +2652,19 @@ impl UIKitPreviewPanePresenter {
         }
         ctx.view_set_parent(numeric_input_view, container);
 
+        let dropdown_value_store = Rc::new(UIKitPreviewDropdownValueStore(Cell::new(0)));
         let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Dropdown".into())));
         ctx.view_set_parent(label, container);
-        let dropdown_box = ctx.construct_view(|_| {
-            Box::new(uikit::dropdown_box::View::new(vec![
-                "DropdownBox Item 1".into(),
-                "DropdownBox Item 2".into(),
-                "DropdownBox Item 3 too long version".into(),
-            ]))
+        let dropdown_box = ctx.construct_view(|id| {
+            Box::new(uikit::dropdown_box::View::new(
+                id,
+                Rc::downgrade(&dropdown_value_store),
+                vec![
+                    "DropdownBox Item 1".into(),
+                    "DropdownBox Item 2".into(),
+                    "DropdownBox Item 3 too long version".into(),
+                ],
+            ))
         });
         {
             let l = ctx.view_layout_mut(dropdown_box).expect("query failed");
@@ -2703,6 +2723,7 @@ impl UIKitPreviewPanePresenter {
             text_input_backing_store2,
             color_picker_backing_store,
             numeric_input_view_backing_store,
+            dropdown_value_store,
             rgc1,
         }
     }
@@ -5965,11 +5986,54 @@ async fn run<'sys>(
                 view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
-                let mut should_commit_ct = false;
-
                 if let Some(r) = receiver.upgrade() {
-                    r.set_selection_id(id, &mut composite_tree);
-                    should_commit_ct = true;
+                    struct LocalContext<'env> {
+                        view_instance_store: &'env mut ViewInstanceStore,
+                        view_render_queue: &'env mut ViewRenderQueue,
+                    }
+                    impl ViewInstanceQueryableMut for LocalContext<'_> {
+                        #[inline(always)]
+                        fn view_instance_mut_of<T: View + 'static>(
+                            &mut self,
+                            id: ViewIdentifier,
+                        ) -> Option<&mut T> {
+                            uikit::view_instance_mut(id, self.view_instance_store)
+                        }
+
+                        #[inline(always)]
+                        fn view_set_visibility_untyped(
+                            &mut self,
+                            id: ViewIdentifier,
+                            visible: bool,
+                        ) {
+                            uikit::view_set_visibility(id, visible, self.view_instance_store)
+                        }
+
+                        #[inline(always)]
+                        fn view_layout_mut_untyped(
+                            &mut self,
+                            id: ViewIdentifier,
+                        ) -> Option<&mut uikit::ViewLayout> {
+                            uikit::view_layout_mut(id, self.view_instance_store)
+                        }
+                    }
+                    impl ViewRenderer for LocalContext<'_> {
+                        #[inline(always)]
+                        fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
+                            self.view_render_queue.schedule(target);
+                        }
+                    }
+                    r.set_selection_id(
+                        id,
+                        &mut ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        },
+                        &mut LocalContext {
+                            view_instance_store: &mut view_instance_store,
+                            view_render_queue: &mut view_render_queue,
+                        },
+                    );
                 }
 
                 // 選択したら閉じる
@@ -5980,14 +6044,61 @@ async fn run<'sys>(
                         &mut ht_manager,
                         &mut keyboard_focus_registry,
                     );
-
-                    should_commit_ct = true;
                 }
 
-                if should_commit_ct {
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                if !view_feedback_store.is_empty() {
+                    let mut fb_context = ViewFeedbackContext {
+                        application: &application,
+                        view_init_context: ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
+                            },
+                            view_allocator: &mut view_allocator,
+                            view_instance_store: &mut view_instance_store,
+                            view_tree_relation_store: &mut view_tree_relation_store,
+                            view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
+                            view_render_state_store: &mut view_render_state_store,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
+                            system_link: &system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            application: &application,
+                        },
+                        view_render_queue: &mut view_render_queue,
+                    };
+
+                    for x in view_feedback_store.drain(..) {
+                        x.dispatch(&view_feedback_registry, &mut fb_context);
+                    }
+
+                    view_feedback_registry.perform_atomic(&mut fb_context);
                 }
+
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &mut view_layout_state_store,
+                    &mut view_render_state_store,
+                );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DockMoveSplitter {
                 controlling_dock,
