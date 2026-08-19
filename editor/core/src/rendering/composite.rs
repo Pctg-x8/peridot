@@ -12,6 +12,7 @@ use bedrock::{
 use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
 
 use crate::{
+    Event,
     graphics::{
         BLEND_STATE_SINGLE_NONE, Graphics, IA_STATE_TRILIST, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
@@ -23,7 +24,7 @@ use crate::{
         vg::VectorRasterizationState,
     },
     utils::{
-        PixelsUnit, Rect, SafeF32, Size,
+        LogicalUnit, PixelsUnit, Rect, SafeF32, Size,
         range_helper::{is_beyond, range_from_len, rate_of},
     },
 };
@@ -615,12 +616,40 @@ impl<Event> Default for CompositeRectTextRun<Event> {
     }
 }
 impl<Event> CompositeRectTextRun<Event> {
+    #[inline(always)]
+    pub fn build(content: String) -> CompositeRectTextRunBuilder<Event> {
+        CompositeRectTextRunBuilder(CompositeRectTextRun {
+            content,
+            ..Default::default()
+        })
+    }
+
     fn perform_complete_event(
         &mut self,
         current_sec: f32,
         on_event: &mut (impl FnMut(Event) + ?Sized),
     ) {
         self.color.process_on_complete(current_sec, on_event);
+    }
+}
+
+#[must_use]
+pub struct CompositeRectTextRunBuilder<Event>(CompositeRectTextRun<Event>);
+impl<Event> From<CompositeRectTextRunBuilder<Event>> for CompositeRectTextRun<Event> {
+    #[inline(always)]
+    fn from(value: CompositeRectTextRunBuilder<Event>) -> Self {
+        value.0
+    }
+}
+impl<Event> CompositeRectTextRunBuilder<Event> {
+    pub fn color_imm(mut self, color: [f32; 4]) -> Self {
+        self.0.color = AnimatableColor::Value(color);
+        self
+    }
+
+    pub fn font(mut self, font: FontID) -> Self {
+        self.0.font_id = font;
+        self
     }
 }
 
@@ -644,6 +673,11 @@ impl<Event> Default for CompositeRectText<Event> {
     }
 }
 impl<Event> CompositeRectText<Event> {
+    #[inline(always)]
+    pub fn build() -> CompositeRectTextBuilder<Event> {
+        CompositeRectTextBuilder(Default::default())
+    }
+
     fn perform_complete_event(
         &mut self,
         current_sec: f32,
@@ -652,6 +686,41 @@ impl<Event> CompositeRectText<Event> {
         for r in self.runs.iter_mut() {
             r.perform_complete_event(current_sec, &mut on_event);
         }
+    }
+}
+
+#[must_use]
+pub struct CompositeRectTextBuilder<Event>(CompositeRectText<Event>);
+impl<Event> From<CompositeRectTextBuilder<Event>> for CompositeRectText<Event> {
+    #[inline(always)]
+    fn from(value: CompositeRectTextBuilder<Event>) -> Self {
+        value.0
+    }
+}
+impl<Event> CompositeRectTextBuilder<Event> {
+    pub fn runs(mut self, runs: Vec<CompositeRectTextRun<Event>>) -> Self {
+        self.0.runs = runs;
+        self
+    }
+
+    pub fn run(mut self, run: impl Into<CompositeRectTextRun<Event>>) -> Self {
+        self.0.runs = vec![run.into()];
+        self
+    }
+
+    pub fn vertical_middle(mut self) -> Self {
+        self.0.vertical_alignment = CompositeRectTextVerticalAlignment::Middle;
+        self
+    }
+
+    pub fn horizontal_middle(mut self) -> Self {
+        self.0.horizontal_alignment = CompositeRectTextHorizontalAlignment::Middle;
+        self
+    }
+
+    pub fn shift_left(mut self, amount: f32) -> Self {
+        self.0.offset[0] += amount;
+        self
     }
 }
 
@@ -898,6 +967,13 @@ impl<Event> Default for CompositeRect<Event> {
     }
 }
 impl<Event> CompositeRect<Event> {
+    #[inline(always)]
+    pub fn build() -> CompositeRectBuilder<Event> {
+        CompositeRectBuilder {
+            temp: CompositeRect::default(),
+        }
+    }
+
     fn perform_complete_event(
         &mut self,
         current_sec: f32,
@@ -918,6 +994,77 @@ impl<Event> CompositeRect<Event> {
         if let Some(ref mut t) = self.text {
             t.perform_complete_event(current_sec, &mut on_event);
         }
+    }
+}
+
+#[must_use]
+pub struct CompositeRectBuilder<Event> {
+    temp: CompositeRect<Event>,
+}
+impl<Event> CompositeRectBuilder<Event> {
+    #[inline(always)]
+    pub fn create(self, registry: &mut CompositeTree<Event>) -> CompositeTreeRef {
+        registry.create(self.temp)
+    }
+
+    pub const fn use_ui_scale(mut self) -> Self {
+        self.temp.scale_factor = CompositeRectScaleFactor::UI;
+        self
+    }
+
+    pub fn offset_imm(mut self, x: f32, y: f32) -> Self {
+        self.temp.offset = [AnimatableFloat::Value(x), AnimatableFloat::Value(y)];
+        self
+    }
+
+    pub fn size_imm(mut self, w: f32, h: f32) -> Self {
+        self.temp.size = [AnimatableFloat::Value(w), AnimatableFloat::Value(h)];
+        self
+    }
+
+    pub fn rect_imm(mut self, r: Rect<LogicalUnit>) -> Self {
+        self.temp.offset = [
+            AnimatableFloat::Value(r.left),
+            AnimatableFloat::Value(r.top),
+        ];
+        self.temp.size = [
+            AnimatableFloat::Value(r.width),
+            AnimatableFloat::Value(r.height),
+        ];
+        self
+    }
+
+    pub const fn expand_full(mut self) -> Self {
+        self.temp.relative_size_adjustment = [1.0, 1.0];
+        self
+    }
+
+    pub const fn expand_width(mut self) -> Self {
+        self.temp.relative_size_adjustment[0] = 1.0;
+        self
+    }
+
+    pub const fn expand_height(mut self) -> Self {
+        self.temp.relative_size_adjustment[1] = 1.0;
+        self
+    }
+
+    pub const fn anchor_parent_bottom(mut self) -> Self {
+        self.temp.relative_offset_adjustment[1] = 1.0;
+        self
+    }
+
+    pub fn composite_fill_color_imm(mut self, color: [f32; 4]) -> Self {
+        self.temp.has_bitmap = true;
+        self.temp.composite_mode = CompositeMode::FillColor(AnimatableColor::Value(color));
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<CompositeRectText<Event>>) -> Self {
+        // UI Scaleにしないと表示がおかしくなる
+        self.temp.scale_factor = CompositeRectScaleFactor::UI;
+        self.temp.text = Some(text.into());
+        self
     }
 }
 
@@ -980,6 +1127,15 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         Event: PartialEq,
     {
         self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
+    }
+
+    #[inline(always)]
+    pub fn rect_imm(self, rect: Rect<LogicalUnit>) -> Self
+    where
+        Event: PartialEq,
+    {
+        self.offset_imm(rect.left, rect.top)
+            .size_imm(rect.width, rect.height)
     }
 
     pub fn y(mut self, v: AnimatableFloat<Event>) -> Self {
@@ -1223,8 +1379,8 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self
     }
 
-    pub fn text(mut self, t: CompositeRectText<Event>) -> Self {
-        unsafe { &mut *self.target }.text = Some(t);
+    pub fn text(mut self, t: impl Into<CompositeRectText<Event>>) -> Self {
+        unsafe { &mut *self.target }.text = Some(t.into());
         self.dirty = true;
         self.text_layout_dirty = true;
         self
@@ -1240,8 +1396,8 @@ impl<'r, Event> CompositeRectModificationChain<'r, Event> {
         self
     }
 
-    pub fn text_run(self, xs: CompositeRectTextRun<Event>) -> Self {
-        self.text_runs(vec![xs])
+    pub fn text_run(self, xs: impl Into<CompositeRectTextRun<Event>>) -> Self {
+        self.text_runs(vec![xs.into()])
     }
 }
 

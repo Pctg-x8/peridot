@@ -15,8 +15,7 @@ use crate::{
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTreeRef,
+            CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun, CompositeTreeRef,
         },
         text::FontID,
     },
@@ -331,57 +330,46 @@ impl View for SectionHeaderView {
                         .set_without_transition(self.checked, ctx.composite_tree);
                 }
 
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(e.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(e.ht_root).height = layout_rect.height;
+
                 e
             }
             None => {
                 // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(layout_rect.left),
-                        AnimatableFloat::Value(layout_rect.top),
-                    ],
-                    size: [
-                        AnimatableFloat::Value(layout_rect.width),
-                        AnimatableFloat::Value(layout_rect.height),
-                    ],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                        1.0, 1.0, 1.0, 0.0,
-                    ])),
-                    text: Some(CompositeRectText {
-                        runs: vec![CompositeRectTextRun {
-                            content: self.name.clone(),
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            ..Default::default()
-                        }],
-                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                        offset: [24.0, 0.0],
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                });
-                let ct_topline = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
-                    relative_size_adjustment: [1.0, 0.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                        1.0, 1.0, 1.0, 0.25,
-                    ])),
-                    ..Default::default()
-                });
-                let ct_bottomline = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
-                    relative_size_adjustment: [1.0, 0.0],
-                    relative_offset_adjustment: [0.0, 1.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                        1.0, 1.0, 1.0, 0.25,
-                    ])),
-                    ..Default::default()
-                });
+                let ct_root = CompositeRect::build()
+                    .use_ui_scale()
+                    .rect_imm(layout_rect.clone())
+                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.0])
+                    .text(
+                        CompositeRectText::build()
+                            .run(
+                                CompositeRectTextRun::build(self.name.clone())
+                                    .color_imm([1.0, 1.0, 1.0, 1.0]),
+                            )
+                            .vertical_middle()
+                            .shift_left(24.0),
+                    )
+                    .create(ctx.composite_tree);
+                let ct_topline = CompositeRect::build()
+                    .use_ui_scale()
+                    .size_imm(0.0, 1.0)
+                    .expand_width()
+                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.25])
+                    .create(ctx.composite_tree);
+                let ct_bottomline = CompositeRect::build()
+                    .use_ui_scale()
+                    .size_imm(0.0, 1.0)
+                    .expand_width()
+                    .anchor_parent_bottom()
+                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.25])
+                    .create(ctx.composite_tree);
                 let checkmark = CheckmarkVisual::new(
                     ctx.composite_tree,
                     ctx.main_thread_texture_id_issuer,

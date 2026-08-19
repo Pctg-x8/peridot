@@ -183,12 +183,11 @@ pub fn object_is_selected(env: &(impl ApplicationAccess + ?Sized), id: ObjectID)
 
 pub fn object_tree_content(
     env: &(impl ApplicationAccess + ?Sized),
-) -> impl Iterator<Item = (usize, ObjectID, &str)> {
+) -> impl Iterator<Item = (ObjectID, &str)> {
     env.application()
         .root_objects
         .iter()
-        .enumerate()
-        .map(move |(n, &id)| (n, id, env.application().object(id).name.as_str()))
+        .map(move |&id| (id, env.application().object(id).name.as_str()))
 }
 
 pub enum ObjectSelectionState {

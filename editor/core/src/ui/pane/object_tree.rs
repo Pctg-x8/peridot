@@ -21,9 +21,8 @@ use crate::{
         ViewFeedbackObjectTreeChanged,
     },
     rendering::composite::{
-        AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
-        CompositeRectScaleFactor, CompositeRectText, CompositeRectTextRun,
-        CompositeRectTextVerticalAlignment, CompositeTreeRef,
+        AnimatableColor, AnimationCurve, CompositeMode, CompositeRect, CompositeRectText,
+        CompositeRectTextRun, CompositeTreeRef,
     },
     ui::dock::PaneContentResizeContext,
     uikit::{
@@ -108,7 +107,7 @@ impl View {
 impl crate::uikit::View for View {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut crate::uikit::RenderContext,
         _layout_state: &crate::uikit::ViewLayoutStateStore,
     ) -> ViewRenderElements {
@@ -116,10 +115,9 @@ impl crate::uikit::View for View {
             Some(ref e) => e,
             None => {
                 // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    relative_size_adjustment: [1.0, 1.0],
-                    ..Default::default()
-                });
+                let ct_root = CompositeRect::build()
+                    .expand_full()
+                    .create(ctx.composite_tree);
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
                     width_adjustment_factor: 1.0,
                     height_adjustment_factor: 1.0,
@@ -151,7 +149,7 @@ impl crate::uikit::View for View {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
@@ -245,7 +243,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 context.teardown_view_recursive(x);
                 context.free_view(x);
             }
-            for (n, x, name) in crate::model::object_tree_content(context.application) {
+            for (x, name) in crate::model::object_tree_content(context.application) {
                 let rv =
                     context.construct_view(|id| Box::new(ObjectRowView::new(id, x, name.into())));
                 context.view_layout_mut(rv).expect("query failed").width = ViewSize::FillAvailable;
@@ -337,11 +335,10 @@ impl crate::uikit::View for ObjectRowView {
                     // label changed
                     ctx.composite_tree
                         .begin_mod_chain(e.ct_label_hover)
-                        .text_run(CompositeRectTextRun {
-                            content: self.label.clone(),
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            ..Default::default()
-                        })
+                        .text_run(
+                            CompositeRectTextRun::build(self.label.clone())
+                                .color_imm([1.0, 1.0, 1.0, 1.0]),
+                        )
                         .apply();
                 }
 
@@ -386,42 +383,22 @@ impl crate::uikit::View for ObjectRowView {
             }
             None => {
                 // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(layout_rect.left),
-                        AnimatableFloat::Value(layout_rect.top),
-                    ],
-                    size: [
-                        AnimatableFloat::Value(layout_rect.width),
-                        AnimatableFloat::Value(layout_rect.height),
-                    ],
-                    relative_size_adjustment: [1.0, 0.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                        0.0,
-                        0.25,
-                        1.0,
-                        if selected { 1.0 } else { 0.0 },
-                    ])),
-                    ..Default::default()
-                });
-                let ct_label_hover = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    relative_size_adjustment: [1.0, 1.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
-                    text: Some(CompositeRectText {
-                        runs: vec![CompositeRectTextRun {
-                            content: self.label.clone(),
-                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                            ..Default::default()
-                        }],
-                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                });
+                let ct_root = CompositeRect::build()
+                    .use_ui_scale()
+                    .rect_imm(layout_rect.clone())
+                    .composite_fill_color_imm([0.0, 0.25, 1.0, if selected { 1.0 } else { 0.0 }])
+                    .create(ctx.composite_tree);
+                let ct_label_hover = CompositeRect::build()
+                    .expand_full()
+                    .composite_fill_color_imm([0.0; 4])
+                    .text(
+                        CompositeRectText::build()
+                            .run(
+                                CompositeRectTextRun::build(self.label.clone()).color_imm([1.0; 4]),
+                            )
+                            .vertical_middle(),
+                    )
+                    .create(ctx.composite_tree);
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
                     left: layout_rect.left,
                     top: layout_rect.top,
@@ -468,7 +445,7 @@ impl crate::uikit::View for ObjectRowView {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, Self::ITEM_HEIGHT)
     }
