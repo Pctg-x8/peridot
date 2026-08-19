@@ -353,6 +353,20 @@ pub fn layout_view_recursive(
             overflow,
             gap,
         } => {
+            let content_sizes = tree_relation_store.relations[target.into_array_index()]
+                .children
+                .iter()
+                .map(|&child| {
+                    compute_actual_content_size(
+                        child,
+                        ctx,
+                        &child_available_rect,
+                        instance_store,
+                        tree_relation_store,
+                    )
+                })
+                .collect::<Vec<_>>();
+
             let mut content_heights = vec![
                 0.0;
                 tree_relation_store.relations[target.into_array_index()]
@@ -370,14 +384,7 @@ pub fn layout_view_recursive(
                         content_heights[i] = v;
                     }
                     ViewLayoutFlowBasis::FixedFitContent => {
-                        content_heights[i] = compute_actual_content_size(
-                            child,
-                            ctx,
-                            &child_available_rect,
-                            instance_store,
-                            tree_relation_store,
-                        )
-                        .height;
+                        content_heights[i] = content_sizes[i].height;
                     }
                     ViewLayoutFlowBasis::Flexible(v) => {
                         flexible_value_total += v;
@@ -402,10 +409,12 @@ pub fn layout_view_recursive(
             let mut left_placement = 0.0;
             let mut top_placement = 0.0;
             let mut size = Size::new_logical(0.0, 0.0);
-            for (&child, ch) in tree_relation_store.relations[target.into_array_index()]
-                .children
-                .iter()
-                .zip(content_heights)
+            for ((&child, ch), content_size) in tree_relation_store.relations
+                [target.into_array_index()]
+            .children
+            .iter()
+            .zip(content_heights)
+            .zip(content_sizes)
             {
                 if top_placement + ch >= available_rect.height {
                     // overflow
@@ -420,14 +429,43 @@ pub fn layout_view_recursive(
                     }
                 }
 
+                let left_offset = match instance_store
+                    .get(child)
+                    .layout
+                    .flow_self_alignment
+                    .unwrap_or(alignment)
+                {
+                    ViewLayoutFlowAlignment::Start => child_available_rect.left + left_placement,
+                    ViewLayoutFlowAlignment::End => {
+                        child_available_rect.left + left_placement + child_available_rect.width
+                            - content_size.width
+                    }
+                    ViewLayoutFlowAlignment::Center => {
+                        child_available_rect.left
+                            + left_placement
+                            + (child_available_rect.width - content_size.width) * 0.5
+                    }
+                    // TODO: baseline for vertical layout
+                    ViewLayoutFlowAlignment::FirstBaseline => {
+                        child_available_rect.left + left_placement
+                    }
+                    ViewLayoutFlowAlignment::LastBaseline => {
+                        child_available_rect.left + left_placement
+                    }
+                    ViewLayoutFlowAlignment::CenterFirstLine => {
+                        child_available_rect.left + left_placement
+                    }
+                    ViewLayoutFlowAlignment::CenterLastLine => {
+                        child_available_rect.left + left_placement
+                    }
+                };
+
                 layout_view_recursive(
                     child,
                     ctx,
                     Rect::from_lt_size(
-                        child_available_rect
-                            .left_top()
-                            .with_offset(Point::new_logical(left_placement, top_placement)),
-                        Size::new_logical(child_available_rect.width, ch),
+                        Point::new_logical(left_offset, child_available_rect.top + top_placement),
+                        Size::new_logical(content_size.width, ch),
                     ),
                     instance_store,
                     tree_relation_store,
@@ -435,7 +473,7 @@ pub fn layout_view_recursive(
                     cb_perform_target_relayout,
                 );
 
-                size.width = size.width.max(left_placement + child_available_rect.width);
+                size.width = size.width.max(left_placement + content_size.width);
                 size.height = size.height.max(top_placement + ch);
                 top_placement += ch + gap;
             }
