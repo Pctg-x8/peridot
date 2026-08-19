@@ -250,8 +250,8 @@ impl super::View for View {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(e.ct_root);
-        ctx.mount_context.ht_manager.free_all(e.ht_root);
+        ctx.composite_tree.free_all(e.ct_root);
+        ctx.ht_manager.free_all(e.ht_root);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {

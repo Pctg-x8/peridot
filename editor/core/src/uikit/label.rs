@@ -136,7 +136,7 @@ impl View for StaticTextView {
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         if let Some(ct) = self.ct.take() {
-            ctx.mount_context.composite_tree.free(ct);
+            ctx.composite_tree.free(ct);
         }
     }
 

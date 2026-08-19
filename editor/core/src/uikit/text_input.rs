@@ -1815,9 +1815,7 @@ impl View for TextInputView {
             return;
         };
 
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(entity.token);
+        ctx.keyboard_focus_registry.release_token(entity.token);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
@@ -2082,9 +2080,7 @@ impl View for NumericInputView {
             return;
         };
 
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(entity.kf_token);
+        ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
@@ -2588,9 +2584,7 @@ impl View for MultilineTextInputView {
             return;
         };
 
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(entity.kf_token);
+        ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {

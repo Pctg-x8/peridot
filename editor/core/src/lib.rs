@@ -1926,10 +1926,8 @@ impl View for ColorPickerHexTextInputView {
             return;
         };
 
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(entity.token);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.keyboard_focus_registry.release_token(entity.token);
+        ctx.ht_manager.free_all(entity.ht_root);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
@@ -2249,8 +2247,8 @@ impl View for EditableColorButtonView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
@@ -3619,15 +3617,13 @@ async fn run<'sys>(
                         crate::uikit::teardown_view_recursive(
                             target,
                             &mut TeardownContext {
-                                mount_context: MountContext {
-                                    composite_tree: &mut self.0.mount_context.composite_tree,
-                                    ht_manager: &mut self.0.mount_context.ht_manager,
-                                    keyboard_focus_registry: &mut self
-                                        .0
-                                        .mount_context
-                                        .keyboard_focus_registry,
-                                    current_sec: self.0.mount_context.current_sec,
-                                },
+                                composite_tree: &mut self.0.mount_context.composite_tree,
+                                ht_manager: &mut self.0.mount_context.ht_manager,
+                                keyboard_focus_registry: &mut self
+                                    .0
+                                    .mount_context
+                                    .keyboard_focus_registry,
+                                current_sec: self.0.mount_context.current_sec,
                                 view_feedback_subscription_delayed_ops: &mut self
                                     .0
                                     .view_feedback_subscription_delayed_ops,
@@ -5198,12 +5194,10 @@ async fn run<'sys>(
                     &mut view_tree_relation_store,
                     &mut view_render_state_store,
                     &mut TeardownContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
                     },
@@ -8386,8 +8380,8 @@ impl View for PreviewToolSelectorButtonView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
@@ -8669,11 +8663,9 @@ impl View for PreviewView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free(entity.ct_root);
-        ctx.mount_context.ht_manager.free(entity.ht_root);
-        ctx.mount_context
-            .keyboard_focus_registry
-            .release_token(entity.kf_token);
+        ctx.composite_tree.free(entity.ct_root);
+        ctx.ht_manager.free(entity.ht_root);
+        ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {

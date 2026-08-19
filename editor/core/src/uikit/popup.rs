@@ -169,7 +169,7 @@ impl PopupManager {
     ) -> bool {
         if let Some((mut instance, mut w, g)) = self.instance_by_id.remove(&id) {
             w.keyboard_focus_state_mut().pop_tab_stop_group();
-            ctx.mount_context.keyboard_focus_registry.release_group(g);
+            ctx.keyboard_focus_registry.release_group(g);
             instance.teardown(ctx);
             teardown_view_recursive(
                 instance.root_view_id(),
@@ -321,8 +321,8 @@ impl View for OverlayPopupBasicMaskView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free(e.ct_root);
-        ctx.mount_context.ht_manager.free(e.ht_root);
+        ctx.composite_tree.free(e.ct_root);
+        ctx.ht_manager.free(e.ht_root);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
@@ -525,8 +525,8 @@ impl View for OverlayPopupBasicFrameView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free(e.ct_root);
-        ctx.mount_context.ht_manager.free(e.ht_root);
+        ctx.composite_tree.free(e.ct_root);
+        ctx.ht_manager.free(e.ht_root);
     }
 
     fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {

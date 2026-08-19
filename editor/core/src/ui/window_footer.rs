@@ -68,7 +68,7 @@ impl crate::uikit::View for View {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
+        ctx.composite_tree.free_all(entity.ct_root);
     }
 
     fn measure_preferred_content_size(

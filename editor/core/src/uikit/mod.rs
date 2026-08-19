@@ -251,12 +251,10 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
 
     pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2, 'h> {
         TeardownContext {
-            mount_context: MountContext {
-                composite_tree: &mut self.mount_context.composite_tree,
-                ht_manager: &mut self.mount_context.ht_manager,
-                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-                current_sec: self.mount_context.current_sec,
-            },
+            composite_tree: &mut self.mount_context.composite_tree,
+            ht_manager: &mut self.mount_context.ht_manager,
+            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
+            current_sec: self.mount_context.current_sec,
             view_feedback_subscription_delayed_ops: &mut self
                 .view_feedback_subscription_delayed_ops,
         }
@@ -299,7 +297,10 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
 }
 
 pub struct TeardownContext<'a, 'h> {
-    pub mount_context: MountContext<'a, 'h>,
+    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'a mut HitTestTreeManager<'h>,
+    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
+    pub current_sec: f32,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
 }
 impl ViewFeedbackRegisterable for TeardownContext<'_, '_> {
@@ -1524,15 +1525,13 @@ impl ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
         teardown_view_recursive(
             target,
             &mut TeardownContext {
-                mount_context: MountContext {
-                    composite_tree: self.view_init_context.mount_context.composite_tree,
-                    ht_manager: self.view_init_context.mount_context.ht_manager,
-                    keyboard_focus_registry: self
-                        .view_init_context
-                        .mount_context
-                        .keyboard_focus_registry,
-                    current_sec: self.view_init_context.mount_context.current_sec,
-                },
+                composite_tree: self.view_init_context.mount_context.composite_tree,
+                ht_manager: self.view_init_context.mount_context.ht_manager,
+                keyboard_focus_registry: self
+                    .view_init_context
+                    .mount_context
+                    .keyboard_focus_registry,
+                current_sec: self.view_init_context.mount_context.current_sec,
                 view_feedback_subscription_delayed_ops: self
                     .view_init_context
                     .view_feedback_subscription_delayed_ops,

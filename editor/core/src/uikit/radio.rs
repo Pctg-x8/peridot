@@ -145,8 +145,8 @@ impl View for RadioButtonView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
     }
 
     fn measure_preferred_content_size(

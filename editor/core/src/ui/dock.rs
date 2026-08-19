@@ -540,15 +540,10 @@ impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
         crate::uikit::teardown_view_recursive(
             target,
             &mut TeardownContext {
-                mount_context: MountContext {
-                    composite_tree: self.view_init_ctx.mount_context.composite_tree,
-                    ht_manager: self.view_init_ctx.mount_context.ht_manager,
-                    keyboard_focus_registry: self
-                        .view_init_ctx
-                        .mount_context
-                        .keyboard_focus_registry,
-                    current_sec: self.view_init_ctx.mount_context.current_sec,
-                },
+                composite_tree: self.view_init_ctx.mount_context.composite_tree,
+                ht_manager: self.view_init_ctx.mount_context.ht_manager,
+                keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
+                current_sec: self.view_init_ctx.mount_context.current_sec,
                 view_feedback_subscription_delayed_ops: self
                     .view_init_ctx
                     .view_feedback_subscription_delayed_ops,
@@ -599,12 +594,10 @@ impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h> {
 impl<'h> DeriveTeardownContext<'h> for RedockingContext<'_, 'h> {
     fn derive_teardown_context<'env>(&'env mut self) -> TeardownContext<'env, 'h> {
         TeardownContext {
-            mount_context: MountContext {
-                composite_tree: self.view_init_ctx.mount_context.composite_tree,
-                ht_manager: self.view_init_ctx.mount_context.ht_manager,
-                keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
-                current_sec: self.view_init_ctx.mount_context.current_sec,
-            },
+            composite_tree: self.view_init_ctx.mount_context.composite_tree,
+            ht_manager: self.view_init_ctx.mount_context.ht_manager,
+            keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
+            current_sec: self.view_init_ctx.mount_context.current_sec,
             view_feedback_subscription_delayed_ops: self
                 .view_init_ctx
                 .view_feedback_subscription_delayed_ops,
@@ -1696,8 +1689,8 @@ impl View for DockedPaneSplitterView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
     }
 
     fn measure_preferred_content_size(
@@ -1988,8 +1981,8 @@ impl View for PaneGroupContainerView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free(entity.ct_root);
-        ctx.mount_context.ht_manager.free(entity.ht_root);
+        ctx.composite_tree.free(entity.ct_root);
+        ctx.ht_manager.free(entity.ht_root);
     }
 
     fn measure_preferred_content_size(
@@ -2104,8 +2097,8 @@ impl View for PaneGroupTabStripView {
             return;
         };
 
-        ctx.mount_context.composite_tree.free(entity.ct_root);
-        ctx.mount_context.ht_manager.free(entity.ht_root);
+        ctx.composite_tree.free(entity.ct_root);
+        ctx.ht_manager.free(entity.ht_root);
     }
 
     fn measure_preferred_content_size(
@@ -2689,13 +2682,11 @@ impl View for PaneGroupTabView {
             return;
         };
 
-        ctx.mount_context
-            .composite_tree
-            .remove_child(entity.ct_root);
-        ctx.mount_context.ht_manager.remove_child(entity.ht_root);
+        ctx.composite_tree.remove_child(entity.ct_root);
+        ctx.ht_manager.remove_child(entity.ht_root);
 
-        ctx.mount_context.composite_tree.free_all(entity.ct_root);
-        ctx.mount_context.ht_manager.free_all(entity.ht_root);
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
     }
 
     fn measure_preferred_content_size(

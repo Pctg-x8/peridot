@@ -184,11 +184,9 @@ impl View for SimpleButtonView {
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         if let Some(entity) = self.entity.take() {
             // some rendered
-            ctx.mount_context.ht_manager.free_all(entity.ht_root);
-            ctx.mount_context.composite_tree.free_all(entity.ct_root);
-            ctx.mount_context
-                .keyboard_focus_registry
-                .release_token(entity.kf_token);
+            ctx.ht_manager.free_all(entity.ht_root);
+            ctx.composite_tree.free_all(entity.ct_root);
+            ctx.keyboard_focus_registry.release_token(entity.kf_token);
         }
     }
 
