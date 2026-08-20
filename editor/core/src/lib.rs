@@ -6503,30 +6503,75 @@ async fn run<'sys>(
                     .len();
                     let current_handle_pointing = match current_handle_shape {
                         rendering::preview::HandleShape::Translation => {
-                            let bbox_y = peridot_math::AABB3 {
-                                min: peridot_math::Vector3(-0.02, 0.0, -0.02) * handle_scale,
-                                max: peridot_math::Vector3(0.02, 0.25, 0.02) * handle_scale,
-                            };
-                            let bbox_x = peridot_math::AABB3 {
-                                min: peridot_math::Vector3(0.0, -0.02, -0.02) * handle_scale,
-                                max: peridot_math::Vector3(0.25, 0.02, 0.02) * handle_scale,
-                            };
-                            let bbox_z = peridot_math::AABB3 {
-                                min: peridot_math::Vector3(-0.02, -0.02, 0.0) * handle_scale,
-                                max: peridot_math::Vector3(0.02, 0.02, 0.25) * handle_scale,
-                            };
-                            if bbox_y.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::Y)
-                            } else if bbox_x.intersect(&ray).is_some() {
+                            let handle_scale =
+                                peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
+                            let bbox_x = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_X
+                                .scale(&handle_scale);
+                            let bbox_y = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Y
+                                .scale(&handle_scale);
+                            let bbox_z = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Z
+                                .scale(&handle_scale);
+
+                            if bbox_x.intersect(&ray).is_some() {
                                 Some(rendering::preview::HandlePointing::X)
+                            } else if bbox_y.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::Y)
                             } else if bbox_z.intersect(&ray).is_some() {
                                 Some(rendering::preview::HandlePointing::Z)
                             } else {
                                 None
                             }
                         }
-                        rendering::preview::HandleShape::Rotation => None,
-                        rendering::preview::HandleShape::Scale => None,
+                        rendering::preview::HandleShape::Rotation => {
+                            let hit_sphere = rendering::preview::handle::ROTATION_HANDLE_HITSPHERE
+                                .scale(handle_scale);
+                            if let Some(tr) = hit_sphere.intersect(&ray) {
+                                const SENSIBLE_WIDTH: f32 = 0.02;
+                                let p = ray.point(tr.start);
+                                if -SENSIBLE_WIDTH * handle_scale <= p.0
+                                    && p.0 <= SENSIBLE_WIDTH * handle_scale
+                                {
+                                    Some(rendering::preview::HandlePointing::X)
+                                } else if -SENSIBLE_WIDTH * handle_scale <= p.1
+                                    && p.1 <= SENSIBLE_WIDTH * handle_scale
+                                {
+                                    Some(rendering::preview::HandlePointing::Y)
+                                } else if -SENSIBLE_WIDTH * handle_scale <= p.2
+                                    && p.2 <= SENSIBLE_WIDTH * handle_scale
+                                {
+                                    Some(rendering::preview::HandlePointing::Z)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        rendering::preview::HandleShape::Scale => {
+                            let handle_scale =
+                                peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
+                            let bbox_x = rendering::preview::handle::SCALE_HANDLE_HITBOX_X
+                                .scale(&handle_scale);
+                            let bbox_y = rendering::preview::handle::SCALE_HANDLE_HITBOX_Y
+                                .scale(&handle_scale);
+                            let bbox_z = rendering::preview::handle::SCALE_HANDLE_HITBOX_Z
+                                .scale(&handle_scale);
+                            let bbox_center =
+                                rendering::preview::handle::SCALE_HANDLE_HITBOX_CENTER
+                                    .scale(&handle_scale);
+
+                            if bbox_x.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::X)
+                            } else if bbox_y.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::Y)
+                            } else if bbox_z.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::Z)
+                            } else if bbox_center.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::All)
+                            } else {
+                                None
+                            }
+                        }
                     };
                     if current_handle_pointing != preview_state.handle_pointing {
                         preview_state.handle_pointing = current_handle_pointing;

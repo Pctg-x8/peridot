@@ -1,7 +1,7 @@
 #include "common-bindings.slang"
 
 [vk::push_constant]
-ConstantBuffer<float4[4]> colorPalette;
+ConstantBuffer<float4[5]> colorPalette;
 
 struct VshInput {
   [vk::location(0)]
