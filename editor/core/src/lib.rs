@@ -14,7 +14,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -38,7 +38,7 @@ use crate::{
         },
     },
     model::{
-        Application, ApplicationMutation, PreviewEditToolType,
+        Application, ApplicationMutation, ObjectRenderShape, PreviewEditToolType,
         ViewFeedbackPreviewEditToolTypeChanged,
     },
     rendering::{
@@ -2988,8 +2988,7 @@ async fn run<'sys>(
         key_input: PreviewKeyInputState::empty(),
         pointer_pos: None,
     };
-    // preview local states
-    let mut preview_latched_key_motion_amplifier = None::<f32>;
+    let mut preview_state = PreviewMainThreadState::new();
 
     let last_window_state = 'try_restore_last_window_state: {
         let fp = match std::fs::File::open(file_system.window_state_save_path()) {
@@ -3459,7 +3458,7 @@ async fn run<'sys>(
     view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
     // initial push test
-    let mut preview_state =
+    /*let mut committed_state =
         profiler::wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
     let mut vbuf_bytes = vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * 24];
     let mut ibuf_bytes = vec![0u8; size_of::<u16>() * 36];
@@ -3586,7 +3585,7 @@ async fn run<'sys>(
             .cast::<u16>()
             .copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
     }
-    preview_state
+    committed_state
         .pushed_meshes
         .push(rendering::preview::CommittedMeshData {
             vertices: std::sync::Arc::from(vbuf_bytes),
@@ -3595,13 +3594,13 @@ async fn run<'sys>(
             index_type: rendering::preview::IndexType::U16,
             sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
         });
-    preview_state
+    committed_state
         .pushed_render_data
         .push(rendering::preview::CommittedRenderData {
             object_to_world: peridot_math::Matrix4F32::ONE,
             mesh_id: 0,
         });
-    drop(preview_state);
+    drop(committed_state);*/
 
     system_link.prelaunch(main_window);
     profiler::end!(perf);
@@ -6374,210 +6373,14 @@ async fn run<'sys>(
             }
             Event::Sync(SyncEvent::NewPresentID { .. }) => {
                 // vsync update period
-                let mut preview_state =
+                let mut committed_state =
                     profiler::wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
 
-                if let Some(new_viewport_size) = preview_input_state.new_viewport_size.take() {
-                    preview_state.viewport_size = new_viewport_size;
-                }
-
-                let scroll_amount = core::mem::replace(&mut preview_input_state.scroll_amount, 0.0);
-                let grab_delta = core::mem::replace(
-                    &mut preview_input_state.grab_delta,
-                    Point::new_logical(0.0, 0.0),
+                preview_state.update(
+                    &mut committed_state,
+                    &mut preview_input_state,
+                    &mut application,
                 );
-
-                if grab_delta.x != 0.0 || grab_delta.y != 0.0 {
-                    // rotate by grab
-                    preview_state.main_camera.rotation = preview_state.main_camera.rotation
-                        * peridot_math::Quaternion::new(
-                            grab_delta.y * 0.5f32.to_radians(),
-                            peridot_math::Matrix3::from(preview_state.main_camera.rotation)
-                                * peridot_math::Vector3::left(),
-                        )
-                        * peridot_math::Quaternion::new(
-                            grab_delta.x * 0.5f32.to_radians(),
-                            peridot_math::Vector3::down(),
-                        );
-                    preview_state.main_camera_dirtified = true;
-                }
-
-                if scroll_amount != 0.0 {
-                    // move by scroll
-                    let amplifier = 5.0f32.powf(if preview_state.main_camera.position.1 == 0.0 {
-                        0.0
-                    } else {
-                        preview_state.main_camera.position.1.abs().log10().floor()
-                    });
-                    preview_state.main_camera.position = preview_state.main_camera.position
-                        + preview_state.main_camera.forward() * 0.25 * amplifier * scroll_amount;
-                    preview_state.main_camera_dirtified = true;
-                }
-
-                if preview_input_state.grabbing {
-                    let mut key_forwards = 0.0f32;
-                    let mut key_rights = 0.0f32;
-                    let mut key_y_motions = 0.0f32;
-                    if preview_input_state
-                        .key_input
-                        .contains(PreviewKeyInputState::W)
-                    {
-                        key_forwards += 1.0;
-                    }
-                    if preview_input_state
-                        .key_input
-                        .contains(PreviewKeyInputState::S)
-                    {
-                        key_forwards -= 1.0;
-                    }
-                    if preview_input_state
-                        .key_input
-                        .contains(PreviewKeyInputState::D)
-                    {
-                        key_rights += 1.0;
-                    }
-                    if preview_input_state
-                        .key_input
-                        .contains(PreviewKeyInputState::A)
-                    {
-                        key_rights -= 1.0;
-                    }
-                    if preview_input_state
-                        .key_input
-                        .contains(PreviewKeyInputState::SHIFT)
-                    {
-                        key_y_motions += 1.0;
-                    }
-                    if preview_input_state
-                        .key_input
-                        .contains(PreviewKeyInputState::CONTROL)
-                    {
-                        key_y_motions -= 1.0;
-                    }
-
-                    if key_forwards != 0.0 || key_rights != 0.0 || key_y_motions != 0.0 {
-                        // move by key
-                        let amplifier =
-                            *preview_latched_key_motion_amplifier.get_or_insert_with(|| {
-                                2.5f32.powf(if preview_state.main_camera.position.1 == 0.0 {
-                                    0.0
-                                } else {
-                                    preview_state.main_camera.position.1.abs().log10().floor()
-                                })
-                            });
-                        preview_state.main_camera.position = preview_state.main_camera.position
-                            + preview_state.main_camera.forward()
-                                * (0.25 * amplifier * key_forwards)
-                            + preview_state.main_camera.right() * (0.25 * amplifier * key_rights)
-                            + peridot_math::Vector3(0.0, key_y_motions * 0.25 * amplifier, 0.0);
-                        preview_state.main_camera_dirtified = true;
-                    } else {
-                        preview_latched_key_motion_amplifier = None;
-                    }
-                } else {
-                    preview_latched_key_motion_amplifier = None;
-                }
-
-                let current_handle_shape = match crate::model::preview_edit_tool_type(&application)
-                {
-                    PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
-                    PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
-                    PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
-                };
-                if current_handle_shape != preview_state.handle_shape {
-                    preview_state.handle_shape = current_handle_shape;
-                    preview_state.handle_data_dirtified = true;
-                }
-
-                if let Some(pointer_pos) = preview_input_state.pointer_pos {
-                    let ray = preview_state.main_camera.viewport_point_to_world_ray(
-                        peridot_math::Vector2(
-                            pointer_pos.x / preview_state.viewport_size.width,
-                            pointer_pos.y / preview_state.viewport_size.height,
-                        ),
-                        preview_state.viewport_size.width / preview_state.viewport_size.height,
-                    );
-
-                    let handle_scale = (preview_state.main_camera.position
-                        - peridot_math::Vector3(0.0, 0.0, 0.0))
-                    .len();
-                    let current_handle_pointing = match current_handle_shape {
-                        rendering::preview::HandleShape::Translation => {
-                            let handle_scale =
-                                peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
-                            let bbox_x = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_X
-                                .scale(&handle_scale);
-                            let bbox_y = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Y
-                                .scale(&handle_scale);
-                            let bbox_z = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Z
-                                .scale(&handle_scale);
-
-                            if bbox_x.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::X)
-                            } else if bbox_y.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::Y)
-                            } else if bbox_z.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::Z)
-                            } else {
-                                None
-                            }
-                        }
-                        rendering::preview::HandleShape::Rotation => {
-                            let hit_sphere = rendering::preview::handle::ROTATION_HANDLE_HITSPHERE
-                                .scale(handle_scale);
-                            if let Some(tr) = hit_sphere.intersect(&ray) {
-                                const SENSIBLE_WIDTH: f32 = 0.02;
-                                let p = ray.point(tr.start);
-                                if -SENSIBLE_WIDTH * handle_scale <= p.0
-                                    && p.0 <= SENSIBLE_WIDTH * handle_scale
-                                {
-                                    Some(rendering::preview::HandlePointing::X)
-                                } else if -SENSIBLE_WIDTH * handle_scale <= p.1
-                                    && p.1 <= SENSIBLE_WIDTH * handle_scale
-                                {
-                                    Some(rendering::preview::HandlePointing::Y)
-                                } else if -SENSIBLE_WIDTH * handle_scale <= p.2
-                                    && p.2 <= SENSIBLE_WIDTH * handle_scale
-                                {
-                                    Some(rendering::preview::HandlePointing::Z)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        }
-                        rendering::preview::HandleShape::Scale => {
-                            let handle_scale =
-                                peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
-                            let bbox_x = rendering::preview::handle::SCALE_HANDLE_HITBOX_X
-                                .scale(&handle_scale);
-                            let bbox_y = rendering::preview::handle::SCALE_HANDLE_HITBOX_Y
-                                .scale(&handle_scale);
-                            let bbox_z = rendering::preview::handle::SCALE_HANDLE_HITBOX_Z
-                                .scale(&handle_scale);
-                            let bbox_center =
-                                rendering::preview::handle::SCALE_HANDLE_HITBOX_CENTER
-                                    .scale(&handle_scale);
-
-                            if bbox_x.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::X)
-                            } else if bbox_y.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::Y)
-                            } else if bbox_z.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::Z)
-                            } else if bbox_center.intersect(&ray).is_some() {
-                                Some(rendering::preview::HandlePointing::All)
-                            } else {
-                                None
-                            }
-                        }
-                    };
-                    if current_handle_pointing != preview_state.handle_pointing {
-                        preview_state.handle_pointing = current_handle_pointing;
-                        preview_state.handle_data_dirtified = true;
-                    }
-                }
             }
             Event::ScheduleViewRenderExt { id } => {
                 view_render_queue.schedule(id);
@@ -8292,6 +8095,435 @@ struct PreviewInputState {
     grab_delta: Point<LogicalUnit>,
     key_input: PreviewKeyInputState,
     pointer_pos: Option<Point<LogicalUnit>>,
+}
+
+struct PreviewMainThreadState {
+    latched_key_motion_amplifier: Option<f32>,
+    render_shape_to_mesh_id: HashMap<ObjectRenderShape, usize>,
+    last_available_mesh_id: usize,
+    free_mesh_ids: BTreeSet<usize>,
+    last_available_render_id: usize,
+    free_render_ids: BTreeSet<usize>,
+}
+impl PreviewMainThreadState {
+    pub fn new() -> Self {
+        Self {
+            latched_key_motion_amplifier: None,
+            render_shape_to_mesh_id: HashMap::new(),
+            last_available_mesh_id: 0,
+            free_mesh_ids: BTreeSet::new(),
+            last_available_render_id: 0,
+            free_render_ids: BTreeSet::new(),
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        committed_state: &mut rendering::preview::CommittedState,
+        input: &mut PreviewInputState,
+        application: &mut Application,
+    ) {
+        if let Some(new_viewport_size) = input.new_viewport_size.take() {
+            committed_state.viewport_size = new_viewport_size;
+        }
+
+        let scroll_amount = core::mem::replace(&mut input.scroll_amount, 0.0);
+        let grab_delta = core::mem::replace(&mut input.grab_delta, Point::new_logical(0.0, 0.0));
+
+        if grab_delta.x != 0.0 || grab_delta.y != 0.0 {
+            // rotate by grab
+            committed_state.main_camera.rotation = committed_state.main_camera.rotation
+                * peridot_math::Quaternion::new(
+                    grab_delta.y * 0.5f32.to_radians(),
+                    peridot_math::Matrix3::from(committed_state.main_camera.rotation)
+                        * peridot_math::Vector3::left(),
+                )
+                * peridot_math::Quaternion::new(
+                    grab_delta.x * 0.5f32.to_radians(),
+                    peridot_math::Vector3::down(),
+                );
+            committed_state.main_camera_dirtified = true;
+        }
+
+        if scroll_amount != 0.0 {
+            // move by scroll
+            let amplifier = 5.0f32.powf(if committed_state.main_camera.position.1 == 0.0 {
+                0.0
+            } else {
+                committed_state.main_camera.position.1.abs().log10().floor()
+            });
+            committed_state.main_camera.position = committed_state.main_camera.position
+                + committed_state.main_camera.forward() * 0.25 * amplifier * scroll_amount;
+            committed_state.main_camera_dirtified = true;
+        }
+
+        let current_handle_shape = match crate::model::preview_edit_tool_type(application) {
+            PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
+            PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
+            PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
+        };
+
+        let current_handle_pointing;
+        if input.grabbing {
+            let mut key_forwards = 0.0f32;
+            let mut key_rights = 0.0f32;
+            let mut key_y_motions = 0.0f32;
+            if input.key_input.contains(PreviewKeyInputState::W) {
+                key_forwards += 1.0;
+            }
+            if input.key_input.contains(PreviewKeyInputState::S) {
+                key_forwards -= 1.0;
+            }
+            if input.key_input.contains(PreviewKeyInputState::D) {
+                key_rights += 1.0;
+            }
+            if input.key_input.contains(PreviewKeyInputState::A) {
+                key_rights -= 1.0;
+            }
+            if input.key_input.contains(PreviewKeyInputState::SHIFT) {
+                key_y_motions += 1.0;
+            }
+            if input.key_input.contains(PreviewKeyInputState::CONTROL) {
+                key_y_motions -= 1.0;
+            }
+
+            if key_forwards != 0.0 || key_rights != 0.0 || key_y_motions != 0.0 {
+                // move by key
+                let amplifier = *self.latched_key_motion_amplifier.get_or_insert_with(|| {
+                    2.5f32.powf(if committed_state.main_camera.position.1 == 0.0 {
+                        0.0
+                    } else {
+                        committed_state.main_camera.position.1.abs().log10().floor()
+                    })
+                });
+                committed_state.main_camera.position = committed_state.main_camera.position
+                    + committed_state.main_camera.forward() * (0.25 * amplifier * key_forwards)
+                    + committed_state.main_camera.right() * (0.25 * amplifier * key_rights)
+                    + peridot_math::Vector3(0.0, key_y_motions * 0.25 * amplifier, 0.0);
+                committed_state.main_camera_dirtified = true;
+            } else {
+                self.latched_key_motion_amplifier = None;
+            }
+
+            current_handle_pointing = None;
+        } else {
+            self.latched_key_motion_amplifier = None;
+
+            current_handle_pointing = if let Some(pointer_pos) = input.pointer_pos {
+                let ray = committed_state.main_camera.viewport_point_to_world_ray(
+                    peridot_math::Vector2(
+                        pointer_pos.x / committed_state.viewport_size.width,
+                        pointer_pos.y / committed_state.viewport_size.height,
+                    ),
+                    committed_state.viewport_size.width / committed_state.viewport_size.height,
+                );
+
+                let handle_scale = (committed_state.main_camera.position
+                    - peridot_math::Vector3(0.0, 0.0, 0.0))
+                .len();
+
+                match current_handle_shape {
+                    rendering::preview::HandleShape::Translation => {
+                        let handle_scale =
+                            peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
+                        let bbox_x = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_X
+                            .scale(&handle_scale);
+                        let bbox_y = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Y
+                            .scale(&handle_scale);
+                        let bbox_z = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Z
+                            .scale(&handle_scale);
+
+                        if bbox_x.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::X)
+                        } else if bbox_y.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::Y)
+                        } else if bbox_z.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::Z)
+                        } else {
+                            None
+                        }
+                    }
+                    rendering::preview::HandleShape::Rotation => {
+                        let hit_sphere = rendering::preview::handle::ROTATION_HANDLE_HITSPHERE
+                            .scale(handle_scale);
+                        if let Some(tr) = hit_sphere.intersect(&ray) {
+                            const SENSIBLE_WIDTH: f32 = 0.02;
+                            let p = ray.point(tr.start);
+                            if -SENSIBLE_WIDTH * handle_scale <= p.0
+                                && p.0 <= SENSIBLE_WIDTH * handle_scale
+                            {
+                                Some(rendering::preview::HandlePointing::X)
+                            } else if -SENSIBLE_WIDTH * handle_scale <= p.1
+                                && p.1 <= SENSIBLE_WIDTH * handle_scale
+                            {
+                                Some(rendering::preview::HandlePointing::Y)
+                            } else if -SENSIBLE_WIDTH * handle_scale <= p.2
+                                && p.2 <= SENSIBLE_WIDTH * handle_scale
+                            {
+                                Some(rendering::preview::HandlePointing::Z)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    }
+                    rendering::preview::HandleShape::Scale => {
+                        let handle_scale =
+                            peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
+                        let bbox_x =
+                            rendering::preview::handle::SCALE_HANDLE_HITBOX_X.scale(&handle_scale);
+                        let bbox_y =
+                            rendering::preview::handle::SCALE_HANDLE_HITBOX_Y.scale(&handle_scale);
+                        let bbox_z =
+                            rendering::preview::handle::SCALE_HANDLE_HITBOX_Z.scale(&handle_scale);
+                        let bbox_center = rendering::preview::handle::SCALE_HANDLE_HITBOX_CENTER
+                            .scale(&handle_scale);
+
+                        if bbox_x.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::X)
+                        } else if bbox_y.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::Y)
+                        } else if bbox_z.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::Z)
+                        } else if bbox_center.intersect(&ray).is_some() {
+                            Some(rendering::preview::HandlePointing::All)
+                        } else {
+                            None
+                        }
+                    }
+                }
+            } else {
+                None
+            };
+        }
+
+        if current_handle_shape != committed_state.handle_shape {
+            committed_state.handle_shape = current_handle_shape;
+            committed_state.handle_data_dirtified = true;
+        }
+        if current_handle_pointing != committed_state.handle_pointing {
+            committed_state.handle_pointing = current_handle_pointing;
+            committed_state.handle_data_dirtified = true;
+        }
+
+        for o in application.removed_object_render_ids.drain(..) {
+            committed_state.removed_render_data.insert(o);
+        }
+
+        for o in application.objects.iter_mut() {
+            if core::mem::replace(&mut o.render_dirty, false) {
+                // update object render data
+                if !o.render_enabled {
+                    if let Some(current_render_id) = o.render_id.take() {
+                        committed_state
+                            .removed_render_data
+                            .insert(current_render_id);
+                        self.free_mesh_ids.insert(current_render_id);
+                    }
+                } else {
+                    let mesh_id = *self
+                        .render_shape_to_mesh_id
+                        .entry(o.render_shape)
+                        .or_insert_with(|| {
+                            if let Some(rid) = self.free_mesh_ids.pop_first() {
+                                committed_state
+                                    .dirty_meshes
+                                    .insert(rid, mesh_data_for_render_shape(o.render_shape));
+                                return rid;
+                            }
+
+                            let rid = self.last_available_mesh_id;
+                            self.last_available_mesh_id += 1;
+                            committed_state
+                                .pushed_meshes
+                                .push(mesh_data_for_render_shape(o.render_shape));
+                            rid
+                        });
+
+                    match o.render_id {
+                        None => {
+                            // first render
+                            o.render_id =
+                                Some(if let Some(rid) = self.free_render_ids.pop_first() {
+                                    committed_state.dirty_render_data.insert(
+                                        rid,
+                                        rendering::preview::CommittedRenderData {
+                                            object_to_world: o.world_matrix.clone(),
+                                            mesh_id,
+                                        },
+                                    );
+                                    rid
+                                } else {
+                                    let rid = self.last_available_render_id;
+                                    self.last_available_render_id += 1;
+                                    committed_state.pushed_render_data.push(
+                                        rendering::preview::CommittedRenderData {
+                                            object_to_world: o.world_matrix.clone(),
+                                            mesh_id,
+                                        },
+                                    );
+                                    rid
+                                });
+                        }
+                        Some(rid) => {
+                            // update existing
+                            committed_state.dirty_render_data.insert(
+                                rid,
+                                rendering::preview::CommittedRenderData {
+                                    object_to_world: o.world_matrix.clone(),
+                                    mesh_id,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn mesh_data_for_render_shape(shape: ObjectRenderShape) -> rendering::preview::CommittedMeshData {
+    match shape {
+        ObjectRenderShape::Cube => {
+            let mut vbuf_bytes = vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * 24];
+            let mut ibuf_bytes = vec![0u8; size_of::<u16>() * 36];
+            unsafe {
+                const VERTICES: &[[peridot_math::Vector4F32; 2]] = &[
+                    // +x
+                    [
+                        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+                    ],
+                    // -x
+                    [
+                        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+                    ],
+                    // +y
+                    [
+                        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                    ],
+                    // -y
+                    [
+                        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                    ],
+                    // +z
+                    [
+                        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+                    ],
+                    // -z
+                    [
+                        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+                    ],
+                    [
+                        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+                    ],
+                ];
+                const INDICES: &[u16] = &[
+                    0, 1, 2, 2, 1, 3, // +x
+                    4, 5, 6, 6, 5, 7, // -x
+                    8, 9, 10, 10, 9, 11, // +y
+                    12, 13, 14, 14, 13, 15, // -y
+                    16, 17, 18, 18, 17, 19, // +z
+                    20, 21, 22, 22, 21, 23, // -z
+                ];
+
+                vbuf_bytes
+                    .as_mut_ptr()
+                    .cast::<[peridot_math::Vector4F32; 2]>()
+                    .copy_from_nonoverlapping(VERTICES.as_ptr(), VERTICES.len());
+                ibuf_bytes
+                    .as_mut_ptr()
+                    .cast::<u16>()
+                    .copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
+            }
+
+            rendering::preview::CommittedMeshData {
+                vertices: std::sync::Arc::from(vbuf_bytes),
+                vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+                indices: std::sync::Arc::from(ibuf_bytes),
+                index_type: rendering::preview::IndexType::U16,
+                sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
+            }
+        }
+        ObjectRenderShape::Sphere => todo!("sphere mesh"),
+        ObjectRenderShape::Cylinder => todo!("cylinder mesh"),
+        ObjectRenderShape::Capsule => todo!("capsule mesh"),
+    }
 }
 
 struct PreviewToolSelectorButtonView {

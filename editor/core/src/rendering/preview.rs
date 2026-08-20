@@ -456,6 +456,7 @@ impl ScratchStagingBuffer {
     }
 }
 
+#[derive(Debug)]
 enum DynamicBufferBlockState {
     Free {
         size: NonZero<br::DeviceSize>,
@@ -689,14 +690,16 @@ impl DynamicBufferPage {
         let left_block_size = block_size.get() - size;
         if left_block_size > 0 {
             // subdiv needed
-            let (left_f, left_s) = Self::mapping(left_block_size);
+            let left_block_size = unsafe { NonZero::new_unchecked(left_block_size) };
+            let left_block_head = head + size;
+            let (left_f, left_s) = Self::mapping(left_block_size.get());
             if !self.has_free_block(left_f, left_s) {
                 // this is first free block
-                self.block_list_headings[Self::block_list_index(left_f, left_s)] = head + size;
+                self.block_list_headings[Self::block_list_index(left_f, left_s)] = left_block_head;
                 self.block_states.insert(
-                    head + size,
+                    left_block_head,
                     DynamicBufferBlockState::Free {
-                        size: unsafe { NonZero::new_unchecked(left_block_size) },
+                        size: left_block_size,
                         prev_block: head,
                         prev_free_block: None,
                         next_free_block: None,
@@ -706,14 +709,14 @@ impl DynamicBufferPage {
                 // connect to head of free list
                 let old_free_head = core::mem::replace(
                     &mut self.block_list_headings[Self::block_list_index(left_f, left_s)],
-                    head + size,
+                    left_block_head,
                 );
                 if old_free_head == head {
                     // sipmle replacement
                     self.block_states.insert(
-                        head + size,
+                        left_block_head,
                         DynamicBufferBlockState::Free {
-                            size: unsafe { NonZero::new_unchecked(left_block_size) },
+                            size: left_block_size,
                             prev_block: head,
                             prev_free_block: None,
                             next_free_block,
@@ -722,9 +725,9 @@ impl DynamicBufferPage {
                 } else {
                     // chaining needed
                     self.block_states.insert(
-                        head + size,
+                        left_block_head,
                         DynamicBufferBlockState::Free {
-                            size: unsafe { NonZero::new_unchecked(left_block_size) },
+                            size: left_block_size,
                             prev_block: head,
                             prev_free_block: None,
                             next_free_block: Some(old_free_head),
@@ -738,7 +741,7 @@ impl DynamicBufferPage {
                         unreachable!();
                     };
                     assert!(old_free_prev_free_block.is_none());
-                    *old_free_prev_free_block = Some(head + size);
+                    *old_free_prev_free_block = Some(left_block_head);
                 }
             }
 
@@ -746,6 +749,244 @@ impl DynamicBufferPage {
         }
 
         Some(head)
+    }
+
+    #[tracing::instrument("DynamicBufferPage::free", skip(self))]
+    pub fn free(&mut self, offset: br::DeviceSize) {
+        let DynamicBufferBlockState::Used { size, prev_block } = self
+            .block_states
+            .remove(&offset)
+            .expect("not a block boundary")
+        else {
+            unreachable!("freeing non-used offset");
+        };
+
+        // try join with adjacent blocks
+        let mut new_free_block_prev_block = prev_block;
+        let mut new_free_block_offset = offset;
+        let mut new_free_block_size = size;
+        if prev_block != new_free_block_offset
+            && let DynamicBufferBlockState::Free {
+                size: prev_size,
+                prev_block: prev_prev_block,
+                prev_free_block: prev_prev_free_block,
+                next_free_block: prev_next_free_block,
+            } = self.block_states[&prev_block]
+        {
+            // join with prev block
+
+            // unlink prev block from freelist first
+            match (prev_prev_free_block, prev_next_free_block) {
+                (None, None) => {
+                    // only one block in the free list
+                    let (f, s) = Self::mapping(prev_size.get());
+                    self.mark_no_free(f, s);
+                }
+                (None, Some(next_free)) => {
+                    // head of the free list
+                    let DynamicBufferBlockState::Free {
+                        prev_free_block: next_prev_free_block,
+                        ..
+                    } = self.block_states.get_mut(&next_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *next_prev_free_block = None;
+
+                    let (f, s) = Self::mapping(prev_size.get());
+                    self.block_list_headings[Self::block_list_index(f, s)] = next_free;
+                }
+                (Some(prev_free), None) => {
+                    // tail of the free list
+                    let DynamicBufferBlockState::Free {
+                        next_free_block: prev_next_free_block,
+                        ..
+                    } = self.block_states.get_mut(&prev_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *prev_next_free_block = None;
+                }
+                (Some(prev_free), Some(next_free)) => {
+                    // middle of the free list
+                    let DynamicBufferBlockState::Free {
+                        next_free_block: prev_next_free_block,
+                        ..
+                    } = self.block_states.get_mut(&prev_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *prev_next_free_block = Some(next_free);
+
+                    let DynamicBufferBlockState::Free {
+                        prev_free_block: next_prev_free_block,
+                        ..
+                    } = self.block_states.get_mut(&next_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *next_prev_free_block = Some(prev_free);
+                }
+            }
+
+            self.block_states.remove(&prev_block);
+            new_free_block_prev_block = prev_prev_block;
+            new_free_block_offset = prev_block;
+            new_free_block_size = new_free_block_size
+                .checked_add(prev_size.get())
+                .expect("too long memory block");
+        }
+        if let DynamicBufferBlockState::Free {
+            size: next_size,
+            prev_free_block: next_prev_free_block,
+            next_free_block: next_next_free_block,
+            ..
+        } = self.block_states[&(new_free_block_offset + new_free_block_size.get())]
+        {
+            // join with next block
+            match (next_prev_free_block, next_next_free_block) {
+                (None, None) => {
+                    // only one block in the free list
+                    let (f, s) = Self::mapping(next_size.get());
+                    self.mark_no_free(f, s);
+                }
+                (None, Some(next_free)) => {
+                    // head of the free list
+                    let DynamicBufferBlockState::Free {
+                        prev_free_block: next_prev_free_block,
+                        ..
+                    } = self.block_states.get_mut(&next_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *next_prev_free_block = None;
+
+                    let (f, s) = Self::mapping(next_size.get());
+                    self.block_list_headings[Self::block_list_index(f, s)] = next_free;
+                }
+                (Some(prev_free), None) => {
+                    // tail of the free list
+                    let DynamicBufferBlockState::Free {
+                        next_free_block: prev_next_free_block,
+                        ..
+                    } = self.block_states.get_mut(&prev_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *prev_next_free_block = None;
+                }
+                (Some(prev_free), Some(next_free)) => {
+                    // middle of the free list
+                    let DynamicBufferBlockState::Free {
+                        next_free_block: prev_next_free_block,
+                        ..
+                    } = self.block_states.get_mut(&prev_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *prev_next_free_block = Some(next_free);
+
+                    let DynamicBufferBlockState::Free {
+                        prev_free_block: next_prev_free_block,
+                        ..
+                    } = self.block_states.get_mut(&next_free).expect("no block?")
+                    else {
+                        unreachable!("corrupted chain");
+                    };
+                    *next_prev_free_block = Some(prev_free);
+                }
+            }
+
+            self.block_states
+                .remove(&(new_free_block_offset + new_free_block_size.get()));
+            new_free_block_size = new_free_block_size
+                .checked_add(next_size.get())
+                .expect("too long memory block");
+        }
+
+        // create free block and join
+        let (f, s) = Self::mapping(new_free_block_size.get());
+        if self.has_free_block(f, s) {
+            // chain to existing free list
+            let next_free = core::mem::replace(
+                &mut self.block_list_headings[Self::block_list_index(f, s)],
+                new_free_block_offset,
+            );
+            if next_free == new_free_block_offset {
+                // simple extending
+                let DynamicBufferBlockState::Free { size, .. } = self
+                    .block_states
+                    .get_mut(&new_free_block_offset)
+                    .expect("no block boundary")
+                else {
+                    unreachable!();
+                };
+
+                *size = new_free_block_size;
+            } else {
+                self.block_states.insert(
+                    new_free_block_offset,
+                    DynamicBufferBlockState::Free {
+                        prev_free_block: None,
+                        next_free_block: Some(next_free),
+                        prev_block: new_free_block_prev_block,
+                        size: new_free_block_size,
+                    },
+                );
+                let DynamicBufferBlockState::Free {
+                    prev_free_block, ..
+                } = self
+                    .block_states
+                    .get_mut(&next_free)
+                    .expect("no block boundary")
+                else {
+                    unreachable!();
+                };
+                *prev_free_block = Some(new_free_block_offset);
+            }
+        } else {
+            // this is the first element of the free list
+            self.mark_free(f, s);
+            self.block_list_headings[Self::block_list_index(f, s)] = new_free_block_offset;
+            self.block_states.insert(
+                new_free_block_offset,
+                DynamicBufferBlockState::Free {
+                    prev_free_block: None,
+                    next_free_block: None,
+                    prev_block: new_free_block_prev_block,
+                    size: new_free_block_size,
+                },
+            );
+        }
+
+        // adjust next block's prev pointer
+        let next_block = new_free_block_offset + new_free_block_size.get();
+        if next_block < DB_TLSF_PAGE_SIZE {
+            match self
+                .block_states
+                .get_mut(&next_block)
+                .expect("no block boundary")
+            {
+                DynamicBufferBlockState::Free { prev_block, .. } => {
+                    *prev_block = new_free_block_offset;
+                }
+                DynamicBufferBlockState::Used { prev_block, .. } => {
+                    *prev_block = new_free_block_offset;
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
+    fn dump_block_states(&self) {
+        let mut x = String::new();
+        for (h, st) in self.block_states.iter() {
+            use std::fmt::Write;
+
+            writeln!(&mut x, "  {h}: {st:?}").unwrap();
+        }
+
+        tracing::debug!("block states\n{x}");
     }
 }
 
@@ -812,6 +1053,10 @@ impl DynamicBuffer {
             offset: found_offs,
         }
     }
+
+    fn free(&mut self, ptr: DynamicBufferPointer) {
+        unsafe { &mut *ptr.source_page.get() }.free(ptr.offset);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -875,10 +1120,13 @@ struct MeshData {
     sub_mesh_ranges: Vec<core::range::Range<u32>>,
 }
 
-struct RenderData {
-    object_uniform_start: DynamicBufferPointer,
-    object_uniform_update_pending: Option<usize>,
-    mesh_id: usize,
+enum RenderData {
+    Inactive,
+    Active {
+        object_uniform_start: DynamicBufferPointer,
+        object_uniform_update_pending: Option<usize>,
+        mesh_id: usize,
+    },
 }
 
 pub struct Renderer {
@@ -1712,11 +1960,49 @@ impl Renderer {
             }
             self.user_data_update_pending = true;
 
-            self.user_renders.push(RenderData {
+            self.user_renders.push(RenderData::Active {
                 object_uniform_start,
                 object_uniform_update_pending: Some(object_ubuf),
                 mesh_id: r.mesh_id,
             });
+            self.needs_invalidate_render = true;
+        }
+        for r in committed_state.removed_render_data.drain() {
+            let RenderData::Active {
+                object_uniform_start,
+                ..
+            } = core::mem::replace(&mut self.user_renders[r], RenderData::Inactive)
+            else {
+                // already inactive
+                continue;
+            };
+
+            self.dynamic_ubuf.free(object_uniform_start);
+            self.needs_invalidate_render = true;
+        }
+        for (rid, d) in committed_state.dirty_render_data.drain() {
+            let RenderData::Active {
+                object_uniform_update_pending,
+                mesh_id,
+                ..
+            } = &mut self.user_renders[rid]
+            else {
+                continue;
+            };
+
+            let object_ubuf = self.scratch_staging.reserve(size_of::<Matrix4F32>());
+            unsafe {
+                self.scratch_staging
+                    .mapped_ptr
+                    .byte_add(object_ubuf)
+                    .cast::<Matrix4F32>()
+                    .write(d.object_to_world);
+            }
+            self.user_data_update_pending = true;
+
+            *object_uniform_update_pending = Some(object_ubuf);
+            *mesh_id = d.mesh_id;
+            self.needs_invalidate_render = true;
         }
 
         if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
@@ -2164,13 +2450,22 @@ impl Renderer {
                         }
                     }
                     for r in self.user_renders.iter_mut() {
-                        if let Some(o) = r.object_uniform_update_pending.take() {
+                        let RenderData::Active {
+                            object_uniform_start,
+                            object_uniform_update_pending,
+                            ..
+                        } = r
+                        else {
+                            continue;
+                        };
+
+                        if let Some(o) = object_uniform_update_pending.take() {
                             std_buffer_copies
-                                .entry(unsafe { &*r.object_uniform_start.source_page.get() }.buffer)
+                                .entry(unsafe { &*object_uniform_start.source_page.get() }.buffer)
                                 .or_insert_with(Vec::new)
                                 .push(br::BufferCopy(br::vk::VkBufferCopy {
                                     srcOffset: o as _,
-                                    dstOffset: r.object_uniform_start.offset,
+                                    dstOffset: object_uniform_start.offset,
                                     size: size_of::<peridot_math::Matrix4F32>() as _,
                                 }));
                         }
@@ -2254,7 +2549,16 @@ impl Renderer {
                 .inject(|mut r| {
                     // TODO: needs approprivate batching
                     for x in self.user_renders.iter() {
-                        let mesh = &self.user_meshes[x.mesh_id];
+                        let &RenderData::Active {
+                            ref object_uniform_start,
+                            mesh_id,
+                            ..
+                        } = x
+                        else {
+                            continue;
+                        };
+
+                        let mesh = &self.user_meshes[mesh_id];
                         r = r
                             .bind_pipeline(
                                 br::PipelineBindPoint::Graphics,
@@ -2272,10 +2576,10 @@ impl Renderer {
                                     self.common_descriptor_set,
                                     self.dynamic_ubuf_object_descriptor_sets[self
                                         .dynamic_ubuf_object_descriptor_set_index_by_buffer_handle
-                                        [&unsafe { &*x.object_uniform_start.source_page.get() }
+                                        [&unsafe { &*object_uniform_start.source_page.get() }
                                             .buffer]],
                                 ],
-                                &[x.object_uniform_start.offset as _],
+                                &[object_uniform_start.offset as _],
                             )
                             .bind_vertex_buffer_array(
                                 0,

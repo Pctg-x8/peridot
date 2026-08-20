@@ -25,7 +25,7 @@ impl ObjectID {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ObjectRenderShape {
     Cube,
@@ -38,12 +38,14 @@ pub struct Object {
     parent: Option<ObjectID>,
     children: Vec<ObjectID>,
     name: String,
-    local_position: peridot_math::Vector3F32,
-    local_rotation_euler: peridot_math::Vector3F32,
-    local_scale: peridot_math::Vector3F32,
-    world_matrix: peridot_math::Matrix4F32,
-    render_enabled: bool,
-    render_shape: ObjectRenderShape,
+    pub local_position: peridot_math::Vector3F32,
+    pub local_rotation_euler: peridot_math::Vector3F32,
+    pub local_scale: peridot_math::Vector3F32,
+    pub world_matrix: peridot_math::Matrix4F32,
+    pub render_enabled: bool,
+    pub render_shape: ObjectRenderShape,
+    pub render_id: Option<usize>,
+    pub render_dirty: bool,
 }
 impl Object {
     fn new(name: String) -> Self {
@@ -57,6 +59,8 @@ impl Object {
             world_matrix: peridot_math::Matrix4F32::ONE,
             render_enabled: true,
             render_shape: ObjectRenderShape::Cube,
+            render_id: None,
+            render_dirty: true,
         }
     }
 
@@ -69,11 +73,12 @@ impl Object {
 
 /// Logical Application Model
 pub struct Application {
-    objects: Vec<Object>,
+    pub objects: Vec<Object>,
     free_object_indices: BTreeSet<usize>,
     root_objects: Vec<ObjectID>,
     selected_objects: HashSet<ObjectID>,
     preview_edit_tool_type: PreviewEditToolType,
+    pub removed_object_render_ids: Vec<usize>,
 }
 impl Application {
     pub fn new() -> Self {
@@ -83,6 +88,7 @@ impl Application {
             root_objects: Vec::new(),
             selected_objects: HashSet::new(),
             preview_edit_tool_type: PreviewEditToolType::Translate,
+            removed_object_render_ids: Vec::new(),
         }
     }
 
@@ -121,6 +127,8 @@ impl Application {
         }
 
         self.free_object_indices.insert(id.into_array_index());
+        self.removed_object_render_ids
+            .extend(self.objects[id.into_array_index()].render_id.take());
         self.objects[id.into_array_index()].reset();
 
         // TODO: compactionの頻度を減らすかはあとで検討
@@ -142,6 +150,8 @@ impl Application {
             }
 
             self.free_object_indices.insert(id.into_array_index());
+            self.removed_object_render_ids
+                .extend(self.objects[id.into_array_index()].render_id.take());
             self.objects[id.into_array_index()].reset();
         }
 
@@ -559,7 +569,10 @@ pub fn toggle_selected_object_render_enable(env: &mut (impl ApplicationMutableAc
         return;
     };
 
-    object_modify_data(env, selected, |o| o.render_enabled = !o.render_enabled);
+    object_modify_data(env, selected, |o| {
+        o.render_enabled = !o.render_enabled;
+        o.render_dirty = true;
+    });
 }
 
 pub fn selected_object_render_shape(
@@ -581,7 +594,10 @@ pub fn set_selected_object_render_shape(
         return;
     };
 
-    object_modify_data(env, selected, |o| o.render_shape = shape);
+    object_modify_data(env, selected, |o| {
+        o.render_shape = shape;
+        o.render_dirty = true;
+    });
 }
 
 pub fn select_object(env: &mut (impl ApplicationMutableAccess + ?Sized), id: ObjectID) {
