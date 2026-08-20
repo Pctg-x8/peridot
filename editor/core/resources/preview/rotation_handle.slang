@@ -18,12 +18,13 @@ struct VshOutput {
 [shader("vertex")]
 func vertMain(data: VshInput)->VshOutput {
   var p2 = data.pos;
-  p2.xyz *= length(cameraData.cameraPos - float4(0.0, 0.0, 0.0, 1.0)) * 0.25;
+  let objectWorldPos = float3(objectData.objectToWorldSpace._14, objectData.objectToWorldSpace._24, objectData.objectToWorldSpace._34);
+  p2.xyz *= length(cameraData.cameraPos.xyz - objectWorldPos);
 
   VshOutput vo;
-  vo.pos = mul(cameraData.worldToClipSpace, p2);
+  vo.pos = mul(cameraData.worldToClipSpace, mul(objectData.objectToWorldSpace, p2));
   vo.toFragment.col = colorPalette[data.colorIndex];
-  vo.toFragment.d = dot(normalize(data.pos.xyz), (cameraData.cameraPos - float4(0.0, 0.0, 0.0, 1.0)).xyz);
+  vo.toFragment.d = dot(normalize(data.pos.xyz), cameraData.cameraPos.xyz - objectWorldPos);
   return vo;
 }
 

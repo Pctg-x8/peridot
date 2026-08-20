@@ -308,10 +308,11 @@ pub unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
 }
 
 const ROTATION_HANDLE_DIVS: u32 = 60;
+const ROTATION_HANDLE_RADIUS: f32 = 0.25;
 
 pub const ROTATION_HANDLE_HITSPHERE: Sphere3<f32> = Sphere3 {
     center: Vector3(0.0, 0.0, 0.0),
-    radius: 0.25,
+    radius: ROTATION_HANDLE_RADIUS,
 };
 
 pub const ROTATION_HANDLE_VCOUNT: usize = (ROTATION_HANDLE_DIVS * 4) as usize;
@@ -324,19 +325,35 @@ pub unsafe fn gen_rotation_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
 
         unsafe {
             vs.add(n as usize).write(HandleVertex {
-                pos: [s, c, 0.0, 1.0],
+                pos: [
+                    s * ROTATION_HANDLE_RADIUS,
+                    c * ROTATION_HANDLE_RADIUS,
+                    0.0,
+                    1.0,
+                ],
                 col_index: 2,
             });
             vs.add((n + ROTATION_HANDLE_DIVS) as usize)
                 .write(HandleVertex {
-                    pos: [s, 0.0, c, 1.0],
+                    pos: [
+                        s * ROTATION_HANDLE_RADIUS,
+                        0.0,
+                        c * ROTATION_HANDLE_RADIUS,
+                        1.0,
+                    ],
                     col_index: 1,
                 });
             vs.add((n + ROTATION_HANDLE_DIVS * 2) as usize)
                 .write(HandleVertex {
-                    pos: [0.0, s, c, 1.0],
+                    pos: [
+                        0.0,
+                        s * ROTATION_HANDLE_RADIUS,
+                        c * ROTATION_HANDLE_RADIUS,
+                        1.0,
+                    ],
                     col_index: 0,
                 });
+
             is.add((n * 2) as usize).write(n as u16);
             is.add((n * 2 + 1) as usize)
                 .write(((n + 1) % ROTATION_HANDLE_DIVS) as u16);
