@@ -385,6 +385,228 @@ where
     }
 }
 
+fn det2<T>(v: &[[T; 2]; 2]) -> T
+where
+    T: Copy + Mul<T, Output = T> + Sub<T, Output = T>,
+{
+    v[0][0] * v[1][1] - v[0][1] * v[1][0]
+}
+
+fn det3<T>(v: &[[T; 3]; 3]) -> T
+where
+    T: Copy + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T>,
+{
+    v[0][0] * det2(&[[v[1][1], v[1][2]], [v[2][1], v[2][2]]])
+        - v[0][1] * det2(&[[v[1][0], v[1][2]], [v[2][0], v[2][2]]])
+        + v[0][2] * det2(&[[v[1][0], v[1][1]], [v[2][0], v[2][1]]])
+}
+
+fn det4<T>(v: &[[T; 4]; 4]) -> T
+where
+    T: Copy + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T>,
+{
+    v[0][0]
+        * det3(&[
+            [v[1][1], v[1][2], v[1][3]],
+            [v[2][1], v[2][2], v[2][3]],
+            [v[3][1], v[3][2], v[3][3]],
+        ])
+        - v[0][1]
+            * det3(&[
+                [v[1][0], v[1][2], v[1][3]],
+                [v[2][0], v[2][2], v[2][3]],
+                [v[3][0], v[3][2], v[3][3]],
+            ])
+        + v[0][2]
+            * det3(&[
+                [v[1][0], v[1][1], v[1][3]],
+                [v[2][0], v[2][1], v[2][3]],
+                [v[3][0], v[3][1], v[3][3]],
+            ])
+        - v[0][3]
+            * det3(&[
+                [v[1][0], v[1][1], v[1][2]],
+                [v[2][0], v[2][1], v[2][2]],
+                [v[3][0], v[3][1], v[3][2]],
+            ])
+}
+
+// Determinant / Inversion //
+impl<T> Matrix2<T> {
+    #[inline(always)]
+    pub fn determinant(&self) -> T
+    where
+        T: Copy + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T>,
+    {
+        det2(&[self.0, self.1])
+    }
+}
+impl<T> Matrix3<T> {
+    #[inline(always)]
+    pub fn determinant(&self) -> T
+    where
+        T: Copy + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T>,
+    {
+        det3(&[self.0, self.1, self.2])
+    }
+}
+impl<T> Matrix4<T> {
+    #[inline(always)]
+    pub fn determinant(&self) -> T
+    where
+        T: Copy + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T>,
+    {
+        det4(&[self.0, self.1, self.2, self.3])
+    }
+
+    /// Minor matrix: https://www.cuemath.com/algebra/adjoint-of-a-matrix/
+    pub fn minor(&self) -> Self
+    where
+        T: Copy + Mul<T, Output = T> + Sub<T, Output = T> + Add<T, Output = T>,
+    {
+        let m00 = det3(&[
+            [self.1[1], self.1[2], self.1[3]],
+            [self.2[1], self.2[2], self.2[3]],
+            [self.3[1], self.3[2], self.3[3]],
+        ]);
+        let m01 = det3(&[
+            [self.1[0], self.1[2], self.1[3]],
+            [self.2[0], self.2[2], self.2[3]],
+            [self.3[0], self.3[2], self.3[3]],
+        ]);
+        let m02 = det3(&[
+            [self.1[0], self.1[1], self.1[3]],
+            [self.2[0], self.2[1], self.2[3]],
+            [self.3[0], self.3[1], self.3[3]],
+        ]);
+        let m03 = det3(&[
+            [self.1[0], self.1[1], self.1[2]],
+            [self.2[0], self.2[1], self.2[2]],
+            [self.3[0], self.3[1], self.3[2]],
+        ]);
+        let m10 = det3(&[
+            [self.0[1], self.0[2], self.0[3]],
+            [self.2[1], self.2[2], self.2[3]],
+            [self.3[1], self.3[2], self.3[3]],
+        ]);
+        let m11 = det3(&[
+            [self.0[0], self.0[2], self.0[3]],
+            [self.2[0], self.2[2], self.2[3]],
+            [self.3[0], self.3[2], self.3[3]],
+        ]);
+        let m12 = det3(&[
+            [self.0[0], self.0[1], self.0[3]],
+            [self.2[0], self.2[1], self.2[3]],
+            [self.3[0], self.3[1], self.3[3]],
+        ]);
+        let m13 = det3(&[
+            [self.0[0], self.0[1], self.0[2]],
+            [self.2[0], self.2[1], self.2[2]],
+            [self.3[0], self.3[1], self.3[2]],
+        ]);
+        let m20 = det3(&[
+            [self.0[1], self.0[2], self.0[3]],
+            [self.1[1], self.1[2], self.1[3]],
+            [self.3[1], self.3[2], self.3[3]],
+        ]);
+        let m21 = det3(&[
+            [self.0[0], self.0[2], self.0[3]],
+            [self.1[0], self.1[2], self.1[3]],
+            [self.3[0], self.3[2], self.3[3]],
+        ]);
+        let m22 = det3(&[
+            [self.0[0], self.0[1], self.0[3]],
+            [self.1[0], self.1[1], self.1[3]],
+            [self.3[0], self.3[1], self.3[3]],
+        ]);
+        let m23 = det3(&[
+            [self.0[0], self.0[1], self.0[2]],
+            [self.1[0], self.1[1], self.1[2]],
+            [self.3[0], self.3[1], self.3[2]],
+        ]);
+        let m30 = det3(&[
+            [self.0[1], self.0[2], self.0[3]],
+            [self.1[1], self.1[2], self.1[3]],
+            [self.2[1], self.2[2], self.2[3]],
+        ]);
+        let m31 = det3(&[
+            [self.0[0], self.0[2], self.0[3]],
+            [self.1[0], self.1[2], self.1[3]],
+            [self.2[0], self.2[2], self.2[3]],
+        ]);
+        let m32 = det3(&[
+            [self.0[0], self.0[1], self.0[3]],
+            [self.1[0], self.1[1], self.1[3]],
+            [self.2[0], self.2[1], self.2[3]],
+        ]);
+        let m33 = det3(&[
+            [self.0[0], self.0[1], self.0[2]],
+            [self.1[0], self.1[1], self.1[2]],
+            [self.2[0], self.2[1], self.2[2]],
+        ]);
+
+        Self(
+            [m00, m01, m02, m03],
+            [m10, m11, m12, m13],
+            [m20, m21, m22, m23],
+            [m30, m31, m32, m33],
+        )
+    }
+
+    pub fn inverse(&self) -> Option<Self>
+    where
+        T: Copy
+            + Mul<T, Output = T>
+            + Sub<T, Output = T>
+            + Add<T, Output = T>
+            + Div<T, Output = T>
+            + Neg<Output = T>
+            + PartialEq<T>
+            + Zero,
+    {
+        let det = self.determinant();
+        if det == T::ZERO {
+            // not invertable
+            return None;
+        }
+
+        let minor = self.minor();
+        let cofactor = Self(
+            [minor.0[0], -minor.0[1], minor.0[2], -minor.0[3]],
+            [-minor.1[0], minor.1[1], -minor.1[2], minor.1[3]],
+            [minor.2[0], -minor.2[1], minor.2[2], -minor.2[3]],
+            [-minor.3[0], minor.3[1], -minor.3[2], minor.3[3]],
+        );
+        let adjugate = cofactor.transpose();
+        Some(Self(
+            [
+                adjugate.0[0] / det,
+                adjugate.0[1] / det,
+                adjugate.0[2] / det,
+                adjugate.0[3] / det,
+            ],
+            [
+                adjugate.1[0] / det,
+                adjugate.1[1] / det,
+                adjugate.1[2] / det,
+                adjugate.1[3] / det,
+            ],
+            [
+                adjugate.2[0] / det,
+                adjugate.2[1] / det,
+                adjugate.2[2] / det,
+                adjugate.2[3] / det,
+            ],
+            [
+                adjugate.3[0] / det,
+                adjugate.3[1] / det,
+                adjugate.3[2] / det,
+                adjugate.3[3] / det,
+            ],
+        ))
+    }
+}
+
 // Scaling, Rotating //
 impl<T> Matrix2<T> {
     pub fn scale(Vector2(x, y): Vector2<T>) -> Self
@@ -587,7 +809,7 @@ where
 // Length Function and Normalization //
 impl<T> Vector2<T>
 where
-    T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+    T: Real + Copy,
 {
     #[inline]
     pub fn len(&self) -> T {
@@ -595,17 +817,14 @@ where
     }
 
     #[inline]
-    pub fn normalize(&self) -> Self
-    where
-        T: Div<T, Output = T>,
-    {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector2(self.0 / l0, self.1 / l0)
     }
 }
 impl<T> Vector3<T>
 where
-    T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+    T: Real + Copy,
 {
     #[inline]
     pub fn len(&self) -> T {
@@ -613,17 +832,14 @@ where
     }
 
     #[inline]
-    pub fn normalize(&self) -> Self
-    where
-        T: Div<T, Output = T>,
-    {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector3(self.0 / l0, self.1 / l0, self.2 / l0)
     }
 }
 impl<T> Vector4<T>
 where
-    T: Real + Copy + Mul<T, Output = T> + Add<T, Output = T>,
+    T: Real + Copy,
 {
     #[inline]
     pub fn len(&self) -> T {
@@ -631,10 +847,7 @@ where
     }
 
     #[inline]
-    pub fn normalize(&self) -> Self
-    where
-        T: Div<T, Output = T>,
-    {
+    pub fn normalize(&self) -> Self {
         let l0 = self.len();
         Vector4(self.0 / l0, self.1 / l0, self.2 / l0, self.3 / l0)
     }

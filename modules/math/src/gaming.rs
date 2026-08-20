@@ -1,6 +1,6 @@
 //! Peridot Extended Mathematics: Gaming Utils(Camera, ModelMatrix)
 
-use crate::linarg::*;
+use crate::{linarg::*, Ray3};
 use crate::{One, Zero};
 use std::ops::Range;
 
@@ -287,6 +287,35 @@ impl Camera {
                 }
             }
         };
+    }
+
+    /// Converts a viewport point to a world ray.
+    ///
+    /// `viewport_point` is in normalized viewport coordinates(`(0, 0)` for left-top of the viewport, `(1, 1)` for right-bottom)
+    pub fn viewport_point_to_world_ray(
+        &self,
+        viewport_point: Vector2<f32>,
+        viewport_aspect_wh: f32,
+    ) -> Ray3<f32> {
+        let pos_clip_near = Vector3(
+            2.0 * viewport_point.0 - 1.0,
+            2.0 * viewport_point.1 - 1.0,
+            1.0,
+        );
+        let pos_clip_far = Vector3(
+            2.0 * viewport_point.0 - 1.0,
+            2.0 * viewport_point.1 - 1.0,
+            -1.0,
+        );
+
+        let vp_inv = self
+            .view_projection_matrix(viewport_aspect_wh)
+            .inverse()
+            .expect("cannot inverse?");
+        let pos_world_near = Vector3::from(vp_inv.clone() * pos_clip_near);
+        let pos_world_far = Vector3::from(vp_inv * pos_clip_far);
+
+        Ray3::from_origin_to(pos_world_near, pos_world_far)
     }
 }
 impl Default for Camera {

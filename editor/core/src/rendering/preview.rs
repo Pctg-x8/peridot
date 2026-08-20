@@ -352,7 +352,7 @@ const VS_ORIGIN_AXES: &[OriginAxesVertex] = &[
 
 pub struct HandleVertex {
     pos: [f32; 4],
-    col: [f32; 4],
+    col_index: u32,
 }
 
 const TRANSLATE_HANDLE_BAR_LENGTH: f32 = 0.2;
@@ -398,7 +398,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                     TRANSLATE_HANDLE_BAR_RADIUS * c,
                     1.0,
                 ],
-                col: [1.0, 0.0, 0.0, 1.0],
+                col_index: 0,
             });
             vs.add(base_vindex_x + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
                 .write(HandleVertex {
@@ -408,7 +408,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                         TRANSLATE_HANDLE_BAR_RADIUS * c,
                         1.0,
                     ],
-                    col: [1.0, 0.0, 0.0, 1.0],
+                    col_index: 0,
                 });
             vs.add(base_vindex_y + r as usize).write(HandleVertex {
                 pos: [
@@ -417,7 +417,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                     TRANSLATE_HANDLE_BAR_RADIUS * c,
                     1.0,
                 ],
-                col: [0.0, 1.0, 0.0, 1.0],
+                col_index: 1,
             });
             vs.add(base_vindex_y + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
                 .write(HandleVertex {
@@ -427,7 +427,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                         TRANSLATE_HANDLE_BAR_RADIUS * c,
                         1.0,
                     ],
-                    col: [0.0, 1.0, 0.0, 1.0],
+                    col_index: 1,
                 });
             vs.add(base_vindex_z + r as usize).write(HandleVertex {
                 pos: [
@@ -436,7 +436,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                     0.0,
                     1.0,
                 ],
-                col: [0.0, 0.0, 1.0, 1.0],
+                col_index: 2,
             });
             vs.add(base_vindex_z + r as usize + TRANSLATE_HANDLE_BAR_DIVISION as usize)
                 .write(HandleVertex {
@@ -446,7 +446,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                         TRANSLATE_HANDLE_BAR_LENGTH,
                         1.0,
                     ],
-                    col: [0.0, 0.0, 1.0, 1.0],
+                    col_index: 2,
                 });
         }
 
@@ -509,7 +509,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                 0.0,
                 1.0,
             ],
-            col: [1.0, 0.0, 0.0, 1.0],
+            col_index: 0,
         });
         vs.add(arrow_top_vindex_y).write(HandleVertex {
             pos: [
@@ -518,7 +518,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                 0.0,
                 1.0,
             ],
-            col: [0.0, 1.0, 0.0, 1.0],
+            col_index: 1,
         });
         vs.add(arrow_top_vindex_z).write(HandleVertex {
             pos: [
@@ -527,7 +527,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                 TRANSLATE_HANDLE_BAR_LENGTH + TRANSLATE_HANDLE_ARROW_SIZE,
                 1.0,
             ],
-            col: [0.0, 0.0, 1.0, 1.0],
+            col_index: 2,
         });
     }
     let base_vindex_x = arrow_top_vindex_x + 1;
@@ -545,7 +545,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                     TRANSLATE_HANDLE_ARROW_RADIUS * c,
                     1.0,
                 ],
-                col: [1.0, 0.0, 0.0, 1.0],
+                col_index: 0,
             });
             vs.add(base_vindex_y + r as usize).write(HandleVertex {
                 pos: [
@@ -554,7 +554,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                     TRANSLATE_HANDLE_ARROW_RADIUS * c,
                     1.0,
                 ],
-                col: [0.0, 1.0, 0.0, 1.0],
+                col_index: 1,
             });
             vs.add(base_vindex_z + r as usize).write(HandleVertex {
                 pos: [
@@ -563,7 +563,7 @@ unsafe fn gen_translate_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
                     TRANSLATE_HANDLE_BAR_LENGTH,
                     1.0,
                 ],
-                col: [0.0, 0.0, 1.0, 1.0],
+                col_index: 2,
             });
         }
 
@@ -629,17 +629,17 @@ fn gen_rotation_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
         unsafe {
             vs.add(n as usize).write(HandleVertex {
                 pos: [s, c, 0.0, 1.0],
-                col: [0.0, 0.0, 1.0, 1.0],
+                col_index: 2,
             });
             vs.add((n + ROTATION_HANDLE_DIVS) as usize)
                 .write(HandleVertex {
                     pos: [s, 0.0, c, 1.0],
-                    col: [0.0, 1.0, 0.0, 1.0],
+                    col_index: 1,
                 });
             vs.add((n + ROTATION_HANDLE_DIVS * 2) as usize)
                 .write(HandleVertex {
                     pos: [0.0, s, c, 1.0],
-                    col: [1.0, 0.0, 0.0, 1.0],
+                    col_index: 0,
                 });
             is.add((n * 2) as usize).write(n as u16);
             is.add((n * 2 + 1) as usize)
@@ -657,7 +657,7 @@ fn gen_rotation_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
             vs.add((n + ROTATION_HANDLE_DIVS * 3) as usize)
                 .write(HandleVertex {
                     pos: [c, s, 0.0, c],
-                    col: [1.0, 1.0, 1.0, 1.0],
+                    col_index: 3,
                 });
             is.add(((n + ROTATION_HANDLE_DIVS * 3) * 2) as usize)
                 .write((n + ROTATION_HANDLE_DIVS * 3) as u16);
@@ -674,10 +674,10 @@ const SCALE_HANDLE_VCOUNT: usize = (8 * 4) + (8 * 3); // tip cube + bar cube
 const SCALE_HANDLE_ICOUNT: usize = (6 * 6 * 4) + (6 * 4 * 3); // tip cube(6 faces) + bar cube(4 faces)
 fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
     // Note: 編集しづらいので一部rustfmtを意図的にスキップする
-    const fn hv(x: f32, y: f32, z: f32, c: [f32; 4]) -> HandleVertex {
+    const fn hv(x: f32, y: f32, z: f32, cx: u32) -> HandleVertex {
         HandleVertex {
             pos: [x, y, z, 1.0],
-            col: c,
+            col_index: cx,
         }
     }
 
@@ -686,7 +686,7 @@ fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
         let t = SCALE_HANDLE_BAR_THICKNESS;
         let am = 0.0;
         let ar = SCALE_HANDLE_BAR_LENGTH;
-        let col = [1.0, 1.0, 1.0, 1.0];
+        let col = 3;
         vs.copy_from_nonoverlapping(
             [
                 // x
@@ -753,41 +753,41 @@ fn gen_scale_handle_mesh(vs: *mut HandleVertex, is: *mut u16) {
         vs.add(8 * 3).copy_from_nonoverlapping(
             [
                 // x
-                hv(c - s, -s, -s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c + s, -s, -s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c - s,  s, -s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c + s,  s, -s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c - s, -s,  s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c + s, -s,  s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c - s,  s,  s, [1.0, 0.0, 0.0, 1.0]),
-                hv(c + s,  s,  s, [1.0, 0.0, 0.0, 1.0]),
+                hv(c - s, -s, -s, 0),
+                hv(c + s, -s, -s, 0),
+                hv(c - s,  s, -s, 0),
+                hv(c + s,  s, -s, 0),
+                hv(c - s, -s,  s, 0),
+                hv(c + s, -s,  s, 0),
+                hv(c - s,  s,  s, 0),
+                hv(c + s,  s,  s, 0),
                 // y
-                hv(-s, c - s, -s, [0.0, 1.0, 0.0, 1.0]),
-                hv( s, c - s, -s, [0.0, 1.0, 0.0, 1.0]),
-                hv(-s, c + s, -s, [0.0, 1.0, 0.0, 1.0]),
-                hv( s, c + s, -s, [0.0, 1.0, 0.0, 1.0]),
-                hv(-s, c - s,  s, [0.0, 1.0, 0.0, 1.0]),
-                hv( s, c - s,  s, [0.0, 1.0, 0.0, 1.0]),
-                hv(-s, c + s,  s, [0.0, 1.0, 0.0, 1.0]),
-                hv( s, c + s,  s, [0.0, 1.0, 0.0, 1.0]),
+                hv(-s, c - s, -s, 1),
+                hv( s, c - s, -s, 1),
+                hv(-s, c + s, -s, 1),
+                hv( s, c + s, -s, 1),
+                hv(-s, c - s,  s, 1),
+                hv( s, c - s,  s, 1),
+                hv(-s, c + s,  s, 1),
+                hv( s, c + s,  s, 1),
                 // z
-                hv(-s, -s, c - s, [0.0, 0.0, 1.0, 1.0]),
-                hv( s, -s, c - s, [0.0, 0.0, 1.0, 1.0]),
-                hv(-s,  s, c - s, [0.0, 0.0, 1.0, 1.0]),
-                hv( s,  s, c - s, [0.0, 0.0, 1.0, 1.0]),
-                hv(-s, -s, c + s, [0.0, 0.0, 1.0, 1.0]),
-                hv( s, -s, c + s, [0.0, 0.0, 1.0, 1.0]),
-                hv(-s,  s, c + s, [0.0, 0.0, 1.0, 1.0]),
-                hv( s,  s, c + s, [0.0, 0.0, 1.0, 1.0]),
+                hv(-s, -s, c - s, 2),
+                hv( s, -s, c - s, 2),
+                hv(-s,  s, c - s, 2),
+                hv( s,  s, c - s, 2),
+                hv(-s, -s, c + s, 2),
+                hv( s, -s, c + s, 2),
+                hv(-s,  s, c + s, 2),
+                hv( s,  s, c + s, 2),
                 // center
-                hv(-s, -s, -s, [1.0, 1.0, 1.0, 1.0]),
-                hv( s, -s, -s, [1.0, 1.0, 1.0, 1.0]),
-                hv(-s,  s, -s, [1.0, 1.0, 1.0, 1.0]),
-                hv( s,  s, -s, [1.0, 1.0, 1.0, 1.0]),
-                hv(-s, -s,  s, [1.0, 1.0, 1.0, 1.0]),
-                hv( s, -s,  s, [1.0, 1.0, 1.0, 1.0]),
-                hv(-s,  s,  s, [1.0, 1.0, 1.0, 1.0]),
-                hv( s,  s,  s, [1.0, 1.0, 1.0, 1.0]),
+                hv(-s, -s, -s, 3),
+                hv( s, -s, -s, 3),
+                hv(-s,  s, -s, 3),
+                hv( s,  s, -s, 3),
+                hv(-s, -s,  s, 3),
+                hv( s, -s,  s, 3),
+                hv(-s,  s,  s, 3),
+                hv( s,  s,  s, 3),
             ]
             .as_ptr(),
             8 * 4,
@@ -1309,6 +1309,13 @@ pub enum HandleShape {
     Scale,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum HandlePointing {
+    X,
+    Y,
+    Z,
+}
+
 pub struct CommittedState {
     pub viewport_size: Size<LogicalUnit>,
     pub main_camera: Camera,
@@ -1321,6 +1328,7 @@ pub struct CommittedState {
     pub removed_render_data: HashSet<usize>,
     pub handle_shape: HandleShape,
     pub handle_to_world_transform: Matrix4F32,
+    pub handle_pointing: Option<HandlePointing>,
     pub handle_data_dirtified: bool,
 }
 
@@ -1396,6 +1404,7 @@ pub struct Renderer {
     user_renders: Vec<RenderData>,
     user_data_update_pending: bool,
     handle_shape: HandleShape,
+    handle_pointing: Option<HandlePointing>,
     handle_to_world_transform: Matrix4F32,
     needs_invalidate_render: bool,
     valid: bool,
@@ -1574,7 +1583,10 @@ impl Renderer {
                     common_descriptor_set_layout.as_transparent_ref(),
                     object_descriptor_set_layout.as_transparent_ref(),
                 ],
-                &[],
+                &[br::PushConstantRange::for_type::<[f32; 4 * 4]>(
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                )],
             ),
         )
         .expect("preview.unlit_colored_object.pipeline_layout.create");
@@ -2041,6 +2053,7 @@ impl Renderer {
             user_renders: Vec::new(),
             user_data_update_pending: false,
             handle_shape: HandleShape::Translation,
+            handle_pointing: None,
             handle_to_world_transform: Matrix4::ONE,
             needs_invalidate_render: false,
             valid: false,
@@ -2176,6 +2189,7 @@ impl Renderer {
 
         if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
             self.handle_shape = committed_state.handle_shape;
+            self.handle_pointing = committed_state.handle_pointing;
             self.needs_invalidate_render = true;
         }
     }
@@ -2444,8 +2458,8 @@ impl Renderer {
                                     br::vk::VkVertexInputAttributeDescription {
                                         location: 1,
                                         binding: 0,
-                                        offset: core::mem::offset_of!(HandleVertex, col) as _,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        offset: core::mem::offset_of!(HandleVertex, col_index) as _,
+                                        format: br::vk::VK_FORMAT_R32_UINT,
                                     },
                                 ),
                             ],
@@ -2499,8 +2513,8 @@ impl Renderer {
                                     br::vk::VkVertexInputAttributeDescription {
                                         location: 1,
                                         binding: 0,
-                                        offset: core::mem::offset_of!(HandleVertex, col) as _,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                        offset: core::mem::offset_of!(HandleVertex, col_index) as _,
+                                        format: br::vk::VK_FORMAT_R32_UINT,
                                     },
                                 ),
                             ],
@@ -2869,6 +2883,31 @@ impl Renderer {
                             ],
                             &[0],
                         )
+                        .push_constant_slice::<[f32; 4]>(
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                            0,
+                            &[
+                                if self.handle_pointing == Some(HandlePointing::X) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [1.0, 0.0, 0.0, 1.0]
+                                },
+                                if self.handle_pointing == Some(HandlePointing::Y) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [0.0, 1.0, 0.0, 1.0]
+                                },
+                                if self.handle_pointing == Some(HandlePointing::Z) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [0.0, 0.0, 1.0, 1.0]
+                                },
+                                [1.0, 1.0, 1.0, 1.0],
+                            ],
+                        )
                         .bind_vertex_buffer_array(
                             0,
                             &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
@@ -2899,6 +2938,31 @@ impl Renderer {
                             ],
                             &[0],
                         )
+                        .push_constant_slice::<[f32; 4]>(
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                            0,
+                            &[
+                                if self.handle_pointing == Some(HandlePointing::X) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [1.0, 0.0, 0.0, 1.0]
+                                },
+                                if self.handle_pointing == Some(HandlePointing::Y) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [0.0, 1.0, 0.0, 1.0]
+                                },
+                                if self.handle_pointing == Some(HandlePointing::Z) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [0.0, 0.0, 1.0, 1.0]
+                                },
+                                [1.0, 1.0, 1.0, 1.0],
+                            ],
+                        )
                         .bind_vertex_buffer_array(
                             0,
                             &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
@@ -2928,6 +2992,31 @@ impl Renderer {
                                 self.offsettable_object_descriptor_set,
                             ],
                             &[0],
+                        )
+                        .push_constant_slice::<[f32; 4]>(
+                            br::VkHandleRef::from_raw_ref(
+                                &self.unlit_colored_object_pipeline_layout,
+                            ),
+                            br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                            0,
+                            &[
+                                if self.handle_pointing == Some(HandlePointing::X) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [1.0, 0.0, 0.0, 1.0]
+                                },
+                                if self.handle_pointing == Some(HandlePointing::Y) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [0.0, 1.0, 0.0, 1.0]
+                                },
+                                if self.handle_pointing == Some(HandlePointing::Z) {
+                                    [1.0, 1.0, 0.0, 1.0]
+                                } else {
+                                    [0.0, 0.0, 1.0, 1.0]
+                                },
+                                [1.0, 1.0, 1.0, 1.0],
+                            ],
                         )
                         .bind_vertex_buffer_array(
                             0,

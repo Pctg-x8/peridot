@@ -175,6 +175,7 @@ pub fn launch() {
         dirty_render_data: HashMap::new(),
         removed_render_data: HashSet::new(),
         handle_shape: rendering::preview::HandleShape::Translation,
+        handle_pointing: None,
         handle_to_world_transform: peridot_math::Matrix4::ONE,
         handle_data_dirtified: false,
     });
@@ -2985,6 +2986,7 @@ async fn run<'sys>(
         grabbing: false,
         grab_delta: Point::new_logical(0.0, 0.0),
         key_input: PreviewKeyInputState::empty(),
+        pointer_pos: None,
     };
     // preview local states
     let mut preview_latched_key_motion_amplifier = None::<f32>;
@@ -6486,6 +6488,51 @@ async fn run<'sys>(
                     preview_state.handle_shape = current_handle_shape;
                     preview_state.handle_data_dirtified = true;
                 }
+
+                if let Some(pointer_pos) = preview_input_state.pointer_pos {
+                    let ray = preview_state.main_camera.viewport_point_to_world_ray(
+                        peridot_math::Vector2(
+                            pointer_pos.x / preview_state.viewport_size.width,
+                            pointer_pos.y / preview_state.viewport_size.height,
+                        ),
+                        preview_state.viewport_size.width / preview_state.viewport_size.height,
+                    );
+
+                    let handle_scale = (preview_state.main_camera.position
+                        - peridot_math::Vector3(0.0, 0.0, 0.0))
+                    .len();
+                    let current_handle_pointing = match current_handle_shape {
+                        rendering::preview::HandleShape::Translation => {
+                            let bbox_y = peridot_math::AABB3 {
+                                min: peridot_math::Vector3(-0.02, 0.0, -0.02) * handle_scale,
+                                max: peridot_math::Vector3(0.02, 0.25, 0.02) * handle_scale,
+                            };
+                            let bbox_x = peridot_math::AABB3 {
+                                min: peridot_math::Vector3(0.0, -0.02, -0.02) * handle_scale,
+                                max: peridot_math::Vector3(0.25, 0.02, 0.02) * handle_scale,
+                            };
+                            let bbox_z = peridot_math::AABB3 {
+                                min: peridot_math::Vector3(-0.02, -0.02, 0.0) * handle_scale,
+                                max: peridot_math::Vector3(0.02, 0.02, 0.25) * handle_scale,
+                            };
+                            if bbox_y.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::Y)
+                            } else if bbox_x.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::X)
+                            } else if bbox_z.intersect(&ray).is_some() {
+                                Some(rendering::preview::HandlePointing::Z)
+                            } else {
+                                None
+                            }
+                        }
+                        rendering::preview::HandleShape::Rotation => None,
+                        rendering::preview::HandleShape::Scale => None,
+                    };
+                    if current_handle_pointing != preview_state.handle_pointing {
+                        preview_state.handle_pointing = current_handle_pointing;
+                        preview_state.handle_data_dirtified = true;
+                    }
+                }
             }
             Event::ScheduleViewRenderExt { id } => {
                 view_render_queue.schedule(id);
@@ -8199,6 +8246,7 @@ struct PreviewInputState {
     grabbing: bool,
     grab_delta: Point<LogicalUnit>,
     key_input: PreviewKeyInputState,
+    pointer_pos: Option<Point<LogicalUnit>>,
 }
 
 struct PreviewToolSelectorButtonView {
@@ -8696,6 +8744,34 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
             left_amount: 0.0,
             continue_flags: EventContinueControl::STOP_PROPAGATION,
         }
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        unsafe { &mut *self.input_state }.pointer_pos = None;
+        EventContinueControl::empty()
+    }
+
+    fn on_pointer_move(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        let (x, y, _, _) = context.ht_manager.translate_client_to_tree_local(
+            sender,
+            args.client_pos.x,
+            args.client_pos.y,
+            args.client_size.width,
+            args.client_size.height,
+        );
+        unsafe { &mut *self.input_state }.pointer_pos = Some(Point::new_logical(x, y));
+
+        EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_pointer_down(

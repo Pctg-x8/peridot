@@ -1,10 +1,13 @@
 #include "common-bindings.slang"
 
+[vk::push_constant]
+ConstantBuffer<float4[4]> colorPalette;
+
 struct VshInput {
   [vk::location(0)]
   float4 pos : POSITION0;
   [vk::location(1)]
-  float4 col : TEXCOORD0;
+  uint colorIndex : TEXCOORD0;
 }
 
 struct VshOutput {
@@ -19,7 +22,7 @@ func vertMain(data: VshInput)->VshOutput {
 
   VshOutput vo;
   vo.pos = mul(cameraData.worldToClipSpace, mul(objectData.objectToWorldSpace, p2));
-  vo.toFragment.col = data.col;
+  vo.toFragment.col = colorPalette[data.colorIndex];
   return vo;
 }
 
