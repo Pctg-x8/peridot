@@ -9012,7 +9012,7 @@ fn mesh_data_for_render_shape(shape: ObjectRenderShape) -> rendering::preview::C
             const HDIV: usize = 20;
             const VDIV: usize = 10;
 
-            let vertex_count = HDIV * VDIV;
+            let vertex_count = HDIV * (VDIV + 1);
             let index_count = (HDIV * VDIV) * 6;
             let mut vbuf_bytes =
                 vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * vertex_count];
@@ -9025,7 +9025,7 @@ fn mesh_data_for_render_shape(shape: ObjectRenderShape) -> rendering::preview::C
                 let ix = ibuf_bytes.as_mut_ptr().cast::<u16>();
 
                 // TODO: v = 0とv = VDIV - 1を特殊処理したほうがよさそう(形状がfanになる)
-                for v in 0..VDIV {
+                for v in 0..=VDIV {
                     for h in 0..HDIV {
                         let ix_base = (h + v * HDIV) * 6;
 
@@ -9038,16 +9038,18 @@ fn mesh_data_for_render_shape(shape: ObjectRenderShape) -> rendering::preview::C
                             peridot_math::Vector4(x * yc * 0.5, y * 0.5, z * yc * 0.5, 1.0),
                             n.clone().with_w(0.0),
                         ]);
-                        let v0 = v;
-                        let v1 = (v + 1) % VDIV;
-                        let h0 = h;
-                        let h1 = (h + 1) % HDIV;
-                        ix.add(ix_base + 0).write_unaligned((h0 + v0 * HDIV) as _);
-                        ix.add(ix_base + 1).write_unaligned((h1 + v0 * HDIV) as _);
-                        ix.add(ix_base + 2).write_unaligned((h1 + v1 * HDIV) as _);
-                        ix.add(ix_base + 3).write_unaligned((h0 + v0 * HDIV) as _);
-                        ix.add(ix_base + 4).write_unaligned((h1 + v1 * HDIV) as _);
-                        ix.add(ix_base + 5).write_unaligned((h0 + v1 * HDIV) as _);
+                        if v < VDIV {
+                            let v0 = v;
+                            let v1 = v + 1;
+                            let h0 = h;
+                            let h1 = (h + 1) % HDIV;
+                            ix.add(ix_base + 0).write_unaligned((h0 + v0 * HDIV) as _);
+                            ix.add(ix_base + 2).write_unaligned((h1 + v0 * HDIV) as _);
+                            ix.add(ix_base + 1).write_unaligned((h1 + v1 * HDIV) as _);
+                            ix.add(ix_base + 3).write_unaligned((h0 + v0 * HDIV) as _);
+                            ix.add(ix_base + 5).write_unaligned((h1 + v1 * HDIV) as _);
+                            ix.add(ix_base + 4).write_unaligned((h0 + v1 * HDIV) as _);
+                        }
                     }
                 }
             }
