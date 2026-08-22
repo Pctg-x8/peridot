@@ -346,8 +346,13 @@ pub fn selected_object_local_scale_z(env: &(impl ApplicationAccess + ?Sized)) ->
     env.application().object(id).local_scale.2
 }
 
-pub fn object_create(env: &mut (impl ApplicationMutableAccess + ?Sized), name: String) -> ObjectID {
+pub fn object_create_of_shape(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    name: String,
+    shape: ObjectRenderShape,
+) -> ObjectID {
     let id = env.application_mut().alloc_object(Object::new(name));
+    env.application_mut().objects[id.into_array_index()].render_shape = shape;
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
     id
 }

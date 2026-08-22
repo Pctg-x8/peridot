@@ -5863,57 +5863,64 @@ async fn run<'sys>(
 
                 match id {
                     MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
-                        crate::model::object_create(
+                        crate::model::object_create_of_shape(
                             &mut ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
                             },
                             "New Plane".into(),
+                            ObjectRenderShape::Plane,
                         );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
-                        crate::model::object_create(
+                        crate::model::object_create_of_shape(
                             &mut ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
                             },
                             "New Cube".into(),
+                            ObjectRenderShape::Cube,
                         );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
-                        crate::model::object_create(
+                        crate::model::object_create_of_shape(
                             &mut ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
                             },
                             "New Sphere".into(),
+                            ObjectRenderShape::Sphere,
                         );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
-                        crate::model::object_create(
+                        crate::model::object_create_of_shape(
                             &mut ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
                             },
                             "New Cylinder".into(),
+                            ObjectRenderShape::Cylinder,
                         );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
-                        crate::model::object_create(
+                        crate::model::object_create_of_shape(
                             &mut ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
                             },
                             "New Capsule".into(),
+                            ObjectRenderShape::Capsule,
                         );
                     }
                     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
-                        crate::model::object_create(
+                        crate::model::object_create_of_shape(
                             &mut ApplicationMutation {
                                 state: &mut application,
                                 view_feedbacks: &mut view_feedback_store,
                             },
                             "New Terrain".into(),
+                            // TODO: terrain support
+                            ObjectRenderShape::Plane,
                         );
                     }
                     MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED => {
