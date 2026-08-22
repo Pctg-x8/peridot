@@ -8,7 +8,7 @@ use crate::{
     Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
-    MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED,
+    MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED, MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -524,6 +524,10 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
                     MenuItem::Command {
                         label: "Destroy".into(),
                         command_id: MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED,
+                    },
+                    MenuItem::Command {
+                        label: "Duplicate".into(),
+                        command_id: MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED,
                     },
                     MenuItem::Heading {
                         label: "Create Child Object".into(),

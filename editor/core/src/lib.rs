@@ -1079,6 +1079,7 @@ pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
 pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
 pub const MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED: u64 = 20;
+pub const MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED: u64 = 21;
 
 pub struct ColorPickerSharedResources {
     ring_tex_id: TextureID,
@@ -5925,6 +5926,12 @@ async fn run<'sys>(
                     }
                     MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED => {
                         crate::model::object_destroy_selected(&mut ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        });
+                    }
+                    MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED => {
+                        crate::model::object_duplicate_selected(&mut ApplicationMutation {
                             state: &mut application,
                             view_feedbacks: &mut view_feedback_store,
                         });

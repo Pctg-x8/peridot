@@ -65,6 +65,22 @@ impl Object {
         }
     }
 
+    fn duplicate_single(&self) -> Self {
+        Self {
+            parent: None,
+            children: Vec::new(),
+            name: self.name.clone(),
+            local_position: self.local_position,
+            local_rotation_euler: self.local_rotation_euler,
+            local_scale: self.local_scale,
+            world_matrix: self.world_matrix.clone(),
+            render_enabled: self.render_enabled,
+            render_shape: self.render_shape,
+            render_id: None,
+            render_dirty: true,
+        }
+    }
+
     fn reset(&mut self) {
         self.name = String::new();
         self.children = Vec::new();
@@ -355,6 +371,20 @@ pub fn object_create_of_shape(
     env.application_mut().objects[id.into_array_index()].render_shape = shape;
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
     id
+}
+
+pub fn object_duplicate_selected(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+) -> Option<ObjectID> {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return None;
+    };
+
+    let new_object = env.application().objects[selected.into_array_index()].duplicate_single();
+    let id = env.application_mut().alloc_object(new_object);
+    // TODO: duplicate with relationship
+    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    Some(id)
 }
 
 pub fn object_destroy_selected(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
