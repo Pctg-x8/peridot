@@ -3,7 +3,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Vector3F32};
+use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Ray3, Sphere3, Vector3F32};
 
 use crate::uikit::{ViewFeedbackContext, ViewFeedbackRegistry};
 
@@ -16,7 +16,7 @@ impl core::fmt::Display for ObjectID {
     }
 }
 impl ObjectID {
-    const fn from_array_index(v: usize) -> Self {
+    pub const fn from_array_index(v: usize) -> Self {
         Self(unsafe { NonZeroUsize::new_unchecked(v.checked_add(1).expect("too many objects!")) })
     }
 
@@ -96,6 +96,36 @@ impl Object {
             ),
             self.local_scale,
         )
+    }
+
+    pub fn hittest_ray(&self, ray: &Ray3<f32>) -> bool {
+        if !self.render_enabled {
+            // no hittest geometry
+            return false;
+        }
+
+        match self.render_shape {
+            ObjectRenderShape::Plane => {
+                // TODO: plane test
+                false
+            }
+            ObjectRenderShape::Cube => {
+                // TODO: cube test
+                false
+            }
+            ObjectRenderShape::Sphere => {
+                // TODO: sphere test
+                false
+            }
+            ObjectRenderShape::Cylinder => {
+                // TODO: cylinder test
+                false
+            }
+            ObjectRenderShape::Capsule => {
+                // TODO: capsule test
+                false
+            }
+        }
     }
 }
 
@@ -789,6 +819,11 @@ pub fn toggle_object_selection_additive(
         env.application_mut().selected_objects.remove(&id);
     }
 
+    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+}
+
+pub fn object_deselect_all(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
+    env.application_mut().selected_objects.clear();
     env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
 }
 

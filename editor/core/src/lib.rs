@@ -38,7 +38,7 @@ use crate::{
         },
     },
     model::{
-        Application, ApplicationMutation, ObjectRenderShape, PreviewEditToolType,
+        Application, ApplicationMutation, ObjectID, ObjectRenderShape, PreviewEditToolType,
         ViewFeedbackPreviewEditToolTypeChanged,
     },
     rendering::{
@@ -2988,14 +2988,7 @@ async fn run<'sys>(
     let mut delayed_render_messages = Vec::new();
     let mut docking_preview_state = None;
 
-    let mut preview_input_state = PreviewInputState {
-        new_viewport_size: None,
-        scroll_amount: 0.0,
-        grabbing: false,
-        grab_delta: Point::new_logical(0.0, 0.0),
-        key_input: PreviewKeyInputState::empty(),
-        pointer_pos: None,
-    };
+    let mut preview_input_state = PreviewInputState::new();
     let mut preview_state = PreviewMainThreadState::new();
 
     let last_window_state = 'try_restore_last_window_state: {
@@ -8231,9 +8224,23 @@ struct PreviewInputState {
     new_viewport_size: Option<Size<LogicalUnit>>,
     scroll_amount: f32,
     grabbing: bool,
+    clicked: bool,
     grab_delta: Point<LogicalUnit>,
     key_input: PreviewKeyInputState,
     pointer_pos: Option<Point<LogicalUnit>>,
+}
+impl PreviewInputState {
+    pub fn new() -> Self {
+        Self {
+            new_viewport_size: None,
+            scroll_amount: 0.0,
+            grabbing: false,
+            clicked: false,
+            grab_delta: Point::new_logical(0.0, 0.0),
+            key_input: PreviewKeyInputState::empty(),
+            pointer_pos: None,
+        }
+    }
 }
 
 enum ManipulationState {
@@ -8294,6 +8301,7 @@ impl PreviewMainThreadState {
 
         let scroll_amount = core::mem::replace(&mut input.scroll_amount, 0.0);
         let grab_delta = core::mem::replace(&mut input.grab_delta, Point::new_logical(0.0, 0.0));
+        let clicked = core::mem::replace(&mut input.clicked, false);
 
         loop {
             match self.manipulation_state {
@@ -8312,6 +8320,35 @@ impl PreviewMainThreadState {
                                 * amplifier
                                 * scroll_amount;
                         committed_state.main_camera_dirtified = true;
+                    }
+
+                    if clicked && let Some(pointer_pos) = input.pointer_pos {
+                        // TODO: 必要なら最適化する
+
+                        let ray = committed_state.main_camera.viewport_point_to_world_ray(
+                            peridot_math::Vector2(
+                                pointer_pos.x / committed_state.viewport_size.width,
+                                pointer_pos.y / committed_state.viewport_size.height,
+                            ),
+                            committed_state.viewport_size.width
+                                / committed_state.viewport_size.height,
+                        );
+                        let mut selected_oid = None;
+                        for (oid, o) in application.state.objects.iter().enumerate() {
+                            if o.hittest_ray(&ray) {
+                                selected_oid = Some(ObjectID::from_array_index(oid));
+                                break;
+                            }
+                        }
+
+                        match selected_oid {
+                            Some(oid) => {
+                                crate::model::select_object(application, oid);
+                            }
+                            None => {
+                                crate::model::object_deselect_all(application);
+                            }
+                        }
                     }
 
                     if input.grabbing {
@@ -9930,9 +9967,7 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        unsafe { &mut *self.input_state }.grabbing = true;
-
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::GRAB_POINTER
+        EventContinueControl::STOP_PROPAGATION
     }
 
     fn on_pointer_up(
@@ -9941,9 +9976,27 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
         _context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        unsafe { &mut *self.input_state }.grabbing = false;
+        EventContinueControl::STOP_PROPAGATION
+    }
 
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
+    fn on_drag_start(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        unsafe { &mut *self.input_state }.grabbing = true;
+        EventContinueControl::GRAB_POINTER | EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_drag_end(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        unsafe { &mut *self.input_state }.grabbing = false;
+        EventContinueControl::RELEASE_CAPTURE_ELEMENT | EventContinueControl::STOP_PROPAGATION
     }
 
     fn grab_delta_move(
@@ -9955,6 +10008,17 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
         let st = unsafe { &mut *self.input_state };
         st.grab_delta.x += args.delta.x;
         st.grab_delta.y += args.delta.y;
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        unsafe { &mut *self.input_state }.clicked = true;
 
         EventContinueControl::STOP_PROPAGATION
     }
