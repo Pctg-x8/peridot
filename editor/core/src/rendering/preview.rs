@@ -1103,7 +1103,7 @@ pub struct CommittedState {
     pub pushed_render_data: Vec<CommittedRenderData>,
     pub dirty_render_data: HashMap<usize, CommittedRenderData>,
     pub removed_render_data: HashSet<usize>,
-    pub handle_shape: HandleShape,
+    pub handle_shape: Option<HandleShape>,
     pub handle_to_world_transform: Matrix4F32,
     pub handle_pointing: Option<HandlePointing>,
     pub handle_data_dirtified: bool,
@@ -1183,7 +1183,7 @@ pub struct Renderer {
     user_meshes: Vec<MeshData>,
     user_renders: Vec<RenderData>,
     user_data_update_pending: bool,
-    handle_shape: HandleShape,
+    handle_shape: Option<HandleShape>,
     handle_pointing: Option<HandlePointing>,
     handle_data_update_offset: Option<usize>,
     needs_invalidate_render: bool,
@@ -1829,7 +1829,7 @@ impl Renderer {
             user_meshes: Vec::new(),
             user_renders: Vec::new(),
             user_data_update_pending: false,
-            handle_shape: HandleShape::Translation,
+            handle_shape: None,
             handle_pointing: None,
             handle_data_update_offset: None,
             needs_invalidate_render: false,
@@ -2728,7 +2728,8 @@ impl Renderer {
                 )
                 // render gizmos
                 .inject(|r| match self.handle_shape {
-                    HandleShape::Translation => r
+                    None => r,
+                    Some(HandleShape::Translation) => r
                         .bind_pipeline(
                             br::PipelineBindPoint::Graphics,
                             br::VkHandleRef::from_raw_ref(unsafe {
@@ -2788,7 +2789,7 @@ impl Renderer {
                             br::IndexType::U16,
                         )
                         .draw_indexed(TRANSLATE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
-                    HandleShape::Rotation => r
+                    Some(HandleShape::Rotation) => r
                         .bind_pipeline(
                             br::PipelineBindPoint::Graphics,
                             br::VkHandleRef::from_raw_ref(unsafe {
@@ -2848,7 +2849,7 @@ impl Renderer {
                             br::IndexType::U16,
                         )
                         .draw_indexed(ROTATION_HANDLE_AXES_DRAW_ICOUNT, 1, 0, 0, 0),
-                    HandleShape::Scale => r
+                    Some(HandleShape::Scale) => r
                         .bind_pipeline(
                             br::PipelineBindPoint::Graphics,
                             br::VkHandleRef::from_raw_ref(unsafe {

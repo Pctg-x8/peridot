@@ -175,7 +175,7 @@ pub fn launch() {
         pushed_render_data: Vec::new(),
         dirty_render_data: HashMap::new(),
         removed_render_data: HashSet::new(),
-        handle_shape: rendering::preview::HandleShape::Translation,
+        handle_shape: None,
         handle_pointing: None,
         handle_to_world_transform: peridot_math::Matrix4::ONE,
         handle_data_dirtified: false,
@@ -8783,6 +8783,7 @@ impl PreviewMainThreadState {
             }
         }
 
+        let current_handle_shape;
         // TODO: handle for multiple selected?(中心に置くとかになるかな)
         if let Some(&selected) = application.selected_objects.iter().next() {
             let handle_matrix = application.objects[selected.into_array_index()]
@@ -8796,15 +8797,11 @@ impl PreviewMainThreadState {
                 committed_state.handle_data_dirtified = true;
             }
 
-            let current_handle_shape = match crate::model::preview_edit_tool_type(application) {
+            current_handle_shape = Some(match crate::model::preview_edit_tool_type(application) {
                 PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
                 PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
                 PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
-            };
-            if current_handle_shape != committed_state.handle_shape {
-                committed_state.handle_shape = current_handle_shape;
-                committed_state.handle_data_dirtified = true;
-            }
+            });
 
             if !input.grabbing {
                 let current_handle_pointing = if let Some(pointer_pos) = input.pointer_pos {
@@ -8817,7 +8814,12 @@ impl PreviewMainThreadState {
                     );
 
                     let handle_scale = (committed_state.main_camera.position - handle_pos).len();
-                    Self::hittest_with_handle(current_handle_shape, handle_scale, &handle_pos, &ray)
+                    Self::hittest_with_handle(
+                        unsafe { current_handle_shape.unwrap_unchecked() },
+                        handle_scale,
+                        &handle_pos,
+                        &ray,
+                    )
                 } else {
                     None
                 };
@@ -8827,6 +8829,12 @@ impl PreviewMainThreadState {
                     committed_state.handle_data_dirtified = true;
                 }
             }
+        } else {
+            current_handle_shape = None;
+        }
+        if current_handle_shape != committed_state.handle_shape {
+            committed_state.handle_shape = current_handle_shape;
+            committed_state.handle_data_dirtified = true;
         }
     }
 
