@@ -28,6 +28,7 @@ impl ObjectID {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum ObjectRenderShape {
+    Plane,
     Cube,
     Sphere,
     Cylinder,

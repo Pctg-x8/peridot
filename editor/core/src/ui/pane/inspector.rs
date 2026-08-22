@@ -127,6 +127,7 @@ impl Presenter {
                     id,
                     eh.clone(),
                     vec![
+                        "Plane".into(),
                         "Cube".into(),
                         "Sphere".into(),
                         "Cylinder".into(),

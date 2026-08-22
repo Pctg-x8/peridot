@@ -472,12 +472,12 @@ enum DynamicBufferBlockState {
 
 /// 最小アロケーション単位
 const DB_TLSF_ALLOC_GRANULARITY: br::DeviceSize = 64; // float4x4
-/// ページサイズ（一括でDeviceMemory/Bufferとして確保するサイズ）
-const DB_TLSF_PAGE_SIZE: br::DeviceSize = 64 * 1024; // 64kb
 /// 最小アロケーション単位のビット位置
 const DB_TLSF_ALLOC_GRANULARITY_BITS: u32 = 6;
+/// ページサイズ（一括でDeviceMemory/Bufferとして確保するサイズ）
+const DB_TLSF_PAGE_SIZE: br::DeviceSize = 1 * 1024 * 1024;
 /// ページサイズのビット位置
-const DB_TLSF_PAGE_SIZE_BIT: u32 = 6 + 10;
+const DB_TLSF_PAGE_SIZE_BIT: u32 = 10 + 10;
 /// Second Levelの分割数のビット位置
 const DB_TLSF_LV2_SUBDIV_BITS: u32 = 4;
 /// Second Levelを抽出するためのビットマスク（大きさにからSecond Levelを抽出するのに使う）
@@ -644,7 +644,7 @@ impl DynamicBufferPage {
     #[tracing::instrument(name = "DynamicBufferPage::try_alloc", skip(self), ret(level = tracing::Level::TRACE))]
     fn try_alloc(&mut self, size: br::DeviceSize) -> Option<br::DeviceSize> {
         let size = rup2_u64(size, DB_TLSF_ALLOC_GRANULARITY);
-        assert!(0 < size && size <= DB_TLSF_PAGE_SIZE);
+        assert!(0 < size && size <= DB_TLSF_PAGE_SIZE, "size={size}");
 
         let (f, s) = Self::mapping(size);
         tracing::debug!(f, s, "tlsf level");

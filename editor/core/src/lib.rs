@@ -8117,6 +8117,7 @@ impl PreviewMainThreadState {
         }
     }
 
+    #[profiler::instrument("MainThread.Preview.Update")]
     pub fn update(
         &mut self,
         committed_state: &mut rendering::preview::CommittedState,
@@ -8383,133 +8384,175 @@ impl PreviewMainThreadState {
     }
 }
 
+const PLANE_VERTICES: &[[peridot_math::Vector4F32; 2]] = &[
+    [
+        peridot_math::Vector4(-0.5, 0.0, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, 0.0, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, 0.0, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, 0.0, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+];
+const PLANE_INDICES: &[u16] = &[0, 1, 2, 2, 3, 0];
+
+const CUBE_VERTICES: &[[peridot_math::Vector4F32; 2]] = &[
+    // +x
+    [
+        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
+    ],
+    // -x
+    [
+        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
+    ],
+    // +y
+    [
+        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+    ],
+    // -y
+    [
+        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+    ],
+    // +z
+    [
+        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
+    ],
+    // -z
+    [
+        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+    ],
+    [
+        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
+        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
+    ],
+];
+const CUBE_INDICES: &[u16] = &[
+    0, 1, 2, 2, 1, 3, // +x
+    4, 5, 6, 6, 5, 7, // -x
+    8, 9, 10, 10, 9, 11, // +y
+    12, 13, 14, 14, 13, 15, // -y
+    16, 17, 18, 18, 17, 19, // +z
+    20, 21, 22, 22, 21, 23, // -z
+];
+
 fn mesh_data_for_render_shape(shape: ObjectRenderShape) -> rendering::preview::CommittedMeshData {
     match shape {
-        ObjectRenderShape::Cube => {
-            let mut vbuf_bytes = vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * 24];
-            let mut ibuf_bytes = vec![0u8; size_of::<u16>() * 36];
+        ObjectRenderShape::Plane => {
+            let mut vbuf_bytes = vec![0u8; size_of_val(PLANE_VERTICES)];
+            let mut ibuf_bytes = vec![0u8; size_of_val(PLANE_INDICES)];
             unsafe {
-                const VERTICES: &[[peridot_math::Vector4F32; 2]] = &[
-                    // +x
-                    [
-                        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
-                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
-                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
-                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
-                        peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-                    ],
-                    // -x
-                    [
-                        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
-                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
-                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
-                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
-                        peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-                    ],
-                    // +y
-                    [
-                        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-                    ],
-                    // -y
-                    [
-                        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-                    ],
-                    // +z
-                    [
-                        peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-                    ],
-                    // -z
-                    [
-                        peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-                    ],
-                    [
-                        peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
-                        peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-                    ],
-                ];
-                const INDICES: &[u16] = &[
-                    0, 1, 2, 2, 1, 3, // +x
-                    4, 5, 6, 6, 5, 7, // -x
-                    8, 9, 10, 10, 9, 11, // +y
-                    12, 13, 14, 14, 13, 15, // -y
-                    16, 17, 18, 18, 17, 19, // +z
-                    20, 21, 22, 22, 21, 23, // -z
-                ];
+                vbuf_bytes.as_mut_ptr().copy_from_nonoverlapping(
+                    PLANE_VERTICES.as_ptr().cast(),
+                    size_of_val(PLANE_VERTICES),
+                );
+                ibuf_bytes.as_mut_ptr().copy_from_nonoverlapping(
+                    PLANE_INDICES.as_ptr().cast(),
+                    size_of_val(PLANE_INDICES),
+                );
+            }
 
-                vbuf_bytes
-                    .as_mut_ptr()
-                    .cast::<[peridot_math::Vector4F32; 2]>()
-                    .copy_from_nonoverlapping(VERTICES.as_ptr(), VERTICES.len());
-                ibuf_bytes
-                    .as_mut_ptr()
-                    .cast::<u16>()
-                    .copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
+            rendering::preview::CommittedMeshData {
+                vertices: std::sync::Arc::from(vbuf_bytes),
+                vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+                indices: std::sync::Arc::from(ibuf_bytes),
+                index_type: rendering::preview::IndexType::U16,
+                sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..6)]),
+            }
+        }
+        ObjectRenderShape::Cube => {
+            let mut vbuf_bytes = vec![0u8; size_of_val(CUBE_VERTICES)];
+            let mut ibuf_bytes = vec![0u8; size_of_val(CUBE_INDICES)];
+            unsafe {
+                vbuf_bytes.as_mut_ptr().copy_from_nonoverlapping(
+                    CUBE_VERTICES.as_ptr().cast(),
+                    size_of_val(CUBE_VERTICES),
+                );
+                ibuf_bytes.as_mut_ptr().copy_from_nonoverlapping(
+                    CUBE_INDICES.as_ptr().cast(),
+                    size_of_val(CUBE_INDICES),
+                );
             }
 
             rendering::preview::CommittedMeshData {
@@ -8520,9 +8563,303 @@ fn mesh_data_for_render_shape(shape: ObjectRenderShape) -> rendering::preview::C
                 sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
             }
         }
-        ObjectRenderShape::Sphere => todo!("sphere mesh"),
-        ObjectRenderShape::Cylinder => todo!("cylinder mesh"),
-        ObjectRenderShape::Capsule => todo!("capsule mesh"),
+        ObjectRenderShape::Sphere => {
+            const HDIV: usize = 20;
+            const VDIV: usize = 10;
+
+            let vertex_count = HDIV * VDIV;
+            let index_count = (HDIV * VDIV) * 6;
+            let mut vbuf_bytes =
+                vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * vertex_count];
+            let mut ibuf_bytes = vec![0u8; size_of::<u16>() * index_count];
+            tracing::debug!(vertex_count, index_count);
+            unsafe {
+                let vt = vbuf_bytes
+                    .as_mut_ptr()
+                    .cast::<[peridot_math::Vector4F32; 2]>();
+                let ix = ibuf_bytes.as_mut_ptr().cast::<u16>();
+
+                // TODO: v = 0とv = VDIV - 1を特殊処理したほうがよさそう(形状がfanになる)
+                for v in 0..VDIV {
+                    for h in 0..HDIV {
+                        let ix_base = (h + v * HDIV) * 6;
+
+                        let (y, yc) =
+                            (core::f32::consts::PI * (v as f32 / VDIV as f32 - 0.5)).sin_cos();
+                        let (x, z) = (core::f32::consts::TAU * h as f32 / HDIV as f32).sin_cos();
+                        let n = peridot_math::Vector3(x * yc, y, z * yc).normalize();
+
+                        vt.add(h + v * HDIV).write_unaligned([
+                            peridot_math::Vector4(x * yc * 0.5, y * 0.5, z * yc * 0.5, 1.0),
+                            n.clone().with_w(0.0),
+                        ]);
+                        let v0 = v;
+                        let v1 = (v + 1) % VDIV;
+                        let h0 = h;
+                        let h1 = (h + 1) % HDIV;
+                        ix.add(ix_base + 0).write_unaligned((h0 + v0 * HDIV) as _);
+                        ix.add(ix_base + 1).write_unaligned((h1 + v0 * HDIV) as _);
+                        ix.add(ix_base + 2).write_unaligned((h1 + v1 * HDIV) as _);
+                        ix.add(ix_base + 3).write_unaligned((h0 + v0 * HDIV) as _);
+                        ix.add(ix_base + 4).write_unaligned((h1 + v1 * HDIV) as _);
+                        ix.add(ix_base + 5).write_unaligned((h0 + v1 * HDIV) as _);
+                    }
+                }
+            }
+
+            rendering::preview::CommittedMeshData {
+                vertices: std::sync::Arc::from(vbuf_bytes),
+                vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+                indices: std::sync::Arc::from(ibuf_bytes),
+                index_type: rendering::preview::IndexType::U16,
+                sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(
+                    0..index_count as u32,
+                )]),
+            }
+        }
+        ObjectRenderShape::Cylinder => {
+            const DIV_COUNT: usize = 16;
+
+            let vertex_count = 2 + DIV_COUNT * 2 + DIV_COUNT * 2;
+            let index_count = (DIV_COUNT * 3) * 2 + (DIV_COUNT * 6);
+            let mut vbuf_bytes =
+                vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * vertex_count];
+            let mut ibuf_bytes = vec![0u8; size_of::<u16>() * index_count];
+            unsafe {
+                let v = vbuf_bytes
+                    .as_mut_ptr()
+                    .cast::<[peridot_math::Vector4F32; 2]>();
+                let i = ibuf_bytes.as_mut_ptr().cast::<u16>();
+
+                // top/bottom center point
+                v.add(0).write_unaligned([
+                    peridot_math::Vector4(0.0, 0.5, 0.0, 1.0),
+                    peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                ]);
+                v.add(1).write_unaligned([
+                    peridot_math::Vector4(0.0, -0.5, 0.0, 1.0),
+                    peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                ]);
+
+                let top_plane_vts_index_base = 2;
+                let top_plane_ix_base = 0;
+                let bottom_plane_vts_index_base = top_plane_vts_index_base + DIV_COUNT;
+                let bottom_plane_ix_base = top_plane_ix_base + DIV_COUNT * 3;
+                let side_plane_vts_index_base = bottom_plane_vts_index_base + DIV_COUNT;
+                let side_plane_ix_base = bottom_plane_ix_base + DIV_COUNT * 3;
+                for n in 0..DIV_COUNT {
+                    let th = core::f32::consts::TAU * n as f32 / DIV_COUNT as f32;
+                    let (s, c) = th.sin_cos();
+
+                    // top/bottom plane
+                    v.add(top_plane_vts_index_base + n).write_unaligned([
+                        peridot_math::Vector4(s * 0.5, 0.5, c * 0.5, 1.0),
+                        peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                    ]);
+                    v.add(bottom_plane_vts_index_base + n).write_unaligned([
+                        peridot_math::Vector4(s * 0.5, -0.5, c * 0.5, 1.0),
+                        peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                    ]);
+                    i.add(top_plane_ix_base + n * 3 + 0).write_unaligned(0);
+                    i.add(top_plane_ix_base + n * 3 + 1)
+                        .write_unaligned((top_plane_vts_index_base + (n + 1) % DIV_COUNT) as _);
+                    i.add(top_plane_ix_base + n * 3 + 2)
+                        .write_unaligned((top_plane_vts_index_base + n) as _);
+                    i.add(bottom_plane_ix_base + n * 3 + 0).write_unaligned(1);
+                    i.add(bottom_plane_ix_base + n * 3 + 1)
+                        .write_unaligned((bottom_plane_vts_index_base + n) as _);
+                    i.add(bottom_plane_ix_base + n * 3 + 2)
+                        .write_unaligned((bottom_plane_vts_index_base + (n + 1) % DIV_COUNT) as _);
+
+                    // side plane
+                    v.add(side_plane_vts_index_base + n * 2 + 0)
+                        .write_unaligned([
+                            peridot_math::Vector4(s * 0.5, 0.5, c * 0.5, 1.0),
+                            peridot_math::Vector4(s, 0.0, c, 0.0),
+                        ]);
+                    v.add(side_plane_vts_index_base + n * 2 + 1)
+                        .write_unaligned([
+                            peridot_math::Vector4(s * 0.5, -0.5, c * 0.5, 1.0),
+                            peridot_math::Vector4(s, 0.0, c, 0.0),
+                        ]);
+                    i.add(side_plane_ix_base + n * 6 + 0)
+                        .write_unaligned((side_plane_vts_index_base + n * 2 + 0) as _);
+                    i.add(side_plane_ix_base + n * 6 + 1).write_unaligned(
+                        (side_plane_vts_index_base + ((n + 1) % DIV_COUNT) * 2 + 0) as _,
+                    );
+                    i.add(side_plane_ix_base + n * 6 + 2)
+                        .write_unaligned((side_plane_vts_index_base + n * 2 + 1) as _);
+                    i.add(side_plane_ix_base + n * 6 + 3).write_unaligned(
+                        (side_plane_vts_index_base + ((n + 1) % DIV_COUNT) * 2 + 0) as _,
+                    );
+                    i.add(side_plane_ix_base + n * 6 + 4).write_unaligned(
+                        (side_plane_vts_index_base + ((n + 1) % DIV_COUNT) * 2 + 1) as _,
+                    );
+                    i.add(side_plane_ix_base + n * 6 + 5)
+                        .write_unaligned((side_plane_vts_index_base + n * 2 + 1) as _);
+                }
+            }
+
+            rendering::preview::CommittedMeshData {
+                vertices: std::sync::Arc::from(vbuf_bytes),
+                vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+                indices: std::sync::Arc::from(ibuf_bytes),
+                index_type: rendering::preview::IndexType::U16,
+                sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(
+                    0..index_count as u32,
+                )]),
+            }
+        }
+        ObjectRenderShape::Capsule => {
+            const HDIV: usize = 20;
+            const VDIV: usize = 3;
+
+            let vertex_count = 2 + (HDIV * VDIV) * 2;
+            let index_count = HDIV * 6 + (HDIV * VDIV) * 12 + HDIV * 6;
+            let mut vbuf_bytes =
+                vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * vertex_count];
+            let mut ibuf_bytes = vec![0u8; size_of::<u16>() * index_count];
+            tracing::debug!(vertex_count, index_count);
+            unsafe {
+                let vt = vbuf_bytes
+                    .as_mut_ptr()
+                    .cast::<[peridot_math::Vector4F32; 2]>();
+                let ix = ibuf_bytes.as_mut_ptr().cast::<u16>();
+
+                // peaks
+                vt.write_unaligned([
+                    peridot_math::Vector4(0.0, 0.5, 0.0, 1.0),
+                    peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
+                ]);
+                vt.add(1).write_unaligned([
+                    peridot_math::Vector4(0.0, -0.5, 0.0, 1.0),
+                    peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
+                ]);
+
+                // first v layer(v 0 -> 1)
+                let v_base = 2;
+                for h in 0..HDIV {
+                    let (y, yc) = (core::f32::consts::PI * (0.5 / VDIV as f32 - 0.5)).sin_cos();
+                    let (x, z) = (core::f32::consts::TAU * h as f32 / HDIV as f32).sin_cos();
+                    let n = peridot_math::Vector3(x * yc, y, z * yc).normalize();
+                    vt.add(v_base + h * 2 + 0).write_unaligned([
+                        peridot_math::Vector4(x * yc * 0.25, y * 0.25 - 0.25, z * yc * 0.25, 1.0),
+                        n.with_w(0.0),
+                    ]);
+                    let (y, yc) = (core::f32::consts::PI * (-0.5 / VDIV as f32 + 0.5)).sin_cos();
+                    let n = peridot_math::Vector3(x * yc, y, z * yc).normalize();
+                    vt.add(v_base + h * 2 + 1).write_unaligned([
+                        peridot_math::Vector4(x * yc * 0.25, y * 0.25 + 0.25, z * yc * 0.25, 1.0),
+                        n.with_w(0.0),
+                    ]);
+
+                    ix.add(h * 6 + 0).write_unaligned(1);
+                    ix.add(h * 6 + 1).write_unaligned((v_base + h * 2 + 0) as _);
+                    ix.add(h * 6 + 2)
+                        .write_unaligned((v_base + ((h + 1) % HDIV) * 2 + 0) as _);
+                    ix.add(h * 6 + 3).write_unaligned(0);
+                    ix.add(h * 6 + 5).write_unaligned((v_base + h * 2 + 1) as _);
+                    ix.add(h * 6 + 4)
+                        .write_unaligned((v_base + ((h + 1) % HDIV) * 2 + 1) as _);
+                }
+
+                // middle v layers
+                for v in 2..=VDIV {
+                    for h in 0..HDIV {
+                        let ix_base = (h + (v - 1) * HDIV) * 12;
+
+                        let (y, yc) = (core::f32::consts::PI
+                            * (0.5 * v as f32 / VDIV as f32 - 0.5))
+                            .sin_cos();
+                        let (x, z) = (core::f32::consts::TAU * h as f32 / HDIV as f32).sin_cos();
+                        let n = peridot_math::Vector3(x * yc, y, z * yc).normalize();
+
+                        vt.add(v_base + (h + (v - 1) * HDIV) * 2 + 0)
+                            .write_unaligned([
+                                peridot_math::Vector4(
+                                    x * yc * 0.25,
+                                    y * 0.25 - 0.25,
+                                    z * yc * 0.25,
+                                    1.0,
+                                ),
+                                n.clone().with_w(0.0),
+                            ]);
+                        let v0 = v - 2;
+                        let v1 = v - 1;
+                        let h0 = h;
+                        let h1 = (h + 1) % HDIV;
+                        ix.add(ix_base + 0)
+                            .write_unaligned((v_base + (h0 + v0 * HDIV) * 2 + 0) as _);
+                        ix.add(ix_base + 2)
+                            .write_unaligned((v_base + (h1 + v0 * HDIV) * 2 + 0) as _);
+                        ix.add(ix_base + 1)
+                            .write_unaligned((v_base + (h1 + v1 * HDIV) * 2 + 0) as _);
+                        ix.add(ix_base + 3)
+                            .write_unaligned((v_base + (h0 + v0 * HDIV) * 2 + 0) as _);
+                        ix.add(ix_base + 5)
+                            .write_unaligned((v_base + (h1 + v1 * HDIV) * 2 + 0) as _);
+                        ix.add(ix_base + 4)
+                            .write_unaligned((v_base + (h0 + v1 * HDIV) * 2 + 0) as _);
+
+                        let (y, yc) = (core::f32::consts::PI
+                            * (-0.5 * v as f32 / VDIV as f32 + 0.5))
+                            .sin_cos();
+                        let n = peridot_math::Vector3(x * yc, y, z * yc).normalize();
+
+                        vt.add(v_base + (h + (v - 1) * HDIV) * 2 + 1)
+                            .write_unaligned([
+                                peridot_math::Vector4(
+                                    x * yc * 0.25,
+                                    y * 0.25 + 0.25,
+                                    z * yc * 0.25,
+                                    1.0,
+                                ),
+                                n.clone().with_w(0.0),
+                            ]);
+                        let v0 = v - 2;
+                        let v1 = v - 1;
+                        let h0 = h;
+                        let h1 = (h + 1) % HDIV;
+                        ix.add(ix_base + 6)
+                            .write_unaligned((v_base + (h0 + v0 * HDIV) * 2 + 1) as _);
+                        ix.add(ix_base + 7)
+                            .write_unaligned((v_base + (h1 + v0 * HDIV) * 2 + 1) as _);
+                        ix.add(ix_base + 8)
+                            .write_unaligned((v_base + (h1 + v1 * HDIV) * 2 + 1) as _);
+                        ix.add(ix_base + 9)
+                            .write_unaligned((v_base + (h0 + v0 * HDIV) * 2 + 1) as _);
+                        ix.add(ix_base + 10)
+                            .write_unaligned((v_base + (h1 + v1 * HDIV) * 2 + 1) as _);
+                        ix.add(ix_base + 11)
+                            .write_unaligned((v_base + (h0 + v1 * HDIV) * 2 + 1) as _);
+                    }
+                }
+
+                // side planes
+                for h in 0..HDIV {
+                    let ix_base = HDIV * 6 + (HDIV * VDIV) * 12 + h * 6;
+                    let v_base0 = v_base + (HDIV * (VDIV - 1) + h) * 2;
+                    let v_base1 = v_base + (HDIV * (VDIV - 1) + (h + 1) % HDIV) * 2;
+
+                    ix.add(ix_base + 0).write_unaligned((v_base0 + 0) as _);
+                    ix.add(ix_base + 1).write_unaligned((v_base0 + 1) as _);
+                    ix.add(ix_base + 2).write_unaligned((v_base1 + 0) as _);
+                    ix.add(ix_base + 3).write_unaligned((v_base1 + 0) as _);
+                    ix.add(ix_base + 5).write_unaligned((v_base1 + 1) as _);
+                    ix.add(ix_base + 4).write_unaligned((v_base0 + 1) as _);
+                }
+            }
+
+            rendering::preview::CommittedMeshData {
+                vertices: std::sync::Arc::from(vbuf_bytes),
+                vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
+                indices: std::sync::Arc::from(ibuf_bytes),
+                index_type: rendering::preview::IndexType::U16,
+                sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(
+                    0..index_count as u32,
+                )]),
+            }
+        }
     }
 }
 
