@@ -1185,7 +1185,7 @@ pub struct Renderer {
     user_data_update_pending: bool,
     handle_shape: HandleShape,
     handle_pointing: Option<HandlePointing>,
-    handle_to_world_transform: Matrix4F32,
+    handle_data_update_offset: Option<usize>,
     needs_invalidate_render: bool,
     valid: bool,
 }
@@ -1515,10 +1515,7 @@ impl Renderer {
                 &raw mut (*p).camera_data_ubuf,
                 CameraData::new(&init_state.main_camera, init_rt.aspect_wh()),
             );
-            core::ptr::write(
-                &raw mut (*p).handle_data_ubuf,
-                Matrix4F32::translation(Vector3(1.0, 0.0, 0.0)).transpose(),
-            );
+            core::ptr::write(&raw mut (*p).handle_data_ubuf, Matrix4F32::ONE);
 
             gen_translate_handle_mesh(
                 ptr.ptr()
@@ -1834,7 +1831,7 @@ impl Renderer {
             user_data_update_pending: false,
             handle_shape: HandleShape::Translation,
             handle_pointing: None,
-            handle_to_world_transform: Matrix4::ONE,
+            handle_data_update_offset: None,
             needs_invalidate_render: false,
             valid: false,
         }
@@ -1956,7 +1953,7 @@ impl Renderer {
                     .mapped_ptr
                     .byte_add(object_ubuf)
                     .cast::<Matrix4F32>()
-                    .write(r.object_to_world);
+                    .write(r.object_to_world.transpose());
             }
             self.user_data_update_pending = true;
 
@@ -1996,7 +1993,7 @@ impl Renderer {
                     .mapped_ptr
                     .byte_add(object_ubuf)
                     .cast::<Matrix4F32>()
-                    .write(d.object_to_world);
+                    .write(d.object_to_world.transpose());
             }
             self.user_data_update_pending = true;
 
@@ -2008,6 +2005,20 @@ impl Renderer {
         if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
             self.handle_shape = committed_state.handle_shape;
             self.handle_pointing = committed_state.handle_pointing;
+            let handle_data_update_offset = self.scratch_staging.reserve(size_of::<Matrix4F32>());
+            unsafe {
+                self.scratch_staging
+                    .mapped_ptr
+                    .byte_add(handle_data_update_offset)
+                    .cast::<Matrix4F32>()
+                    .write(
+                        committed_state
+                            .handle_to_world_transform
+                            .clone()
+                            .transpose(),
+                    );
+            }
+            self.handle_data_update_offset = Some(handle_data_update_offset);
             self.needs_invalidate_render = true;
         }
     }
@@ -2394,9 +2405,26 @@ impl Renderer {
         self.update_command_pending = false;
         let user_data_update_pending =
             core::mem::replace(&mut self.user_data_update_pending, false);
-        if self.pending_camera_data_updates.is_some() || user_data_update_pending {
+        if self.pending_camera_data_updates.is_some()
+            || self.handle_data_update_offset.is_some()
+            || user_data_update_pending
+        {
             // needs update device data
             self.scratch_staging.ops_before_copy(device);
+
+            let mut internal_uniform_copies = Vec::with_capacity(2);
+            if let Some(bo) = self.pending_camera_data_updates.take() {
+                internal_uniform_copies.push(br::BufferCopy::copy_data::<CameraData>(
+                    bo as _,
+                    self.camera_data_ubuf_range.start,
+                ));
+            }
+            if let Some(offset) = self.handle_data_update_offset.take() {
+                internal_uniform_copies.push(br::BufferCopy::copy_data::<Matrix4F32>(
+                    offset as _,
+                    self.handle_data_ubuf_range.start,
+                ));
+            }
 
             unsafe {
                 br::vkfn_wrapper::reset_command_pool(
@@ -2414,16 +2442,16 @@ impl Renderer {
                 .expect("preview.validate.update_command_buffer.begin");
             }
             br::CmdRecord::new(unsafe { br::VkHandleRefMut::dangling(self.update_command_buffer) })
-                .inject(|r| match self.pending_camera_data_updates.take() {
-                    None => r,
-                    Some(bo) => r.copy_buffer(
-                        br::VkHandleRef::from_raw_ref(&self.scratch_staging.buffer),
-                        br::VkHandleRef::from_raw_ref(&self.internal_uniform_buffer),
-                        &[br::BufferCopy::copy_data::<CameraData>(
-                            bo as _,
-                            self.camera_data_ubuf_range.start,
-                        )],
-                    ),
+                .inject(|r| {
+                    if internal_uniform_copies.is_empty() {
+                        r
+                    } else {
+                        r.copy_buffer(
+                            br::VkHandleRef::from_raw_ref(&self.scratch_staging.buffer),
+                            br::VkHandleRef::from_raw_ref(&self.internal_uniform_buffer),
+                            &internal_uniform_copies,
+                        )
+                    }
                 })
                 .inject(|r| {
                     let mut std_buffer_copies = HashMap::new();

@@ -3,7 +3,7 @@ use std::{
     num::NonZeroUsize,
 };
 
-use peridot_math::{One, Vector3F32};
+use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Vector3F32};
 
 use crate::uikit::{ViewFeedbackContext, ViewFeedbackRegistry};
 
@@ -20,7 +20,7 @@ impl ObjectID {
         Self(unsafe { NonZeroUsize::new_unchecked(v.checked_add(1).expect("too many objects!")) })
     }
 
-    const fn into_array_index(self) -> usize {
+    pub const fn into_array_index(self) -> usize {
         self.0.get() - 1
     }
 }
@@ -36,8 +36,8 @@ pub enum ObjectRenderShape {
 }
 
 pub struct Object {
-    parent: Option<ObjectID>,
-    children: Vec<ObjectID>,
+    pub parent: Option<ObjectID>,
+    pub children: Vec<ObjectID>,
     name: String,
     pub local_position: peridot_math::Vector3F32,
     pub local_rotation_euler: peridot_math::Vector3F32,
@@ -70,6 +70,17 @@ impl Object {
         self.children = Vec::new();
         self.parent = None;
     }
+
+    #[inline(always)]
+    pub fn compute_local_matrix(&self) -> Matrix4F32 {
+        Matrix4::trs(
+            self.local_position,
+            Quaternion::from_euler_zyx(
+                self.local_rotation_euler * (core::f32::consts::TAU / 360.0),
+            ),
+            self.local_scale,
+        )
+    }
 }
 
 /// Logical Application Model
@@ -77,9 +88,10 @@ pub struct Application {
     pub objects: Vec<Object>,
     free_object_indices: BTreeSet<usize>,
     root_objects: Vec<ObjectID>,
-    selected_objects: HashSet<ObjectID>,
+    pub selected_objects: HashSet<ObjectID>,
     preview_edit_tool_type: PreviewEditToolType,
     pub removed_object_render_ids: Vec<usize>,
+    pub world_matrix_recompute_targets: HashSet<ObjectID>,
 }
 impl Application {
     pub fn new() -> Self {
@@ -90,6 +102,7 @@ impl Application {
             selected_objects: HashSet::new(),
             preview_edit_tool_type: PreviewEditToolType::Translate,
             removed_object_render_ids: Vec::new(),
+            world_matrix_recompute_targets: HashSet::new(),
         }
     }
 
@@ -172,6 +185,10 @@ impl Application {
 
     pub fn object(&self, id: ObjectID) -> &Object {
         &self.objects[id.into_array_index()]
+    }
+
+    fn should_world_matrix_recompute(&mut self, id: ObjectID) {
+        self.world_matrix_recompute_targets.insert(id);
     }
 }
 
@@ -369,6 +386,7 @@ pub fn object_set_parent(
     env.application_mut().objects[parent.into_array_index()]
         .children
         .push(id);
+    env.application_mut().should_world_matrix_recompute(id);
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
 }
 
@@ -384,7 +402,8 @@ pub fn object_detach_parent(env: &mut (impl ApplicationMutableAccess + ?Sized), 
     env.application_mut().objects[parent.into_array_index()]
         .children
         .retain(|&id| id != child);
-    env.application_mut().root_objects.push(parent);
+    env.application_mut().root_objects.push(child);
+    env.application_mut().should_world_matrix_recompute(child);
 
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
 }
@@ -434,6 +453,8 @@ pub fn set_selected_object_local_translate_x(
     };
 
     object_modify_data(env, selected, |o| o.local_position.0 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_translate_y(
@@ -445,6 +466,8 @@ pub fn set_selected_object_local_translate_y(
     };
 
     object_modify_data(env, selected, |o| o.local_position.1 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_translate_z(
@@ -456,6 +479,8 @@ pub fn set_selected_object_local_translate_z(
     };
 
     object_modify_data(env, selected, |o| o.local_position.2 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_rotation_x(
@@ -467,6 +492,8 @@ pub fn set_selected_object_local_rotation_x(
     };
 
     object_modify_data(env, selected, |o| o.local_rotation_euler.0 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_rotation_y(
@@ -478,6 +505,8 @@ pub fn set_selected_object_local_rotation_y(
     };
 
     object_modify_data(env, selected, |o| o.local_rotation_euler.1 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_rotation_z(
@@ -489,6 +518,8 @@ pub fn set_selected_object_local_rotation_z(
     };
 
     object_modify_data(env, selected, |o| o.local_rotation_euler.2 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_scale_x(
@@ -500,6 +531,8 @@ pub fn set_selected_object_local_scale_x(
     };
 
     object_modify_data(env, selected, |o| o.local_scale.0 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_scale_y(
@@ -511,6 +544,8 @@ pub fn set_selected_object_local_scale_y(
     };
 
     object_modify_data(env, selected, |o| o.local_scale.1 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn set_selected_object_local_scale_z(
@@ -522,6 +557,21 @@ pub fn set_selected_object_local_scale_z(
     };
 
     object_modify_data(env, selected, |o| o.local_scale.2 = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
+}
+
+pub fn set_selected_object_local_scale(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    v: Vector3F32,
+) {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return;
+    };
+
+    object_modify_data(env, selected, |o| o.local_scale = v);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn apply_selected_object_local_translate_delta(
@@ -533,6 +583,8 @@ pub fn apply_selected_object_local_translate_delta(
     };
 
     object_modify_data(env, selected, |o| o.local_position += delta);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn apply_selected_object_local_rotate_delta(
@@ -544,6 +596,8 @@ pub fn apply_selected_object_local_rotate_delta(
     };
 
     object_modify_data(env, selected, |o| o.local_rotation_euler += delta);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn apply_selected_object_local_scale_delta(
@@ -555,6 +609,8 @@ pub fn apply_selected_object_local_scale_delta(
     };
 
     object_modify_data(env, selected, |o| o.local_scale += delta);
+    env.application_mut()
+        .should_world_matrix_recompute(selected);
 }
 
 pub fn selected_object_render_is_enabled(env: &(impl ApplicationAccess + ?Sized)) -> bool {

@@ -32,7 +32,7 @@ func vertMain(data: VshInput)->VshOutput {
   VshOutput vo;
   vo.pos = mul(cameraData.worldToClipSpace,
                mul(objectData.objectToWorldSpace, data.pos));
-  vo.toFragment.norm = mul(objectData.objectToWorldSpace, data.normal);
+  vo.toFragment.norm = normalize(mul(objectData.objectToWorldSpace, data.normal));
   return vo;
 }
 

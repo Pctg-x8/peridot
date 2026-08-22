@@ -289,6 +289,27 @@ impl Camera {
         };
     }
 
+    /// Converts a viewport point to a world point.
+    ///
+    /// `viewport_point` is in normalized viewport coordinates(`(0, 0)` for left-top of the viewport, `(1, 1)` for right-bottom)
+    pub fn viewport_point_to_world_point(
+        &self,
+        viewport_point: Vector2<f32>,
+        viewport_aspect_wh: f32,
+    ) -> Vector3<f32> {
+        let pos_clip = Vector3(
+            2.0 * viewport_point.0 - 1.0,
+            2.0 * viewport_point.1 - 1.0,
+            0.0,
+        );
+
+        let vp_inv = self
+            .view_projection_matrix(viewport_aspect_wh)
+            .inverse()
+            .expect("cannot inverse?");
+        Vector3::from(vp_inv.clone() * pos_clip)
+    }
+
     /// Converts a viewport point to a world ray.
     ///
     /// `viewport_point` is in normalized viewport coordinates(`(0, 0)` for left-top of the viewport, `(1, 1)` for right-bottom)

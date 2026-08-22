@@ -894,6 +894,73 @@ impl<T> Quaternion<T> {
         Self(axis.0 * s, axis.1 * s, axis.2 * s, c)
     }
 
+    /// Creates a new quaternion from Euler angles in ZYX order.
+    pub fn from_euler_zyx(euler: Vector3<T>) -> Self
+    where
+        T: Copy + Real + One,
+    {
+        /* applies euler rotation in ZYX order...
+         * qz = Self(0.0, 0.0, (euler.2 / 2.0).sin(), (euler.2 / 2.0).cos())
+         * qy = Self(0.0, (euler.1 / 2.0).sin(), 0.0, (euler.1 / 2.0).cos())
+         * qx = Self((euler.0 / 2.0).sin(), 0.0, 0.0, (euler.0 / 2.0).cos())
+         * qzy = qz * qy
+         *   = Self(
+         *       qz.3 * qy.0 + qz.0 * qy.3 + qz.1 * qy.2 - qz.2 * qy.1,
+         *       qz.3 * qy.1 - qz.0 * qy.2 + qz.1 * qy.3 + qz.2 * qy.0,
+         *       qz.3 * qy.2 + qz.0 * qy.1 - qz.1 * qy.0 + qz.2 * qy.3,
+         *       qz.3 * qy.3 - qz.0 * qy.0 - qz.1 * qy.1 - qz.2 * qy.2,
+         *     )
+         *   = Self(
+         *       -qz.2 * qy.1,
+         *       qz.3 * qy.1,
+         *       qz.2 * qy.3,
+         *       qz.3 * qy.3,
+         *     )
+         *   = Self(
+         *       -(euler.2 / 2.0).sin() * (euler.1 / 2.0).sin(),
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).sin(),
+         *       (euler.2 / 2.0).sin() * (euler.1 / 2.0).cos(),
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).cos()
+         *     )
+         * q = qzy * qx
+         *   = Self(
+         *       qyz.3 * qx.0 + qzy.0 * qx.3 + qzy.1 * qx.2 - qzy.2 * qx.1,
+         *       qyz.3 * qx.1 - qzy.0 * qx.2 + qzy.1 * qx.3 + qzy.2 * qx.0,
+         *       qyz.3 * qx.2 + qzy.0 * qx.1 - qzy.1 * qx.0 + qzy.2 * qx.3,
+         *       qyz.3 * qx.3 - qzy.0 * qx.0 - qzy.1 * qx.1 - qzy.2 * qx.2,
+         *     )
+         *   = Self(
+         *       qyz.3 * qx.0 + qzy.0 * qx.3,
+         *       qzy.1 * qx.3 + qzy.2 * qx.0,
+         *       -qzy.1 * qx.0 + qzy.2 * qx.3,
+         *       qyz.3 * qx.3 - qzy.0 * qx.0,
+         *     )
+         *   = Self(
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).sin() - (euler.2 / 2.0).sin() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).cos(),
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).cos() + (euler.2 / 2.0).sin() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).sin(),
+         *       -(euler.2 / 2.0).cos() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).sin() + (euler.2 / 2.0).sin() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).cos(),
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).cos() + (euler.2 / 2.0).sin() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).sin(),
+         *     )
+         *   = Self(
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).sin() - (euler.2 / 2.0).sin() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).cos(),
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).cos() + (euler.2 / 2.0).sin() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).sin(),
+         *       (euler.2 / 2.0).sin() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).cos() - (euler.2 / 2.0).cos() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).sin(),
+         *       (euler.2 / 2.0).cos() * (euler.1 / 2.0).cos() * (euler.0 / 2.0).cos() + (euler.2 / 2.0).sin() * (euler.1 / 2.0).sin() * (euler.0 / 2.0).sin(),
+         *     )
+         */
+
+        let (sz, cz) = (euler.2 / (T::ONE + T::ONE)).sin_cos();
+        let (sy, cy) = (euler.1 / (T::ONE + T::ONE)).sin_cos();
+        let (sx, cx) = (euler.0 / (T::ONE + T::ONE)).sin_cos();
+
+        Self(
+            cz * cy * sx - sz * sy * cx,
+            cz * sy * cx + sz * cy * sx,
+            sz * cy * cx - cz * sy * sx,
+            cz * cy * cx + sz * sy * sx,
+        )
+    }
+
     /// Calculates the lerp-ed quaternion between 2 quaternions by `t`.
     pub fn lerp(&self, other: &Self, t: T) -> Self
     where

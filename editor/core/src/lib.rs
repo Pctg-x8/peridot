@@ -51,6 +51,7 @@ use crate::{
             CompositeTree, CompositeTreeRef, CompositeTreeSyncBuffer, CornerRadius, Gradient,
             GradientRef, TextureMappingMode, TextureType,
         },
+        preview::HandlePointing,
         text::{FontID, FontSet},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
@@ -6373,14 +6374,71 @@ async fn run<'sys>(
             }
             Event::Sync(SyncEvent::NewPresentID { .. }) => {
                 // vsync update period
-                let mut committed_state =
-                    profiler::wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
-
                 preview_state.update(
-                    &mut committed_state,
+                    &mut *profiler::wrap!(
+                        LOCK_WAIT,
+                        committed_preview_state.lock().expect("poisoned")
+                    ),
                     &mut preview_input_state,
-                    &mut application,
+                    &mut ApplicationMutation {
+                        state: &mut application,
+                        view_feedbacks: &mut view_feedback_store,
+                    },
                 );
+
+                if !view_feedback_store.is_empty() {
+                    let mut fb_context = ViewFeedbackContext {
+                        application: &application,
+                        view_init_context: ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree: &mut composite_tree,
+                                ht_manager: &mut ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry: &mut keyboard_focus_registry,
+                            },
+                            view_allocator: &mut view_allocator,
+                            view_instance_store: &mut view_instance_store,
+                            view_tree_relation_store: &mut view_tree_relation_store,
+                            view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
+                            view_render_state_store: &mut view_render_state_store,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
+                            system_link: &system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            application: &application,
+                        },
+                        view_render_queue: &mut view_render_queue,
+                    };
+
+                    for x in view_feedback_store.drain(..) {
+                        x.dispatch(&view_feedback_registry, &mut fb_context);
+                    }
+
+                    view_feedback_registry.perform_atomic(&mut fb_context);
+                }
+
+                view_render_queue.perform(
+                    &mut RenderContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        system_link: &system_link,
+                        main_thread_texture_id_issuer: &mut texture_id_issuer,
+                        application: &application,
+                        view_feedback_subscription_delayed_ops:
+                            &mut view_feedback_registry_delayed_ops,
+                    },
+                    &mut view_instance_store,
+                    &view_tree_relation_store,
+                    &mut view_layout_state_store,
+                    &mut view_render_state_store,
+                );
+
+                composite_tree
+                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::ScheduleViewRenderExt { id } => {
                 view_render_queue.schedule(id);
@@ -8097,7 +8155,31 @@ struct PreviewInputState {
     pointer_pos: Option<Point<LogicalUnit>>,
 }
 
+enum ManipulationState {
+    None,
+    Camera,
+    Translate {
+        pointing: HandlePointing,
+        base_object_pos: peridot_math::Vector3F32,
+        base_cursor_pos: peridot_math::Vector3F32,
+        grab_sum: Point<LogicalUnit>,
+    },
+    Rotate {
+        pointing: HandlePointing,
+        base_object_rot: peridot_math::Vector3F32,
+        base_cursor_pos: peridot_math::Vector3F32,
+        grab_sum: Point<LogicalUnit>,
+    },
+    Scale {
+        pointing: HandlePointing,
+        base_object_scale: peridot_math::Vector3F32,
+        base_cursor_pos: peridot_math::Vector3F32,
+        grab_sum: Point<LogicalUnit>,
+    },
+}
+
 struct PreviewMainThreadState {
+    manipulation_state: ManipulationState,
     latched_key_motion_amplifier: Option<f32>,
     render_shape_to_mesh_id: HashMap<ObjectRenderShape, usize>,
     last_available_mesh_id: usize,
@@ -8108,6 +8190,7 @@ struct PreviewMainThreadState {
 impl PreviewMainThreadState {
     pub fn new() -> Self {
         Self {
+            manipulation_state: ManipulationState::None,
             latched_key_motion_amplifier: None,
             render_shape_to_mesh_id: HashMap::new(),
             last_available_mesh_id: 0,
@@ -8122,7 +8205,7 @@ impl PreviewMainThreadState {
         &mut self,
         committed_state: &mut rendering::preview::CommittedState,
         input: &mut PreviewInputState,
-        application: &mut Application,
+        application: &mut ApplicationMutation,
     ) {
         if let Some(new_viewport_size) = input.new_viewport_size.take() {
             committed_state.viewport_size = new_viewport_size;
@@ -8131,188 +8214,425 @@ impl PreviewMainThreadState {
         let scroll_amount = core::mem::replace(&mut input.scroll_amount, 0.0);
         let grab_delta = core::mem::replace(&mut input.grab_delta, Point::new_logical(0.0, 0.0));
 
-        if grab_delta.x != 0.0 || grab_delta.y != 0.0 {
-            // rotate by grab
-            committed_state.main_camera.rotation = committed_state.main_camera.rotation
-                * peridot_math::Quaternion::new(
-                    grab_delta.y * 0.5f32.to_radians(),
-                    peridot_math::Matrix3::from(committed_state.main_camera.rotation)
-                        * peridot_math::Vector3::left(),
-                )
-                * peridot_math::Quaternion::new(
-                    grab_delta.x * 0.5f32.to_radians(),
-                    peridot_math::Vector3::down(),
-                );
-            committed_state.main_camera_dirtified = true;
-        }
-
-        if scroll_amount != 0.0 {
-            // move by scroll
-            let amplifier = 5.0f32.powf(if committed_state.main_camera.position.1 == 0.0 {
-                0.0
-            } else {
-                committed_state.main_camera.position.1.abs().log10().floor()
-            });
-            committed_state.main_camera.position = committed_state.main_camera.position
-                + committed_state.main_camera.forward() * 0.25 * amplifier * scroll_amount;
-            committed_state.main_camera_dirtified = true;
-        }
-
-        let current_handle_shape = match crate::model::preview_edit_tool_type(application) {
-            PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
-            PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
-            PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
-        };
-
-        let current_handle_pointing;
-        if input.grabbing {
-            let mut key_forwards = 0.0f32;
-            let mut key_rights = 0.0f32;
-            let mut key_y_motions = 0.0f32;
-            if input.key_input.contains(PreviewKeyInputState::W) {
-                key_forwards += 1.0;
-            }
-            if input.key_input.contains(PreviewKeyInputState::S) {
-                key_forwards -= 1.0;
-            }
-            if input.key_input.contains(PreviewKeyInputState::D) {
-                key_rights += 1.0;
-            }
-            if input.key_input.contains(PreviewKeyInputState::A) {
-                key_rights -= 1.0;
-            }
-            if input.key_input.contains(PreviewKeyInputState::SHIFT) {
-                key_y_motions += 1.0;
-            }
-            if input.key_input.contains(PreviewKeyInputState::CONTROL) {
-                key_y_motions -= 1.0;
-            }
-
-            if key_forwards != 0.0 || key_rights != 0.0 || key_y_motions != 0.0 {
-                // move by key
-                let amplifier = *self.latched_key_motion_amplifier.get_or_insert_with(|| {
-                    2.5f32.powf(if committed_state.main_camera.position.1 == 0.0 {
-                        0.0
-                    } else {
-                        committed_state.main_camera.position.1.abs().log10().floor()
-                    })
-                });
-                committed_state.main_camera.position = committed_state.main_camera.position
-                    + committed_state.main_camera.forward() * (0.25 * amplifier * key_forwards)
-                    + committed_state.main_camera.right() * (0.25 * amplifier * key_rights)
-                    + peridot_math::Vector3(0.0, key_y_motions * 0.25 * amplifier, 0.0);
-                committed_state.main_camera_dirtified = true;
-            } else {
-                self.latched_key_motion_amplifier = None;
-            }
-
-            current_handle_pointing = None;
-        } else {
-            self.latched_key_motion_amplifier = None;
-
-            current_handle_pointing = if let Some(pointer_pos) = input.pointer_pos {
-                let ray = committed_state.main_camera.viewport_point_to_world_ray(
-                    peridot_math::Vector2(
-                        pointer_pos.x / committed_state.viewport_size.width,
-                        pointer_pos.y / committed_state.viewport_size.height,
-                    ),
-                    committed_state.viewport_size.width / committed_state.viewport_size.height,
-                );
-
-                let handle_scale = (committed_state.main_camera.position
-                    - peridot_math::Vector3(0.0, 0.0, 0.0))
-                .len();
-
-                match current_handle_shape {
-                    rendering::preview::HandleShape::Translation => {
-                        let handle_scale =
-                            peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
-                        let bbox_x = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_X
-                            .scale(&handle_scale);
-                        let bbox_y = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Y
-                            .scale(&handle_scale);
-                        let bbox_z = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Z
-                            .scale(&handle_scale);
-
-                        if bbox_x.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::X)
-                        } else if bbox_y.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::Y)
-                        } else if bbox_z.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::Z)
-                        } else {
-                            None
-                        }
-                    }
-                    rendering::preview::HandleShape::Rotation => {
-                        let hit_sphere = rendering::preview::handle::ROTATION_HANDLE_HITSPHERE
-                            .scale(handle_scale);
-                        if let Some(tr) = hit_sphere.intersect(&ray) {
-                            const SENSIBLE_WIDTH: f32 = 0.02;
-                            let p = ray.point(tr.start);
-                            if -SENSIBLE_WIDTH * handle_scale <= p.0
-                                && p.0 <= SENSIBLE_WIDTH * handle_scale
-                            {
-                                Some(rendering::preview::HandlePointing::X)
-                            } else if -SENSIBLE_WIDTH * handle_scale <= p.1
-                                && p.1 <= SENSIBLE_WIDTH * handle_scale
-                            {
-                                Some(rendering::preview::HandlePointing::Y)
-                            } else if -SENSIBLE_WIDTH * handle_scale <= p.2
-                                && p.2 <= SENSIBLE_WIDTH * handle_scale
-                            {
-                                Some(rendering::preview::HandlePointing::Z)
+        loop {
+            match self.manipulation_state {
+                ManipulationState::None => {
+                    if scroll_amount != 0.0 {
+                        // move by scroll
+                        let amplifier =
+                            5.0f32.powf(if committed_state.main_camera.position.1 == 0.0 {
+                                0.0
                             } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
+                                committed_state.main_camera.position.1.abs().log10().floor()
+                            });
+                        committed_state.main_camera.position = committed_state.main_camera.position
+                            + committed_state.main_camera.forward()
+                                * 0.25
+                                * amplifier
+                                * scroll_amount;
+                        committed_state.main_camera_dirtified = true;
                     }
-                    rendering::preview::HandleShape::Scale => {
-                        let handle_scale =
-                            peridot_math::Vector3(handle_scale, handle_scale, handle_scale);
-                        let bbox_x =
-                            rendering::preview::handle::SCALE_HANDLE_HITBOX_X.scale(&handle_scale);
-                        let bbox_y =
-                            rendering::preview::handle::SCALE_HANDLE_HITBOX_Y.scale(&handle_scale);
-                        let bbox_z =
-                            rendering::preview::handle::SCALE_HANDLE_HITBOX_Z.scale(&handle_scale);
-                        let bbox_center = rendering::preview::handle::SCALE_HANDLE_HITBOX_CENTER
-                            .scale(&handle_scale);
 
-                        if bbox_x.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::X)
-                        } else if bbox_y.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::Y)
-                        } else if bbox_z.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::Z)
-                        } else if bbox_center.intersect(&ray).is_some() {
-                            Some(rendering::preview::HandlePointing::All)
-                        } else {
-                            None
+                    if input.grabbing {
+                        // grab start on this frame
+
+                        if let Some(&selected) = application.selected_objects.iter().next()
+                            && let Some(pointer_pos) = input.pointer_pos
+                        {
+                            let current_handle_shape =
+                                match crate::model::preview_edit_tool_type(application) {
+                                    PreviewEditToolType::Translate => {
+                                        rendering::preview::HandleShape::Translation
+                                    }
+                                    PreviewEditToolType::Rotate => {
+                                        rendering::preview::HandleShape::Rotation
+                                    }
+                                    PreviewEditToolType::Scale => {
+                                        rendering::preview::HandleShape::Scale
+                                    }
+                                };
+
+                            let handle_matrix =
+                                &application.objects[selected.into_array_index()].world_matrix;
+                            let handle_pos = peridot_math::Vector3(
+                                handle_matrix.0[3],
+                                handle_matrix.1[3],
+                                handle_matrix.2[3],
+                            );
+
+                            let ray = committed_state.main_camera.viewport_point_to_world_ray(
+                                peridot_math::Vector2(
+                                    pointer_pos.x / committed_state.viewport_size.width,
+                                    pointer_pos.y / committed_state.viewport_size.height,
+                                ),
+                                committed_state.viewport_size.width
+                                    / committed_state.viewport_size.height,
+                            );
+
+                            let handle_scale =
+                                (committed_state.main_camera.position - handle_pos).len();
+                            if let Some(pointing) = Self::hittest_with_handle(
+                                current_handle_shape,
+                                handle_scale,
+                                &handle_pos,
+                                &ray,
+                            ) {
+                                self.manipulation_state = match current_handle_shape {
+                                    rendering::preview::HandleShape::Translation => {
+                                        ManipulationState::Translate {
+                                            pointing,
+                                            base_object_pos: application.objects
+                                                [selected.into_array_index()]
+                                            .local_position,
+                                            base_cursor_pos: committed_state
+                                                .main_camera
+                                                .viewport_point_to_world_point(
+                                                    peridot_math::Vector2(
+                                                        pointer_pos.x
+                                                            / committed_state.viewport_size.width,
+                                                        pointer_pos.y
+                                                            / committed_state.viewport_size.height,
+                                                    ),
+                                                    committed_state.viewport_size.width
+                                                        / committed_state.viewport_size.height,
+                                                ),
+                                            grab_sum: pointer_pos,
+                                        }
+                                    }
+                                    rendering::preview::HandleShape::Rotation => {
+                                        ManipulationState::Rotate {
+                                            pointing,
+                                            base_object_rot: application.objects
+                                                [selected.into_array_index()]
+                                            .local_rotation_euler,
+                                            base_cursor_pos: committed_state
+                                                .main_camera
+                                                .viewport_point_to_world_point(
+                                                    peridot_math::Vector2(
+                                                        pointer_pos.x
+                                                            / committed_state.viewport_size.width,
+                                                        pointer_pos.y
+                                                            / committed_state.viewport_size.height,
+                                                    ),
+                                                    committed_state.viewport_size.width
+                                                        / committed_state.viewport_size.height,
+                                                ),
+                                            grab_sum: pointer_pos,
+                                        }
+                                    }
+                                    rendering::preview::HandleShape::Scale => {
+                                        ManipulationState::Scale {
+                                            pointing,
+                                            base_object_scale: application.objects
+                                                [selected.into_array_index()]
+                                            .local_scale,
+                                            base_cursor_pos: committed_state
+                                                .main_camera
+                                                .viewport_point_to_world_point(
+                                                    peridot_math::Vector2(
+                                                        pointer_pos.x
+                                                            / committed_state.viewport_size.width,
+                                                        pointer_pos.y
+                                                            / committed_state.viewport_size.height,
+                                                    ),
+                                                    committed_state.viewport_size.width
+                                                        / committed_state.viewport_size.height,
+                                                ),
+                                            grab_sum: pointer_pos,
+                                        }
+                                    }
+                                };
+                                break;
+                            }
                         }
+
+                        self.manipulation_state = ManipulationState::Camera;
+                        continue;
+                    } else {
+                        break;
                     }
                 }
-            } else {
-                None
-            };
+                ManipulationState::Camera => {
+                    if grab_delta.x != 0.0 || grab_delta.y != 0.0 {
+                        // rotate by grab
+                        committed_state.main_camera.rotation = committed_state.main_camera.rotation
+                            * peridot_math::Quaternion::new(
+                                grab_delta.y * 0.5f32.to_radians(),
+                                peridot_math::Matrix3::from(committed_state.main_camera.rotation)
+                                    * peridot_math::Vector3::left(),
+                            )
+                            * peridot_math::Quaternion::new(
+                                grab_delta.x * 0.5f32.to_radians(),
+                                peridot_math::Vector3::down(),
+                            );
+                        committed_state.main_camera_dirtified = true;
+                    }
+
+                    if scroll_amount != 0.0 {
+                        // move by scroll
+                        let amplifier =
+                            5.0f32.powf(if committed_state.main_camera.position.1 == 0.0 {
+                                0.0
+                            } else {
+                                committed_state.main_camera.position.1.abs().log10().floor()
+                            });
+                        committed_state.main_camera.position = committed_state.main_camera.position
+                            + committed_state.main_camera.forward()
+                                * 0.25
+                                * amplifier
+                                * scroll_amount;
+                        committed_state.main_camera_dirtified = true;
+                    }
+
+                    if input.grabbing {
+                        let mut key_forwards = 0.0f32;
+                        let mut key_rights = 0.0f32;
+                        let mut key_y_motions = 0.0f32;
+                        if input.key_input.contains(PreviewKeyInputState::W) {
+                            key_forwards += 1.0;
+                        }
+                        if input.key_input.contains(PreviewKeyInputState::S) {
+                            key_forwards -= 1.0;
+                        }
+                        if input.key_input.contains(PreviewKeyInputState::D) {
+                            key_rights += 1.0;
+                        }
+                        if input.key_input.contains(PreviewKeyInputState::A) {
+                            key_rights -= 1.0;
+                        }
+                        if input.key_input.contains(PreviewKeyInputState::SHIFT) {
+                            key_y_motions += 1.0;
+                        }
+                        if input.key_input.contains(PreviewKeyInputState::CONTROL) {
+                            key_y_motions -= 1.0;
+                        }
+
+                        if key_forwards != 0.0 || key_rights != 0.0 || key_y_motions != 0.0 {
+                            // move by key
+                            let amplifier =
+                                *self.latched_key_motion_amplifier.get_or_insert_with(|| {
+                                    2.5f32.powf(if committed_state.main_camera.position.1 == 0.0 {
+                                        0.0
+                                    } else {
+                                        committed_state.main_camera.position.1.abs().log10().floor()
+                                    })
+                                });
+                            committed_state.main_camera.position = committed_state
+                                .main_camera
+                                .position
+                                + committed_state.main_camera.forward()
+                                    * (0.25 * amplifier * key_forwards)
+                                + committed_state.main_camera.right()
+                                    * (0.25 * amplifier * key_rights)
+                                + peridot_math::Vector3(0.0, key_y_motions * 0.25 * amplifier, 0.0);
+                            committed_state.main_camera_dirtified = true;
+                        } else {
+                            self.latched_key_motion_amplifier = None;
+                        }
+                    } else {
+                        self.latched_key_motion_amplifier = None;
+                        self.manipulation_state = ManipulationState::None;
+                    }
+
+                    break;
+                }
+                ManipulationState::Translate {
+                    pointing,
+                    base_object_pos,
+                    base_cursor_pos,
+                    ref mut grab_sum,
+                } => {
+                    const SENSITIVITY: f32 = 25.0;
+
+                    if !input.grabbing {
+                        self.manipulation_state = ManipulationState::None;
+                        continue;
+                    }
+
+                    *grab_sum = grab_sum.with_offset(grab_delta);
+                    let cursor_pos = committed_state.main_camera.viewport_point_to_world_point(
+                        peridot_math::Vector2(
+                            grab_sum.x / committed_state.viewport_size.width,
+                            grab_sum.y / committed_state.viewport_size.height,
+                        ),
+                        committed_state.viewport_size.width / committed_state.viewport_size.height,
+                    );
+                    let move_delta = (cursor_pos - base_cursor_pos) * SENSITIVITY;
+
+                    match pointing {
+                        HandlePointing::X => {
+                            crate::model::set_selected_object_local_translate_x(
+                                application,
+                                base_object_pos.0 + move_delta.0,
+                            );
+                        }
+                        HandlePointing::Y => {
+                            crate::model::set_selected_object_local_translate_y(
+                                application,
+                                base_object_pos.1 + move_delta.1,
+                            );
+                        }
+                        HandlePointing::Z => {
+                            crate::model::set_selected_object_local_translate_z(
+                                application,
+                                base_object_pos.2 + move_delta.2,
+                            );
+                        }
+                        HandlePointing::All => {
+                            // nop for translate
+                        }
+                    }
+
+                    break;
+                }
+                ManipulationState::Rotate {
+                    pointing,
+                    base_object_rot,
+                    base_cursor_pos,
+                    ref mut grab_sum,
+                } => {
+                    if !input.grabbing {
+                        self.manipulation_state = ManipulationState::None;
+                        continue;
+                    }
+                    const SENSITIVITY: f32 = 90.0;
+
+                    *grab_sum = grab_sum.with_offset(grab_delta);
+                    let cursor_pos = committed_state.main_camera.viewport_point_to_world_point(
+                        peridot_math::Vector2(
+                            grab_sum.x / committed_state.viewport_size.width,
+                            grab_sum.y / committed_state.viewport_size.height,
+                        ),
+                        committed_state.viewport_size.width / committed_state.viewport_size.height,
+                    );
+                    let move_delta = (cursor_pos - base_cursor_pos) * SENSITIVITY;
+
+                    // TODO: ここ見る軸はこれであってるか？
+                    match pointing {
+                        HandlePointing::X => {
+                            crate::model::set_selected_object_local_rotation_x(
+                                application,
+                                base_object_rot.0 - move_delta.1,
+                            );
+                        }
+                        HandlePointing::Y => {
+                            crate::model::set_selected_object_local_rotation_y(
+                                application,
+                                base_object_rot.1 + move_delta.0,
+                            );
+                        }
+                        HandlePointing::Z => {
+                            crate::model::set_selected_object_local_rotation_z(
+                                application,
+                                base_object_rot.2 - move_delta.1,
+                            );
+                        }
+                        HandlePointing::All => {
+                            // nop for rotation
+                        }
+                    }
+
+                    break;
+                }
+                ManipulationState::Scale {
+                    pointing,
+                    base_object_scale,
+                    base_cursor_pos,
+                    ref mut grab_sum,
+                } => {
+                    if !input.grabbing {
+                        self.manipulation_state = ManipulationState::None;
+                        continue;
+                    }
+                    const SENSITIVITY: f32 = 25.0;
+
+                    *grab_sum = grab_sum.with_offset(grab_delta);
+                    let cursor_pos = committed_state.main_camera.viewport_point_to_world_point(
+                        peridot_math::Vector2(
+                            grab_sum.x / committed_state.viewport_size.width,
+                            grab_sum.y / committed_state.viewport_size.height,
+                        ),
+                        committed_state.viewport_size.width / committed_state.viewport_size.height,
+                    );
+                    let move_delta = (cursor_pos - base_cursor_pos) * SENSITIVITY;
+
+                    match pointing {
+                        HandlePointing::X => {
+                            crate::model::set_selected_object_local_scale_x(
+                                application,
+                                base_object_scale.0 + move_delta.0,
+                            );
+                        }
+                        HandlePointing::Y => {
+                            crate::model::set_selected_object_local_scale_y(
+                                application,
+                                base_object_scale.1 + move_delta.1,
+                            );
+                        }
+                        HandlePointing::Z => {
+                            crate::model::set_selected_object_local_scale_z(
+                                application,
+                                base_object_scale.2 + move_delta.2,
+                            );
+                        }
+                        HandlePointing::All => {
+                            let scale_all = move_delta.len();
+                            crate::model::set_selected_object_local_scale(
+                                application,
+                                base_object_scale
+                                    + peridot_math::Vector3(scale_all, scale_all, scale_all),
+                            );
+                        }
+                    }
+
+                    break;
+                }
+            }
         }
 
-        if current_handle_shape != committed_state.handle_shape {
-            committed_state.handle_shape = current_handle_shape;
-            committed_state.handle_data_dirtified = true;
-        }
-        if current_handle_pointing != committed_state.handle_pointing {
-            committed_state.handle_pointing = current_handle_pointing;
-            committed_state.handle_data_dirtified = true;
+        let mut process_stack = Vec::new();
+        process_stack.extend(application.world_matrix_recompute_targets.iter().copied());
+        while let Some(id) = process_stack.pop() {
+            match application.objects[id.into_array_index()].parent {
+                None => {
+                    // this is root object: compute direct matrix
+                    let o = &mut application.state.objects[id.into_array_index()];
+                    o.world_matrix = o.compute_local_matrix();
+                    o.render_dirty = true;
+                }
+                Some(parent_id) => {
+                    if application
+                        .state
+                        .world_matrix_recompute_targets
+                        .contains(&parent_id)
+                    {
+                        // parent is scheduled to be updated the world matrix
+                        continue;
+                    }
+
+                    let parent_matrix = application.state.objects[parent_id.into_array_index()]
+                        .world_matrix
+                        .clone();
+                    let o = &mut application.state.objects[id.into_array_index()];
+                    o.world_matrix = parent_matrix * o.compute_local_matrix();
+                    o.render_dirty = true;
+                }
+            }
+
+            application.state.world_matrix_recompute_targets.remove(&id);
+            process_stack.extend(
+                application.state.objects[id.into_array_index()]
+                    .children
+                    .iter()
+                    .copied(),
+            );
         }
 
-        for o in application.removed_object_render_ids.drain(..) {
+        for o in application.state.removed_object_render_ids.drain(..) {
             committed_state.removed_render_data.insert(o);
         }
 
-        for o in application.objects.iter_mut() {
+        for o in application.state.objects.iter_mut() {
             if core::mem::replace(&mut o.render_dirty, false) {
                 // update object render data
                 if !o.render_enabled {
@@ -8378,6 +8698,131 @@ impl PreviewMainThreadState {
                             );
                         }
                     }
+                }
+            }
+        }
+
+        // TODO: handle for multiple selected?(中心に置くとかになるかな)
+        if let Some(&selected) = application.selected_objects.iter().next() {
+            let handle_matrix = application.objects[selected.into_array_index()]
+                .world_matrix
+                .clone();
+            let handle_pos =
+                peridot_math::Vector3(handle_matrix.0[3], handle_matrix.1[3], handle_matrix.2[3]);
+            let handle_matrix = peridot_math::Matrix4::translation(handle_pos);
+            if handle_matrix != committed_state.handle_to_world_transform {
+                committed_state.handle_to_world_transform = handle_matrix;
+                committed_state.handle_data_dirtified = true;
+            }
+
+            let current_handle_shape = match crate::model::preview_edit_tool_type(application) {
+                PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
+                PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
+                PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
+            };
+            if current_handle_shape != committed_state.handle_shape {
+                committed_state.handle_shape = current_handle_shape;
+                committed_state.handle_data_dirtified = true;
+            }
+
+            if !input.grabbing {
+                let current_handle_pointing = if let Some(pointer_pos) = input.pointer_pos {
+                    let ray = committed_state.main_camera.viewport_point_to_world_ray(
+                        peridot_math::Vector2(
+                            pointer_pos.x / committed_state.viewport_size.width,
+                            pointer_pos.y / committed_state.viewport_size.height,
+                        ),
+                        committed_state.viewport_size.width / committed_state.viewport_size.height,
+                    );
+
+                    let handle_scale = (committed_state.main_camera.position - handle_pos).len();
+                    Self::hittest_with_handle(current_handle_shape, handle_scale, &handle_pos, &ray)
+                } else {
+                    None
+                };
+
+                if current_handle_pointing != committed_state.handle_pointing {
+                    committed_state.handle_pointing = current_handle_pointing;
+                    committed_state.handle_data_dirtified = true;
+                }
+            }
+        }
+    }
+
+    fn hittest_with_handle(
+        shape: rendering::preview::HandleShape,
+        scale: f32,
+        pos: &peridot_math::Vector3F32,
+        ray: &peridot_math::Ray3<f32>,
+    ) -> Option<rendering::preview::HandlePointing> {
+        match shape {
+            rendering::preview::HandleShape::Translation => {
+                let scale = peridot_math::Vector3(scale, scale, scale);
+                let bbox_x = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_X
+                    .scale(&scale)
+                    .translate(pos);
+                let bbox_y = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Y
+                    .scale(&scale)
+                    .translate(pos);
+                let bbox_z = rendering::preview::handle::TRANSLATE_HANDLE_HITBOX_Z
+                    .scale(&scale)
+                    .translate(pos);
+
+                if bbox_x.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::X)
+                } else if bbox_y.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::Y)
+                } else if bbox_z.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::Z)
+                } else {
+                    None
+                }
+            }
+            rendering::preview::HandleShape::Rotation => {
+                let hit_sphere = rendering::preview::handle::ROTATION_HANDLE_HITSPHERE
+                    .scale(scale)
+                    .translate(pos);
+                if let Some(tr) = hit_sphere.intersect(ray) {
+                    const SENSIBLE_WIDTH: f32 = 0.02;
+                    let p = ray.point(tr.start) - *pos;
+                    if -SENSIBLE_WIDTH * scale <= p.0 && p.0 <= SENSIBLE_WIDTH * scale {
+                        Some(rendering::preview::HandlePointing::X)
+                    } else if -SENSIBLE_WIDTH * scale <= p.1 && p.1 <= SENSIBLE_WIDTH * scale {
+                        Some(rendering::preview::HandlePointing::Y)
+                    } else if -SENSIBLE_WIDTH * scale <= p.2 && p.2 <= SENSIBLE_WIDTH * scale {
+                        Some(rendering::preview::HandlePointing::Z)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            rendering::preview::HandleShape::Scale => {
+                let scale = peridot_math::Vector3(scale, scale, scale);
+                let bbox_x = rendering::preview::handle::SCALE_HANDLE_HITBOX_X
+                    .scale(&scale)
+                    .translate(pos);
+                let bbox_y = rendering::preview::handle::SCALE_HANDLE_HITBOX_Y
+                    .scale(&scale)
+                    .translate(pos);
+                let bbox_z = rendering::preview::handle::SCALE_HANDLE_HITBOX_Z
+                    .scale(&scale)
+                    .translate(pos);
+                let bbox_center = rendering::preview::handle::SCALE_HANDLE_HITBOX_CENTER
+                    .scale(&scale)
+                    .translate(pos);
+
+                if bbox_x.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::X)
+                } else if bbox_y.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::Y)
+                } else if bbox_z.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::Z)
+                } else if bbox_center.intersect(ray).is_some() {
+                    Some(rendering::preview::HandlePointing::All)
+                } else {
+                    None
                 }
             }
         }

@@ -8,8 +8,8 @@ use crate::{
         hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
     },
     model::{
-        Application, ApplicationMutableAccess, ApplicationMutation, ObjectSelectionState,
-        ViewFeedbackObjectDataChanged, ViewFeedbackObjectNameChanged,
+        Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation,
+        ObjectSelectionState, ViewFeedbackObjectDataChanged, ViewFeedbackObjectNameChanged,
         ViewFeedbackObjectSelectionChanged,
     },
     rendering::{
@@ -562,6 +562,39 @@ impl EventHandler {
         env.unsubscribe_view_feedback::<ViewFeedbackObjectDataChanged>(self);
     }
 
+    fn revalidate_all(
+        &self,
+        with_transition: bool,
+        env: &mut (
+                 impl ViewRenderer
+                 + ViewInstanceQueryable
+                 + ViewInstanceQueryableMut
+                 + ApplicationAccess
+                 + ?Sized
+             ),
+    ) {
+        for x in self.vec3_editors.iter() {
+            env.view_instance(x.x).expect("query failed").revalidate();
+            env.view_instance(x.y).expect("query failed").revalidate();
+            env.view_instance(x.z).expect("query failed").revalidate();
+        }
+
+        let render_enabled = crate::model::selected_object_render_is_enabled(env);
+        if env
+            .view_instance_mut(self.render_section_header_view)
+            .expect("query failed")
+            .set_checked(render_enabled, with_transition)
+        {
+            // should re-render
+            env.schedule_view_render(self.render_section_header_view);
+        }
+
+        env.view_instance_mut(self.render_shape_selector_view)
+            .expect("query failed")
+            .revalidate();
+        env.schedule_view_render(self.root_content_view);
+    }
+
     fn on_toggle_render_enable(&self, ctx: &mut (impl ApplicationMutableAccess + ?Sized)) {
         crate::model::toggle_selected_object_render_enable(ctx);
     }
@@ -607,35 +640,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
                         context.view_set_parent(self.items_container_view, self.root_content_view);
                     }
 
-                    for x in self.vec3_editors.iter() {
-                        context
-                            .view_instance(x.x)
-                            .expect("query failed")
-                            .revalidate();
-                        context
-                            .view_instance(x.y)
-                            .expect("query failed")
-                            .revalidate();
-                        context
-                            .view_instance(x.z)
-                            .expect("query failed")
-                            .revalidate();
-                    }
-
-                    let render_enabled = crate::model::selected_object_render_is_enabled(context);
-                    if context
-                        .view_instance_mut(self.render_section_header_view)
-                        .expect("query failed")
-                        .set_checked(render_enabled, false)
-                    {
-                        // should re-render
-                        context.schedule_view_render(self.render_section_header_view);
-                    }
-
-                    context
-                        .view_instance_mut(self.render_shape_selector_view)
-                        .expect("query failed")
-                        .revalidate();
+                    self.revalidate_all(false, context);
                 }
                 ObjectSelectionState::Multiple => {
                     context
@@ -689,15 +694,7 @@ impl ViewFeedbackHandler<ViewFeedbackObjectDataChanged> for EventHandler {
         _feedback: &ViewFeedbackObjectDataChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
-        let render_enabled = crate::model::selected_object_render_is_enabled(context);
-        if context
-            .view_instance_mut(self.render_section_header_view)
-            .expect("query failed")
-            .set_checked(render_enabled, true)
-        {
-            // should re-render
-            context.schedule_view_render(self.render_section_header_view);
-        }
+        self.revalidate_all(true, context);
     }
 }
 impl TextInputViewIO for EventHandler {
