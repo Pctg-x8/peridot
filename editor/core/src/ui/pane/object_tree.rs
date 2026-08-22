@@ -5,7 +5,10 @@ use std::{
 };
 
 use crate::{
-    Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
+    Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE,
+    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE, MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER,
+    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE, MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN,
+    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
     MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
     MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
     MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED, MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED,
@@ -534,29 +537,29 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
                     },
                     MenuItem::Command {
                         label: "Plane".into(),
-                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE,
                     },
                     MenuItem::Command {
                         label: "Cube".into(),
-                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE,
                     },
                     MenuItem::Command {
                         label: "Sphere".into(),
-                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE,
                     },
                     MenuItem::Command {
                         label: "Cylinder".into(),
-                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER,
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER,
                     },
                     MenuItem::Command {
                         label: "Capsule".into(),
-                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE,
+                        command_id: MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE,
                     },
                     MenuItem::SubMenu {
                         label: "Special".into(),
                         items: vec![MenuItem::Command {
                             label: "Terrain".into(),
-                            command_id: MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN,
+                            command_id: MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN,
                         }],
                     },
                 ],

@@ -165,30 +165,6 @@ impl Application {
         self.compaction_objects();
     }
 
-    fn free_object_selected(&mut self) {
-        for id in self.selected_objects.drain() {
-            // detach from registry
-            match self.objects[id.into_array_index()].parent.take() {
-                Some(parent) => {
-                    self.objects[parent.into_array_index()]
-                        .children
-                        .retain(|&oid| oid != id);
-                }
-                None => {
-                    self.root_objects.retain(|&oid| oid != id);
-                }
-            }
-
-            self.free_object_indices.insert(id.into_array_index());
-            self.removed_object_render_ids
-                .extend(self.objects[id.into_array_index()].render_id.take());
-            self.objects[id.into_array_index()].reset();
-        }
-
-        // TODO: compactionの頻度を減らすかはあとで検討
-        self.compaction_objects();
-    }
-
     fn compaction_objects(&mut self) {
         // objectsのうしろにいるfreeを解放
         while !self.objects.is_empty() && self.free_object_indices.remove(&(self.objects.len() - 1))
@@ -373,6 +349,20 @@ pub fn object_create_of_shape(
     id
 }
 
+pub fn object_create_of_shape_children_of_selected(
+    env: &mut (impl ApplicationMutableAccess + ?Sized),
+    name: String,
+    shape: ObjectRenderShape,
+) -> Option<ObjectID> {
+    let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
+        return None;
+    };
+
+    let id = object_create_of_shape(env, name, shape);
+    object_set_parent(env, id, selected);
+    Some(id)
+}
+
 pub fn object_duplicate_selected(
     env: &mut (impl ApplicationMutableAccess + ?Sized),
 ) -> Option<ObjectID> {
@@ -380,15 +370,78 @@ pub fn object_duplicate_selected(
         return None;
     };
 
+    // root object
     let new_object = env.application().objects[selected.into_array_index()].duplicate_single();
     let id = env.application_mut().alloc_object(new_object);
-    // TODO: duplicate with relationship
+    if let Some(parent) = env.application().objects[selected.into_array_index()].parent {
+        object_set_parent(env, id, parent);
+    }
+
+    // recursibly duplicate children
+    let mut process_stack = Vec::new();
+    process_stack.extend(
+        env.application().objects[selected.into_array_index()]
+            .children
+            .iter()
+            .map(|&child| (child, id)),
+    );
+    while let Some((src_id, parent)) = process_stack.pop() {
+        let new_object = env.application().objects[src_id.into_array_index()].duplicate_single();
+        let id = env.application_mut().alloc_object(new_object);
+        object_set_parent(env, id, parent);
+        process_stack.extend(
+            env.application().objects[src_id.into_array_index()]
+                .children
+                .iter()
+                .map(|&child| (child, id)),
+        );
+    }
+
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
     Some(id)
 }
 
 pub fn object_destroy_selected(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
-    env.application_mut().free_object_selected();
+    let state = env.application_mut();
+    for id in state.selected_objects.drain() {
+        let mut destroy_targets = Vec::new();
+        let mut process_stack = Vec::new();
+        process_stack.push(id);
+        while let Some(id) = process_stack.pop() {
+            destroy_targets.push(id);
+            process_stack.extend(
+                state.objects[id.into_array_index()]
+                    .children
+                    .iter()
+                    .copied(),
+            );
+        }
+
+        // 子から消していく
+        while let Some(id) = destroy_targets.pop() {
+            // detach from registry
+            match state.objects[id.into_array_index()].parent.take() {
+                Some(parent) => {
+                    state.objects[parent.into_array_index()]
+                        .children
+                        .retain(|&oid| oid != id);
+                }
+                None => {
+                    state.root_objects.retain(|&oid| oid != id);
+                }
+            }
+
+            state.free_object_indices.insert(id.into_array_index());
+            state
+                .removed_object_render_ids
+                .extend(state.objects[id.into_array_index()].render_id.take());
+            state.objects[id.into_array_index()].reset();
+        }
+    }
+
+    // TODO: compactionの頻度を減らすかはあとで検討
+    state.compaction_objects();
+
     env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
     env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
 }
