@@ -205,11 +205,28 @@ pub fn object_is_selected(env: &(impl ApplicationAccess + ?Sized), id: ObjectID)
 
 pub fn object_tree_content(
     env: &(impl ApplicationAccess + ?Sized),
-) -> impl Iterator<Item = (ObjectID, &str)> {
-    env.application()
-        .root_objects
-        .iter()
-        .map(move |&id| (id, env.application().object(id).name.as_str()))
+) -> Vec<(ObjectID, &str, usize)> {
+    let mut results = Vec::new();
+    let mut process_stack = VecDeque::new();
+    process_stack.extend(env.application().root_objects.iter().map(|&id| (id, 0)));
+    while let Some((id, depth)) = process_stack.pop_front() {
+        results.push((
+            id,
+            env.application().objects[id.into_array_index()]
+                .name
+                .as_str(),
+            depth,
+        ));
+        for &child in env.application().objects[id.into_array_index()]
+            .children
+            .iter()
+            .rev()
+        {
+            process_stack.push_front((child, depth + 1));
+        }
+    }
+
+    results
 }
 
 pub enum ObjectSelectionState {

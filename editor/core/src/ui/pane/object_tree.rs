@@ -246,9 +246,10 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 context.teardown_view_recursive(x);
                 context.free_view(x);
             }
-            for (x, name) in crate::model::object_tree_content(context.application) {
-                let rv =
-                    context.construct_view(|id| Box::new(ObjectRowView::new(id, x, name.into())));
+            for (x, name, indent_level) in crate::model::object_tree_content(context.application) {
+                let rv = context.construct_view(|id| {
+                    Box::new(ObjectRowView::new(id, x, name.into(), indent_level))
+                });
                 context.view_layout_mut(rv).expect("query failed").width = ViewSize::FillAvailable;
                 context.view_set_parent(rv, self.root_view_id);
                 row_views.push(rv);
@@ -303,17 +304,24 @@ struct ObjectRowView {
     eh: Option<Rc<ObjectRowEventHandler>>,
     label: String,
     label_changed: bool,
+    indent_level: usize,
 }
 impl ObjectRowView {
     const ITEM_HEIGHT: f32 = 20.0;
 
-    fn new(id: TypedViewIdentifier<Self>, assigned_object: ObjectID, init_label: String) -> Self {
+    fn new(
+        id: TypedViewIdentifier<Self>,
+        assigned_object: ObjectID,
+        init_label: String,
+        indent_level: usize,
+    ) -> Self {
         Self {
             id,
             assigned_object,
             eh: None,
             label: init_label,
             label_changed: false,
+            indent_level,
         }
     }
 
@@ -399,7 +407,8 @@ impl crate::uikit::View for ObjectRowView {
                             .run(
                                 CompositeRectTextRun::build(self.label.clone()).color_imm([1.0; 4]),
                             )
-                            .vertical_middle(),
+                            .vertical_middle()
+                            .shift_left(self.indent_level as f32 * 16.0),
                     )
                     .create(ctx.composite_tree);
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
