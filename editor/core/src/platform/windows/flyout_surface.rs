@@ -54,8 +54,8 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     uikit::{
-        MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemSubMenuView, MenuItemView,
-        MountTarget, ViewInitContext,
+        MenuBaseSurfaceEventHandler, MenuItemInteractableElement, MenuItemLayout,
+        MenuItemSubMenuView, MountTarget, ViewInitContext,
     },
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
@@ -847,42 +847,6 @@ impl super::SystemLink<'_> {
 
         let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
         Handle(h)
-    }
-
-    pub fn pop_context_menu(
-        &self,
-        parent: WindowHandle,
-        view_init_context: &mut ViewInitContext,
-        depth: usize,
-        surface_pos: Point<LogicalUnit>,
-        layouted_items: Vec<MenuItemLayout>,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-        setup_contents: impl FnOnce(
-            Vec<MenuItemLayout>,
-            Handle,
-            &mut ViewInitContext,
-        ) -> Vec<MenuItemView>,
-    ) -> (Handle, Rc<MenuBaseSurfaceEventHandler>, Vec<MenuItemView>) {
-        let width = MenuItemLayout::min_width(layouted_items.iter());
-        let height = MenuItemLayout::height(layouted_items.iter());
-
-        let h = self.new_flyout_surface(
-            parent,
-            surface_pos,
-            Size::new_logical(width.value(), height.value()),
-            view_init_context.mount_context.composite_tree,
-            view_init_context.mount_context.ht_manager,
-            view_init_context.mount_context.keyboard_focus_registry,
-            delayed_render_messages,
-        );
-
-        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-        view_init_context
-            .ht_manager
-            .set_action_handler(h.ht_root(), &base_surface_event_handler);
-        let views = setup_contents(layouted_items, h, view_init_context);
-
-        (h, base_surface_event_handler, views)
     }
 
     pub fn any_pointer_on_context_menu(&self) -> bool {

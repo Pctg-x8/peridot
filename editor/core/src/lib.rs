@@ -57,9 +57,9 @@ use crate::{
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
         ContainerView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources,
-        MenuItemView, MountContext, MountTarget, NumericInputView, NumericInputViewIO,
-        NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
-        ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
+        MenuItemInteractableElement, MountContext, MountTarget, NumericInputView,
+        NumericInputViewIO, NumericInputViewInit, PopupID, PopupManager, RadioButtonView,
+        RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
         TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
         ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
         ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable,
@@ -4462,7 +4462,6 @@ async fn run<'sys>(
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
-                    &system_link,
                     surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -4504,7 +4503,6 @@ async fn run<'sys>(
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
-                    &system_link,
                     surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -5672,12 +5670,56 @@ impl DropdownMenuSession {
 
 pub struct MenuSurface {
     handle: FlyoutSurfaceHandle,
-    item_views: Vec<MenuItemView>,
+    item_views: Vec<Option<MenuItemInteractableElement>>,
     _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
     parent_path: Vec<usize>,
     current_selecting: Option<usize>,
 }
 impl MenuSurface {
+    fn new(
+        ctx: &mut ViewInitContext,
+        delayed_render_messages: &mut Vec<RenderMessage>,
+        common_res: &crate::uikit::MenuItemCommonResources,
+        initiator_window: WindowHandle,
+        display_pos: Point<LogicalUnit>,
+        depth: usize,
+        parent_path: Vec<usize>,
+        items: impl Iterator<Item = MenuItem>,
+    ) -> Self {
+        let layouted_items = crate::uikit::MenuItemLayout::build(items, ctx.system_link.font_set());
+        let width = crate::uikit::MenuItemLayout::min_width(layouted_items.iter());
+        let height = crate::uikit::MenuItemLayout::height(layouted_items.iter());
+
+        let surface = ctx.system_link.new_flyout_surface(
+            initiator_window,
+            display_pos,
+            Size::new_logical(width.value(), height.value()),
+            ctx.mount_context.composite_tree,
+            ctx.mount_context.ht_manager,
+            ctx.mount_context.keyboard_focus_registry,
+            delayed_render_messages,
+        );
+
+        let base_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
+        ctx.ht_manager
+            .set_action_handler(surface.ht_root(), &base_event_handler);
+        let item_views = crate::uikit::MenuItemLayout::instantiate(
+            layouted_items.into_iter(),
+            depth,
+            ctx,
+            common_res,
+            &surface,
+        );
+
+        Self {
+            handle: surface,
+            item_views,
+            _base_event_handler: base_event_handler,
+            parent_path,
+            current_selecting: None,
+        }
+    }
+
     pub fn set_current_selecting(
         &mut self,
         new_index: usize,
@@ -5690,16 +5732,25 @@ impl MenuSurface {
         }
 
         if let Some(x) = self.current_selecting {
-            self.item_views[x].unlit(composite_tree, current_sec);
+            self.item_views[x]
+                .as_ref()
+                .expect("not interactable")
+                .unlit(composite_tree, current_sec);
         }
 
         self.current_selecting = Some(new_index);
-        self.item_views[new_index].lit(composite_tree, current_sec);
+        self.item_views[new_index]
+            .as_ref()
+            .expect("not interactable")
+            .lit(composite_tree, current_sec);
     }
 
     pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
         if let Some(x) = self.current_selecting {
-            self.item_views[x].unlit(composite_tree, current_sec);
+            self.item_views[x]
+                .as_ref()
+                .expect("not interactable")
+                .unlit(composite_tree, current_sec);
         }
 
         self.current_selecting = None;
@@ -5716,49 +5767,57 @@ impl MenuSession {
     pub fn new(
         parent: WindowHandle,
         items: Vec<MenuItem>,
-        system_link: &SystemLink,
         surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         delayed_render_messages: &mut Vec<RenderMessage>,
         common_res: &MenuItemCommonResources,
     ) -> Self {
         #[cfg(target_os = "macos")]
-        system_link.flyout_surface_context.observe_global_click();
-
-        let (root_surface, base_event_handler, item_views) = system_link.pop_context_menu(
-            parent,
-            view_init_context,
-            0,
-            surface_pos,
-            crate::uikit::MenuItemLayout::build(items.iter().cloned(), system_link.font_set()),
-            delayed_render_messages,
-            |layout, h, view_init_ctx| {
-                let views = crate::uikit::MenuItemLayout::instantiate(
-                    layout.into_iter(),
-                    0,
-                    view_init_ctx,
-                    common_res,
-                );
-                for x in views.iter() {
-                    x.mount(view_init_ctx, &h);
-                }
-
-                views
-            },
-        );
+        view_init_context
+            .system_link
+            .flyout_surface_context
+            .observe_global_click();
 
         Self {
+            opening_surfaces: vec![MenuSurface::new(
+                view_init_context,
+                delayed_render_messages,
+                common_res,
+                parent,
+                surface_pos,
+                0,
+                Vec::new(),
+                items.iter().cloned(),
+            )],
             parent,
             items,
-            opening_surfaces: vec![MenuSurface {
-                handle: root_surface,
-                item_views,
-                _base_event_handler: base_event_handler,
-                parent_path: Vec::new(),
-                current_selecting: None,
-            }],
             active_selection: None,
         }
+    }
+
+    fn close_deeper<E>(
+        &mut self,
+        target_depth: usize,
+        system_link: &SystemLink,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+    ) {
+        while self.opening_surfaces.len() > target_depth + 1 {
+            self.opening_surfaces.pop().expect("empty?").handle.close(
+                system_link,
+                composite_tree,
+                ht_manager,
+                keyboard_focus_registry,
+            );
+        }
+    }
+
+    fn query_submenu<'a>(&'a self, index_path: impl Iterator<Item = usize>) -> &'a [MenuItem] {
+        index_path.fold(&self.items[..], |haystack, x| match haystack[x] {
+            MenuItem::SubMenu { ref items, .. } => items,
+            _ => unreachable!("invalid nesting"),
+        })
     }
 
     pub fn perform_delayed_action(
@@ -5770,17 +5829,19 @@ impl MenuSession {
     ) {
         match self.active_selection {
             Some((depth, index)) => {
-                while self.opening_surfaces.len() > depth + 1 {
-                    self.opening_surfaces.pop().expect("empty?").handle.close(
-                        system_link,
-                        view_init_context.mount_context.composite_tree,
-                        view_init_context.mount_context.ht_manager,
-                        view_init_context.mount_context.keyboard_focus_registry,
-                    );
-                }
+                self.close_deeper(
+                    depth,
+                    system_link,
+                    view_init_context.mount_context.composite_tree,
+                    view_init_context.mount_context.ht_manager,
+                    view_init_context.mount_context.keyboard_focus_registry,
+                );
                 let latest_surface = self.opening_surfaces.last().expect("root?");
 
-                if let MenuItemView::SubMenu(ref submenu) = latest_surface.item_views[index] {
+                if let Some(MenuItemInteractableElement::SubMenu(ref submenu)) =
+                    latest_surface.item_views[index]
+                {
+                    // submenu delayed action
                     let pos = latest_surface.handle.submenu_pop_position(submenu);
                     let parent_path = latest_surface
                         .parent_path
@@ -5788,126 +5849,31 @@ impl MenuSession {
                         .copied()
                         .chain(core::iter::once(index))
                         .collect::<Vec<_>>();
-                    let items = parent_path.iter().fold(&self.items[..], |haystack, &x| {
-                        match haystack[x] {
-                            MenuItem::SubMenu { ref items, .. } => items,
-                            _ => unreachable!("invalid nesting"),
-                        }
-                    });
+                    let items = self.query_submenu(parent_path.iter().copied());
 
-                    let (surface, base_event_handler, item_views) = system_link.pop_context_menu(
-                        self.parent,
+                    self.opening_surfaces.push(MenuSurface::new(
                         view_init_context,
-                        depth + 1,
-                        pos,
-                        crate::uikit::MenuItemLayout::build(
-                            items.into_iter().cloned(),
-                            system_link.font_set(),
-                        ),
                         delayed_render_messages,
-                        |layout, h, view_init_ctx| {
-                            let views = crate::uikit::MenuItemLayout::instantiate(
-                                layout.into_iter(),
-                                depth + 1,
-                                view_init_ctx,
-                                common_res,
-                            );
-                            for x in views.iter() {
-                                x.mount(view_init_ctx, &h);
-                            }
-
-                            views
-                        },
-                    );
-
-                    self.opening_surfaces.push(MenuSurface {
-                        handle: surface,
-                        item_views,
-                        _base_event_handler: base_event_handler,
+                        common_res,
+                        self.parent,
+                        pos,
+                        depth + 1,
                         parent_path,
-                        current_selecting: None,
-                    });
+                        items.iter().cloned(),
+                    ));
                 }
             }
             None => {
                 // 最初のやつだけ表示する
-                while self.opening_surfaces.len() > 1 {
-                    self.opening_surfaces.pop().expect("empty?").handle.close(
-                        system_link,
-                        view_init_context.mount_context.composite_tree,
-                        view_init_context.mount_context.ht_manager,
-                        view_init_context.mount_context.keyboard_focus_registry,
-                    );
-                }
+                self.close_deeper(
+                    0,
+                    system_link,
+                    view_init_context.mount_context.composite_tree,
+                    view_init_context.mount_context.ht_manager,
+                    view_init_context.mount_context.keyboard_focus_registry,
+                );
             }
         }
-    }
-
-    pub fn open_submenu(
-        &mut self,
-        depth: usize,
-        index: usize,
-        system_link: &SystemLink,
-        view_init_context: &mut ViewInitContext,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-        common_res: &MenuItemCommonResources,
-    ) {
-        while self.opening_surfaces.len() > depth + 1 {
-            self.opening_surfaces.pop().expect("empty?").handle.close(
-                system_link,
-                view_init_context.mount_context.composite_tree,
-                view_init_context.mount_context.ht_manager,
-                view_init_context.mount_context.keyboard_focus_registry,
-            );
-        }
-
-        let target_surface = self.opening_surfaces.last().expect("root?");
-        let MenuItemView::SubMenu(ref view) = target_surface.item_views[index] else {
-            panic!("not a submenu");
-        };
-        let display_pos = target_surface.handle.submenu_pop_position(view);
-        let parent_path = target_surface
-            .parent_path
-            .iter()
-            .copied()
-            .chain(core::iter::once(index))
-            .collect::<Vec<_>>();
-        let items = parent_path
-            .iter()
-            .fold(&self.items[..], |haystack, &x| match haystack[x] {
-                MenuItem::SubMenu { ref items, .. } => items,
-                _ => unreachable!("invalid nesting"),
-            });
-
-        let (surface, base_event_handler, item_views) = system_link.pop_context_menu(
-            self.parent,
-            view_init_context,
-            depth + 1,
-            display_pos,
-            crate::uikit::MenuItemLayout::build(items.into_iter().cloned(), system_link.font_set()),
-            delayed_render_messages,
-            |layout, h, view_init_ctx| {
-                let views = crate::uikit::MenuItemLayout::instantiate(
-                    layout.into_iter(),
-                    depth + 1,
-                    view_init_ctx,
-                    common_res,
-                );
-                for x in views.iter() {
-                    x.mount(view_init_ctx, &h);
-                }
-
-                views
-            },
-        );
-
-        self.opening_surfaces.push(MenuSurface {
-            handle: surface,
-            item_views,
-            _base_event_handler: base_event_handler,
-            parent_path,
-            current_selecting: None,
-        });
     }
 
     pub fn terminate(
@@ -6088,11 +6054,11 @@ impl SystemLink<'_> {
             Vec<MenuItemLayout>,
             FlyoutSurfaceHandle,
             &mut ViewInitContext,
-        ) -> Vec<MenuItemView>,
+        ) -> Vec<MenuItemInteractableElement>,
     ) -> (
         FlyoutSurfaceHandle,
         Rc<MenuBaseSurfaceEventHandler>,
-        Vec<MenuItemView>,
+        Vec<MenuItemInteractableElement>,
     ) {
         let width = MenuItemLayout::min_width(layouted_items.iter());
         let height = MenuItemLayout::height(layouted_items.iter());

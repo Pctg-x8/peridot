@@ -1,7 +1,7 @@
 use std::rc::Rc;
 
 use crate::{
-    Event,
+    Event, FlyoutSurfaceHandle,
     input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
     rendering::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
@@ -15,7 +15,7 @@ use crate::{
         },
         text::{FontID, FontSet, TextLayout},
     },
-    uikit::{MountContext, MountTarget, ViewInitContext},
+    uikit::{MountTarget, ViewInitContext},
     utils::{LogicalUnit, SafeF32, Size},
 };
 
@@ -29,35 +29,30 @@ pub enum MenuItem {
     Separator,
 }
 
-pub enum MenuItemView {
-    Heading(HeadingView),
+pub enum MenuItemInteractableElement {
     Command(CommandView),
     SubMenu(SubMenuView),
-    Separator(SeparatorView),
 }
-impl MenuItemView {
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        match self {
-            MenuItemView::Heading(heading) => heading.mount(ctx, target),
-            MenuItemView::Command(command) => command.mount(ctx, target),
-            MenuItemView::SubMenu(submenu) => submenu.mount(ctx, target),
-            MenuItemView::Separator(separator) => separator.mount(ctx, target),
-        }
-    }
-
+impl MenuItemInteractableElement {
     pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
         match self {
-            MenuItemView::Command(x) => x.event_handler.lit(composite_tree, current_sec),
-            MenuItemView::SubMenu(x) => x.event_handler.lit(composite_tree, current_sec),
-            _ => (),
+            MenuItemInteractableElement::Command(x) => {
+                x.event_handler.lit(composite_tree, current_sec)
+            }
+            MenuItemInteractableElement::SubMenu(x) => {
+                x.event_handler.lit(composite_tree, current_sec)
+            }
         }
     }
 
     pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
         match self {
-            MenuItemView::Command(x) => x.event_handler.unlit(composite_tree, current_sec),
-            MenuItemView::SubMenu(x) => x.event_handler.unlit(composite_tree, current_sec),
-            _ => (),
+            MenuItemInteractableElement::Command(x) => {
+                x.event_handler.unlit(composite_tree, current_sec)
+            }
+            MenuItemInteractableElement::SubMenu(x) => {
+                x.event_handler.unlit(composite_tree, current_sec)
+            }
         }
     }
 }
@@ -147,48 +142,54 @@ impl MenuItemLayout {
         depth: usize,
         ctx: &mut ViewInitContext,
         common_res: &CommonResources,
-    ) -> Vec<MenuItemView> {
+        onto: &FlyoutSurfaceHandle,
+    ) -> Vec<Option<MenuItemInteractableElement>> {
         layout
             .enumerate()
             .scan(0.0, |ad_accum, (index, x)| match x.item {
-                MenuItem::Heading { label } => Some(MenuItemView::Heading(HeadingView::new(
-                    ctx,
-                    label,
-                    x.placement_y,
-                ))),
+                MenuItem::Heading { label } => {
+                    create_heading_visual(label, x.placement_y, onto.ct_root(), ctx.composite_tree);
+                    Some(None)
+                }
                 MenuItem::Command { label, command_id } => {
                     let ad = *ad_accum;
                     *ad_accum += ANIMATION_DELAY_PER_ELEMENT;
 
-                    Some(MenuItemView::Command(CommandView::new(
-                        ctx,
-                        common_res,
-                        label,
-                        command_id,
-                        depth,
-                        index,
-                        ad,
-                        x.placement_y,
+                    Some(Some(MenuItemInteractableElement::Command(
+                        CommandView::new(
+                            ctx,
+                            common_res,
+                            label,
+                            command_id,
+                            depth,
+                            index,
+                            ad,
+                            x.placement_y,
+                            (onto.ct_root(), onto.ht_root()),
+                        ),
                     )))
                 }
                 MenuItem::SubMenu { label, .. } => {
                     let ad = *ad_accum;
                     *ad_accum += ANIMATION_DELAY_PER_ELEMENT;
 
-                    Some(MenuItemView::SubMenu(SubMenuView::new(
-                        ctx,
-                        common_res,
-                        label,
-                        depth,
-                        index,
-                        ad,
-                        x.placement_y,
+                    Some(Some(MenuItemInteractableElement::SubMenu(
+                        SubMenuView::new(
+                            ctx,
+                            common_res,
+                            label,
+                            depth,
+                            index,
+                            ad,
+                            x.placement_y,
+                            (onto.ct_root(), onto.ht_root()),
+                        ),
                     )))
                 }
-                MenuItem::Separator => Some(MenuItemView::Separator(SeparatorView::new(
-                    ctx,
-                    x.placement_y,
-                ))),
+                MenuItem::Separator => {
+                    create_separator_visual(x.placement_y, onto.ct_root(), ctx.composite_tree);
+                    Some(None)
+                }
             })
             .collect()
     }
@@ -257,44 +258,40 @@ const LIT_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {
 };
 const UNLIT_OPACITY_ANIM: FloatAnimationTemplate = LIT_OPACITY_ANIM.flip(AnimationCurve::Linear);
 
-pub struct HeadingView {
-    ct_root: CompositeTreeRef,
-}
-impl HeadingView {
-    pub fn new(ctx: &mut ViewInitContext, label: String, placement_y: f32) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(ITEM_HEIGHT),
-            ],
-            offset: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(placement_y),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.9])),
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: label,
-                    font_id: FontID::UIDefault,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+pub fn create_heading_visual<E>(
+    label: String,
+    placement_y: f32,
+    onto: CompositeTreeRef,
+    composite_tree: &mut CompositeTree<E>,
+) {
+    let ct_root = composite_tree.create(CompositeRect {
+        scale_factor: CompositeRectScaleFactor::UI,
+        relative_size_adjustment: [1.0, 0.0],
+        size: [
+            AnimatableFloat::Value(0.0),
+            AnimatableFloat::Value(ITEM_HEIGHT),
+        ],
+        offset: [
+            AnimatableFloat::Value(0.0),
+            AnimatableFloat::Value(placement_y),
+        ],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.9])),
+        text: Some(CompositeRectText {
+            runs: vec![CompositeRectTextRun {
+                content: label,
+                font_id: FontID::UIDefault,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                 ..Default::default()
-            }),
+            }],
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
             ..Default::default()
-        });
+        }),
+        ..Default::default()
+    });
 
-        Self { ct_root }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-    }
+    composite_tree.add_child(onto, ct_root);
 }
 
 pub struct CommandView {
@@ -313,6 +310,7 @@ impl CommandView {
         index: usize,
         animation_delay: f32,
         placement_y: f32,
+        onto: (CompositeTreeRef, HitTestTreeRef),
     ) -> Self {
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
@@ -378,17 +376,15 @@ impl CommandView {
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
+        ctx.composite_tree.add_child(onto.0, ct_root);
+        ctx.ht_manager.add_child(onto.1, ht_root);
+
         Self {
             event_handler: eh,
             ht_root,
             ct_root,
             ct_label,
         }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
     }
 }
 
@@ -424,6 +420,7 @@ impl SubMenuView {
         index: usize,
         animation_delay: f32,
         placement_y: f32,
+        onto: (CompositeTreeRef, HitTestTreeRef),
     ) -> Self {
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
@@ -512,6 +509,9 @@ impl SubMenuView {
         });
         ctx.ht_manager.set_action_handler(ht_root, &eh);
 
+        ctx.composite_tree.add_child(onto.0, ct_root);
+        ctx.ht_manager.add_child(onto.1, ht_root);
+
         Self {
             event_handler: eh,
             ht_root,
@@ -521,37 +521,27 @@ impl SubMenuView {
             placement_y,
         }
     }
-
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(parent.ht_root(), self.ht_root);
-    }
 }
 
-pub struct SeparatorView {
-    ct_root: CompositeTreeRef,
-}
-impl SeparatorView {
-    pub fn new(ctx: &mut ViewInitContext, placement_y: f32) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 0.0],
-            size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
-            offset: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(placement_y),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.5])),
-            ..Default::default()
-        });
+pub fn create_separator_visual<E>(
+    placement_y: f32,
+    onto: CompositeTreeRef,
+    composite_tree: &mut CompositeTree<E>,
+) {
+    let ct_root = composite_tree.create(CompositeRect {
+        scale_factor: CompositeRectScaleFactor::UI,
+        relative_size_adjustment: [1.0, 0.0],
+        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
+        offset: [
+            AnimatableFloat::Value(0.0),
+            AnimatableFloat::Value(placement_y),
+        ],
+        has_bitmap: true,
+        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.5])),
+        ..Default::default()
+    });
 
-        Self { ct_root }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, parent: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(parent.ct_root(), self.ct_root);
-    }
+    composite_tree.add_child(onto, ct_root);
 }
 
 pub struct BaseSurfaceEventHandler {

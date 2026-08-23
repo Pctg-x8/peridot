@@ -7,8 +7,6 @@ use std::{
     rc::{Rc, Weak},
 };
 
-use bedrock::TypedVulkanSinkStructure;
-
 use crate::{
     SyncEvent, SystemLink,
     input::{
@@ -1684,9 +1682,8 @@ mod menu;
 pub use self::menu::{
     BaseSurfaceEventHandler as MenuBaseSurfaceEventHandler, CommandView as MenuItemCommandView,
     CommonResources as MenuItemCommonResources,
-    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS,
-    HeadingView as MenuItemHeadingView, MenuItem, MenuItemLayout, MenuItemView,
-    SeparatorView as MenuItemSeparatorView, SubMenuView as MenuItemSubMenuView,
+    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS, MenuItem,
+    MenuItemInteractableElement, MenuItemLayout, SubMenuView as MenuItemSubMenuView,
 };
 
 mod layout;
