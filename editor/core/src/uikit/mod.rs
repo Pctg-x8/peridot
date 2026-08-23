@@ -1680,10 +1680,9 @@ pub use self::button::{
 
 mod menu;
 pub use self::menu::{
-    BaseSurfaceEventHandler as MenuBaseSurfaceEventHandler, CommandView as MenuItemCommandView,
-    CommonResources as MenuItemCommonResources,
-    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS, MenuItem,
-    MenuItemInteractableElement, MenuItemLayout, SubMenuView as MenuItemSubMenuView,
+    CommandView as MenuItemCommandView, CommonResources as MenuItemCommonResources,
+    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS, EventHandler as MenuEventHandler,
+    MenuItem, MenuItemInteractableElement, MenuItemLayout, SubMenuView as MenuItemSubMenuView,
 };
 
 mod layout;

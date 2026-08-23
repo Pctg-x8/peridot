@@ -56,7 +56,7 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
-        ContainerView, MenuBaseSurfaceEventHandler, MenuItem, MenuItemCommonResources,
+        ContainerView, MenuEventHandler, MenuItem, MenuItemCommonResources,
         MenuItemInteractableElement, MountContext, MountTarget, NumericInputView,
         NumericInputViewIO, NumericInputViewInit, PopupID, PopupManager, RadioButtonView,
         RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
@@ -3502,153 +3502,9 @@ async fn run<'sys>(
     }
     view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
-    // initial push test
-    /*let mut committed_state =
-        profiler::wrap!(LOCK_WAIT, committed_preview_state.lock().expect("poisoned"));
-    let mut vbuf_bytes = vec![0u8; size_of::<[peridot_math::Vector4F32; 2]>() * 24];
-    let mut ibuf_bytes = vec![0u8; size_of::<u16>() * 36];
-    unsafe {
-        const VERTICES: &[[peridot_math::Vector4F32; 2]] = &[
-            // +x
-            [
-                peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
-                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
-                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
-                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
-                peridot_math::Vector4(1.0, 0.0, 0.0, 0.0),
-            ],
-            // -x
-            [
-                peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
-                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
-                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
-                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
-                peridot_math::Vector4(-1.0, 0.0, 0.0, 0.0),
-            ],
-            // +y
-            [
-                peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, 1.0, 0.0, 0.0),
-            ],
-            // -y
-            [
-                peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, -1.0, 0.0, 0.0),
-            ],
-            // +z
-            [
-                peridot_math::Vector4(0.5, 0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, -0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, 0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, -0.5, 0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, 1.0, 0.0),
-            ],
-            // -z
-            [
-                peridot_math::Vector4(0.5, 0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, 0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(0.5, -0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-            ],
-            [
-                peridot_math::Vector4(-0.5, -0.5, -0.5, 1.0),
-                peridot_math::Vector4(0.0, 0.0, -1.0, 0.0),
-            ],
-        ];
-        const INDICES: &[u16] = &[
-            0, 1, 2, 2, 1, 3, // +x
-            4, 5, 6, 6, 5, 7, // -x
-            8, 9, 10, 10, 9, 11, // +y
-            12, 13, 14, 14, 13, 15, // -y
-            16, 17, 18, 18, 17, 19, // +z
-            20, 21, 22, 22, 21, 23, // -z
-        ];
-
-        vbuf_bytes
-            .as_mut_ptr()
-            .cast::<[peridot_math::Vector4F32; 2]>()
-            .copy_from_nonoverlapping(VERTICES.as_ptr(), VERTICES.len());
-        ibuf_bytes
-            .as_mut_ptr()
-            .cast::<u16>()
-            .copy_from_nonoverlapping(INDICES.as_ptr(), INDICES.len());
-    }
-    committed_state
-        .pushed_meshes
-        .push(rendering::preview::CommittedMeshData {
-            vertices: std::sync::Arc::from(vbuf_bytes),
-            vertex_stride: size_of::<[peridot_math::Vector4F32; 2]>(),
-            indices: std::sync::Arc::from(ibuf_bytes),
-            index_type: rendering::preview::IndexType::U16,
-            sub_mesh_ranges: std::sync::Arc::new([core::range::Range::from(0..36)]),
-        });
-    committed_state
-        .pushed_render_data
-        .push(rendering::preview::CommittedRenderData {
-            object_to_world: peridot_math::Matrix4F32::ONE,
-            mesh_id: 0,
-        });
-    drop(committed_state);*/
-
     system_link.prelaunch(main_window);
     profiler::end!(perf);
+
     loop {
         let e = event_queue.next_event().await;
         tracing::trace!(target: "event-trace", event = ?e);
@@ -5643,7 +5499,7 @@ impl DropdownMenuSession {
 pub struct MenuSurface {
     handle: FlyoutSurfaceHandle,
     item_views: Vec<Option<MenuItemInteractableElement>>,
-    _base_event_handler: Rc<MenuBaseSurfaceEventHandler>,
+    _event_handler: Rc<MenuEventHandler>,
     parent_path: Vec<usize>,
     current_selecting: Option<usize>,
 }
@@ -5672,21 +5528,19 @@ impl MenuSurface {
             delayed_render_messages,
         );
 
-        let base_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-        ctx.ht_manager
-            .set_action_handler(surface.ht_root(), &base_event_handler);
-        let item_views = crate::uikit::MenuItemLayout::instantiate(
+        let (item_views, eh) = crate::uikit::MenuItemLayout::instantiate(
             layouted_items.into_iter(),
             depth,
             ctx,
             common_res,
             &surface,
         );
+        ctx.ht_manager.set_action_handler(surface.ht_root(), &eh);
 
         Self {
             handle: surface,
             item_views,
-            _base_event_handler: base_event_handler,
+            _event_handler: eh,
             parent_path,
             current_selecting: None,
         }
@@ -5944,9 +5798,6 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
     a: 16,
 };
 
-#[cfg(windows)]
-use platform::windows::SystemLink;
-
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
     vk_device: *const Graphics<'sys>,
@@ -6068,7 +5919,7 @@ pub use platform::unix::wayland::{
 };
 #[cfg(windows)]
 pub use platform::windows::{
-    PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
+    PointerID, SystemLink, WindowHandle, WindowPersistentStateNativeGeometryUnit,
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 
@@ -6602,6 +6453,7 @@ impl FileSystem {
             .parent()
             .expect("fs.resources_base_pat.current_exe.parent")
             .join("../Resources/resources");
+
         #[cfg(target_os = "linux")]
         let cache_base_path = 'cache_base_path: {
             if let Some(p) = std::env::var_os("XDG_CACHE_HOME") {
