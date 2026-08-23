@@ -2,7 +2,7 @@ use core::cell::Cell;
 use std::rc::Rc;
 
 use crate::{
-    Event,
+    Event, SystemLink,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -19,92 +19,128 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{MenuItem, MountContext, MountTarget, RawMountTarget, ViewInitContext},
-    utils::Point,
+    uikit::{MenuItem, ViewRenderElements},
+    utils::{Point, Size},
 };
 
 pub struct View {
-    eh: Rc<EventHandler>,
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
+    top: f32,
+    eh: Option<Rc<EventHandler>>,
+    labels: Vec<(String, Vec<MenuItem>)>,
 }
 impl View {
-    pub const HEIGHT: f32 = ItemView::ITEM_HEIGHT;
+    pub const HEIGHT: f32 = ItemSubView::ITEM_HEIGHT;
 
-    pub fn new(ctx: &mut ViewInitContext, top: f32, labels: Vec<(String, Vec<MenuItem>)>) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(top)],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(ItemView::ITEM_HEIGHT),
-            ],
-            relative_size_adjustment: [1.0, 0.0],
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            top,
-            height: ItemView::ITEM_HEIGHT,
-            width_adjustment_factor: 1.0,
-            ..Default::default()
-        });
-
-        let mut item_views = Vec::with_capacity(labels.len());
-        let mut item_left = 0.0;
-        for (label, items) in labels {
-            let v = ItemView::new(ctx, label, item_left, items);
-            v.mount(ctx, &RawMountTarget { ct_root, ht_root });
-            item_left += v.width + ItemView::PADDING_INLINE * 2.0;
-            item_views.push(v);
-        }
-
-        let eh = Rc::new(EventHandler {
-            items: item_views,
-            opening: Cell::new(false),
-            last_lit_index: Cell::new(None),
-            ignore_next_pointer_down_event: Cell::new(false),
-        });
-        for x in eh.items.iter() {
-            x.bind_event_handler(&eh, ctx.ht_manager);
-        }
-
+    pub fn new(top: f32, labels: Vec<(String, Vec<MenuItem>)>) -> Self {
         Self {
-            eh,
-            ct_root,
-            ht_root,
-        }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
-    }
-
-    pub fn on_global_mouse_click<E>(
-        &self,
-        composite_tree: &mut CompositeTree<E>,
-        current_sec: f32,
-    ) {
-        self.on_close_all(composite_tree, current_sec);
-        if self.eh.last_lit_index.get().is_some() {
-            // 連続で開いちゃうので次のPointerDownを無視する
-            self.eh.ignore_next_pointer_down_event.set(true);
+            top,
+            eh: None,
+            labels,
         }
     }
 
     pub fn on_close_all<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        self.eh.opening.set(false);
+        let eh = self.eh.as_ref().expect("not rendered?");
+        eh.opening.set(false);
 
-        if self.eh.last_lit_index.get().is_none() {
-            for x in self.eh.items.iter() {
+        if eh.last_lit_index.get().is_none() {
+            for x in eh.items.iter() {
                 x.unlit(composite_tree, current_sec);
             }
         }
+
+        // if eh.last_lit_index.get().is_some() {
+        //     // 連続で開いちゃうので次のPointerDownを無視する
+        //     eh.ignore_next_pointer_down_event.set(true);
+        // }
+    }
+}
+impl crate::uikit::View for View {
+    fn render(
+        &mut self,
+        _layout_rect: crate::utils::Rect<crate::utils::LogicalUnit>,
+        ctx: &mut crate::uikit::RenderContext,
+        _layout_state: &crate::uikit::ViewLayoutStateStore,
+    ) -> crate::uikit::ViewRenderElements {
+        let e = match self.eh {
+            Some(ref e) => e,
+            None => {
+                // first render
+                let ct_root = CompositeRect::build()
+                    .use_ui_scale()
+                    .expand_width()
+                    .offset_imm(0.0, self.top)
+                    .size_imm(0.0, ItemSubView::ITEM_HEIGHT)
+                    .create(ctx.composite_tree);
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    top: self.top,
+                    height: ItemSubView::ITEM_HEIGHT,
+                    width_adjustment_factor: 1.0,
+                    ..Default::default()
+                });
+
+                let mut item_views = Vec::with_capacity(self.labels.len());
+                let mut item_left = 0.0;
+                for (label, items) in self.labels.iter() {
+                    let v = ItemSubView::new(
+                        label.clone(),
+                        item_left,
+                        items.clone(),
+                        ctx.composite_tree,
+                        ctx.ht_manager,
+                        ctx.system_link,
+                    );
+                    ctx.composite_tree.add_child(ct_root, v.ct_root);
+                    ctx.ht_manager.add_child(ht_root, v.ht_root);
+                    item_left += v.width + ItemSubView::PADDING_INLINE * 2.0;
+                    item_views.push(v);
+                }
+
+                let eh = Rc::new(EventHandler {
+                    ct_root,
+                    ht_root,
+                    items: item_views,
+                    opening: Cell::new(false),
+                    last_lit_index: Cell::new(None),
+                    ignore_next_pointer_down_event: Cell::new(false),
+                });
+                for x in eh.items.iter() {
+                    x.bind_event_handler(&eh, ctx.ht_manager);
+                }
+
+                &*self.eh.insert(eh)
+            }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut crate::uikit::TeardownContext) {
+        let Some(e) = self.eh.take() else {
+            // not rendered
+            return;
+        };
+
+        ctx.composite_tree.free_all(e.ct_root);
+        ctx.ht_manager.free_all(e.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut crate::uikit::MeasureContext,
+    ) -> Size<crate::utils::LogicalUnit> {
+        Size::new_logical(0.0, ItemSubView::ITEM_HEIGHT)
     }
 }
 
 struct EventHandler {
-    items: Vec<ItemView>,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    items: Vec<ItemSubView>,
     opening: Cell<bool>,
     last_lit_index: Cell<Option<usize>>,
     ignore_next_pointer_down_event: Cell<bool>,
@@ -214,27 +250,34 @@ impl HitTestTreeActionHandler for EventHandler {
     }
 }
 
-struct ItemView {
+struct ItemSubView {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     width: f32,
     items: Vec<MenuItem>,
     lit: core::cell::Cell<bool>,
 }
-impl ItemView {
+impl ItemSubView {
     const ITEM_HEIGHT: f32 = 20.0;
     const PADDING_INLINE: f32 = 8.0;
 
-    fn new(ctx: &mut ViewInitContext, label: String, left: f32, items: Vec<MenuItem>) -> Self {
+    fn new<E>(
+        label: String,
+        left: f32,
+        items: Vec<MenuItem>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        syslink: &SystemLink,
+    ) -> Self {
         let text_width =
-            TextLayout::measure_visual_width(&label, FontID::UIDefault, ctx.system_link.font_set());
+            TextLayout::measure_visual_width(&label, FontID::UIDefault, syslink.font_set());
 
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_root = composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(left), AnimatableFloat::Value(0.0)],
             size: [
                 AnimatableFloat::Value(text_width + Self::PADDING_INLINE * 2.0),
-                AnimatableFloat::Value(ItemView::ITEM_HEIGHT),
+                AnimatableFloat::Value(ItemSubView::ITEM_HEIGHT),
             ],
             has_bitmap: true,
             text: Some(CompositeRectText {
@@ -250,10 +293,10 @@ impl ItemView {
             }),
             ..Default::default()
         });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
+        let ht_root = ht_manager.create(HitTestTreeData {
             left,
             width: text_width + Self::PADDING_INLINE * 2.0,
-            height: ItemView::ITEM_HEIGHT,
+            height: ItemSubView::ITEM_HEIGHT,
             ..Default::default()
         });
 
@@ -273,11 +316,6 @@ impl ItemView {
         ht_manager: &mut HitTestTreeManager,
     ) {
         ht_manager.set_action_handler(self.ht_root, event_handler);
-    }
-
-    fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree.add_child(target.ct_root(), self.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.ht_root);
     }
 
     fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {

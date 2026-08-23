@@ -2929,7 +2929,7 @@ struct PerWindowData {
     screen_reposition_interests: HashSet<HitTestTreeRef>,
     root_view: TypedViewIdentifier<WindowRootView>,
     header: ui::window_header::Component,
-    appmenu: Option<ui::app_menu_bar::View>,
+    appmenu: Option<TypedViewIdentifier<ui::app_menu_bar::View>>,
     footer: Option<TypedViewIdentifier<ui::window_footer::View>>,
     docking_manager: ui::dock::DockingManager,
 }
@@ -3120,86 +3120,87 @@ async fn run<'sys>(
     );
 
     let app_menu_view = if system_link.needs_app_menu_in_surface() {
-        let app_menu_view = ui::app_menu_bar::View::new(
-            &mut view_init_ctx,
-            ui::window_header::View::THICKNESS,
-            vec![
-                (
-                    "ファイル(F)".into(),
-                    vec![
-                        MenuItem::Command {
-                            label: "新規プロジェクト...".into(),
-                            command_id: 0,
-                        },
-                        MenuItem::Command {
-                            label: "新規ファイル...".into(),
-                            command_id: 0,
-                        },
-                        MenuItem::Separator,
-                        MenuItem::Command {
-                            label: "プロジェクトを開く...".into(),
-                            command_id: 0,
-                        },
-                        MenuItem::Command {
-                            label: "保存".into(),
-                            command_id: 0,
-                        },
-                        MenuItem::Command {
-                            label: "名前をつけて保存...".into(),
-                            command_id: 0,
-                        },
-                        MenuItem::Separator,
-                        MenuItem::Command {
-                            label: "Peridot Marble Editor を終了".into(),
-                            command_id: 1000,
-                        },
-                    ],
-                ),
-                (
-                    "編集(E)".into(),
-                    vec![MenuItem::Command {
-                        label: "項目2".into(),
-                        command_id: 1,
-                    }],
-                ),
-                (
-                    "ウィンドウ(W)".into(),
-                    vec![
-                        MenuItem::Command {
-                            label: "項目3".into(),
-                            command_id: 2,
-                        },
-                        MenuItem::SubMenu {
-                            label: "その他".into(),
-                            items: vec![
-                                MenuItem::Command {
-                                    label: "ウィンドウ1".into(),
-                                    command_id: 201,
-                                },
-                                MenuItem::Command {
-                                    label: "ウィンドウ2".into(),
-                                    command_id: 202,
-                                },
-                            ],
-                        },
-                    ],
-                ),
-                (
-                    "ヘルプ(H)".into(),
-                    vec![
-                        MenuItem::Command {
-                            label: "項目4".into(),
-                            command_id: 3,
-                        },
-                        MenuItem::Command {
-                            label: "バージョン情報".into(),
-                            command_id: 100,
-                        },
-                    ],
-                ),
-            ],
-        );
-        app_menu_view.mount(&mut view_init_ctx, &main_window);
+        let app_menu_view = view_init_ctx.construct_view(|_| {
+            Box::new(ui::app_menu_bar::View::new(
+                ui::window_header::View::THICKNESS,
+                vec![
+                    (
+                        "ファイル(F)".into(),
+                        vec![
+                            MenuItem::Command {
+                                label: "新規プロジェクト...".into(),
+                                command_id: 0,
+                            },
+                            MenuItem::Command {
+                                label: "新規ファイル...".into(),
+                                command_id: 0,
+                            },
+                            MenuItem::Separator,
+                            MenuItem::Command {
+                                label: "プロジェクトを開く...".into(),
+                                command_id: 0,
+                            },
+                            MenuItem::Command {
+                                label: "保存".into(),
+                                command_id: 0,
+                            },
+                            MenuItem::Command {
+                                label: "名前をつけて保存...".into(),
+                                command_id: 0,
+                            },
+                            MenuItem::Separator,
+                            MenuItem::Command {
+                                label: "Peridot Marble Editor を終了".into(),
+                                command_id: 1000,
+                            },
+                        ],
+                    ),
+                    (
+                        "編集(E)".into(),
+                        vec![MenuItem::Command {
+                            label: "項目2".into(),
+                            command_id: 1,
+                        }],
+                    ),
+                    (
+                        "ウィンドウ(W)".into(),
+                        vec![
+                            MenuItem::Command {
+                                label: "項目3".into(),
+                                command_id: 2,
+                            },
+                            MenuItem::SubMenu {
+                                label: "その他".into(),
+                                items: vec![
+                                    MenuItem::Command {
+                                        label: "ウィンドウ1".into(),
+                                        command_id: 201,
+                                    },
+                                    MenuItem::Command {
+                                        label: "ウィンドウ2".into(),
+                                        command_id: 202,
+                                    },
+                                ],
+                            },
+                        ],
+                    ),
+                    (
+                        "ヘルプ(H)".into(),
+                        vec![
+                            MenuItem::Command {
+                                label: "項目4".into(),
+                                command_id: 3,
+                            },
+                            MenuItem::Command {
+                                label: "バージョン情報".into(),
+                                command_id: 100,
+                            },
+                        ],
+                    ),
+                ],
+            ))
+        });
+        view_init_ctx.view_set_parent(app_menu_view, main_window_root_view);
         Some(app_menu_view)
     } else {
         None
@@ -3457,24 +3458,20 @@ async fn run<'sys>(
     application.sync(&mut view_feedback_store);
     let mut fb_context = ViewFeedbackContext {
         application: &application,
-        view_init_context: ViewInitContext {
-            mount_context: MountContext {
-                composite_tree: &mut composite_tree,
-                ht_manager: &mut ht_manager,
-                current_sec: global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut keyboard_focus_registry,
-            },
-            view_allocator: &mut view_allocator,
-            view_instance_store: &mut view_instance_store,
-            view_tree_relation_store: &mut view_tree_relation_store,
-            view_group_relation_store: &mut view_group_relation_store,
-            view_layout_state_store: &mut view_layout_state_store,
-            view_render_state_store: &mut view_render_state_store,
-            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-            system_link: &system_link,
-            main_thread_texture_id_issuer: &mut texture_id_issuer,
-            application: &application,
-        },
+        composite_tree: &mut composite_tree,
+        ht_manager: &mut ht_manager,
+        current_sec: global_time_base.elapsed().as_secs_f32(),
+        keyboard_focus_registry: &mut keyboard_focus_registry,
+        view_allocator: &mut view_allocator,
+        view_instance_store: &mut view_instance_store,
+        view_tree_relation_store: &mut view_tree_relation_store,
+        view_group_relation_store: &mut view_group_relation_store,
+        view_layout_state_store: &mut view_layout_state_store,
+        view_render_state_store: &mut view_render_state_store,
+        view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+        system_link: &system_link,
+        main_thread_texture_id_issuer: &mut texture_id_issuer,
+
         view_render_queue: &mut view_render_queue,
     };
 
@@ -3792,7 +3789,12 @@ async fn run<'sys>(
                 if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
                     if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        a.on_close_all(
+                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                            a.into_untyped(),
+                            &view_instance_store,
+                        )
+                        .expect("query failed")
+                        .on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -3919,7 +3921,12 @@ async fn run<'sys>(
                     // フォーカスロストした時もコンテキストメニューを閉じる
                     if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        a.on_close_all(
+                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                            a.into_untyped(),
+                            &view_instance_store,
+                        )
+                        .expect("query failed")
+                        .on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -3939,7 +3946,12 @@ async fn run<'sys>(
                         if let Some(ref a) =
                             unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                         {
-                            a.on_close_all(
+                            crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                                a.into_untyped(),
+                                &view_instance_store,
+                            )
+                            .expect("query failed")
+                            .on_close_all(
                                 &mut composite_tree,
                                 global_time_base.elapsed().as_secs_f32(),
                             );
@@ -3964,7 +3976,12 @@ async fn run<'sys>(
                 // drag_preview_popover.bind_position_base_window_link(window);
 
                 if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu {
-                    a.on_close_all(
+                    crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                        a.into_untyped(),
+                        &view_instance_store,
+                    )
+                    .expect("query failed")
+                    .on_close_all(
                         &mut composite_tree,
                         global_time_base.elapsed().as_secs_f32(),
                     );
@@ -3974,7 +3991,12 @@ async fn run<'sys>(
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        a.on_close_all(
+                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                            a.into_untyped(),
+                            &view_instance_store,
+                        )
+                        .expect("query failed")
+                        .on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -4548,7 +4570,12 @@ async fn run<'sys>(
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        a.on_close_all(
+                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                            a.into_untyped(),
+                            &view_instance_store,
+                        )
+                        .expect("query failed")
+                        .on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -4763,7 +4790,12 @@ async fn run<'sys>(
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        a.on_close_all(
+                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                            a.into_untyped(),
+                            &view_instance_store,
+                        )
+                        .expect("query failed")
+                        .on_close_all(
                             &mut composite_tree,
                             global_time_base.elapsed().as_secs_f32(),
                         );
@@ -5374,24 +5406,19 @@ async fn run<'sys>(
         if !view_feedback_store.is_empty() {
             let mut fb_context = ViewFeedbackContext {
                 application: &application,
-                view_init_context: ViewInitContext {
-                    mount_context: MountContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                    },
-                    view_allocator: &mut view_allocator,
-                    view_instance_store: &mut view_instance_store,
-                    view_tree_relation_store: &mut view_tree_relation_store,
-                    view_group_relation_store: &mut view_group_relation_store,
-                    view_layout_state_store: &mut view_layout_state_store,
-                    view_render_state_store: &mut view_render_state_store,
-                    view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-                    system_link: &system_link,
-                    main_thread_texture_id_issuer: &mut texture_id_issuer,
-                    application: &application,
-                },
+                composite_tree: &mut composite_tree,
+                ht_manager: &mut ht_manager,
+                current_sec: global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut keyboard_focus_registry,
+                view_allocator: &mut view_allocator,
+                view_instance_store: &mut view_instance_store,
+                view_tree_relation_store: &mut view_tree_relation_store,
+                view_group_relation_store: &mut view_group_relation_store,
+                view_layout_state_store: &mut view_layout_state_store,
+                view_render_state_store: &mut view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+                system_link: &system_link,
+                main_thread_texture_id_issuer: &mut texture_id_issuer,
                 view_render_queue: &mut view_render_queue,
             };
 

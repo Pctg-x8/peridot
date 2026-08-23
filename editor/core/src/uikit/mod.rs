@@ -1517,7 +1517,19 @@ pub trait ViewFeedbackRegisterable {
 
 pub struct ViewFeedbackContext<'a, 'h> {
     pub application: &'a Application,
-    pub view_init_context: ViewInitContext<'a, 'h>,
+    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'a mut HitTestTreeManager<'h>,
+    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
+    pub current_sec: f32,
+    pub view_allocator: &'a mut ViewIdentifierAllocator,
+    pub view_instance_store: &'a mut ViewInstanceStore,
+    pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
+    pub view_group_relation_store: &'a mut ViewGroupRelationStore,
+    pub view_layout_state_store: &'a mut ViewLayoutStateStore,
+    pub view_render_state_store: &'a mut ViewRenderStateStore,
+    pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
+    pub system_link: &'a SystemLink<'a>,
+    pub main_thread_texture_id_issuer: &'a mut MainThreadTextureIDIssuer,
     pub view_render_queue: &'a mut ViewRenderQueue,
 }
 impl ApplicationAccess for ViewFeedbackContext<'_, '_> {
@@ -1534,12 +1546,12 @@ impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
     ) -> TypedViewIdentifier<T> {
         construct_view(
             ctor,
-            self.view_init_context.view_allocator,
-            self.view_init_context.view_instance_store,
-            self.view_init_context.view_tree_relation_store,
-            self.view_init_context.view_group_relation_store,
-            self.view_init_context.view_layout_state_store,
-            self.view_init_context.view_render_state_store,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_layout_state_store,
+            self.view_render_state_store,
         )
     }
 
@@ -1547,46 +1559,46 @@ impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
     fn free_view_untyped(&mut self, id: ViewIdentifier) {
         free_view(
             id,
-            self.view_init_context.view_allocator,
-            self.view_init_context.view_instance_store,
-            self.view_init_context.view_tree_relation_store,
-            self.view_init_context.view_group_relation_store,
-            self.view_init_context.view_layout_state_store,
-            self.view_init_context.view_render_state_store,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_layout_state_store,
+            self.view_render_state_store,
         )
     }
 }
 impl ViewInstanceQueryable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        view_instance(id, self.view_init_context.view_instance_store)
+        view_instance(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        view_instance_mut(id, self.view_init_context.view_instance_store)
+        view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-        view_set_visibility(id, visible, self.view_init_context.view_instance_store);
+        view_set_visibility(id, visible, self.view_instance_store);
     }
 
     #[inline(always)]
     fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
-        view_layout_mut(id, self.view_init_context.view_instance_store)
+        view_layout_mut(id, self.view_instance_store)
     }
 }
 impl ViewRelationControllable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
-        view_set_parent(id, parent, self.view_init_context.view_tree_relation_store);
+        view_set_parent(id, parent, self.view_tree_relation_store);
     }
 
     #[inline(always)]
     fn view_detach_parent_untyped(&mut self, id: ViewIdentifier) {
-        view_detach_parent(id, self.view_init_context.view_tree_relation_store);
+        view_detach_parent(id, self.view_tree_relation_store);
     }
 }
 impl ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
@@ -1595,20 +1607,15 @@ impl ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
         teardown_view_recursive(
             target,
             &mut TeardownContext {
-                composite_tree: self.view_init_context.mount_context.composite_tree,
-                ht_manager: self.view_init_context.mount_context.ht_manager,
-                keyboard_focus_registry: self
-                    .view_init_context
-                    .mount_context
-                    .keyboard_focus_registry,
-                current_sec: self.view_init_context.mount_context.current_sec,
-                view_feedback_subscription_delayed_ops: self
-                    .view_init_context
-                    .view_feedback_subscription_delayed_ops,
+                composite_tree: self.composite_tree,
+                ht_manager: self.ht_manager,
+                keyboard_focus_registry: self.keyboard_focus_registry,
+                current_sec: self.current_sec,
+                view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
             },
-            self.view_init_context.view_instance_store,
-            self.view_init_context.view_tree_relation_store,
-            self.view_init_context.view_render_state_store,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_render_state_store,
         );
     }
 }
