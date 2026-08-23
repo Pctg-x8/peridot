@@ -1749,7 +1749,7 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
             return EventContinueControl::empty();
         }
 
-        self.r#move(&args.client_pos, context.system_link.event_dispatcher());
+        self.r#move(&args.client_pos, context.system_link);
         EventContinueControl::STOP_PROPAGATION
     }
 
@@ -1759,7 +1759,7 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
         context: &mut InputEventContext,
         args: &PointerActionArgs,
     ) -> EventContinueControl {
-        self.r#move(&args.client_pos, context.system_link.event_dispatcher());
+        self.r#move(&args.client_pos, context.system_link);
         EventContinueControl::STOP_PROPAGATION
     }
 
@@ -1776,12 +1776,8 @@ impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
 }
 impl DockedPaneSplitterEventHandler {
     /// 動かす
-    fn r#move(
-        &self,
-        client_pos: &Point<PointerInputUnit>,
-        event_dispatcher: &LogicFiberEventDispatcher,
-    ) {
-        event_dispatcher.dispatch(Event::DockMoveSplitter {
+    fn r#move(&self, client_pos: &Point<PointerInputUnit>, syslink: &SystemLink) {
+        syslink.dispatch_event(Event::DockMoveSplitter {
             controlling_dock: self.controlling_dock.get(),
             pos_client: self.dir.dominant_coordinate(client_pos) + self.drag_delta.get(),
         });

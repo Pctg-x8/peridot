@@ -1,7 +1,9 @@
 use std::rc::Rc;
 
 use windows::{
-    UI::Composition::{CompositionEffectSourceParameter, Desktop::DesktopWindowTarget},
+    UI::Composition::{
+        CompositionEffectFactory, CompositionEffectSourceParameter, Desktop::DesktopWindowTarget,
+    },
     Win32::{
         Foundation::{FALSE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
@@ -36,23 +38,20 @@ use windows::{
         },
     },
 };
-use windows_core::{Interface, PCWSTR, h, w};
+use windows_core::{HSTRING, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
 use crate::{
     Event, LogicFiberEventDispatcher, SystemLink, WindowHandle,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
-        ShellPointerActions,
+        KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState, ShellPointerActions,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
     platform::windows::{ApplicationContext, ModifierKeyRecorder},
     rendering::{
         NewContextMenuData, RenderMessage,
-        composite::{
-            AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
-        },
+        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     uikit::{
         MenuBaseSurfaceEventHandler, MenuItemLayout, MenuItemSubMenuView, MenuItemView,
@@ -194,7 +193,6 @@ pub struct InstanceState {
     event_dispatcher: *const LogicFiberEventDispatcher,
     _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
-    kf_root_group: KeyboardFocusGroupRef,
     spawned_surface_pos: Point<LogicalUnit>,
     pointer_focus: bool,
     modifier_key_state: ModifierKeyRecorder,
@@ -208,7 +206,7 @@ impl InstanceState {
     ) {
         composite_tree.free_all(self.composite_root);
         ht_manager.free_all(self.ht_root);
-        keyboard_focus_registry.release_group(self.kf_root_group);
+        keyboard_focus_registry.release_group(self.keyboard_focus_state.root_group());
     }
 
     #[inline(always)]
@@ -576,10 +574,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+const BLUR_EFFECT_SOURCE_PARAM_NAME: &HSTRING = h!("source");
+
 pub struct SharedState {
     window_class: u16,
     dxgi_factory: IDXGIFactory2,
     d3d12_cq: ID3D12CommandQueue,
+    blur_effect_factory: CompositionEffectFactory,
     delayed_action_timer: *const WaitableTimer,
 }
 impl SharedState {
@@ -602,10 +603,26 @@ impl SharedState {
             .expect("context_menu.register_class")
         };
 
+        let fx = GaussianBlurEffect::new().expect("context_menu.fx.create");
+        fx.SetSource(
+            &CompositionEffectSourceParameter::Create(BLUR_EFFECT_SOURCE_PARAM_NAME)
+                .expect("compositioneffectsourceparameter.create"),
+        )
+        .expect("context_menu.fx.set_source");
+        fx.SetBlurAmount(16.0)
+            .expect("context_menu.fx.set_blur_amount");
+        fx.SetOptimization(EffectOptimization::Balanced)
+            .expect("context_menu.fx.set_optimization");
+        let blur_effect_factory = app_context
+            .native_compositor
+            .CreateEffectFactory(&fx)
+            .expect("context_menu.fx.create_factory");
+
         Self {
             window_class,
             dxgi_factory: dx_context.dxgi_factory.clone(),
             d3d12_cq: dx_context.d3d12_cq.clone(),
+            blur_effect_factory,
             delayed_action_timer: delayed_action_timer.get_ref(),
         }
     }
@@ -675,14 +692,10 @@ impl super::SystemLink<'_> {
             )
             .expect("context_menu.create_window")
         };
-        let composite_root = composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                0.0, 0.0, 0.0, 0.375,
-            ])),
-            ..Default::default()
-        });
+        let composite_root = CompositeRect::build()
+            .expand_full()
+            .composite_fill_color_imm([0.0, 0.0, 0.0, 0.375])
+            .create(composite_tree);
         let ht_root = ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
@@ -693,18 +706,6 @@ impl super::SystemLink<'_> {
             // width, heightはいじらなくていい（渡される基本サイズがすでに影を抜いた分になっている）
             ..Default::default()
         });
-        let c_target = unsafe {
-            self.app_context
-                .native_compositor_desktop_interop
-                .CreateDesktopWindowTarget(h, true)
-                .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
-        };
-        let cv_root = self
-            .app_context
-            .native_compositor
-            .CreateSpriteVisual()
-            .expect("compositor.CreateSpriteVisual");
-        c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
 
         let swapchain = unsafe {
             self.flyout_surface_context
@@ -732,29 +733,19 @@ impl super::SystemLink<'_> {
                 .expect("dxgi_factory.CreateSwapChainForComposition")
         };
         let swapchain: IDXGISwapChain3 = swapchain.cast().expect("swapchain.cast");
-        let fx = GaussianBlurEffect::new().expect("drag.fx.create");
-        fx.SetSource(
-            &CompositionEffectSourceParameter::Create(h!("source"))
-                .expect("compositioneffectsourceparameter.create"),
-        )
-        .expect("drag.fx.set_source");
-        fx.SetBlurAmount(16.0).expect("drag.fx.set_blur_amount");
-        fx.SetOptimization(EffectOptimization::Speed)
-            .expect("drag.fx.set_optimization");
-        let effect_factory = self
+
+        let c_target = unsafe {
+            self.app_context
+                .native_compositor_desktop_interop
+                .CreateDesktopWindowTarget(h, true)
+                .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
+        };
+        let cv_root = self
             .app_context
             .native_compositor
-            .CreateEffectFactory(&fx)
-            .expect("drag.fx.create_factory");
-        let backdrop_brush = self
-            .app_context
-            .native_compositor
-            .CreateBackdropBrush()
-            .expect("drag.backdrop_brush.create");
-        let blur_brush = effect_factory.CreateBrush().expect("drag.fx_brush.create");
-        blur_brush
-            .SetSourceParameter(h!("Source"), &backdrop_brush)
-            .expect("drag.fx.set_blur_source");
+            .CreateSpriteVisual()
+            .expect("compositor.CreateSpriteVisual");
+        c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
         cv_root
             .SetSize(Vector2 {
                 X: pixels_size.width as _,
@@ -771,7 +762,24 @@ impl super::SystemLink<'_> {
             .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
             .expect("drag.visual.blur.set_relative_offset_adjustment");
         cv_root
-            .SetBrush(&blur_brush)
+            .SetBrush(&{
+                let x = self
+                    .flyout_surface_context
+                    .blur_effect_factory
+                    .CreateBrush()
+                    .expect("drag.fx_brush.create");
+                x.SetSourceParameter(
+                    BLUR_EFFECT_SOURCE_PARAM_NAME,
+                    &self
+                        .app_context
+                        .native_compositor
+                        .CreateBackdropBrush()
+                        .expect("drag.backdrop_brush.create"),
+                )
+                .expect("drag.fx.set_blur_source");
+
+                x
+            })
             .expect("drag.visual.blur.set_brush");
         cv_root
             .SetShadow(&{
@@ -808,9 +816,6 @@ impl super::SystemLink<'_> {
             )
             .expect("cv_root.SetBrush");
         cv_composited
-            .SetRelativeOffsetAdjustment(Vector3::zero())
-            .expect("drag.visual.color_tint.set_relative_offset_adjustment");
-        cv_composited
             .SetRelativeSizeAdjustment(Vector2::one())
             .expect("drag.visual.color_tint.set_relative_size_adjustment");
         cv_root
@@ -819,7 +824,6 @@ impl super::SystemLink<'_> {
             .InsertAtTop(&cv_composited)
             .expect("drag.visual.add_child");
 
-        let root_kf_group = keyboard_focus_registry.acquire_group();
         set_state(
             h,
             Box::new(InstanceState {
@@ -827,8 +831,9 @@ impl super::SystemLink<'_> {
                 ht_root,
                 event_dispatcher: self.event_dispatcher,
                 _c_target: c_target,
-                keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
-                kf_root_group: root_kf_group,
+                keyboard_focus_state: PerWindowKeyboardFocusState::new(
+                    keyboard_focus_registry.acquire_group(),
+                ),
                 spawned_surface_pos: pos,
                 pointer_focus: false,
                 modifier_key_state: ModifierKeyRecorder::new(),
@@ -836,7 +841,6 @@ impl super::SystemLink<'_> {
         );
         delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
             w: Handle(h),
-            // composition_surface_handle: SendableCompositionSurfaceHandle(dcomp_surface_handle),
             swapchain,
             composite_root,
         }));

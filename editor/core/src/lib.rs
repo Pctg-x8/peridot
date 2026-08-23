@@ -193,7 +193,7 @@ pub fn launch() {
         &vk_device,
         rt_sender,
         rt_receiver,
-        root_font_set,
+        &root_font_set,
         &preview_state,
         #[cfg(windows)]
         &mut app_context,
@@ -216,10 +216,10 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
     fs: &'sys FileSystem,
-    vk_device: &'sys Graphics,
+    gfx: &'sys Graphics,
     rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    root_font_set: FontSet,
+    root_font_set: &'sys FontSet,
     preview_state: &'sys Mutex<rendering::preview::CommittedState>,
     #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
@@ -298,11 +298,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         },
         #[cfg(windows)]
         SystemLink {
-            font_set: &root_font_set,
+            font_set: root_font_set,
             rt_sender: rt_sender.clone(),
-            gfx: vk_device,
+            gfx,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
-            app_context: app_context,
+            app_context,
             pointer_hovering_timer: pointer_hovering_timer.as_ref().get_ref(),
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
                 app_context,
@@ -313,8 +313,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(not(windows))]
         SystemLink {
             rt_sender: rt_sender.clone(),
-            vk_device,
-            font_set: &root_font_set,
+            gfx,
+            font_set: root_font_set,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
             dbus,
@@ -362,7 +362,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
-            gfx: vk_device,
+            gfx,
             shutdown_signal: &shutdown,
             renderer_sync,
             global_time_base,
@@ -673,22 +673,27 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 );
             }
 
-            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 {
-                sync_event_bus.redispatch(&app_event_dispatcher);
-                continue;
-            }
-            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 1 {
-                app_event_dispatcher.dispatch(Event::PointerHover);
-                continue;
-            }
-            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 2 {
-                app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
-                continue;
-            }
-            #[cfg(feature = "enable-profiling")]
-            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 3 {
-                profiler::profiler().emit_memory_stats();
-                continue;
+            if let Some(hindex) = r.0.checked_sub(windows::Win32::Foundation::WAIT_OBJECT_0.0)
+                && let Some(&handle) = handles.get(hindex as usize)
+            {
+                // handle signaled
+                if handle == sync_event_bus.event_notify.as_handle() {
+                    sync_event_bus.redispatch(&app_event_dispatcher);
+                    continue;
+                }
+                if handle == pointer_hovering_timer.as_handle() {
+                    app_event_dispatcher.dispatch(Event::PointerHover);
+                    continue;
+                }
+                if handle == context_menu_delayed_action_timer.as_handle() {
+                    app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
+                    continue;
+                }
+                #[cfg(feature = "enable-profiling")]
+                if handle == memory_sample_timer.as_handle() {
+                    profiler::profiler().emit_memory_stats();
+                    continue;
+                }
             }
             if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
                 while unsafe {
@@ -722,15 +727,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             platform::mac::bridge::nsapp_run();
         }
 
-        event_store.push_back(Event::Quit);
-        while app
-            .as_mut()
-            .poll(&mut core::task::Context::from_waker(&unsafe {
-                core::task::Waker::new(&(), &APP_WAKER_VTABLE)
-            }))
-            .is_pending()
-        {}
-
+        app_event_dispatcher.terminate();
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
@@ -1048,6 +1045,24 @@ impl LogicFiberEventDispatcher {
                 *self.polling = false;
             }
         }
+    }
+
+    pub fn terminate(&self) {
+        unsafe {
+            (*self.event_store).push_back(Event::Quit);
+        }
+
+        while unsafe {
+            (self.poll_fn_ptr)(
+                self.future_ptr,
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            )
+        }
+        .is_pending()
+        {}
     }
 
     pub fn can_immediate_dispatch(&self) -> bool {
@@ -7371,7 +7386,7 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
 };
 
 #[cfg(windows)]
-pub type SystemLink<'sys> = platform::windows::SystemLink<'sys>;
+use platform::windows::SystemLink;
 
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {

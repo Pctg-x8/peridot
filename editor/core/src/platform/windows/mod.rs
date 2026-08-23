@@ -30,8 +30,8 @@ use windows::{
             },
             Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, IDXGIFactory2},
             Gdi::{
-                GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY,
-                MONITORINFO, MapWindowPoints, MonitorFromWindow,
+                GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
+                MonitorFromWindow,
             },
         },
         System::{
@@ -110,7 +110,7 @@ use crate::{
         LogicalUnit, PixelsUnit, Point, Rect, Size,
         platform::windows::{
             EnumerateDisplayMonitorContinuous, WaitableTimer, current_instance_handle,
-            enumerate_display_monitors, register_class,
+            enumerate_display_monitors, primary_monitor, register_class,
         },
     },
 };
@@ -185,15 +185,6 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    fn event_handler_mut<'a>(&'a mut self) -> &'a mut WindowEventHandler {
-        unsafe {
-            &mut *core::ptr::with_exposed_provenance_mut(
-                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
-            )
-        }
-    }
-
-    #[inline(always)]
     pub fn state<'a>(&'a self) -> &'a WindowState {
         unsafe {
             &*core::ptr::with_exposed_provenance(
@@ -213,70 +204,52 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn client_size(&self) -> Size<LogicalUnit> {
-        let mut rc = core::mem::MaybeUninit::uninit();
-        if let Err(e) = unsafe { GetClientRect(self.0, rc.as_mut_ptr()) } {
-            tracing::error!(reason = %e, "get_client_rect");
-            return Size::new_logical(0.0, 0.0);
-        }
-
-        let rc = unsafe { rc.assume_init_ref() };
-        Size::new_pixels(rc.right as _, rc.bottom as _)
+        self.pixels_client_size()
             .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
-    }
-
-    #[inline(always)]
-    pub fn screen_position(&self) -> Point<PixelsUnit> {
-        let mut extended_frame_bounds = core::mem::MaybeUninit::<RECT>::uninit();
-        unsafe {
-            DwmGetWindowAttribute(
-                self.0,
-                DWMWA_EXTENDED_FRAME_BOUNDS,
-                extended_frame_bounds.as_mut_ptr().cast(),
-                core::mem::size_of::<RECT>() as _,
-            )
-            .expect("DwmGetWindowAttribute")
-        }
-        let extended_frame_bounds = unsafe { extended_frame_bounds.assume_init_ref() };
-
-        Point::new_pixels(
-            extended_frame_bounds.left as _,
-            extended_frame_bounds.top as _,
-        )
-    }
-
-    pub fn screen_rect(&self) -> Rect<PixelsUnit> {
-        let mut extended_frame_bounds = core::mem::MaybeUninit::<RECT>::uninit();
-        unsafe {
-            DwmGetWindowAttribute(
-                self.0,
-                DWMWA_EXTENDED_FRAME_BOUNDS,
-                extended_frame_bounds.as_mut_ptr().cast(),
-                core::mem::size_of::<RECT>() as _,
-            )
-            .expect("DwmGetWindowAttribute")
-        }
-        let extended_frame_bounds = unsafe { extended_frame_bounds.assume_init_ref() };
-
-        Rect::from_lt_size(
-            Point::new_pixels(
-                extended_frame_bounds.left as _,
-                extended_frame_bounds.top as _,
-            ),
-            Size::new_pixels(
-                (extended_frame_bounds.right - extended_frame_bounds.left) as _,
-                (extended_frame_bounds.bottom - extended_frame_bounds.top) as _,
-            ),
-        )
     }
 
     #[inline(always)]
     pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
         let mut rect = core::mem::MaybeUninit::uninit();
-        unsafe {
-            GetClientRect(self.0, rect.as_mut_ptr()).expect("GetClientRect");
+        if let Err(e) = unsafe { GetClientRect(self.0, rect.as_mut_ptr()) } {
+            tracing::error!(reason = %e, "get_client_rect");
+            return Size::new_pixels(0, 0);
         }
         let rect = unsafe { rect.assume_init_ref() };
         Size::new_pixels(rect.right as _, rect.bottom as _)
+    }
+
+    fn query_extended_frame_bounds(&self) -> RECT {
+        let mut extended_frame_bounds = core::mem::MaybeUninit::<RECT>::uninit();
+        unsafe {
+            DwmGetWindowAttribute(
+                self.0,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                extended_frame_bounds.as_mut_ptr().cast(),
+                core::mem::size_of::<RECT>() as _,
+            )
+            .expect("DwmGetWindowAttribute")
+        }
+
+        unsafe { extended_frame_bounds.assume_init() }
+    }
+
+    #[inline(always)]
+    pub fn screen_position(&self) -> Point<PixelsUnit> {
+        let extended_frame_bounds = self.query_extended_frame_bounds();
+        Point::new_pixels(extended_frame_bounds.left, extended_frame_bounds.top)
+    }
+
+    pub fn screen_rect(&self) -> Rect<PixelsUnit> {
+        let extended_frame_bounds = self.query_extended_frame_bounds();
+
+        Rect::from_lt_size(
+            Point::new_pixels(extended_frame_bounds.left, extended_frame_bounds.top),
+            Size::new_pixels(
+                (extended_frame_bounds.right - extended_frame_bounds.left) as _,
+                (extended_frame_bounds.bottom - extended_frame_bounds.top) as _,
+            ),
+        )
     }
 
     #[inline(always)]
@@ -383,7 +356,7 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
-        self.state().root_focus_group
+        self.state().keyboard_focus_state.root_group()
     }
 
     pub fn geometry_state_snapshot(&self, _system_link: &SystemLink) -> crate::WindowGeometryState {
@@ -401,23 +374,8 @@ impl WindowHandle {
 
             crate::WindowGeometryState::Maximized { monitor_index }
         } else {
-            let mut rc = core::mem::MaybeUninit::<RECT>::uninit();
-            unsafe {
-                DwmGetWindowAttribute(
-                    self.0,
-                    DWMWA_EXTENDED_FRAME_BOUNDS,
-                    rc.as_mut_ptr().cast(),
-                    size_of::<RECT>() as _,
-                )
-                .expect("dwmgetwindowattribute.extended_frame_bounds")
-            };
-            let rc = unsafe { rc.assume_init_ref() };
-
             crate::WindowGeometryState::Restored {
-                rect: Rect::from_lt_size(
-                    Point::new_pixels(rc.left, rc.top),
-                    Size::new_pixels((rc.right - rc.left) as _, (rc.bottom - rc.top) as _),
-                ),
+                rect: self.screen_rect(),
             }
         }
     }
@@ -502,15 +460,15 @@ impl NativeWindow {
         }
     }
 
-    fn new(
+    fn new<E>(
         app_context: &ApplicationContext,
         window_type: WindowType,
         pos: Option<Point<PixelsUnit>>,
         size: Option<Size<PixelsUnit>>,
         maximized: bool,
-        composite_root: CompositeTreeRef,
-        ht_root: HitTestTreeRef,
         event_dispatcher: LogicFiberEventDispatcher,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> Self {
         let mut window_style = WS_OVERLAPPEDWINDOW;
@@ -534,27 +492,33 @@ impl NativeWindow {
             )
             .expect("CreateWindowExW")
         };
-        let root_kf_group = keyboard_focus_registry.acquire_group();
-        let event_handler = Box::new(WindowEventHandler {
-            state: WindowState {
-                r#type: window_type,
-                content_scale: unsafe { GetDpiForWindow(w) as f32 / 96.0 },
-                composite_root,
-                ht_root,
-                latest_ui_scale_changes: Mutex::new(None),
-                keyboard_focus_state: PerWindowKeyboardFocusState::new(root_kf_group),
-                root_focus_group: root_kf_group,
-                destroying: false,
-            },
-            app_context,
-            event_dispatcher,
-            modifier_key_state: ModifierKeyRecorder::new(),
-        });
         unsafe {
             SetWindowLongPtrW(
                 w,
                 WindowEventHandler::LONG_PTR_INDEX,
-                Box::into_raw(event_handler).addr().cast_signed(),
+                Box::into_raw(Box::new(WindowEventHandler {
+                    state: WindowState {
+                        r#type: window_type,
+                        content_scale: GetDpiForWindow(w) as f32 / 96.0,
+                        composite_root: CompositeRect::build().expand_full().create(composite_tree),
+                        ht_root: ht_manager.create(HitTestTreeData {
+                            width_adjustment_factor: 1.0,
+                            height_adjustment_factor: 1.0,
+                            root_of_window: Some(WindowHandle(w)),
+                            ..Default::default()
+                        }),
+                        latest_ui_scale_changes: Mutex::new(None),
+                        keyboard_focus_state: PerWindowKeyboardFocusState::new(
+                            keyboard_focus_registry.acquire_group(),
+                        ),
+                        destroying: false,
+                    },
+                    app_context,
+                    event_dispatcher,
+                    modifier_key_state: ModifierKeyRecorder::new(),
+                }))
+                .addr()
+                .cast_signed(),
             );
         }
 
@@ -589,7 +553,6 @@ pub struct WindowState {
     pub ht_root: HitTestTreeRef,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pub keyboard_focus_state: PerWindowKeyboardFocusState,
-    pub root_focus_group: KeyboardFocusGroupRef,
     destroying: bool,
 }
 
@@ -1810,8 +1773,32 @@ impl DxContext {
     }
 }
 
+fn find_maximized_base_left_top(monitor_index: usize) -> Option<Point<PixelsUnit>> {
+    let primary_monitor = primary_monitor();
+    let mut target_left_top = None;
+    let mut primary_left_top = None;
+    let mut enum_index = 0;
+    enumerate_display_monitors(|hm, r| {
+        if hm == primary_monitor {
+            primary_left_top = Some(Point::new_pixels(r.left, r.top));
+        }
+
+        if enum_index == monitor_index {
+            target_left_top = Some(Point::new_pixels(r.left, r.top));
+        }
+
+        enum_index += 1;
+        EnumerateDisplayMonitorContinuous::Continue
+    });
+    if primary_left_top.is_none() {
+        tracing::warn!("no primary monitor enumerated?");
+    }
+
+    target_left_top.or(primary_left_top)
+}
+
 pub struct SystemLink<'sys> {
-    pub font_set: *const FontSet,
+    pub font_set: &'sys FontSet,
     pub gfx: *const Graphics<'sys>,
     pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
@@ -1819,15 +1806,10 @@ pub struct SystemLink<'sys> {
     pub pointer_hovering_timer: *const WaitableTimer,
     pub flyout_surface_context: flyout_surface::SharedState,
 }
-impl SystemLink<'_> {
+impl<'sys> SystemLink<'sys> {
     #[inline(always)]
     pub fn dispatch_event(&self, event: Event) {
         unsafe { &*self.event_dispatcher }.dispatch(event);
-    }
-
-    #[inline(always)]
-    pub fn event_dispatcher(&self) -> &LogicFiberEventDispatcher {
-        unsafe { &*self.event_dispatcher }
     }
 
     #[inline(always)]
@@ -1836,8 +1818,8 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
-    pub fn font_set(&self) -> &FontSet {
-        unsafe { &*self.font_set }
+    pub const fn font_set(&self) -> &'sys FontSet {
+        self.font_set
     }
 
     #[inline(always)]
@@ -1857,32 +1839,7 @@ impl SystemLink<'_> {
         let (pos, size, initial_maximized);
         match mode {
             MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-                let primary_monitor = unsafe {
-                    MonitorFromWindow(HWND(core::ptr::null_mut()), MONITOR_DEFAULTTOPRIMARY)
-                };
-
-                let mut found_hm_left_top = None;
-                let mut primary_hm_left_top = None;
-                let mut enum_index = 0;
-                enumerate_display_monitors(|hm, r| {
-                    if hm == primary_monitor {
-                        primary_hm_left_top = Some(Point::new_pixels(r.left, r.top));
-                    }
-
-                    if enum_index == monitor_index {
-                        found_hm_left_top = Some(Point::new_pixels(r.left, r.top));
-                    }
-
-                    enum_index += 1;
-                    EnumerateDisplayMonitorContinuous::Continue
-                });
-
-                pos = Some(found_hm_left_top.unwrap_or_else(|| {
-                    primary_hm_left_top.unwrap_or_else(|| {
-                        tracing::error!("no primary monitor enumerated?");
-                        Point::new_pixels(0, 0)
-                    })
-                }));
+                pos = find_maximized_base_left_top(monitor_index);
                 size = None;
                 initial_maximized = true;
             }
@@ -1896,29 +1853,20 @@ impl SystemLink<'_> {
                 size = None;
                 initial_maximized = false;
             }
-        };
+        }
 
-        let ht = ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
         let w = NativeWindow::new(
             self.app_context,
             WindowType::Main {},
             pos,
             size,
             initial_maximized,
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            ht,
             unsafe { &*self.event_dispatcher }.clone(),
+            composite_tree,
+            ht_manager,
             keyboard_focus_registry,
         );
         let h = w.make_handle();
-        ht_manager.get_data_mut(ht).root_of_window = Some(h);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.gfx });
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
@@ -1953,33 +1901,7 @@ impl SystemLink<'_> {
         let (initial_pos, initial_size, initial_maximized);
         match mode {
             SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-                let primary_monitor = unsafe {
-                    MonitorFromWindow(HWND(core::ptr::null_mut()), MONITOR_DEFAULTTOPRIMARY)
-                };
-
-                let mut found_hm_left_top = None;
-                let mut primary_monitor_left_top = None;
-                let mut enum_index = 0;
-                enumerate_display_monitors(|hm, r| {
-                    if hm == primary_monitor {
-                        primary_monitor_left_top = Some(Point::new_pixels(r.left, r.top));
-                    }
-
-                    if enum_index == monitor_index {
-                        found_hm_left_top = Some(Point::new_pixels(r.left, r.top));
-                    }
-
-                    enum_index += 1;
-                    EnumerateDisplayMonitorContinuous::Continue
-                });
-                let target_left_top = found_hm_left_top.unwrap_or_else(|| {
-                    primary_monitor_left_top.unwrap_or_else(|| {
-                        tracing::error!("no primary monitor enumerated?");
-                        Point::new_pixels(0, 0)
-                    })
-                });
-
-                initial_pos = Some(target_left_top);
+                initial_pos = find_maximized_base_left_top(monitor_index);
                 initial_size = None;
                 initial_maximized = true;
             }
@@ -2009,27 +1931,18 @@ impl SystemLink<'_> {
             }
         };
 
-        let ht = hit_tree.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
         let w = NativeWindow::new(
             self.app_context,
             WindowType::Sub,
             initial_pos,
             initial_size,
             initial_maximized,
-            composite_tree.create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-            ht,
             unsafe { &*self.event_dispatcher }.clone(),
+            composite_tree,
+            hit_tree,
             keyboard_focus_registry,
         );
         let h = w.make_handle();
-        hit_tree.get_data_mut(ht).root_of_window = Some(h);
 
         let vk_surface = w.create_vk_surface(unsafe { &*self.gfx });
         delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
@@ -2064,7 +1977,8 @@ impl SystemLink<'_> {
 
         composite_tree.free_all(window_handle.ct_root());
         hit_tree.free_all(window_handle.ht_root());
-        keyboard_focus_registry.release_group(window_handle.state().root_focus_group);
+        keyboard_focus_registry
+            .release_group(window_handle.state().keyboard_focus_state.root_group());
         window_handle.destroy();
     }
 
@@ -2089,15 +2003,6 @@ impl SystemLink<'_> {
                 }
             });
         }
-    }
-
-    #[inline(always)]
-    pub fn notify_ui_scale_changes_to_render(&self, window: WindowHandle, new_scale: f32) {
-        *window
-            .state()
-            .latest_ui_scale_changes
-            .lock()
-            .expect("poisoned") = Some(new_scale);
     }
 
     pub fn set_pointer_hovering_timeout(&mut self) {

@@ -1533,6 +1533,14 @@ impl PerWindowKeyboardFocusState {
         }
     }
 
+    #[inline(always)]
+    pub fn root_group(&self) -> KeyboardFocusGroupRef {
+        *self
+            .active_group_stack
+            .first()
+            .expect("root group has been popped")
+    }
+
     pub fn push_tab_stop_group(
         &mut self,
         group: KeyboardFocusGroupRef,

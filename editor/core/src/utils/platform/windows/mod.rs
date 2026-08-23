@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use windows::{
     Win32::{
         Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, RECT},
-        Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR},
+        Graphics::Gdi::{
+            EnumDisplayMonitors, HDC, HMONITOR, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow,
+        },
         System::{
             Diagnostics::Debug::OutputDebugStringA,
             LibraryLoader::GetModuleHandleW,
@@ -54,6 +56,11 @@ pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
         r if r == 0 => Err(std::io::Error::last_os_error()),
         r => Ok(r),
     }
+}
+
+#[inline(always)]
+pub fn primary_monitor() -> HMONITOR {
+    unsafe { MonitorFromWindow(HWND(core::ptr::null_mut()), MONITOR_DEFAULTTOPRIMARY) }
 }
 
 #[derive(Clone, Copy)]
