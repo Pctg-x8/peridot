@@ -1151,6 +1151,67 @@ pub fn teardown_view_recursive(
     }
 }
 
+/// Teardown + Free Instance
+pub fn destruct_view_recursive(
+    target: ViewIdentifier,
+    ctx: &mut TeardownContext,
+    allocator: &mut ViewIdentifierAllocator,
+    instance_store: &mut ViewInstanceStore,
+    tree_relation_store: &mut ViewTreeRelationStore,
+    group_relation_store: &mut ViewGroupRelationStore,
+    layout_state_store: &mut ViewLayoutStateStore,
+    render_state_store: &mut ViewRenderStateStore,
+) {
+    // ensure no parent owns this item
+    view_detach_parent(target, tree_relation_store);
+    assert!(
+        tree_relation_store.relations[target.into_array_index()]
+            .parent
+            .is_none()
+    );
+
+    // 逆向きに(深いものから)teardownしていく
+    let mut process_order = Vec::new();
+    let mut descend_stack = VecDeque::new();
+    descend_stack.push_back(target);
+    while let Some(id) = descend_stack.pop_front() {
+        tree_relation_store.relations[id.into_array_index()].parent = None;
+        process_order.push(id);
+        descend_stack.extend(
+            tree_relation_store
+                .relations
+                .get_mut(id.into_array_index())
+                .into_iter()
+                .flat_map(|x| x.children.drain(..)),
+        );
+    }
+
+    for id in process_order {
+        let mut instance = instance_store.instances[id.into_array_index()]
+            .instance
+            .take();
+        if let Some(ref mut instance) = instance {
+            instance.teardown(ctx);
+        }
+        render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
+
+        // ensure no parent/group owns this item
+        leave_view_group(id, group_relation_store);
+
+        if id.0.get() + 1 == allocator.last_free_identifier.get() {
+            // returned last identifier
+            allocator.last_free_identifier = id.0;
+            instance_store.instances.pop();
+            tree_relation_store.relations.pop();
+            group_relation_store.joining_group.pop();
+            layout_state_store.pop();
+            render_state_store.0.pop();
+        } else {
+            allocator.free_identifier.insert(id);
+        }
+    }
+}
+
 pub fn view_instance<T: View + 'static>(
     id: ViewIdentifier,
     instance_store: &ViewInstanceStore,
@@ -1314,6 +1375,15 @@ pub trait ViewImmediateTeardownable {
     #[inline(always)]
     fn teardown_view_recursive<T>(&mut self, target: TypedViewIdentifier<T>) {
         self.teardown_view_recursive_untyped(target.into_untyped());
+    }
+}
+
+pub trait ViewDestructionContext {
+    fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier);
+
+    #[inline(always)]
+    fn destruct_view_recursive<T>(&mut self, target: TypedViewIdentifier<T>) {
+        self.destruct_view_recursive_untyped(target.into_untyped());
     }
 }
 

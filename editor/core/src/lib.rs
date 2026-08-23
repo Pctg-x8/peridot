@@ -61,9 +61,9 @@ use crate::{
         NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
         ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
         TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
-        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry,
-        ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
+        ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
+        ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable,
+        ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
         ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
         ViewLayoutGridCell, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
@@ -1145,8 +1145,16 @@ static COLOR_PICKER_SHARED_RES: UnsafeMainThreadOnlyOnceCell<ColorPickerSharedRe
     UnsafeMainThreadOnlyOnceCell(core::cell::OnceCell::new());
 
 pub struct ColorPickerView {
-    eh: Rc<ColorPickerEventHandler>,
-    first_rendered: bool,
+    hex_text_input_view_id: ViewIdentifier,
+    backing_store: std::rc::Weak<dyn ColorPickerBackingStoreEvent>,
+    eh: Option<Rc<ColorPickerEventHandler>>,
+}
+impl Drop for ColorPickerView {
+    fn drop(&mut self) {
+        if self.eh.is_some() {
+            tracing::warn!("ColorPickedView dropped but still rendered");
+        }
+    }
 }
 impl ColorPickerView {
     const RING_THICKNESS: f32 = 12.0;
@@ -1155,234 +1163,13 @@ impl ColorPickerView {
     const ALPHA_SLIDER_THUMB_THICKNESS: f32 = 3.0;
 
     pub fn new(
-        ctx: &mut ViewInitContext,
-        lt: Point<LogicalUnit>,
-        backing_store: &std::rc::Weak<impl ColorPickerBackingStoreEvent + 'static>,
+        hex_text_input_view_id: ViewIdentifier,
+        backing_store: std::rc::Weak<impl ColorPickerBackingStoreEvent + 'static>,
     ) -> Self {
-        let shared = COLOR_PICKER_SHARED_RES.0.get_or_init(|| {
-            ColorPickerSharedResources::new(
-                ctx.main_thread_texture_id_issuer,
-                ctx.system_link.rt_sender(),
-            )
-        });
-
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(lt.x), AnimatableFloat::Value(lt.y)],
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
-                id: shared.ring_tex_id,
-                r#type: TextureType::Color,
-                mapping: TextureMappingMode::Stretch,
-                slice_borders: [0.0; 4],
-            }),
-            ..Default::default()
-        });
-        let gradient_box_size =
-            2.0 * (64.0 - Self::RING_THICKNESS - Self::GRADIENT_BOX_MARGIN) / 2.0f32.sqrt();
-        let ct_sat_light_box = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(-gradient_box_size * 0.5),
-                AnimatableFloat::Value(-gradient_box_size * 0.5),
-            ],
-            relative_offset_adjustment: [0.5, 0.5],
-            size: [
-                AnimatableFloat::Value(gradient_box_size),
-                AnimatableFloat::Value(gradient_box_size),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::ColorPickerGradientBox(AnimatableColor::Value([
-                1.0, 0.0, 0.0, 1.0,
-            ])),
-            ..Default::default()
-        });
-        let ct_pointer = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
-            size: [
-                AnimatableFloat::Value(Self::POINTER_SIZE),
-                AnimatableFloat::Value(Self::POINTER_SIZE),
-            ],
-            has_bitmap: true,
-            corner_radius: CornerRadius::all(Self::POINTER_SIZE * 0.5),
-            border: Some(Border {
-                thickness: 2.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_pointer_dark = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
-            size: [
-                AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
-                AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
-            ],
-            has_bitmap: true,
-            corner_radius: CornerRadius::all((Self::POINTER_SIZE - 4.0) * 0.5),
-            border: Some(Border {
-                thickness: 1.0,
-                color: AnimatableColor::Value([0.0, 0.0, 0.0, 0.5]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let alpha_slider_content_gradient =
-            ctx.mount_context
-                .composite_tree
-                .create_gradient(Gradient::Linear {
-                    start_color: [1.0, 0.0, 0.0, 0.0],
-                    end_color: [1.0, 0.0, 0.0, 1.0],
-                    start_pos_relative: [0.0, 0.0],
-                    end_pos_relative: [1.0, 0.0],
-                });
-        let ct_alpha_slider_base = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(128.0 + 8.0),
-            ],
-            size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(16.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
-                id: shared.alpha_slider_bg_tex_id,
-                r#type: TextureType::Color,
-                mapping: TextureMappingMode::Repeat,
-                slice_borders: [0.0; 4],
-            }),
-            ..Default::default()
-        });
-        let ct_alpha_slider_content = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillLinearGradient(alpha_slider_content_gradient),
-            ..Default::default()
-        });
-        let ct_alpha_slider_thumb = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(128.0 - Self::ALPHA_SLIDER_THUMB_THICKNESS * 0.5),
-                AnimatableFloat::Value(0.0),
-            ],
-            size: [
-                AnimatableFloat::Value(Self::ALPHA_SLIDER_THUMB_THICKNESS),
-                AnimatableFloat::Value(0.0),
-            ],
-            relative_size_adjustment: [0.0, 1.0],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.1, 0.1, 0.1, 1.0])),
-            border: Some(Border {
-                thickness: 0.5,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_hex_label = ctx.mount_context.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            offset: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(128.0 + 32.0 + 16.0),
-            ],
-            size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
-            has_bitmap: false,
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    content: "HEX".into(),
-                    font_id: FontID::UIDefault,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            left: lt.x,
-            top: lt.y,
-            width: 128.0,
-            height: 128.0,
-            ..Default::default()
-        });
-        let ht_sat_light_box = ctx.ht_manager.create(HitTestTreeData {
-            left: -gradient_box_size * 0.5,
-            top: -gradient_box_size * 0.5,
-            left_adjustment_factor: 0.5,
-            top_adjustment_factor: 0.5,
-            width: gradient_box_size,
-            height: gradient_box_size,
-            ..Default::default()
-        });
-        let ht_alpha_slider = ctx.ht_manager.create(HitTestTreeData {
-            left: 0.0,
-            top: 128.0 + 8.0,
-            width: 128.0,
-            height: 16.0,
-            ..Default::default()
-        });
-
-        ctx.composite_tree.add_child(ct_root, ct_sat_light_box);
-        ctx.composite_tree.add_child(ct_pointer, ct_pointer_dark);
-        ctx.composite_tree.add_child(ct_sat_light_box, ct_pointer);
-        ctx.composite_tree
-            .add_child(ct_alpha_slider_base, ct_alpha_slider_content);
-        ctx.composite_tree
-            .add_child(ct_alpha_slider_base, ct_alpha_slider_thumb);
-        ctx.composite_tree.add_child(ct_root, ct_alpha_slider_base);
-        ctx.composite_tree.add_child(ct_root, ct_hex_label);
-        ctx.ht_manager.add_child(ht_root, ht_sat_light_box);
-        ctx.ht_manager.add_child(ht_root, ht_alpha_slider);
-
-        let eh = Rc::new_cyclic(|thisref| ColorPickerEventHandler {
-            backing_store: backing_store.clone(),
-            ct_root,
-            ct_sat_light_box,
-            ct_pointer,
-            ct_pointer_dark,
-            ct_alpha_slider_base,
-            ct_alpha_slider_content,
-            ct_alpha_slider_thumb,
-            alpha_slider_content_gradient,
-            ct_hex_label,
-            ht_root,
-            ht_sat_light_box,
-            ht_alpha_slider,
-            sat_light_box_size: Size::new_logical(gradient_box_size, gradient_box_size),
-            ring_selecting: Cell::new(false),
-            box_selecting: Cell::new(false),
-            alpha_sliding: Cell::new(false),
-            current_hue: Cell::new(0.0),
-            current_light: Cell::new(1.0),
-            current_saturation: Cell::new(0.0),
-            current_alpha: Cell::new(1.0),
-            hex_text_input_view: RefCell::new(ColorPickerHexTextInputView::new(
-                ctx.alloc_view_id_without_instance(),
-                Rect::from_lt_size(
-                    Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
-                    Size::new_logical(128.0 - 32.0, 20.0),
-                ),
-                thisref.clone(),
-            )),
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-        ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
-        ctx.ht_manager.set_action_handler(ht_alpha_slider, &eh);
-
-        if let Some(e) = backing_store.upgrade() {
-            let v = e.value();
-
-            eh.set_by_color(v, ctx.composite_tree);
-            eh.hex_text_input_view.borrow().set_value(v);
-        }
-
         Self {
-            eh,
-            first_rendered: false,
+            hex_text_input_view_id,
+            backing_store: backing_store as _,
+            eh: None,
         }
     }
 }
@@ -1393,6 +1180,248 @@ impl View for ColorPickerView {
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
+        let e = match self.eh {
+            Some(ref e) => {
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .offset_imm(layout_rect.left, layout_rect.top)
+                    .apply();
+                ctx.ht_manager.get_data_mut(e.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(e.ht_root).top = layout_rect.top;
+
+                e
+            }
+            None => {
+                // first render
+                let shared = COLOR_PICKER_SHARED_RES.0.get_or_init(|| {
+                    ColorPickerSharedResources::new(
+                        ctx.main_thread_texture_id_issuer,
+                        ctx.system_link.rt_sender(),
+                    )
+                });
+
+                let ct_root = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
+                    ],
+                    size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(128.0)],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
+                        id: shared.ring_tex_id,
+                        r#type: TextureType::Color,
+                        mapping: TextureMappingMode::Stretch,
+                        slice_borders: [0.0; 4],
+                    }),
+                    ..Default::default()
+                });
+                let gradient_box_size =
+                    2.0 * (64.0 - Self::RING_THICKNESS - Self::GRADIENT_BOX_MARGIN) / 2.0f32.sqrt();
+                let ct_sat_light_box = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(-gradient_box_size * 0.5),
+                        AnimatableFloat::Value(-gradient_box_size * 0.5),
+                    ],
+                    relative_offset_adjustment: [0.5, 0.5],
+                    size: [
+                        AnimatableFloat::Value(gradient_box_size),
+                        AnimatableFloat::Value(gradient_box_size),
+                    ],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::ColorPickerGradientBox(AnimatableColor::Value(
+                        [1.0, 0.0, 0.0, 1.0],
+                    )),
+                    ..Default::default()
+                });
+                let ct_pointer = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
+                    size: [
+                        AnimatableFloat::Value(Self::POINTER_SIZE),
+                        AnimatableFloat::Value(Self::POINTER_SIZE),
+                    ],
+                    has_bitmap: true,
+                    corner_radius: CornerRadius::all(Self::POINTER_SIZE * 0.5),
+                    border: Some(Border {
+                        thickness: 2.0,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_pointer_dark = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
+                    size: [
+                        AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
+                        AnimatableFloat::Value(Self::POINTER_SIZE - 4.0),
+                    ],
+                    has_bitmap: true,
+                    corner_radius: CornerRadius::all((Self::POINTER_SIZE - 4.0) * 0.5),
+                    border: Some(Border {
+                        thickness: 1.0,
+                        color: AnimatableColor::Value([0.0, 0.0, 0.0, 0.5]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let alpha_slider_content_gradient =
+                    ctx.composite_tree.create_gradient(Gradient::Linear {
+                        start_color: [1.0, 0.0, 0.0, 0.0],
+                        end_color: [1.0, 0.0, 0.0, 1.0],
+                        start_pos_relative: [0.0, 0.0],
+                        end_pos_relative: [1.0, 0.0],
+                    });
+                let ct_alpha_slider_base = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(0.0),
+                        AnimatableFloat::Value(128.0 + 8.0),
+                    ],
+                    size: [AnimatableFloat::Value(128.0), AnimatableFloat::Value(16.0)],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::DirectSourceOver(CompositeTexture {
+                        id: shared.alpha_slider_bg_tex_id,
+                        r#type: TextureType::Color,
+                        mapping: TextureMappingMode::Repeat,
+                        slice_borders: [0.0; 4],
+                    }),
+                    ..Default::default()
+                });
+                let ct_alpha_slider_content = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    relative_size_adjustment: [1.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillLinearGradient(
+                        alpha_slider_content_gradient,
+                    ),
+                    ..Default::default()
+                });
+                let ct_alpha_slider_thumb = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(128.0 - Self::ALPHA_SLIDER_THUMB_THICKNESS * 0.5),
+                        AnimatableFloat::Value(0.0),
+                    ],
+                    size: [
+                        AnimatableFloat::Value(Self::ALPHA_SLIDER_THUMB_THICKNESS),
+                        AnimatableFloat::Value(0.0),
+                    ],
+                    relative_size_adjustment: [0.0, 1.0],
+                    has_bitmap: true,
+                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
+                        0.1, 0.1, 0.1, 1.0,
+                    ])),
+                    border: Some(Border {
+                        thickness: 0.5,
+                        color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ct_hex_label = ctx.composite_tree.create(CompositeRect {
+                    scale_factor: CompositeRectScaleFactor::UI,
+                    offset: [
+                        AnimatableFloat::Value(0.0),
+                        AnimatableFloat::Value(128.0 + 32.0 + 16.0),
+                    ],
+                    size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(20.0)],
+                    has_bitmap: false,
+                    text: Some(CompositeRectText {
+                        runs: vec![CompositeRectTextRun {
+                            content: "HEX".into(),
+                            font_id: FontID::UIDefault,
+                            color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                            ..Default::default()
+                        }],
+                        vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                });
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: 128.0,
+                    height: 128.0,
+                    ..Default::default()
+                });
+                let ht_sat_light_box = ctx.ht_manager.create(HitTestTreeData {
+                    left: -gradient_box_size * 0.5,
+                    top: -gradient_box_size * 0.5,
+                    left_adjustment_factor: 0.5,
+                    top_adjustment_factor: 0.5,
+                    width: gradient_box_size,
+                    height: gradient_box_size,
+                    ..Default::default()
+                });
+                let ht_alpha_slider = ctx.ht_manager.create(HitTestTreeData {
+                    left: 0.0,
+                    top: 128.0 + 8.0,
+                    width: 128.0,
+                    height: 16.0,
+                    ..Default::default()
+                });
+
+                ctx.composite_tree.add_child(ct_root, ct_sat_light_box);
+                ctx.composite_tree.add_child(ct_pointer, ct_pointer_dark);
+                ctx.composite_tree.add_child(ct_sat_light_box, ct_pointer);
+                ctx.composite_tree
+                    .add_child(ct_alpha_slider_base, ct_alpha_slider_content);
+                ctx.composite_tree
+                    .add_child(ct_alpha_slider_base, ct_alpha_slider_thumb);
+                ctx.composite_tree.add_child(ct_root, ct_alpha_slider_base);
+                ctx.composite_tree.add_child(ct_root, ct_hex_label);
+                ctx.ht_manager.add_child(ht_root, ht_sat_light_box);
+                ctx.ht_manager.add_child(ht_root, ht_alpha_slider);
+
+                let eh = Rc::new_cyclic(|thisref| ColorPickerEventHandler {
+                    backing_store: self.backing_store.clone(),
+                    ct_root,
+                    ct_sat_light_box,
+                    ct_pointer,
+                    ct_pointer_dark,
+                    ct_alpha_slider_base,
+                    ct_alpha_slider_content,
+                    ct_alpha_slider_thumb,
+                    alpha_slider_content_gradient,
+                    ct_hex_label,
+                    ht_root,
+                    ht_sat_light_box,
+                    ht_alpha_slider,
+                    sat_light_box_size: Size::new_logical(gradient_box_size, gradient_box_size),
+                    ring_selecting: Cell::new(false),
+                    box_selecting: Cell::new(false),
+                    alpha_sliding: Cell::new(false),
+                    current_hue: Cell::new(0.0),
+                    current_light: Cell::new(1.0),
+                    current_saturation: Cell::new(0.0),
+                    current_alpha: Cell::new(1.0),
+                    hex_text_input_view: RefCell::new(ColorPickerHexTextInputView::new(
+                        self.hex_text_input_view_id,
+                        Rect::from_lt_size(
+                            Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
+                            Size::new_logical(128.0 - 32.0, 20.0),
+                        ),
+                        thisref.clone(),
+                    )),
+                });
+                ctx.ht_manager.set_action_handler(ht_root, &eh);
+                ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
+                ctx.ht_manager.set_action_handler(ht_alpha_slider, &eh);
+
+                if let Some(e) = self.backing_store.upgrade() {
+                    let v = e.value();
+
+                    eh.set_by_color(v, ctx.composite_tree);
+                    eh.hex_text_input_view.borrow().set_value(v);
+                }
+
+                &*self.eh.insert(eh)
+            }
+        };
         // TODO: ViewがViewをもつパターン(これなしにしたほうがいいかも)
         // self.eh.hex_text_input_view.borrow_mut().render(
         //     ctx,
@@ -1402,23 +1431,30 @@ impl View for ColorPickerView {
         //     },
         //     kf_group,
         // );
-        ctx.composite_tree
-            .begin_mod_chain(self.eh.ct_root)
-            .offset_imm(layout_rect.left, layout_rect.top)
-            .apply();
-        ctx.ht_manager.get_data_mut(self.eh.ht_root).left = layout_rect.left;
-        ctx.ht_manager.get_data_mut(self.eh.ht_root).top = layout_rect.top;
 
         uikit::ViewRenderElements {
-            composite_tree: Some(self.eh.ct_root),
-            hit_tree: Some(self.eh.ht_root),
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
             ..uikit::ViewRenderElements::EMPTY
         }
     }
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.eh.take() else {
+            // not rendered
+            return;
+        };
 
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+        ctx.composite_tree.free_all(e.ct_root);
+        ctx.ht_manager.free_all(e.ht_root);
+        ctx.composite_tree
+            .free_gradient(e.alpha_slider_content_gradient);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(128.0, 128.0 + 32.0 + 16.0 + 20.0)
     }
 }
@@ -2331,7 +2367,7 @@ impl EditableColorButtonPickerFlyoutView {
         ctx: &mut ViewInitContext,
         backing_store: &std::rc::Weak<EditableColorButtonEventHandler>,
     ) -> Self {
-        let v = ColorPickerView::new(ctx, Point::new_logical(8.0, 8.0), backing_store);
+        let v = ColorPickerView::new(ctx.alloc_view_id_without_instance(), backing_store.clone());
         Self(ctx.construct_view(|_| Box::new(v)))
     }
 }
@@ -2613,9 +2649,8 @@ impl UIKitPreviewPanePresenter {
             .construct_view(|_| Box::new(StaticTextView::new("Color Picker(Standalone)".into())));
         ctx.view_set_parent(label, content_view);
         let color_picker = ColorPickerView::new(
-            ctx,
-            Point::new_logical(16.0, ytop),
-            &Rc::downgrade(&color_picker_backing_store),
+            ctx.alloc_view_id_without_instance(),
+            Rc::downgrade(&color_picker_backing_store),
         );
         let color_picker = ctx.construct_view(|_| Box::new(color_picker));
         ctx.view_set_parent(color_picker, content_view);
@@ -3804,12 +3839,23 @@ async fn run<'sys>(
                 }
 
                 if let Some(c) = custom_view_flyout_session.take_if(|x| x.parent == window) {
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
+                    c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+                        syslink: &system_link,
+                        view_allocator: &mut view_allocator,
+                        view_instance_store: &mut view_instance_store,
+                        view_tree_relation_store: &mut view_tree_relation_store,
+                        view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
+                        view_render_state_store: &mut view_render_state_store,
+                        teardown_context: TeardownContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
+                        },
+                    });
                 }
 
                 if !view_feedback_store.is_empty() {
@@ -4105,12 +4151,23 @@ async fn run<'sys>(
                 }
 
                 if let Some(c) = custom_view_flyout_session.take() {
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
+                    c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+                        syslink: &system_link,
+                        view_allocator: &mut view_allocator,
+                        view_instance_store: &mut view_instance_store,
+                        view_tree_relation_store: &mut view_tree_relation_store,
+                        view_group_relation_store: &mut view_group_relation_store,
+                        view_layout_state_store: &mut view_layout_state_store,
+                        view_render_state_store: &mut view_render_state_store,
+                        teardown_context: TeardownContext {
+                            composite_tree: &mut composite_tree,
+                            ht_manager: &mut ht_manager,
+                            keyboard_focus_registry: &mut keyboard_focus_registry,
+                            current_sec: global_time_base.elapsed().as_secs_f32(),
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
+                        },
+                    });
                 }
 
                 pointer_input_manager.handle_mouse_down(
@@ -6907,16 +6964,44 @@ pub trait FlyoutSurfacePresenter {
         system_link: &SystemLink,
     ) {
     }
+
+    #[allow(unused_variables)]
+    fn teardown(&self, ctx: &mut TeardownContext) {}
 }
 pub trait FlyoutSurfacePresenterConstructor {
     fn size(&self) -> Size<LogicalUnit>;
     fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter>;
 }
 
+pub struct FlyoutSurfaceSessionTerminateContext<'a, 'h> {
+    pub syslink: &'a SystemLink<'a>,
+    pub view_allocator: &'a mut ViewIdentifierAllocator,
+    pub view_instance_store: &'a mut ViewInstanceStore,
+    pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
+    pub view_group_relation_store: &'a mut ViewGroupRelationStore,
+    pub view_layout_state_store: &'a mut ViewLayoutStateStore,
+    pub view_render_state_store: &'a mut ViewRenderStateStore,
+    pub teardown_context: TeardownContext<'a, 'h>,
+}
+impl ViewDestructionContext for FlyoutSurfaceSessionTerminateContext<'_, '_> {
+    #[inline(always)]
+    fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
+        crate::uikit::destruct_view_recursive(
+            target,
+            &mut self.teardown_context,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_layout_state_store,
+            self.view_render_state_store,
+        );
+    }
+}
+
 pub struct CustomViewFlyoutSurface {
     native_surface: FlyoutSurfaceHandle,
-    kf_group: KeyboardFocusGroupRef,
-    view: Box<dyn FlyoutSurfacePresenter>,
+    content: Box<dyn FlyoutSurfacePresenter>,
 }
 pub struct CustomViewFlyoutSession {
     parent: WindowHandle,
@@ -6926,34 +7011,32 @@ impl CustomViewFlyoutSession {
     pub fn begin(
         parent: WindowHandle,
         pos: Point<LogicalUnit>,
-        view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
+        content_ctor: Box<dyn FlyoutSurfacePresenterConstructor>,
         view_init_context: &mut ViewInitContext,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Self {
         let surface = view_init_context.system_link.new_flyout_surface(
             parent,
             pos,
-            view_constructor.size(),
+            content_ctor.size(),
             view_init_context.mount_context.composite_tree,
             view_init_context.mount_context.ht_manager,
             view_init_context.mount_context.keyboard_focus_registry,
             delayed_render_messages,
         );
-        let kf_group = view_init_context.keyboard_focus_registry.acquire_group();
-        let view = view_constructor.create(view_init_context);
+        let content = content_ctor.create(view_init_context);
         view_init_context.render_view_with_base(
-            view.root_view_id(),
+            content.root_view_id(),
             &surface,
-            kf_group,
-            Rect::from_lt_size(Point::new_logical(0.0, 0.0), view_constructor.size()),
+            surface.keyboard_focus_state().root_group(),
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), content_ctor.size()),
         );
 
         Self {
             parent,
             opening_surface: CustomViewFlyoutSurface {
                 native_surface: surface,
-                kf_group,
-                view,
+                content,
             },
         }
     }
@@ -6966,22 +7049,20 @@ impl CustomViewFlyoutSession {
         system_link: &SystemLink,
     ) {
         self.opening_surface
-            .view
+            .content
             .rescale(new_scale, composite_tree, ht_manager, system_link);
     }
 
-    pub fn terminate(
-        self,
-        syslink: &SystemLink,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
+    pub fn terminate<'a, 'h: 'a>(self, env: &mut FlyoutSurfaceSessionTerminateContext) {
+        self.opening_surface
+            .content
+            .teardown(&mut env.teardown_context);
+        env.destruct_view_recursive_untyped(self.opening_surface.content.root_view_id());
         self.opening_surface.native_surface.close(
-            syslink,
-            composite_tree,
-            ht_manager,
-            keyboard_focus_registry,
+            env.syslink,
+            env.teardown_context.composite_tree,
+            env.teardown_context.ht_manager,
+            env.teardown_context.keyboard_focus_registry,
         );
     }
 }
