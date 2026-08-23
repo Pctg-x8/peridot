@@ -73,7 +73,7 @@ impl crate::uikit::View for View {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, Self::THICKNESS)
     }

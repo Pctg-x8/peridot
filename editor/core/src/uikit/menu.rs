@@ -264,32 +264,19 @@ pub fn create_heading_visual<E>(
     onto: CompositeTreeRef,
     composite_tree: &mut CompositeTree<E>,
 ) {
-    let ct_root = composite_tree.create(CompositeRect {
-        scale_factor: CompositeRectScaleFactor::UI,
-        relative_size_adjustment: [1.0, 0.0],
-        size: [
-            AnimatableFloat::Value(0.0),
-            AnimatableFloat::Value(ITEM_HEIGHT),
-        ],
-        offset: [
-            AnimatableFloat::Value(0.0),
-            AnimatableFloat::Value(placement_y),
-        ],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.9])),
-        text: Some(CompositeRectText {
-            runs: vec![CompositeRectTextRun {
-                content: label,
-                font_id: FontID::UIDefault,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                ..Default::default()
-            }],
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+    let ct_root = CompositeRect::build()
+        .use_ui_scale()
+        .expand_width()
+        .size_imm(0.0, ITEM_HEIGHT)
+        .offset_imm(0.0, placement_y)
+        .composite_fill_color_imm([0.0, 0.0, 0.0, 0.9])
+        .text(
+            CompositeRectText::build()
+                .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                .horizontal_middle()
+                .vertical_middle(),
+        )
+        .create(composite_tree);
 
     composite_tree.add_child(onto, ct_root);
 }
@@ -312,6 +299,8 @@ impl CommandView {
         placement_y: f32,
         onto: (CompositeTreeRef, HitTestTreeRef),
     ) -> Self {
+        let animation_base_time = ctx.current_sec + animation_delay;
+
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height: ITEM_HEIGHT,
@@ -319,53 +308,32 @@ impl CommandView {
             cursor_shape: CursorShape::Pointer,
             ..Default::default()
         });
-        let animation_base_time = ctx.current_sec + animation_delay;
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(ITEM_HEIGHT),
-            ],
-            offset: [
+        let ct_root = CompositeRect::build()
+            .use_ui_scale()
+            .expand_width()
+            .size_imm(0.0, ITEM_HEIGHT)
+            .offset(
                 AnimatableFloat::from_template(&INTRO_X_ANIM, animation_base_time),
                 AnimatableFloat::Value(placement_y),
-            ],
-            opacity: AnimatableFloat::from_template(&INTRO_OPACITY_ANIM, animation_base_time),
-            ..Default::default()
-        });
-        let ct_label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            offset: [
-                AnimatableFloat::Value(TEXT_INLINE_MARGIN),
-                AnimatableFloat::Value(0.0),
-            ],
-            size: [
-                AnimatableFloat::Value(-TEXT_INLINE_MARGIN * 2.0),
-                AnimatableFloat::Value(0.0),
-            ],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: label,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_light = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: common_res.composite_mode_light(),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
+            )
+            .opacity_anim(&INTRO_OPACITY_ANIM, animation_base_time)
+            .create(ctx.composite_tree);
+        let ct_label = CompositeRect::build()
+            .use_ui_scale()
+            .expand_full()
+            .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
+            .offset_imm(TEXT_INLINE_MARGIN, 0.0)
+            .text(
+                CompositeRectText::build()
+                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .vertical_middle(),
+            )
+            .create(ctx.composite_tree);
+        let ct_light = CompositeRect::build()
+            .expand_full()
+            .composite(common_res.composite_mode_light())
+            .opacity_imm(0.0)
+            .create(ctx.composite_tree);
         ctx.composite_tree.add_child(ct_root, ct_light);
         ctx.composite_tree.add_child(ct_root, ct_label);
         let eh = std::rc::Rc::new(CommandViewEventHandler {
@@ -422,6 +390,8 @@ impl SubMenuView {
         placement_y: f32,
         onto: (CompositeTreeRef, HitTestTreeRef),
     ) -> Self {
+        let animation_base_time = ctx.current_sec + animation_delay;
+
         let ht_root = ctx.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height: ITEM_HEIGHT,
@@ -429,58 +399,36 @@ impl SubMenuView {
             cursor_shape: CursorShape::Pointer,
             ..Default::default()
         });
-        let animation_base_time = ctx.current_sec + animation_delay;
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 0.0],
-            size: [
-                AnimatableFloat::Value(0.0),
-                AnimatableFloat::Value(ITEM_HEIGHT),
-            ],
-            offset: [
+        let ct_root = CompositeRect::build()
+            .use_ui_scale()
+            .expand_width()
+            .size_imm(0.0, ITEM_HEIGHT)
+            .offset(
                 AnimatableFloat::from_template(&INTRO_X_ANIM, animation_base_time),
                 AnimatableFloat::Value(placement_y),
-            ],
-            opacity: AnimatableFloat::from_template(&INTRO_OPACITY_ANIM, animation_base_time),
-            ..Default::default()
-        });
-        let ct_label = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            offset: [
-                AnimatableFloat::Value(TEXT_INLINE_MARGIN),
-                AnimatableFloat::Value(0.0),
-            ],
-            size: [
-                AnimatableFloat::Value(-TEXT_INLINE_MARGIN * 2.0),
-                AnimatableFloat::Value(0.0),
-            ],
-            text: Some(CompositeRectText {
-                runs: vec![CompositeRectTextRun {
-                    font_id: FontID::UIDefault,
-                    content: label,
-                    color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                    ..Default::default()
-                }],
-                horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-                vertical_alignment: CompositeRectTextVerticalAlignment::Middle,
-                ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_arrow = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_offset_adjustment: [1.0, 0.5],
-            size: [
-                AnimatableFloat::Value(Self::ICON_SIZE.width),
-                AnimatableFloat::Value(Self::ICON_SIZE.height),
-            ],
-            offset: [
-                AnimatableFloat::Value(-Self::ICON_SIZE.width - TEXT_INLINE_MARGIN),
-                AnimatableFloat::Value(-Self::ICON_SIZE.height * 0.5),
-            ],
-            has_bitmap: true,
-            composite_mode: CompositeMode::ColorTint(
+            )
+            .opacity_anim(&INTRO_OPACITY_ANIM, animation_base_time)
+            .create(ctx.composite_tree);
+        let ct_label = CompositeRect::build()
+            .use_ui_scale()
+            .expand_full()
+            .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
+            .offset_imm(TEXT_INLINE_MARGIN, 0.0)
+            .text(
+                CompositeRectText::build()
+                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .vertical_middle(),
+            )
+            .create(ctx.composite_tree);
+        let ct_arrow = CompositeRect::build()
+            .use_ui_scale()
+            .relative_offset_adjustment(1.0, 0.5)
+            .offset_imm(
+                -Self::ICON_SIZE.width - TEXT_INLINE_MARGIN,
+                -Self::ICON_SIZE.height * 0.5,
+            )
+            .size_imm(Self::ICON_SIZE.width, Self::ICON_SIZE.height)
+            .composite(CompositeMode::ColorTint(
                 AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                 CompositeTexture {
                     id: common_res.tid_submenu_arrow,
@@ -488,17 +436,13 @@ impl SubMenuView {
                     mapping: TextureMappingMode::Stretch,
                     slice_borders: [0.0; 4],
                 },
-            ),
-            ..Default::default()
-        });
-        let ct_light = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            relative_size_adjustment: [1.0, 1.0],
-            has_bitmap: true,
-            composite_mode: common_res.composite_mode_light(),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
+            ))
+            .create(ctx.composite_tree);
+        let ct_light = CompositeRect::build()
+            .expand_full()
+            .composite(common_res.composite_mode_light())
+            .opacity_imm(0.0)
+            .create(ctx.composite_tree);
         ctx.composite_tree.add_child(ct_root, ct_light);
         ctx.composite_tree.add_child(ct_root, ct_label);
         ctx.composite_tree.add_child(ct_root, ct_arrow);
@@ -528,18 +472,13 @@ pub fn create_separator_visual<E>(
     onto: CompositeTreeRef,
     composite_tree: &mut CompositeTree<E>,
 ) {
-    let ct_root = composite_tree.create(CompositeRect {
-        scale_factor: CompositeRectScaleFactor::UI,
-        relative_size_adjustment: [1.0, 0.0],
-        size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(1.0)],
-        offset: [
-            AnimatableFloat::Value(0.0),
-            AnimatableFloat::Value(placement_y),
-        ],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 0.5])),
-        ..Default::default()
-    });
+    let ct_root = CompositeRect::build()
+        .use_ui_scale()
+        .expand_width()
+        .size_imm(0.0, 1.0)
+        .offset_imm(0.0, placement_y)
+        .composite_fill_color_imm([1.0, 1.0, 1.0, 0.5])
+        .create(composite_tree);
 
     composite_tree.add_child(onto, ct_root);
 }

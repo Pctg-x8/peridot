@@ -8,12 +8,6 @@ pub mod platform;
 pub mod range_helper;
 pub mod text;
 
-/// identity function
-#[inline(always)]
-pub const fn identity<T>(x: T) -> T {
-    x
-}
-
 /// Safely comparable/equatable f32
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]

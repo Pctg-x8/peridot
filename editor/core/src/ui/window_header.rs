@@ -203,7 +203,7 @@ impl crate::uikit::View for View {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, Self::THICKNESS)
     }
@@ -216,15 +216,6 @@ impl crate::uikit::View for View {
 struct ViewEntity {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-}
-
-struct SystemCommandButtonActionHandler {
-    ht_root: HitTestTreeRef,
-    ct_hover: CompositeTreeRef,
-    cmd: core::cell::Cell<SystemCommand>,
-    hovering: core::cell::Cell<bool>,
-    pressing: core::cell::Cell<bool>,
-    is_dirty: core::cell::Cell<bool>,
 }
 
 struct SystemCommandButtonView {
@@ -250,7 +241,7 @@ impl SystemCommandButtonView {
 impl crate::uikit::View for SystemCommandButtonView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> crate::uikit::ViewRenderElements {
@@ -380,7 +371,7 @@ impl crate::uikit::View for SystemCommandButtonView {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(Self::WIDTH, View::THICKNESS)
     }

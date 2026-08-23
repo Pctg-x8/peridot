@@ -1012,9 +1012,14 @@ impl<Event> CompositeRectBuilder<Event> {
         self
     }
 
-    pub fn offset_imm(mut self, x: f32, y: f32) -> Self {
-        self.temp.offset = [AnimatableFloat::Value(x), AnimatableFloat::Value(y)];
+    pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self {
+        self.temp.offset = [x, y];
         self
+    }
+
+    #[inline(always)]
+    pub fn offset_imm(self, x: f32, y: f32) -> Self {
+        self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
     }
 
     pub fn size_imm(mut self, w: f32, h: f32) -> Self {
@@ -1031,6 +1036,11 @@ impl<Event> CompositeRectBuilder<Event> {
             AnimatableFloat::Value(r.width),
             AnimatableFloat::Value(r.height),
         ];
+        self
+    }
+
+    pub const fn relative_offset_adjustment(mut self, x: f32, y: f32) -> Self {
+        self.temp.relative_offset_adjustment = [x, y];
         self
     }
 
@@ -1054,10 +1064,30 @@ impl<Event> CompositeRectBuilder<Event> {
         self
     }
 
-    pub fn composite_fill_color_imm(mut self, color: [f32; 4]) -> Self {
+    pub fn composite(mut self, mode: CompositeMode<Event>) -> Self {
         self.temp.has_bitmap = true;
-        self.temp.composite_mode = CompositeMode::FillColor(AnimatableColor::Value(color));
+        self.temp.composite_mode = mode;
         self
+    }
+
+    #[inline(always)]
+    pub fn composite_fill_color_imm(self, color: [f32; 4]) -> Self {
+        self.composite(CompositeMode::FillColor(AnimatableColor::Value(color)))
+    }
+
+    pub fn opacity(mut self, opacity: AnimatableFloat<Event>) -> Self {
+        self.temp.opacity = opacity;
+        self
+    }
+
+    #[inline(always)]
+    pub fn opacity_imm(self, opacity: f32) -> Self {
+        self.opacity(AnimatableFloat::Value(opacity))
+    }
+
+    #[inline(always)]
+    pub fn opacity_anim(self, template: &FloatAnimationTemplate, start_sec: f32) -> Self {
+        self.opacity(AnimatableFloat::from_template(template, start_sec))
     }
 
     pub fn text(mut self, text: impl Into<CompositeRectText<Event>>) -> Self {
