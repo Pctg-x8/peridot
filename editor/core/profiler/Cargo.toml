@@ -13,3 +13,7 @@ profiler-attr.path = "../profiler-attr"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = ["Win32_System_Performance"]

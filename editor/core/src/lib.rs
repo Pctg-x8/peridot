@@ -687,7 +687,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }
             #[cfg(feature = "enable-profiling")]
             if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + 3 {
-                crate::perf::profiler().emit_memory_stats();
+                profiler::profiler().emit_memory_stats();
                 continue;
             }
             if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
@@ -6632,7 +6632,7 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
-                            &view_layout_state_store,
+                            &mut view_layout_state_store,
                             &mut view_render_state_store,
                         );
 
@@ -6729,7 +6729,7 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
-                            &view_layout_state_store,
+                            &mut view_layout_state_store,
                             &mut view_render_state_store,
                         );
 
@@ -6826,7 +6826,7 @@ async fn run<'sys>(
                             },
                             &mut view_instance_store,
                             &view_tree_relation_store,
-                            &view_layout_state_store,
+                            &mut view_layout_state_store,
                             &mut view_render_state_store,
                         );
 

@@ -174,7 +174,7 @@ profiler::section!(UPDATE_PREVIEW = "RenderLoop.UpdatePreview");
 profiler::section!(POST_QUEUE = "RenderLoop.PostQueue");
 profiler::section!(WAIT_QUEUE = "RenderLoop.WaitQueue");
 #[cfg(windows)]
-crate::perf_section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
+profiler::section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 
 pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
 
@@ -1105,7 +1105,7 @@ impl<'main> RenderThread<'main> {
             profiler::wrap!(WAIT_QUEUE, render_queue.wait().expect("render_queue.wait"));
 
             #[cfg(windows)]
-            crate::perf_begin!(perf = WIN32_DX_PRESENT);
+            profiler::begin!(perf = WIN32_DX_PRESENT);
             #[cfg(windows)]
             if !present_swapchains.is_empty() {
                 for x in present_swapchains {
@@ -1133,7 +1133,7 @@ impl<'main> RenderThread<'main> {
                 }
             }
             #[cfg(windows)]
-            crate::perf_end!(perf);
+            profiler::end!(perf);
 
             // unsafe {
             //     manual_capture_end();
