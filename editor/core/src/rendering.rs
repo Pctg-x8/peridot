@@ -115,8 +115,8 @@ pub struct ShaderTexture {
 pub enum RenderMessage {
     NewWindow(NewWindowData),
     DestroyWindow(WindowHandle, std::sync::mpsc::Sender<()>),
-    NewContextMenu(NewContextMenuData),
-    DestroyContextMenu(FlyoutSurfaceHandle, std::sync::mpsc::Sender<()>),
+    NewFlyoutSurface(NewContextMenuData),
+    DestroyFlyoutSurface(FlyoutSurfaceHandle, std::sync::mpsc::Sender<()>),
     RegisterNormalized2DStaticMeshTexture {
         id: TextureID,
         data: Normalized2DStaticMeshTexture,
@@ -167,7 +167,7 @@ profiler::section!(PROCESS_MESSAGE = "RenderLoop.ProcessMessage");
 profiler::section!(UPDATE_GRADIENT = "RenderLoop.UpdateGradient");
 profiler::section!(UPDATE_WINDOW = "RenderLoop.UpdateWindow");
 profiler::section!(ACQUIRE_WINDOW_BACKBUFFER = "RenderLoop.UpdateWindow.AcquireBackbuffer");
-profiler::section!(UPDATE_CONTEXT_MENU = "RenderLoop.UpdateContextMenu");
+profiler::section!(UPDATE_FLYOUT_SURFACE = "RenderLoop.UpdateFlyoutSurface");
 profiler::section!(RENDER_VG_MASK = "RenderLoop.RenderVGMask");
 profiler::section!(VALIDATE_PREVIEW_RENDERING = "RenderLoop.ValidatePreviewRendering");
 profiler::section!(UPDATE_PREVIEW = "RenderLoop.UpdatePreview");
@@ -394,7 +394,7 @@ impl<'main> RenderThread<'main> {
                             tracing::error!(reason = %e, "done_event_bus.send");
                         };
                     }
-                    Ok(RenderMessage::NewContextMenu(create_data)) => {
+                    Ok(RenderMessage::NewFlyoutSurface(create_data)) => {
                         let init_scale =
                             SafeF32::new(create_data.w.render_scale()).expect("invalid scale");
 
@@ -425,7 +425,7 @@ impl<'main> RenderThread<'main> {
                             ),
                         );
                     }
-                    Ok(RenderMessage::DestroyContextMenu(handle, done_event_bus)) => {
+                    Ok(RenderMessage::DestroyFlyoutSurface(handle, done_event_bus)) => {
                         if let Some(x) = context_menus.remove(&handle) {
                             let current = glyph_atlas_per_scale
                                 .get_mut(&x.active_scale)
@@ -766,7 +766,7 @@ impl<'main> RenderThread<'main> {
                 });
             }
             for (k, x) in context_menus.iter_mut() {
-                profiler::scope!(UPDATE_CONTEXT_MENU);
+                profiler::scope!(UPDATE_FLYOUT_SURFACE);
 
                 let backbuffer_index = match x.acquire_backbuffer_with_wait() {
                     Ok(x) => x,
@@ -947,9 +947,7 @@ impl<'main> RenderThread<'main> {
                     backbuffer_index,
                 });
                 #[cfg(windows)]
-                {
-                    present_swapchains.push(x.swapchain.clone());
-                }
+                present_swapchains.push(x.swapchain.clone());
             }
 
             for (s, x) in glyph_atlas_per_scale.iter_mut() {

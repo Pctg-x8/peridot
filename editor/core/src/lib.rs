@@ -5709,7 +5709,6 @@ impl MenuSession {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) {
-        tracing::debug!("context menu terminate");
         while let Some(c) = self.opening_surfaces.pop() {
             c.handle.close(
                 system_link,

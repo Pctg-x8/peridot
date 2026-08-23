@@ -91,7 +91,7 @@ impl Handle {
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         syslink
             .rt_sender
-            .send(RenderMessage::DestroyContextMenu(self, tx))
+            .send(RenderMessage::DestroyFlyoutSurface(self, tx))
             .expect("rt_sender.send");
         rx.recv().expect("rx.recv");
 
@@ -834,7 +834,7 @@ impl super::SystemLink<'_> {
                 modifier_key_state: ModifierKeyRecorder::new(),
             }),
         );
-        delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
+        delayed_render_messages.push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
             w: Handle(h),
             swapchain,
             composite_root,
