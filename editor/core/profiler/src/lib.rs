@@ -10,11 +10,12 @@ mod spinlock;
 
 pub use profiler_attr::*;
 
-static mut PROFILER_INSTANCE: [u64; core::mem::size_of::<Profiler>() / 8] =
-    [0u64; core::mem::size_of::<Profiler>() / 8];
+#[repr(align(16))]
+struct ProfilerInstanceMemRgn([u8; size_of::<Profiler>()]);
+static mut PROFILER_INSTANCE: ProfilerInstanceMemRgn = ProfilerInstanceMemRgn([0; _]);
 #[inline(always)]
 pub const fn profiler() -> &'static Profiler {
-    unsafe { &*(&raw const PROFILER_INSTANCE).cast::<Profiler>() }
+    unsafe { &*(&raw const PROFILER_INSTANCE.0).cast::<Profiler>() }
 }
 
 pub fn init_profiler() {
@@ -79,10 +80,9 @@ pub fn init_profiler() {
     }
 
     unsafe {
-        core::ptr::write(
-            core::ptr::addr_of_mut!(PROFILER_INSTANCE).cast(),
-            Profiler::new(file),
-        )
+        (&raw mut PROFILER_INSTANCE.0)
+            .cast::<Profiler>()
+            .write(Profiler::new(file));
     }
 }
 
@@ -96,38 +96,14 @@ pub fn fini_profiler() {
     });
 
     unsafe {
-        core::ptr::drop_in_place((&raw mut PROFILER_INSTANCE).cast::<Profiler>());
+        (&raw mut PROFILER_INSTANCE.0)
+            .cast::<Profiler>()
+            .drop_in_place();
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use self::platform::{TIMESTAMP_FREQUENCY, timestamp};
-
-#[cfg(not(unix))]
-#[inline(always)]
-pub fn timestamp() -> i64 {
-    #[cfg(windows)]
-    let mut x = core::mem::MaybeUninit::uninit();
-    #[cfg(windows)]
-    unsafe {
-        // never fails on winxp or later
-        let _ = windows::Win32::System::Performance::QueryPerformanceCounter(x.as_mut_ptr());
-    }
-    #[cfg(windows)]
-    unsafe {
-        x.assume_init()
-    }
-}
-
-#[cfg(windows)]
-pub static TIMESTAMP_FREQUENCY: std::sync::LazyLock<i64> = std::sync::LazyLock::new(|| {
-    let mut x = core::mem::MaybeUninit::uninit();
-    unsafe {
-        // never fails on winxp or later
-        let _ = windows::Win32::System::Performance::QueryPerformanceFrequency(x.as_mut_ptr());
-    }
-    unsafe { x.assume_init() }
-});
 
 #[cfg(target_os = "linux")]
 static mut SELF_STATM: platform::linux::StatMFile =
@@ -142,28 +118,7 @@ pub struct MemoryStats {
 impl MemoryStats {
     pub fn fetch() -> Self {
         #[cfg(windows)]
-        let mut stat = core::mem::MaybeUninit::<
-            windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX2,
-        >::uninit();
-        #[cfg(windows)]
-        if let Err(e) = unsafe {
-            windows::Win32::System::ProcessStatus::GetProcessMemoryInfo(
-                windows::Win32::System::Threading::GetCurrentProcess(),
-                stat.as_mut_ptr().cast(),
-                core::mem::size_of::<
-                    windows::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS_EX2,
-                >() as _,
-            )
-        } {
-            tracing::error!(reason = %e, "GetProcessMemoryInfo failed");
-            return Self {
-                total_resident_bytes: 0,
-                total_reserved_bytes: 0,
-                total_private_resident_bytes: 0,
-            };
-        }
-        #[cfg(windows)]
-        let stat = unsafe { stat.assume_init_ref() };
+        let stat = platform::windows::get_self_process_memory_info();
         #[cfg(windows)]
         return Self {
             total_resident_bytes: stat.WorkingSetSize,
@@ -247,7 +202,7 @@ impl Profiler {
             &mut target,
             &mut [
                 IoSlice::new(&0x0102u16.to_ne_bytes()),
-                IoSlice::new(&[core::mem::size_of::<usize>() as u8]),
+                IoSlice::new(&[size_of::<usize>() as u8]),
                 IoSlice::new(&TIMESTAMP_FREQUENCY.to_ne_bytes()),
             ],
         )
@@ -431,11 +386,6 @@ impl Event {
     pub const fn new(name: &'static str) -> Self {
         Self { name }
     }
-
-    #[inline(always)]
-    pub fn emit(&self) {
-        profiler().emit_event(self);
-    }
 }
 
 #[cfg(feature = "active")]
@@ -456,7 +406,7 @@ macro_rules! event {
 #[macro_export]
 macro_rules! emit {
     ($marker: expr) => {
-        $marker.emit();
+        $crate::profiler().emit_event(&$marker);
     };
 }
 
@@ -525,9 +475,7 @@ pub struct SectionScope(pub u64);
 impl Drop for SectionScope {
     #[inline(always)]
     fn drop(&mut self) {
-        {
-            profiler().emit_section_end(self.0);
-        }
+        profiler().emit_section_end(self.0);
     }
 }
 
