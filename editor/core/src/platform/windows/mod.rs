@@ -17,7 +17,7 @@ use windows::{
     },
     Win32::{
         Devices::HumanInterfaceDevice::KEYBOARD_OVERRUN_MAKE_CODE,
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
             Direct3D12::{
@@ -131,7 +131,7 @@ impl core::hash::Hash for WindowHandle {
 }
 impl WindowHandle {
     #[inline(always)]
-    pub fn destroy(&mut self) {
+    fn destroy(&mut self) {
         self.state_mut().destroying = true;
         if let Err(e) = unsafe { DestroyWindow(self.0) } {
             tracing::error!(reason = %e, "window.destroy");
@@ -1803,7 +1803,7 @@ pub struct SystemLink<'sys> {
     pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context: &'sys ApplicationContext,
-    pub pointer_hovering_timer: *const WaitableTimer,
+    pub pointer_hovering_timer_handle: HANDLE,
     pub flyout_surface_context: flyout_surface::SharedState,
 }
 impl<'sys> SystemLink<'sys> {
@@ -2006,13 +2006,13 @@ impl<'sys> SystemLink<'sys> {
     }
 
     pub fn set_pointer_hovering_timeout(&mut self) {
-        unsafe { &*self.pointer_hovering_timer }
+        unsafe { WaitableTimer::ref_from_handle(&self.pointer_hovering_timer_handle) }
             .set_oneshot_relative(crate::input::POINTER_HOVER_TIMEOUT_MS as _)
             .expect("pointer_hovering_timer.set");
     }
 
     pub fn kill_pointer_hovering_timeout(&mut self) {
-        unsafe { &*self.pointer_hovering_timer }
+        unsafe { WaitableTimer::ref_from_handle(&self.pointer_hovering_timer_handle) }
             .cancel()
             .expect("pointer_hovering_timer.cancel");
     }

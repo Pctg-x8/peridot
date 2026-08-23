@@ -274,14 +274,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     }
 
     #[cfg(windows)]
-    let pointer_hovering_timer = core::pin::pin!(
-        utils::platform::windows::WaitableTimer::new(false).expect("pointer_hovering_timer.create")
-    );
+    let pointer_hovering_timer =
+        utils::platform::windows::WaitableTimer::new(false).expect("pointer_hovering_timer.create");
     #[cfg(windows)]
-    let context_menu_delayed_action_timer = core::pin::pin!(
-        utils::platform::windows::WaitableTimer::new(false)
-            .expect("context_menu_delayed_action_timer.create")
-    );
+    let context_menu_delayed_action_timer = utils::platform::windows::WaitableTimer::new(false)
+        .expect("context_menu_delayed_action_timer.create");
     #[cfg(target_os = "linux")]
     let pointer_hovering_timer = utils::platform::linux::TimerFD::new().expect("timerfd.new");
     #[cfg(feature = "wayland")]
@@ -303,11 +300,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             gfx,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context,
-            pointer_hovering_timer: pointer_hovering_timer.as_ref().get_ref(),
+            pointer_hovering_timer_handle: pointer_hovering_timer.as_handle(),
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
                 app_context,
                 &dx_context,
-                context_menu_delayed_action_timer.as_ref(),
+                &context_menu_delayed_action_timer,
             ),
         },
         #[cfg(not(windows))]
@@ -3661,9 +3658,9 @@ async fn run<'sys>(
             Event::SubWindowClose { mut window } => {
                 let wd = unsafe { window.take_extra_data::<PerWindowData>() };
                 struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
-                impl ViewImmediateTeardownable for LocalContext<'_, '_> {
-                    fn teardown_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-                        crate::uikit::teardown_view_recursive(
+                impl ViewDestructionContext for LocalContext<'_, '_> {
+                    fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
+                        crate::uikit::destruct_view_recursive(
                             target,
                             &mut TeardownContext {
                                 composite_tree: &mut self.0.mount_context.composite_tree,
@@ -3677,31 +3674,6 @@ async fn run<'sys>(
                                     .0
                                     .view_feedback_subscription_delayed_ops,
                             },
-                            self.0.view_instance_store,
-                            self.0.view_tree_relation_store,
-                            self.0.view_render_state_store,
-                        );
-                    }
-                }
-                impl ViewRegisterable for LocalContext<'_, '_> {
-                    fn construct_view<T: View + 'static>(
-                        &mut self,
-                        ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
-                    ) -> TypedViewIdentifier<T> {
-                        crate::uikit::construct_view(
-                            ctor,
-                            self.0.view_allocator,
-                            self.0.view_instance_store,
-                            self.0.view_tree_relation_store,
-                            self.0.view_group_relation_store,
-                            self.0.view_layout_state_store,
-                            self.0.view_render_state_store,
-                        )
-                    }
-
-                    fn free_view_untyped(&mut self, id: ViewIdentifier) {
-                        crate::uikit::free_view(
-                            id,
                             self.0.view_allocator,
                             self.0.view_instance_store,
                             self.0.view_tree_relation_store,

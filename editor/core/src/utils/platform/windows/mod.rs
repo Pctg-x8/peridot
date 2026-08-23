@@ -163,6 +163,7 @@ impl Event {
     }
 }
 
+#[repr(transparent)]
 pub struct WaitableTimer(HANDLE);
 unsafe impl Sync for WaitableTimer {}
 unsafe impl Send for WaitableTimer {}
@@ -180,6 +181,11 @@ impl WaitableTimer {
         Ok(Self(unsafe {
             CreateWaitableTimerW(None, manual_reset, None)?
         }))
+    }
+
+    #[inline(always)]
+    pub const unsafe fn ref_from_handle<'a>(handle: &'a HANDLE) -> &'a Self {
+        unsafe { core::mem::transmute(handle) }
     }
 
     #[inline(always)]

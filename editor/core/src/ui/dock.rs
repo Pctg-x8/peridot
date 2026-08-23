@@ -2,7 +2,7 @@ use core::cell::Cell;
 use std::{collections::BTreeSet, rc::Rc};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SyncEvent, SystemLink, WindowHandle,
+    Event, SyncEvent, SystemLink, WindowHandle,
     input::{
         EventContinueControl, InputEventContext, PointerInputUnit,
         hittest::{
@@ -22,7 +22,7 @@ use crate::{
     },
     uikit::{
         DeriveTeardownContext, MountContext, RenderContext, SystemLinkAccess, TeardownContext,
-        TypedViewIdentifier, View, ViewIdentifier, ViewImmediateRenderable,
+        TypedViewIdentifier, View, ViewDestructionContext, ViewIdentifier, ViewImmediateRenderable,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewRegisterable,
         ViewRelationControllable, ViewRenderElements, ViewRenderQueue, ViewRenderer,
@@ -642,7 +642,7 @@ impl View for WindowDockRootView {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
@@ -670,23 +670,20 @@ impl DockingManager {
         let root_id = dock_ctor(ctx, view_render_queue, store);
 
         // set all as children of the window
-        fn rec(
-            id: DockID,
-            store: &mut DockStore,
-            root_view: TypedViewIdentifier<WindowDockRootView>,
-            env: &mut (impl ViewRelationControllable + ?Sized),
-        ) {
+        let mut process_stack = Vec::new();
+        process_stack.push(root_id);
+        while let Some(id) = process_stack.pop() {
             match store.get(id) {
                 &Dock::RootContainer { content } => {
-                    rec(content, store, root_view, env);
+                    process_stack.push(content);
                 }
                 &Dock::Fill {
                     ref group_view_controller,
                     ..
                 } => {
-                    env.view_set_parent(group_view_controller.tab_strip_view, root_view);
+                    ctx.view_set_parent(group_view_controller.tab_strip_view, root_view_id);
                     for x in group_view_controller.contents.iter() {
-                        env.view_set_parent(x.container, root_view);
+                        ctx.view_set_parent(x.container, root_view_id);
                     }
                 }
                 &Dock::Splitted {
@@ -695,13 +692,11 @@ impl DockingManager {
                     splitter,
                     ..
                 } => {
-                    env.view_set_parent(splitter, root_view);
-                    rec(docked, store, root_view, env);
-                    rec(rest, store, root_view, env);
+                    ctx.view_set_parent(splitter, root_view_id);
+                    process_stack.extend([docked, rest]);
                 }
             }
         }
-        rec(root_id, store, root_view_id, ctx);
         ctx.render_view_with_base(
             root_view_id.into_untyped(),
             &bound_window,
@@ -727,14 +722,9 @@ impl DockingManager {
         }
     }
 
-    pub fn teardown(
-        self,
-        store: &mut DockStore,
-        env: &mut (impl ViewImmediateTeardownable + ViewRegisterable + ?Sized),
-    ) {
+    pub fn teardown(self, store: &mut DockStore, env: &mut (impl ViewDestructionContext + ?Sized)) {
         // TODO: teardown docks
-        env.teardown_view_recursive(self.root_view_id);
-        env.free_view(self.root_view_id);
+        env.destruct_view_recursive(self.root_view_id);
     }
 
     #[inline(always)]
@@ -1609,7 +1599,7 @@ impl DockedPaneSplitterView {
 impl View for DockedPaneSplitterView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
@@ -1695,7 +1685,7 @@ impl View for DockedPaneSplitterView {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(
             DESIGN_METRICS.splitter_thickness,
@@ -1908,7 +1898,7 @@ impl PaneGroupContainerView {
 impl View for PaneGroupContainerView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
@@ -1983,7 +1973,7 @@ impl View for PaneGroupContainerView {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
@@ -2028,7 +2018,7 @@ impl PaneGroupTabStripView {
 impl View for PaneGroupTabStripView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
@@ -2099,7 +2089,7 @@ impl View for PaneGroupTabStripView {
 
     fn measure_preferred_content_size(
         &self,
-        ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut crate::uikit::MeasureContext,
     ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, DESIGN_METRICS.tab_height())
     }

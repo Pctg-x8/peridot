@@ -1,11 +1,9 @@
-use std::rc::Rc;
-
 use windows::{
     UI::Composition::{
         CompositionEffectFactory, CompositionEffectSourceParameter, Desktop::DesktopWindowTarget,
     },
     Win32::{
-        Foundation::{FALSE, HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Foundation::{FALSE, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM},
         Graphics::{
             Direct3D12::ID3D12CommandQueue,
             Dxgi::{
@@ -53,10 +51,7 @@ use crate::{
         NewContextMenuData, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{
-        MenuBaseSurfaceEventHandler, MenuItemInteractableElement, MenuItemLayout,
-        MenuItemSubMenuView, MountTarget, ViewInitContext,
-    },
+    uikit::{MenuItemSubMenuView, MountTarget},
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{WaitableTimer, WindowByClassIter, register_class},
@@ -581,7 +576,7 @@ pub struct SharedState {
     dxgi_factory: IDXGIFactory2,
     d3d12_cq: ID3D12CommandQueue,
     blur_effect_factory: CompositionEffectFactory,
-    delayed_action_timer: *const WaitableTimer,
+    delayed_action_timer_handle: HANDLE,
 }
 impl SharedState {
     pub(super) const CLASS_NAME: PCWSTR = w!("ContextMenu");
@@ -589,7 +584,7 @@ impl SharedState {
     pub fn new(
         app_context: &ApplicationContext,
         dx_context: &super::DxContext,
-        delayed_action_timer: core::pin::Pin<&WaitableTimer>,
+        delayed_action_timer: &WaitableTimer,
     ) -> Self {
         let window_class = unsafe {
             register_class(&WNDCLASSEXW {
@@ -623,7 +618,7 @@ impl SharedState {
             dxgi_factory: dx_context.dxgi_factory.clone(),
             d3d12_cq: dx_context.d3d12_cq.clone(),
             blur_effect_factory,
-            delayed_action_timer: delayed_action_timer.get_ref(),
+            delayed_action_timer_handle: delayed_action_timer.as_handle(),
         }
     }
 
@@ -633,13 +628,13 @@ impl SharedState {
     }
 
     pub fn reserve_delayed_action(&self) {
-        unsafe { &*self.delayed_action_timer }
+        unsafe { WaitableTimer::ref_from_handle(&self.delayed_action_timer_handle) }
             .set_oneshot_relative(crate::uikit::MENU_DELAYED_ACTION_TIMEOUT_MS as _)
             .expect("delayed_action_timer.set_oneshot_relative");
     }
 
     pub fn unreserve_delayed_action(&self) {
-        unsafe { &*self.delayed_action_timer }
+        unsafe { WaitableTimer::ref_from_handle(&self.delayed_action_timer_handle) }
             .cancel()
             .expect("delayed_action_timer.cancel");
     }
