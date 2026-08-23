@@ -63,7 +63,7 @@ impl Handle {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         syslink
             .rt_sender
-            .send(RenderMessage::DestroyContextMenu(self, done_event_sender))
+            .send(RenderMessage::DestroyFlyoutSurface(self, done_event_sender))
             .expect("rt_sender.send");
         done_event_receiver
             .recv_timeout(std::time::Duration::from_millis(1000))
@@ -77,6 +77,11 @@ impl Handle {
         drop(eh);
 
         drop(unsafe { wl::Owned::wrap_unchecked(self.0) });
+    }
+
+    #[inline(always)]
+    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.data().keyboard_focus_state
     }
 
     #[inline(always)]
@@ -514,11 +519,11 @@ pub fn new_surface<E>(
             (*syslink.display_server.context).dp.as_raw().cast(),
             surface.as_ptr().cast(),
         )
-        .execute((&*syslink.vk_device).instance(), None)
+        .execute((&*syslink.gfx).instance(), None)
         .expect("vk_surface.create")
     };
-    let vk_surface = VulkanSurface::new(unsafe { &*syslink.vk_device }, vk_surface);
-    delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
+    let vk_surface = VulkanSurface::new(unsafe { &*syslink.gfx }, vk_surface);
+    delayed_render_messages.push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
         w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
         vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
         composite_root: ct_root,

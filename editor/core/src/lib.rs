@@ -5799,7 +5799,7 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
 
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
-    vk_device: *const Graphics<'sys>,
+    gfx: *const Graphics<'sys>,
     rt_sender: RenderMessageSender,
     font_set: *const FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,
@@ -5861,48 +5861,6 @@ impl SystemLink<'_> {
             delayed_render_messages,
             parent.ui_scale_factor(),
         )
-    }
-
-    #[cfg(feature = "wayland")]
-    pub fn pop_context_menu(
-        &self,
-        parent: WindowHandle,
-        view_init_context: &mut ViewInitContext,
-        depth: usize,
-        surface_pos: Point<LogicalUnit>,
-        layouted_items: Vec<MenuItemLayout>,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-        setup_contents: impl FnOnce(
-            Vec<MenuItemLayout>,
-            FlyoutSurfaceHandle,
-            &mut ViewInitContext,
-        ) -> Vec<MenuItemInteractableElement>,
-    ) -> (
-        FlyoutSurfaceHandle,
-        Rc<MenuBaseSurfaceEventHandler>,
-        Vec<MenuItemInteractableElement>,
-    ) {
-        let width = MenuItemLayout::min_width(layouted_items.iter());
-        let height = MenuItemLayout::height(layouted_items.iter());
-        tracing::debug!(%width, %height, "pop context menu");
-
-        let handle = self.new_flyout_surface(
-            parent,
-            surface_pos,
-            Size::new_logical(width.value(), height.value()),
-            view_init_context.mount_context.composite_tree,
-            view_init_context.mount_context.ht_manager,
-            view_init_context.mount_context.keyboard_focus_registry,
-            delayed_render_messages,
-        );
-
-        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-        view_init_context
-            .ht_manager
-            .set_action_handler(handle.ht_root(), &base_surface_event_handler);
-        let views = setup_contents(layouted_items, handle, view_init_context);
-
-        (handle, base_surface_event_handler, views)
     }
 }
 

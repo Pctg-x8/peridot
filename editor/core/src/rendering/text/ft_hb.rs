@@ -1,5 +1,7 @@
 //! Text Rendering backend using FreeType2 + Harfbuzz(Generic OSS fallback)
 
+use core::convert::identity;
+
 use peridot_tp_budoux as budoux;
 use peridot_tp_freetype::{
     LoadFlags, OutlineFuncs, Vector, get_char_index, load_glyph, outline_decompose,
@@ -93,7 +95,7 @@ impl TextLayout {
                                         *last_boundary = next_boundary;
                                         Some(res)
                                     })
-                                    .filter_map(crate::utils::identity),
+                                    .filter_map(identity),
                                 );
                         } else {
                             let u16s = x.content[starting_bytes..ending_bytes]
@@ -126,7 +128,7 @@ impl TextLayout {
                                         *last_boundary = next_boundary;
                                         Some(res)
                                     })
-                                    .filter_map(crate::utils::identity),
+                                    .filter_map(identity),
                                 );
                         }
                     }

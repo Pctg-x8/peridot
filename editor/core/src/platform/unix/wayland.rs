@@ -221,7 +221,7 @@ impl crate::SystemLink<'_> {
             unsafe { &*self.display_server.static_pixbufs }
                 .window_decoration
                 .as_ref(),
-            unsafe { &*self.vk_device },
+            unsafe { &*self.gfx },
             delayed_render_messages,
         )
         .into_handle()
@@ -289,7 +289,7 @@ impl crate::SystemLink<'_> {
             unsafe { &*self.display_server.static_pixbufs }
                 .window_decoration
                 .as_ref(),
-            unsafe { &*self.vk_device },
+            unsafe { &*self.gfx },
             delayed_render_messages,
         );
 
