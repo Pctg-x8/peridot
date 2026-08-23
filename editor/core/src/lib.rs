@@ -3756,27 +3756,6 @@ async fn run<'sys>(
                         ht_manager: &mut ht_manager,
                     },
                 );
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
@@ -3857,66 +3836,9 @@ async fn run<'sys>(
                         },
                     });
                 }
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::WindowRescaleUI { window, new_scale } => {
                 popup_manager.rescale(window, new_scale, &mut composite_tree);
-
-                let mut renderer_sync = renderer_sync.lock().expect("poisoned");
-                composite_tree.commit(&mut renderer_sync.composite_buffer);
             }
             Event::WindowMaximizeStateChanged {
                 window,
@@ -3964,24 +3886,6 @@ async fn run<'sys>(
                             view_instance_store: &mut view_instance_store,
                         },
                     );
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
             },
             Event::WindowFocusChanged {
                 mut window,
@@ -4028,60 +3932,6 @@ async fn run<'sys>(
                         &mut keyboard_focus_registry,
                     );
                 }
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::WindowActivatingStateChanged { window, activated } => {
                 if !activated {
@@ -4101,9 +3951,6 @@ async fn run<'sys>(
                             &mut ht_manager,
                             &mut keyboard_focus_registry,
                         );
-
-                        composite_tree
-                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }
@@ -4192,60 +4039,6 @@ async fn run<'sys>(
                     window.ht_root(),
                     &mut keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerMove {
                 pointer_id,
@@ -4276,60 +4069,6 @@ async fn run<'sys>(
                     window.ht_root(),
                 );
 
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
-
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
             }
@@ -4357,60 +4096,6 @@ async fn run<'sys>(
                         },
                     },
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerUp {
                 window,
@@ -4439,60 +4124,6 @@ async fn run<'sys>(
                     key_modifier,
                     window.ht_root(),
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerLeaveWindow { window, pointer_id } => {
                 pointer_input_manager.handle_mouse_leave(
@@ -4513,60 +4144,6 @@ async fn run<'sys>(
                         },
                     },
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::PointerHover => {
                 system_link.kill_pointer_hovering_timeout();
@@ -4584,60 +4161,6 @@ async fn run<'sys>(
                         view_feedbacks: &mut view_feedback_store,
                     },
                 });
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::ScrollWheel {
                 amount,
@@ -4661,60 +4184,6 @@ async fn run<'sys>(
                         },
                     },
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::KeyDown {
                 mut window,
@@ -4748,60 +4217,6 @@ async fn run<'sys>(
                         },
                         &keyboard_focus_registry,
                     );
-
-                    if !view_feedback_store.is_empty() {
-                        let mut fb_context = ViewFeedbackContext {
-                            application: &application,
-                            view_init_context: ViewInitContext {
-                                mount_context: MountContext {
-                                    composite_tree: &mut composite_tree,
-                                    ht_manager: &mut ht_manager,
-                                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                                    keyboard_focus_registry: &mut keyboard_focus_registry,
-                                },
-                                view_allocator: &mut view_allocator,
-                                view_instance_store: &mut view_instance_store,
-                                view_tree_relation_store: &mut view_tree_relation_store,
-                                view_group_relation_store: &mut view_group_relation_store,
-                                view_layout_state_store: &mut view_layout_state_store,
-                                view_render_state_store: &mut view_render_state_store,
-                                view_feedback_subscription_delayed_ops:
-                                    &mut view_feedback_registry_delayed_ops,
-                                system_link: &system_link,
-                                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                application: &application,
-                            },
-                            view_render_queue: &mut view_render_queue,
-                        };
-
-                        for x in view_feedback_store.drain(..) {
-                            x.dispatch(&view_feedback_registry, &mut fb_context);
-                        }
-
-                        view_feedback_registry.perform_atomic(&mut fb_context);
-                    }
-
-                    view_render_queue.perform(
-                        &mut RenderContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                        },
-                        &mut view_instance_store,
-                        &view_tree_relation_store,
-                        &mut view_layout_state_store,
-                        &mut view_render_state_store,
-                    );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
             Event::KeyDown {
@@ -4828,60 +4243,6 @@ async fn run<'sys>(
                     },
                     &keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::KeyUp {
                 window,
@@ -4907,60 +4268,6 @@ async fn run<'sys>(
                     },
                     &keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::KeyChar {
                 window,
@@ -4986,60 +4293,6 @@ async fn run<'sys>(
                     },
                     &keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::IMEStateChanges {
                 window,
@@ -5065,60 +4318,6 @@ async fn run<'sys>(
                     },
                     &keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::OpenAlertDialog {
                 target_window,
@@ -5165,40 +4364,10 @@ async fn run<'sys>(
                     },
                     &keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
+            }
+            Event::PopupClose { id } => {
+                popup_manager.close(
+                    id,
                     &mut RenderContext {
                         composite_tree: &mut composite_tree,
                         ht_manager: &mut ht_manager,
@@ -5215,54 +4384,9 @@ async fn run<'sys>(
                     &mut view_layout_state_store,
                     &mut view_render_state_store,
                 );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
-            }
-            Event::PopupClose { id } => {
-                if popup_manager.close(
-                    id,
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                ) {
-                    view_render_queue.perform(
-                        &mut RenderContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                        },
-                        &mut view_instance_store,
-                        &view_tree_relation_store,
-                        &mut view_layout_state_store,
-                        &mut view_render_state_store,
-                    );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                }
             }
             Event::Sync(SyncEvent::PopupUnmount { id }) => {
-                if popup_manager.teardown(
+                popup_manager.teardown(
                     id,
                     &mut view_instance_store,
                     &mut view_tree_relation_store,
@@ -5275,17 +4399,13 @@ async fn run<'sys>(
                         view_feedback_subscription_delayed_ops:
                             &mut view_feedback_registry_delayed_ops,
                     },
-                ) {
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                }
+                );
             }
             Event::OpenCustomViewFlyout {
                 parent,
                 surface_pos,
                 view_constructor,
             } => {
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
                     parent,
                     surface_pos,
@@ -5311,35 +4431,12 @@ async fn run<'sys>(
                     },
                     &mut delayed_render_messages,
                 ));
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuOpen {
                 parent,
                 items,
                 surface_pos,
             } => {
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
@@ -5367,10 +4464,6 @@ async fn run<'sys>(
                     &mut delayed_render_messages,
                     &context_menu_common_resources,
                 ));
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuReopen {
                 parent,
@@ -5386,7 +4479,6 @@ async fn run<'sys>(
                     );
                 }
 
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
@@ -5414,10 +4506,6 @@ async fn run<'sys>(
                     &mut delayed_render_messages,
                     &context_menu_common_resources,
                 ));
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuOpen {
                 parent,
@@ -5426,7 +4514,6 @@ async fn run<'sys>(
                 items,
                 selection_receiver,
             } => {
-                let mut view_feedback_registry_delayed_ops = VecDeque::new();
                 current_active_dropdown_menu_session = Some(DropdownMenuSession::new(
                     selection_receiver,
                     parent,
@@ -5455,10 +4542,6 @@ async fn run<'sys>(
                     min_width,
                     items,
                 ));
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuCloseAll => {
                 if let Some(c) = current_active_menu_session.take() {
@@ -5477,22 +4560,11 @@ async fn run<'sys>(
                         &mut ht_manager,
                         &mut keyboard_focus_registry,
                     );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
             Event::MenuRescale { scale } => {
-                let mut should_commit_ct = false;
-
                 if let Some(ref c) = custom_view_flyout_session {
                     c.rescale(scale, &mut composite_tree, &ht_manager, &system_link);
-                    should_commit_ct = true;
-                }
-
-                if should_commit_ct {
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }
             }
             Event::MenuSelectItem { depth, index } => {
@@ -5504,8 +4576,6 @@ async fn run<'sys>(
                         global_time_base.elapsed().as_secs_f32(),
                     );
 
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
@@ -5517,8 +4587,6 @@ async fn run<'sys>(
                         global_time_base.elapsed().as_secs_f32(),
                     );
 
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     system_link.flyout_surface_context.reserve_delayed_action();
                 }
             }
@@ -5552,7 +4620,6 @@ async fn run<'sys>(
                     .unreserve_delayed_action();
 
                 if let Some(c) = current_active_menu_session.as_mut() {
-                    let mut view_feedback_registry_delayed_ops = VecDeque::new();
                     c.perform_delayed_action(
                         &system_link,
                         &mut ViewInitContext {
@@ -5577,10 +4644,6 @@ async fn run<'sys>(
                         &mut delayed_render_messages,
                         &context_menu_common_resources,
                     );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
             Event::MenuPointerDown {
@@ -5611,60 +4674,6 @@ async fn run<'sys>(
                     target.ht_root(),
                     &mut keyboard_focus_registry,
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuPointerMove {
                 pointer_id,
@@ -5694,60 +4703,6 @@ async fn run<'sys>(
                     },
                     target.ht_root(),
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
                 let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
                 system_link.set_cursor(&pointer_id, cursor_shape);
@@ -5779,60 +4734,6 @@ async fn run<'sys>(
                     key_modifier,
                     target.ht_root(),
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuPointerLeave { pointer_id, .. } => {
                 pointer_input_manager.handle_mouse_leave(
@@ -5853,60 +4754,6 @@ async fn run<'sys>(
                         },
                     },
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::MenuSelectCommand { id } => {
                 tracing::debug!(id, "ContextMenuSelectCommand");
@@ -6072,60 +4919,6 @@ async fn run<'sys>(
                         tracing::warn!(id, "unhandled menu command");
                     }
                 }
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
                 if let Some(r) = receiver.upgrade() {
@@ -6187,60 +4980,6 @@ async fn run<'sys>(
                         &mut keyboard_focus_registry,
                     );
                 }
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::DockMoveSplitter {
                 controlling_dock,
@@ -6257,27 +4996,6 @@ async fn run<'sys>(
                         ht_manager: &mut ht_manager,
                     },
                 );
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
             }
             Event::DockBeginPreview {
                 initiator,
@@ -6494,28 +5212,6 @@ async fn run<'sys>(
                         );
                         sub_windows.insert(new_window);
                     }
-
-                    view_render_queue.perform(
-                        &mut RenderContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                        },
-                        &mut view_instance_store,
-                        &view_tree_relation_store,
-                        &mut view_layout_state_store,
-                        &mut view_render_state_store,
-                    );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
                 }
             }
             Event::Sync(SyncEvent::NewPresentID { .. }) => {
@@ -6531,85 +5227,9 @@ async fn run<'sys>(
                         view_feedbacks: &mut view_feedback_store,
                     },
                 );
-
-                if !view_feedback_store.is_empty() {
-                    let mut fb_context = ViewFeedbackContext {
-                        application: &application,
-                        view_init_context: ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        view_render_queue: &mut view_render_queue,
-                    };
-
-                    for x in view_feedback_store.drain(..) {
-                        x.dispatch(&view_feedback_registry, &mut fb_context);
-                    }
-
-                    view_feedback_registry.perform_atomic(&mut fb_context);
-                }
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             Event::ScheduleViewRenderExt { id } => {
                 view_render_queue.schedule(id);
-
-                view_render_queue.perform(
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-
-                composite_tree
-                    .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
             }
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
@@ -6657,59 +5277,6 @@ async fn run<'sys>(
                                 }
                             }
                         }
-
-                        if !view_feedback_store.is_empty() {
-                            let mut fb_context = ViewFeedbackContext {
-                                application: &application,
-                                view_init_context: ViewInitContext {
-                                    mount_context: MountContext {
-                                        composite_tree: &mut composite_tree,
-                                        ht_manager: &mut ht_manager,
-                                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                                    },
-                                    view_allocator: &mut view_allocator,
-                                    view_instance_store: &mut view_instance_store,
-                                    view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_layout_state_store: &mut view_layout_state_store,
-                                    view_group_relation_store: &mut view_group_relation_store,
-                                    view_render_state_store: &mut view_render_state_store,
-                                    view_feedback_subscription_delayed_ops:
-                                        &mut view_feedback_registry_delayed_ops,
-                                    system_link: &system_link,
-                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                    application: &application,
-                                },
-                                view_render_queue: &mut view_render_queue,
-                            };
-
-                            for x in view_feedback_store.drain(..) {
-                                x.dispatch(&view_feedback_registry, &mut fb_context);
-                            }
-
-                            view_feedback_registry.perform_atomic(&mut fb_context);
-                        }
-
-                        view_render_queue.perform(
-                            &mut RenderContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                system_link: &system_link,
-                                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                application: &application,
-                                view_feedback_subscription_delayed_ops:
-                                    &mut view_feedback_registry_delayed_ops,
-                            },
-                            &mut view_instance_store,
-                            &view_tree_relation_store,
-                            &mut view_layout_state_store,
-                            &mut view_render_state_store,
-                        );
-
-                        composite_tree
-                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }
@@ -6754,59 +5321,6 @@ async fn run<'sys>(
                                 }
                             }
                         }
-
-                        if !view_feedback_store.is_empty() {
-                            let mut fb_context = ViewFeedbackContext {
-                                application: &application,
-                                view_init_context: ViewInitContext {
-                                    mount_context: MountContext {
-                                        composite_tree: &mut composite_tree,
-                                        ht_manager: &mut ht_manager,
-                                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                                    },
-                                    view_allocator: &mut view_allocator,
-                                    view_instance_store: &mut view_instance_store,
-                                    view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_layout_state_store: &mut view_layout_state_store,
-                                    view_group_relation_store: &mut view_group_relation_store,
-                                    view_render_state_store: &mut view_render_state_store,
-                                    view_feedback_subscription_delayed_ops:
-                                        &mut view_feedback_registry_delayed_ops,
-                                    system_link: &system_link,
-                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                    application: &application,
-                                },
-                                view_render_queue: &mut view_render_queue,
-                            };
-
-                            for x in view_feedback_store.drain(..) {
-                                x.dispatch(&view_feedback_registry, &mut fb_context);
-                            }
-
-                            view_feedback_registry.perform_atomic(&mut fb_context);
-                        }
-
-                        view_render_queue.perform(
-                            &mut RenderContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                system_link: &system_link,
-                                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                application: &application,
-                                view_feedback_subscription_delayed_ops:
-                                    &mut view_feedback_registry_delayed_ops,
-                            },
-                            &mut view_instance_store,
-                            &view_tree_relation_store,
-                            &mut view_layout_state_store,
-                            &mut view_render_state_store,
-                        );
-
-                        composite_tree
-                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }
@@ -6851,63 +5365,62 @@ async fn run<'sys>(
                                 }
                             }
                         }
-
-                        if !view_feedback_store.is_empty() {
-                            let mut fb_context = ViewFeedbackContext {
-                                application: &application,
-                                view_init_context: ViewInitContext {
-                                    mount_context: MountContext {
-                                        composite_tree: &mut composite_tree,
-                                        ht_manager: &mut ht_manager,
-                                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                                    },
-                                    view_allocator: &mut view_allocator,
-                                    view_instance_store: &mut view_instance_store,
-                                    view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_layout_state_store: &mut view_layout_state_store,
-                                    view_group_relation_store: &mut view_group_relation_store,
-                                    view_render_state_store: &mut view_render_state_store,
-                                    view_feedback_subscription_delayed_ops:
-                                        &mut view_feedback_registry_delayed_ops,
-                                    system_link: &system_link,
-                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                    application: &application,
-                                },
-                                view_render_queue: &mut view_render_queue,
-                            };
-
-                            for x in view_feedback_store.drain(..) {
-                                x.dispatch(&view_feedback_registry, &mut fb_context);
-                            }
-
-                            view_feedback_registry.perform_atomic(&mut fb_context);
-                        }
-
-                        view_render_queue.perform(
-                            &mut RenderContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                system_link: &system_link,
-                                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                application: &application,
-                                view_feedback_subscription_delayed_ops:
-                                    &mut view_feedback_registry_delayed_ops,
-                            },
-                            &mut view_instance_store,
-                            &view_tree_relation_store,
-                            &mut view_layout_state_store,
-                            &mut view_render_state_store,
-                        );
-
-                        composite_tree
-                            .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                     }
                 }
             }
         }
+
+        // after-input common update phase
+        if !view_feedback_store.is_empty() {
+            let mut fb_context = ViewFeedbackContext {
+                application: &application,
+                view_init_context: ViewInitContext {
+                    mount_context: MountContext {
+                        composite_tree: &mut composite_tree,
+                        ht_manager: &mut ht_manager,
+                        current_sec: global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut keyboard_focus_registry,
+                    },
+                    view_allocator: &mut view_allocator,
+                    view_instance_store: &mut view_instance_store,
+                    view_tree_relation_store: &mut view_tree_relation_store,
+                    view_group_relation_store: &mut view_group_relation_store,
+                    view_layout_state_store: &mut view_layout_state_store,
+                    view_render_state_store: &mut view_render_state_store,
+                    view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+                    system_link: &system_link,
+                    main_thread_texture_id_issuer: &mut texture_id_issuer,
+                    application: &application,
+                },
+                view_render_queue: &mut view_render_queue,
+            };
+
+            for x in view_feedback_store.drain(..) {
+                x.dispatch(&view_feedback_registry, &mut fb_context);
+            }
+
+            view_feedback_registry.perform_atomic(&mut fb_context);
+        }
+
+        view_render_queue.perform(
+            &mut RenderContext {
+                composite_tree: &mut composite_tree,
+                ht_manager: &mut ht_manager,
+                keyboard_focus_registry: &mut keyboard_focus_registry,
+                current_sec: global_time_base.elapsed().as_secs_f32(),
+                system_link: &system_link,
+                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                application: &application,
+                view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+            },
+            &mut view_instance_store,
+            &view_tree_relation_store,
+            &mut view_layout_state_store,
+            &mut view_render_state_store,
+        );
+
+        composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+        view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
 
         for msg in delayed_render_messages.drain(..) {
             system_link.rt_sender().send(msg).expect("rt_sender.send");
