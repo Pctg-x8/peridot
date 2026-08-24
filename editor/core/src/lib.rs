@@ -2839,14 +2839,14 @@ impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
 }
 
 struct AssetExplorerPanePresenter {
-    root_view_id: TypedViewIdentifier<ContainerView>,
+    root_view_id: TypedViewIdentifier<AssetExplorerFileListView>,
 }
 impl AssetExplorerPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetExplorer");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
+            root_view_id: ctx.construct_view(|_| Box::new(AssetExplorerFileListView::new())),
         }
     }
 }
@@ -2862,8 +2862,68 @@ impl ui::dock::PaneContentPresenter for AssetExplorerPanePresenter {
     fn root_view_id(&self) -> ViewIdentifier {
         self.root_view_id.into_untyped()
     }
+}
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+pub struct AssetExplorerFileListView {
+    entity: Option<Rc<AssetExplorerFileListViewEntity>>,
+}
+impl AssetExplorerFileListView {
+    pub fn new() -> Self {
+        Self { entity: None }
+    }
+}
+impl View for AssetExplorerFileListView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
+            None => {
+                let ct_root = CompositeRect::build()
+                    .expand_full()
+                    .create(ctx.composite_tree);
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width_adjustment_factor: 1.0,
+                    height_adjustment_factor: 1.0,
+                    ..Default::default()
+                });
+
+                let entity = Rc::new(AssetExplorerFileListViewEntity { ct_root, ht_root });
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..uikit::ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            return;
+        };
+
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+}
+
+struct AssetExplorerFileListViewEntity {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
 }
 
 struct ProjectSettingsPanePresenter {
