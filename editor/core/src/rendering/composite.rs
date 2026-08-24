@@ -722,6 +722,11 @@ impl<Event> CompositeRectTextBuilder<Event> {
         self.0.offset[0] += amount;
         self
     }
+
+    pub const fn allow_wrapping(mut self) -> Self {
+        self.0.allow_wrapping = true;
+        self
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1088,6 +1093,16 @@ impl<Event> CompositeRectBuilder<Event> {
     #[inline(always)]
     pub fn opacity_anim(self, template: &FloatAnimationTemplate, start_sec: f32) -> Self {
         self.opacity(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn border(mut self, border: Border<Event>) -> Self {
+        self.temp.border = Some(border);
+        self
+    }
+
+    pub fn corner_radius(mut self, corner_radius: CornerRadius) -> Self {
+        self.temp.corner_radius = corner_radius;
+        self
     }
 
     pub fn text(mut self, text: impl Into<CompositeRectText<Event>>) -> Self {

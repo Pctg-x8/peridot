@@ -52,7 +52,7 @@ use crate::{
             GradientRef, TextureMappingMode, TextureType,
         },
         preview::HandlePointing,
-        text::{FontID, FontSet},
+        text::{FontID, FontSet, TextLayout},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
@@ -2891,7 +2891,20 @@ impl View for AssetExplorerFileListView {
                     ..Default::default()
                 });
 
-                let entity = Rc::new(AssetExplorerFileListViewEntity { ct_root, ht_root });
+                let element = AssetExplorerTiledElementSubView::new(
+                    ctx.composite_tree,
+                    ctx.ht_manager,
+                    ctx.system_link,
+                    "toolongelementname".into(),
+                );
+                ctx.composite_tree.add_child(ct_root, element.ct_root);
+                ctx.ht_manager.add_child(ht_root, element.ht_root);
+
+                let entity = Rc::new(AssetExplorerFileListViewEntity {
+                    ct_root,
+                    ht_root,
+                    elements: vec![element],
+                });
 
                 &*self.entity.insert(entity)
             }
@@ -2924,6 +2937,76 @@ impl View for AssetExplorerFileListView {
 struct AssetExplorerFileListViewEntity {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    elements: Vec<AssetExplorerTiledElementSubView>,
+}
+
+struct AssetExplorerTiledElementSubView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl AssetExplorerTiledElementSubView {
+    const MARGIN: f32 = 4.0;
+    const ICON_TEXT_MARGIN: f32 = 2.0;
+    const TEXT_WIDTH_MAX: f32 = 48.0;
+
+    pub fn new<E>(
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        syslink: &SystemLink,
+        label: String,
+    ) -> Self {
+        let label_metric = TextLayout::new_single(
+            &label,
+            FontID::UIDefault,
+            syslink.font_set(),
+            CompositeRectTextHorizontalAlignment::Middle,
+            Some(Self::TEXT_WIDTH_MAX),
+        )
+        .size();
+
+        let ct_root = CompositeRect::build()
+            .use_ui_scale()
+            .size_imm(
+                Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
+                32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
+            )
+            .composite_fill_color_imm([0.0; 4])
+            .border(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            })
+            .corner_radius(CornerRadius::all(4.0))
+            .create(composite_tree);
+        let ct_icon = CompositeRect::build()
+            .use_ui_scale()
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 0.5])
+            .size_imm(32.0, 32.0)
+            .relative_offset_adjustment(0.5, 0.0)
+            .offset_imm(-16.0, Self::MARGIN)
+            .create(composite_tree);
+        let ct_label = CompositeRect::build()
+            .text(
+                CompositeRectText::build()
+                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .horizontal_middle()
+                    .allow_wrapping(),
+            )
+            .expand_width()
+            .offset_imm(0.0, Self::MARGIN + 32.0 + Self::ICON_TEXT_MARGIN)
+            .create(composite_tree);
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width: Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
+            height: 32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        composite_tree.add_child(ct_root, ct_icon);
+        composite_tree.add_child(ct_root, ct_label);
+
+        Self { ct_root, ht_root }
+    }
 }
 
 struct ProjectSettingsPanePresenter {
