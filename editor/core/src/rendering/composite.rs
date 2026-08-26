@@ -12,14 +12,13 @@ use bedrock::{
 use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
 
 use crate::{
-    Event,
     graphics::{
         BLEND_STATE_SINGLE_NONE, Graphics, IA_STATE_TRILIST, MS_STATE_EMPTY,
         RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
     },
     rendering::{
         ColorTextureAtlasManager, MaskTextureAtlasManager, TextureID,
-        atlas::{AtlasRect, DynamicAtlasManager},
+        atlas::AtlasRect,
         text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
     },

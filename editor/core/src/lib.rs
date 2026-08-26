@@ -5922,8 +5922,6 @@ pub use platform::windows::{
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 
-profiler::section!(SYNC_EVENT_BUS_PUSH = "SyncEventBus.Push");
-
 pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,
     #[cfg(target_os = "linux")]
@@ -5951,16 +5949,13 @@ impl SyncEventBus {
         }
     }
 
+    #[profiler::instrument("SyncEventBus.Push")]
     pub fn push(&self, e: SyncEvent) {
-        profiler::scope!(SYNC_EVENT_BUS_PUSH);
-
         self.queue.lock().expect("poisoned").push_back(e);
         #[cfg(target_os = "linux")]
         self.efd.inc(1).unwrap();
         #[cfg(windows)]
-        {
-            self.event_notify.set().expect("event_notify.set");
-        }
+        self.event_notify.set().expect("event_notify.set");
         #[cfg(target_os = "macos")]
         unsafe {
             extern "C" fn callback(ctx: *mut core::ffi::c_void) {
@@ -5994,9 +5989,7 @@ impl SyncEventBus {
             Ok(_) => Ok(()),
         };
         #[cfg(windows)]
-        {
-            self.event_notify.reset().map_err(From::from)
-        }
+        return self.event_notify.reset().map_err(From::from);
         #[cfg(target_os = "macos")]
         {
             // TODO
