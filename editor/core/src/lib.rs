@@ -52,7 +52,7 @@ use crate::{
             GradientRef, TextureMappingMode, TextureType,
         },
         preview::HandlePointing,
-        text::{FontID, FontSet},
+        text::{FontID, FontSet, TextLayout},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
@@ -2839,14 +2839,14 @@ impl ui::dock::PaneContentPresenter for TimelinePanePresenter {
 }
 
 struct AssetExplorerPanePresenter {
-    root_view_id: TypedViewIdentifier<ContainerView>,
+    root_view_id: TypedViewIdentifier<AssetExplorerFileListView>,
 }
 impl AssetExplorerPanePresenter {
     const ID: &str = internal_pane_identifier!("AssetExplorer");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
+            root_view_id: ctx.construct_view(|_| Box::new(AssetExplorerFileListView::new())),
         }
     }
 }
@@ -2862,8 +2862,151 @@ impl ui::dock::PaneContentPresenter for AssetExplorerPanePresenter {
     fn root_view_id(&self) -> ViewIdentifier {
         self.root_view_id.into_untyped()
     }
+}
 
-    fn teardown(&mut self, ctx: &mut TeardownContext) {}
+pub struct AssetExplorerFileListView {
+    entity: Option<Rc<AssetExplorerFileListViewEntity>>,
+}
+impl AssetExplorerFileListView {
+    pub fn new() -> Self {
+        Self { entity: None }
+    }
+}
+impl View for AssetExplorerFileListView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> uikit::ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
+            None => {
+                let ct_root = CompositeRect::build()
+                    .expand_full()
+                    .create(ctx.composite_tree);
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    width_adjustment_factor: 1.0,
+                    height_adjustment_factor: 1.0,
+                    ..Default::default()
+                });
+
+                let element = AssetExplorerTiledElementSubView::new(
+                    ctx.composite_tree,
+                    ctx.ht_manager,
+                    ctx.system_link,
+                    "toolongelementname".into(),
+                );
+                ctx.composite_tree.add_child(ct_root, element.ct_root);
+                ctx.ht_manager.add_child(ht_root, element.ht_root);
+
+                let entity = Rc::new(AssetExplorerFileListViewEntity {
+                    ct_root,
+                    ht_root,
+                    elements: vec![element],
+                });
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        uikit::ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..uikit::ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            return;
+        };
+
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+}
+
+struct AssetExplorerFileListViewEntity {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    elements: Vec<AssetExplorerTiledElementSubView>,
+}
+
+struct AssetExplorerTiledElementSubView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl AssetExplorerTiledElementSubView {
+    const MARGIN: f32 = 4.0;
+    const ICON_TEXT_MARGIN: f32 = 2.0;
+    const TEXT_WIDTH_MAX: f32 = 48.0;
+
+    pub fn new<E>(
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        syslink: &SystemLink,
+        label: String,
+    ) -> Self {
+        let label_metric = TextLayout::new_single(
+            &label,
+            FontID::UIDefault,
+            syslink.font_set(),
+            CompositeRectTextHorizontalAlignment::Middle,
+            Some(Self::TEXT_WIDTH_MAX),
+        )
+        .size();
+
+        let ct_root = CompositeRect::build()
+            .use_ui_scale()
+            .size_imm(
+                Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
+                32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
+            )
+            .composite_fill_color_imm([0.0; 4])
+            .border(Border {
+                thickness: 1.0,
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                ..Default::default()
+            })
+            .corner_radius(CornerRadius::all(4.0))
+            .create(composite_tree);
+        let ct_icon = CompositeRect::build()
+            .use_ui_scale()
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 0.5])
+            .size_imm(32.0, 32.0)
+            .relative_offset_adjustment(0.5, 0.0)
+            .offset_imm(-16.0, Self::MARGIN)
+            .create(composite_tree);
+        let ct_label = CompositeRect::build()
+            .text(
+                CompositeRectText::build()
+                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .horizontal_middle()
+                    .allow_wrapping(),
+            )
+            .size_imm(Self::TEXT_WIDTH_MAX, 0.0)
+            .offset_imm(Self::MARGIN, Self::MARGIN + 32.0 + Self::ICON_TEXT_MARGIN)
+            .create(composite_tree);
+        let ht_root = ht_manager.create(HitTestTreeData {
+            width: Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
+            height: 32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
+            cursor_shape: CursorShape::Pointer,
+            ..Default::default()
+        });
+
+        composite_tree.add_child(ct_root, ct_icon);
+        composite_tree.add_child(ct_root, ct_label);
+
+        Self { ct_root, ht_root }
+    }
 }
 
 struct ProjectSettingsPanePresenter {
@@ -5799,7 +5942,7 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
 
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
-    vk_device: *const Graphics<'sys>,
+    gfx: *const Graphics<'sys>,
     rt_sender: RenderMessageSender,
     font_set: *const FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,
@@ -5861,48 +6004,6 @@ impl SystemLink<'_> {
             delayed_render_messages,
             parent.ui_scale_factor(),
         )
-    }
-
-    #[cfg(feature = "wayland")]
-    pub fn pop_context_menu(
-        &self,
-        parent: WindowHandle,
-        view_init_context: &mut ViewInitContext,
-        depth: usize,
-        surface_pos: Point<LogicalUnit>,
-        layouted_items: Vec<MenuItemLayout>,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-        setup_contents: impl FnOnce(
-            Vec<MenuItemLayout>,
-            FlyoutSurfaceHandle,
-            &mut ViewInitContext,
-        ) -> Vec<MenuItemInteractableElement>,
-    ) -> (
-        FlyoutSurfaceHandle,
-        Rc<MenuBaseSurfaceEventHandler>,
-        Vec<MenuItemInteractableElement>,
-    ) {
-        let width = MenuItemLayout::min_width(layouted_items.iter());
-        let height = MenuItemLayout::height(layouted_items.iter());
-        tracing::debug!(%width, %height, "pop context menu");
-
-        let handle = self.new_flyout_surface(
-            parent,
-            surface_pos,
-            Size::new_logical(width.value(), height.value()),
-            view_init_context.mount_context.composite_tree,
-            view_init_context.mount_context.ht_manager,
-            view_init_context.mount_context.keyboard_focus_registry,
-            delayed_render_messages,
-        );
-
-        let base_surface_event_handler = Rc::new(MenuBaseSurfaceEventHandler::new(depth));
-        view_init_context
-            .ht_manager
-            .set_action_handler(handle.ht_root(), &base_surface_event_handler);
-        let views = setup_contents(layouted_items, handle, view_init_context);
-
-        (handle, base_surface_event_handler, views)
     }
 }
 
