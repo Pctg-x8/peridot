@@ -8,7 +8,8 @@ use peridot_tp_freetype::{
 };
 use peridot_tp_harfbuzz::ffi::{
     hb_buffer_add_utf8, hb_buffer_create, hb_buffer_destroy, hb_buffer_get_glyph_infos,
-    hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_buffer_t, hb_shape,
+    hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_buffer_t,
+    hb_glyph_info_t, hb_glyph_position_t, hb_shape,
 };
 use peridot_tp_icu as icu;
 
@@ -19,7 +20,7 @@ use crate::{
         text::{FontID, FontSet, GlyphPlacementBox, TextRun},
         vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
     },
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Point, Rect, Size, text::prev_char_byte},
 };
 
 pub struct TextLayout {
@@ -178,40 +179,21 @@ impl TextLayout {
                                 let byte_range =
                                     core::range::Range::from(starting_bytes..shaped_bytes);
 
-                                let buf = unsafe { hb_buffer_create() };
+                                let mut buf = Buffer::new();
+                                buf.add(&b[byte_range], 0);
+                                buf.guess_segment_properties();
                                 unsafe {
-                                    hb_buffer_add_utf8(
-                                        buf,
-                                        b.as_ptr().add(byte_range.start).cast(),
-                                        (byte_range.end - byte_range.start) as _,
+                                    hb_shape(
+                                        shaping_face.as_ptr(),
+                                        buf.0.as_ptr(),
+                                        core::ptr::null(),
                                         0,
-                                        -1,
                                     );
-                                    hb_buffer_guess_segment_properties(buf);
-                                    hb_shape(shaping_face.as_ptr(), buf, core::ptr::null(), 0);
                                 }
 
-                                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                                let glyph_infos = unsafe {
-                                    hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr())
-                                };
-                                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                                let glyph_positions = unsafe {
-                                    hb_buffer_get_glyph_positions(
-                                        buf,
-                                        glyph_positions_len.as_mut_ptr(),
-                                    )
-                                };
-                                assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                                    glyph_positions_len.assume_init()
-                                });
-                                let glyph_count = unsafe { glyph_infos_len.assume_init() };
-                                let glyph_positions = unsafe {
-                                    core::slice::from_raw_parts(glyph_positions, glyph_count as _)
-                                };
-                                let glyph_infos = unsafe {
-                                    core::slice::from_raw_parts(glyph_infos, glyph_count as _)
-                                };
+                                let glyph_infos = buf.get_glyph_infos();
+                                let glyph_positions = buf.get_glyph_positions();
+                                assert_eq!(glyph_infos.len(), glyph_positions.len());
 
                                 let buf_total_advances = glyph_positions
                                     .iter()
@@ -286,8 +268,10 @@ impl TextLayout {
                             max_width,
                             content = b
                         );
-                        if line_left_offset + section_visual_right > max_width {
-                            // overflow: should line feed
+                        if !lines.last_mut().expect("empty lines").buffers.is_empty()
+                            && line_left_offset + section_visual_right > max_width
+                        {
+                            // overflow: this section should be placed on the next line.
                             lines.last_mut().expect("empty lines").baseline_y_offset +=
                                 line_y_offset;
                             lines.last_mut().expect("empty_lines").height = final_line_height;
@@ -313,7 +297,188 @@ impl TextLayout {
                             line_left_offset = 0.0;
                         }
 
-                        // TODO: そもそも1セクションも長すぎる場合に強制折り返しをさせる
+                        if section_visual_right > max_width {
+                            // tracing::warn!(
+                            //     section_visual_right,
+                            //     max_width,
+                            //     content = b,
+                            //     "todo: force line break"
+                            // );
+
+                            let last_line = lines.last_mut().expect("empty lines");
+                            // TODO: RTL support
+                            let mut bytes_iter = b.char_indices();
+                            let mut break_pos = 0;
+                            'brk: while let Some(x) = section_buffers.get(0) {
+                                let pos = x.buffer.get_glyph_positions();
+                                let left_base = x.left_offset;
+                                let mut cursor = 0.0;
+                                for p in pos {
+                                    let char_left = left_base + cursor;
+                                    // TODO: may need ligature handling?
+                                    let (char_byte_offs, _) =
+                                        bytes_iter.next().expect("bytes overflow");
+                                    if char_left > max_width {
+                                        // tracing::debug!(
+                                        //     char_left,
+                                        //     pre = &b[..char_byte_offs],
+                                        //     post = &b[char_byte_offs..],
+                                        //     "force line break candidate here"
+                                        // );
+                                        // これの一つ前で切る
+                                        break_pos = prev_char_byte(b, char_byte_offs);
+                                        break 'brk;
+                                    }
+                                    cursor += p.x_advance as f32 / 64.0;
+                                }
+
+                                // このSectionBufferはbreakしなくていいので今の行に追加
+                                let unbreak_buffer = section_buffers.remove(0);
+                                last_line.buffers.push(unbreak_buffer);
+                            }
+                            // tracing::debug!(break_pos, "force line break");
+
+                            // 前後に分ける
+                            let current_head_buffer_start_byte =
+                                section_buffers[0].char_offset_bytes[0];
+                            let current_head_buffer_end_byte = section_buffers[0]
+                                .char_offset_bytes
+                                .last()
+                                .copied()
+                                .expect("empty char offset bytes");
+                            let face = font_set.select(section_buffers[0].font_id).faces
+                                [section_buffers[0].face_index];
+                            let shaping_font = font_set
+                                .select_shaping(section_buffers[0].font_id)
+                                .faces[section_buffers[0].face_index];
+                            let mut pre_buffer = Buffer::new();
+                            let mut post_buffer = Buffer::new();
+                            pre_buffer.add(&b[current_head_buffer_start_byte..break_pos], 0);
+                            post_buffer.add(&b[break_pos..current_head_buffer_end_byte], 0);
+                            pre_buffer.guess_segment_properties();
+                            post_buffer.guess_segment_properties();
+                            unsafe {
+                                hb_shape(
+                                    shaping_font.as_ptr(),
+                                    pre_buffer.0.as_ptr(),
+                                    core::ptr::null(),
+                                    0,
+                                );
+                                hb_shape(
+                                    shaping_font.as_ptr(),
+                                    post_buffer.0.as_ptr(),
+                                    core::ptr::null(),
+                                    0,
+                                );
+                            }
+
+                            // pre_bufferはそのまま現在の行に入れる
+                            let glyph_infos = pre_buffer.get_glyph_infos();
+                            let glyph_positions = pre_buffer.get_glyph_positions();
+                            assert_eq!(glyph_infos.len(), glyph_positions.len());
+                            let run_right = section_buffers[0].left_offset
+                                + glyph_positions
+                                    .iter()
+                                    .map(|p| p.x_advance as f32 / 64.0)
+                                    .sum::<f32>();
+                            last_line.buffers.push(ShapedTextRun {
+                                buffer: pre_buffer,
+                                char_offset_bytes: b[current_head_buffer_start_byte..break_pos]
+                                    .char_indices()
+                                    .map(|(i, _)| current_head_buffer_start_byte + i)
+                                    .chain(core::iter::once(break_pos))
+                                    .collect(),
+                                left_offset: section_buffers[0].left_offset,
+                                font_id: section_buffers[0].font_id,
+                                face_index: section_buffers[0].face_index,
+                            });
+
+                            // update metrics
+                            let face_metrics = unsafe { &(*(*face).size).metrics };
+                            baseline_y_offset =
+                                baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                            section_line_height =
+                                section_line_height.max(face_metrics.height as f32 / 64.0);
+                            // freetype2のdescenderは符号が逆になってるのでこれで正解
+                            section_height = section_height.max(
+                                (face_metrics.ascender - face_metrics.descender) as f32 / 64.0,
+                            );
+                            line_left_offset = run_right;
+
+                            // 新規行発行
+                            last_line.baseline_y_offset = last_line
+                                .baseline_y_offset
+                                .max(core::mem::replace(&mut baseline_y_offset, 0.0));
+                            last_line.height = last_line
+                                .height
+                                .max(core::mem::replace(&mut section_height, 0.0));
+                            last_line.width_with_trailing_whitespace = last_line
+                                .width_with_trailing_whitespace
+                                .max(core::mem::replace(&mut line_left_offset, 0.0));
+                            line_y_offset += core::mem::replace(&mut section_line_height, 0.0);
+                            lines.push(LineLayout {
+                                buffers: Vec::new(),
+                                width_with_trailing_whitespace: 0.0,
+                                height: 0.0,
+                                line_top_offset: line_y_offset,
+                                baseline_y_offset: 0.0,
+                            });
+
+                            let glyph_infos = post_buffer.get_glyph_infos();
+                            let glyph_positions = post_buffer.get_glyph_positions();
+                            assert_eq!(glyph_infos.len(), glyph_positions.len());
+                            let run_right = glyph_positions
+                                .iter()
+                                .map(|p| p.x_advance as f32 / 64.0)
+                                .sum::<f32>();
+
+                            // post_bufferはsection_buffersの0を置き替える
+                            section_buffers[0].buffer = post_buffer;
+                            section_buffers[0].char_offset_bytes = b
+                                [break_pos..current_head_buffer_end_byte]
+                                .char_indices()
+                                .map(|(i, _)| break_pos + i)
+                                .chain(core::iter::once(current_head_buffer_end_byte))
+                                .collect();
+                            let right_shifts = section_buffers[0].left_offset;
+                            section_buffers[0].left_offset = 0.0;
+
+                            // update metrics
+                            let face_metrics = unsafe { &(*(*face).size).metrics };
+                            baseline_y_offset = face_metrics.ascender as f32 / 64.0;
+                            section_line_height = face_metrics.height as f32 / 64.0;
+                            // freetype2のdescenderは符号が逆になってるのでこれで正解
+                            section_height =
+                                (face_metrics.ascender - face_metrics.descender) as f32 / 64.0;
+                            section_left_offset = run_right;
+
+                            // 後ろにいるsection_bufferの位置を調整
+                            for x in section_buffers[1..].iter_mut() {
+                                x.left_offset -= right_shifts;
+
+                                // update metrics
+                                let glyph_infos = x.buffer.get_glyph_infos();
+                                let glyph_positions = x.buffer.get_glyph_positions();
+                                assert_eq!(glyph_infos.len(), glyph_positions.len());
+                                let run_right = glyph_positions
+                                    .iter()
+                                    .map(|p| p.x_advance as f32 / 64.0)
+                                    .sum::<f32>();
+
+                                let face_metrics = unsafe {
+                                    &(*(*font_set.select(x.font_id).faces[x.face_index]).size)
+                                        .metrics
+                                };
+                                baseline_y_offset =
+                                    baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                                section_line_height =
+                                    section_line_height.max(face_metrics.height as f32 / 64.0);
+                                section_height = section_height.max(
+                                    (face_metrics.ascender - face_metrics.descender) as f32 / 64.0,
+                                );
+                                section_left_offset = run_right;
+                            }
+                        }
 
                         let last_line = lines.last_mut().expect("empty lines");
                         last_line.buffers.extend(section_buffers);
@@ -386,52 +551,35 @@ impl TextLayout {
                         shaped_bytes += c.len_utf8();
                     }
 
-                    if starting_bytes != shaped_bytes {
+                    let shaped_range = core::range::Range::from(starting_bytes..shaped_bytes);
+                    if !shaped_range.is_empty() {
                         // needs shaping
                         any_shaped_on_line = true;
                         let face = font.faces[face_index];
                         let shaping_face = shaping_set.faces[face_index];
-                        let byte_range = core::range::Range::from(starting_bytes..shaped_bytes);
 
-                        let buf = unsafe { hb_buffer_create() };
+                        let mut buf = Buffer::new();
+                        buf.add(&x.content[shaped_range], 0);
+                        buf.guess_segment_properties();
                         unsafe {
-                            hb_buffer_add_utf8(
-                                buf,
-                                x.content.as_ptr().add(byte_range.start).cast(),
-                                (byte_range.end - byte_range.start) as _,
-                                0,
-                                -1,
-                            );
-                            hb_buffer_guess_segment_properties(buf);
-                            hb_shape(shaping_face.as_ptr(), buf, core::ptr::null(), 0);
+                            hb_shape(shaping_face.as_ptr(), buf.0.as_ptr(), core::ptr::null(), 0);
                         }
 
-                        let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                        let _glyph_infos =
-                            unsafe { hb_buffer_get_glyph_infos(buf, glyph_infos_len.as_mut_ptr()) };
-                        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                        let glyph_positions = unsafe {
-                            hb_buffer_get_glyph_positions(buf, glyph_positions_len.as_mut_ptr())
-                        };
-                        assert_eq!(unsafe { glyph_infos_len.assume_init() }, unsafe {
-                            glyph_positions_len.assume_init()
-                        });
-                        let glyph_count = unsafe { glyph_infos_len.assume_init() };
-                        let buf_total_advances = unsafe {
-                            core::slice::from_raw_parts(glyph_positions, glyph_count as _)
-                        }
-                        .iter()
-                        .map(|p| p.x_advance as f32 / 64.0)
-                        .sum::<f32>();
+                        let glyph_infos = buf.get_glyph_infos();
+                        let glyph_positions = buf.get_glyph_positions();
+                        assert_eq!(glyph_infos.len(), glyph_positions.len());
+                        let buf_total_advances = glyph_positions
+                            .iter()
+                            .map(|p| p.x_advance as f32 / 64.0)
+                            .sum::<f32>();
 
                         let last_line = lines.last_mut().expect("empty lines");
-
                         last_line.buffers.push(ShapedTextRun {
                             buffer: buf,
-                            char_offset_bytes: x.content[byte_range]
+                            char_offset_bytes: x.content[shaped_range]
                                 .char_indices()
-                                .map(|(i, _)| byte_range.start + i)
-                                .chain(core::iter::once(byte_range.end))
+                                .map(|(i, _)| shaped_range.start + i)
+                                .chain(core::iter::once(shaped_range.end))
                                 .collect(),
                             left_offset,
                             font_id: x.font,
@@ -466,10 +614,13 @@ impl TextLayout {
                         let last_line = lines.last_mut().expect("empty lines");
                         if !any_shaped_on_line {
                             // no chars processed on the line
+                            // final_line_heightが0なのでいいかんじに計算する
                             let face_metrics = unsafe { &(*(*font.faces[0]).size).metrics };
 
                             last_line.baseline_y_offset = face_metrics.ascender as f32 / 64.0;
                             line_height = face_metrics.height as f32 / 64.0;
+                            final_line_height =
+                                (face_metrics.ascender - face_metrics.descender) as f32 / 64.0;
                         }
 
                         last_line.baseline_y_offset += line_y_offset;
@@ -551,23 +702,8 @@ impl TextLayout {
             for x in l.buffers.iter() {
                 let font = font_set.select(x.font_id).faces[x.face_index];
 
-                let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-                let glyph_infos =
-                    unsafe { hb_buffer_get_glyph_infos(x.buffer, glyph_infos_len.as_mut_ptr()) };
-                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                let glyph_positions = unsafe {
-                    hb_buffer_get_glyph_positions(x.buffer, glyph_positions_len.as_mut_ptr())
-                };
-                let glyph_infos = unsafe {
-                    core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _)
-                };
-                let glyph_positions = unsafe {
-                    core::slice::from_raw_parts(
-                        glyph_positions,
-                        glyph_positions_len.assume_init() as _,
-                    )
-                };
-                assert_eq!(glyph_infos.len(), glyph_positions.len());
+                let glyph_infos = x.buffer.get_glyph_infos();
+                let glyph_positions = x.buffer.get_glyph_positions();
 
                 let mut left_cursor = x.left_offset;
                 for (glyph_info, glyph_position) in
@@ -696,18 +832,13 @@ impl TextLayout {
             }
 
             for tr in l.buffers.iter() {
-                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                let glyph_positions = unsafe {
-                    hb_buffer_get_glyph_positions(tr.buffer, glyph_positions_len.as_mut_ptr())
-                };
+                let glyph_positions = tr.buffer.get_glyph_positions();
                 let mut left_cursor = tr.left_offset;
                 let mut bytes_iter = tr.char_offset_bytes.iter().copied();
                 bytes = bytes_iter.next().expect("never empty");
-                for n in 0..unsafe { glyph_positions_len.assume_init() } {
-                    let glyph_position = unsafe { &*glyph_positions.add(n as usize) };
-
+                for glyph_pos in glyph_positions {
                     let left = left_cursor;
-                    let right = left + glyph_position.x_advance as f32 / 64.0;
+                    let right = left + glyph_pos.x_advance as f32 / 64.0;
                     let mid = (left + right) / 2.0;
 
                     if x < left {
@@ -725,7 +856,7 @@ impl TextLayout {
                         return bytes_iter.next().expect("reached to the end");
                     }
 
-                    left_cursor += glyph_position.x_advance as f32 / 64.0;
+                    left_cursor += glyph_pos.x_advance as f32 / 64.0;
                     bytes = bytes_iter.next().expect("reached to the end");
                 }
             }
@@ -796,17 +927,7 @@ impl TextLayout {
                     continue;
                 }
 
-                let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-                let glyph_positions = unsafe {
-                    hb_buffer_get_glyph_positions(tr.buffer, glyph_positions_len.as_mut_ptr())
-                };
-                let glyph_positions = unsafe {
-                    core::slice::from_raw_parts(
-                        glyph_positions,
-                        glyph_positions_len.assume_init() as _,
-                    )
-                };
-
+                let glyph_positions = tr.buffer.get_glyph_positions();
                 let mut left_cursor = tr.left_offset;
                 for (glyph_position, &bytepos) in
                     glyph_positions.iter().zip(tr.char_offset_bytes.iter())
@@ -876,40 +997,23 @@ impl OutlineFuncs for OutlineReceiver<'_> {
 }
 
 pub struct ShapedTextRun {
-    buffer: *mut hb_buffer_t,
+    buffer: Buffer,
     /// final element = end of byte range
     char_offset_bytes: Vec<usize>,
     left_offset: f32,
     font_id: FontID,
     face_index: usize,
 }
-impl Drop for ShapedTextRun {
-    #[inline(always)]
-    fn drop(&mut self) {
-        unsafe {
-            hb_buffer_destroy(self.buffer);
-        }
-    }
-}
 impl ShapedTextRun {
     pub fn visual_width(&self, font_set: &FontSet) -> f32 {
-        let face = font_set.select(self.font_id).faces[self.face_index];
-
-        let mut glyph_infos_len = core::mem::MaybeUninit::uninit();
-        let glyph_infos =
-            unsafe { hb_buffer_get_glyph_infos(self.buffer, glyph_infos_len.as_mut_ptr()) };
-        let mut glyph_positions_len = core::mem::MaybeUninit::uninit();
-        let glyph_positions =
-            unsafe { hb_buffer_get_glyph_positions(self.buffer, glyph_positions_len.as_mut_ptr()) };
-        let glyph_infos =
-            unsafe { core::slice::from_raw_parts(glyph_infos, glyph_infos_len.assume_init() as _) };
-        let glyph_positions = unsafe {
-            core::slice::from_raw_parts(glyph_positions, glyph_positions_len.assume_init() as _)
-        };
+        let glyph_infos = self.buffer.get_glyph_infos();
+        let glyph_positions = self.buffer.get_glyph_positions();
         assert_eq!(glyph_infos.len(), glyph_positions.len());
 
         match (glyph_positions, glyph_infos) {
             (&[ref advances @ .., _], &[.., ref last_glyph]) => {
+                let face = font_set.select(self.font_id).faces[self.face_index];
+
                 unsafe {
                     load_glyph(face, last_glyph.codepoint, LoadFlags::DEFAULT)
                         .expect("face.load_glyph");
@@ -941,5 +1045,54 @@ impl LineLayout {
             // compute visual right of each buffers
             .map(|tr| tr.left_offset + tr.visual_width(font_set))
             .fold(0.0, f32::max)
+    }
+}
+
+#[repr(transparent)]
+pub struct Buffer(core::ptr::NonNull<hb_buffer_t>);
+impl Drop for Buffer {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe {
+            hb_buffer_destroy(self.0.as_ptr());
+        }
+    }
+}
+impl Buffer {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self(unsafe { core::ptr::NonNull::new_unchecked(hb_buffer_create()) })
+    }
+
+    #[inline(always)]
+    pub fn add(&mut self, content: &str, offset: core::ffi::c_uint) {
+        unsafe {
+            hb_buffer_add_utf8(
+                self.0.as_ptr(),
+                content.as_ptr().cast(),
+                content.len() as _,
+                offset,
+                -1,
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub fn guess_segment_properties(&mut self) {
+        unsafe { hb_buffer_guess_segment_properties(self.0.as_ptr()) }
+    }
+
+    #[inline(always)]
+    pub fn get_glyph_infos<'a>(&'a self) -> &'a [hb_glyph_info_t] {
+        let mut len = core::mem::MaybeUninit::uninit();
+        let ptr = unsafe { hb_buffer_get_glyph_infos(self.0.as_ptr(), len.as_mut_ptr()) };
+        unsafe { core::slice::from_raw_parts(ptr, len.assume_init() as _) }
+    }
+
+    #[inline(always)]
+    pub fn get_glyph_positions<'a>(&'a self) -> &'a [hb_glyph_position_t] {
+        let mut len = core::mem::MaybeUninit::uninit();
+        let ptr = unsafe { hb_buffer_get_glyph_positions(self.0.as_ptr(), len.as_mut_ptr()) };
+        unsafe { core::slice::from_raw_parts(ptr, len.assume_init() as _) }
     }
 }
