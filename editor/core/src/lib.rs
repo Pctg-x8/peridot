@@ -2992,8 +2992,8 @@ impl AssetExplorerTiledElementSubView {
                     .horizontal_middle()
                     .allow_wrapping(),
             )
-            .expand_width()
-            .offset_imm(0.0, Self::MARGIN + 32.0 + Self::ICON_TEXT_MARGIN)
+            .size_imm(Self::TEXT_WIDTH_MAX, 0.0)
+            .offset_imm(Self::MARGIN, Self::MARGIN + 32.0 + Self::ICON_TEXT_MARGIN)
             .create(composite_tree);
         let ht_root = ht_manager.create(HitTestTreeData {
             width: Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
