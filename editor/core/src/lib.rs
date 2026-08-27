@@ -22,9 +22,6 @@ use std::{
 #[cfg(target_os = "macos")]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-#[cfg(not(windows))]
-#[cfg(feature = "wayland")]
-use crate::uikit::MenuItemLayout;
 use crate::{
     graphics::Graphics,
     input::{
@@ -56,19 +53,19 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
-        ContainerView, MenuEventHandler, MenuItem, MenuItemCommonResources,
+        ContainerView, ContainerViewInit, MenuEventHandler, MenuItem, MenuItemCommonResources,
         MenuItemInteractableElement, MountContext, MountTarget, NumericInputView,
         NumericInputViewIO, NumericInputViewInit, PopupID, PopupManager, RadioButtonView,
-        RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonView, StaticTextView,
-        TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
-        ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
-        ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable,
-        ViewGroupRelationStore, ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
-        ViewLayoutGridCell, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
-        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize,
-        ViewTreeRelationStore,
+        RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonViewInit,
+        StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier,
+        View, ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable,
+        ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
+        ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
+        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
+        ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -2512,7 +2509,43 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
-        let container = ctx.construct_view(|_| Box::new(ContainerView));
+        let container = ctx.construct_view2(ContainerViewInit, |ctx| {
+            let label = ctx.construct_view2(
+                StaticTextViewInit {
+                    content: "Simple Buttons + Alert Dialog".into(),
+                    ..Default::default()
+                },
+                |_| [],
+            );
+
+            let button_container = ctx.construct_view2(ContainerViewInit, |ctx| {
+                const LONG_MESSAGE: &str = "とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ";
+
+                    [ctx.construct_view2(SimpleButtonViewInit {
+                         label: "Test Alert".into(),
+                                        event_handler: Some(Box::new(AlertButtonEventHandler(
+                                            "てすとめっせーじ from button\n改行もしてみる".into(),
+                                        ))),
+                                    }, |_| []).into_untyped(), ctx.construct_view2(SimpleButtonViewInit {
+                                        label: "Test Alert 2".into(),
+                                        event_handler: Some(Box::new(AlertButtonEventHandler(LONG_MESSAGE.into()))),
+                                    }, |_| []).into_untyped()]
+            });
+            {
+                let button_container = ctx.view_layout_mut(button_container).expect("query failed");
+                button_container.padding.left = 8.0;
+                button_container.width = ViewSize::FillAvailable;
+                button_container.child = ViewLayoutChild::Flow {
+                    direction: ViewLayoutFlowDirection::Horizontal,
+                    alignment: ViewLayoutFlowAlignment::Start,
+                    justify: ViewLayoutFlowJustify::Start,
+                    overflow: ViewLayoutOverflow::Overflow,
+                    gap: 8.0,
+                };
+            }
+
+            [label.into_untyped(), button_container.into_untyped()]
+        });
         {
             let container = ctx.view_layout_mut(container).expect("query failed");
             container.child = ViewLayoutChild::Flow {
@@ -2524,45 +2557,67 @@ impl UIKitPreviewPanePresenter {
             };
         }
         ctx.view_set_parent(container, content_view);
-        let label = ctx.construct_view(|_| {
-            Box::new(StaticTextView::new("Simple Buttons + Alert Dialog".into()))
-        });
-        ctx.view_set_parent(label, container);
-        let button_container = ctx.construct_view(|_| Box::new(ContainerView));
-        {
-            let button_container = ctx.view_layout_mut(button_container).expect("query failed");
-            button_container.padding.left = 8.0;
-            button_container.width = ViewSize::FillAvailable;
-            button_container.child = ViewLayoutChild::Flow {
-                direction: ViewLayoutFlowDirection::Horizontal,
-                alignment: ViewLayoutFlowAlignment::Start,
-                justify: ViewLayoutFlowJustify::Start,
-                overflow: ViewLayoutOverflow::Overflow,
-                gap: 8.0,
-            };
-        }
-        ctx.view_set_parent(button_container, container);
-        let test_alert_btn = ctx.construct_view(|_| {
-            Box::new(SimpleButtonView::new(
-                "Test Alert".into(),
-                Some(Box::new(AlertButtonEventHandler(
-                    "てすとめっせーじ from button\n改行もしてみる".into(),
-                ))),
-            ))
-        });
-        ctx.view_set_parent(test_alert_btn, button_container);
-        let test_alert_btn2 = ctx.construct_view(|_| Box::new(SimpleButtonView::new(
-            "Test Alert 2".into(),
-            Some(Box::new(AlertButtonEventHandler("とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ".into()))),
-        )));
-        ctx.view_set_parent(test_alert_btn2, button_container);
 
         let text_input_backing_store1 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
         let text_input_backing_store2 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
 
-        let container = ctx.construct_view(|_| Box::new(ContainerView));
+        let container = ctx.construct_view2(ContainerViewInit, |ctx| {
+            [
+                ctx.construct_view2(
+                    StaticTextViewInit {
+                        content: "Text Input(Single Line)".into(),
+                        ..Default::default()
+                    },
+                    |_| [],
+                )
+                .into_untyped(),
+                {
+                    let v = ctx.construct_view2(ContainerViewInit, |ctx| {
+                        [
+                            {
+                                let v = ctx.construct_view(|id| {
+                                    Box::new(TextInputView::new(
+                                        id,
+                                        Rc::downgrade(&text_input_backing_store1),
+                                    ))
+                                });
+                                let l = ctx.view_layout_mut(v).expect("query failed");
+                                l.width = ViewSize::Fixed(128.0);
+                                l.height = ViewSize::Fixed(20.0);
+                                v
+                            }
+                            .into_untyped(),
+                            {
+                                let v = ctx.construct_view(|id| {
+                                    Box::new(TextInputView::new(
+                                        id,
+                                        Rc::downgrade(&text_input_backing_store2),
+                                    ))
+                                });
+                                let l = ctx.view_layout_mut(v).expect("query failed");
+                                l.width = ViewSize::Fixed(128.0);
+                                l.height = ViewSize::Fixed(20.0);
+                                v
+                            }
+                            .into_untyped(),
+                        ]
+                    });
+                    let l = ctx.view_layout_mut(v).expect("query failed");
+                    l.padding.left = 8.0;
+                    l.child = ViewLayoutChild::Flow {
+                        direction: ViewLayoutFlowDirection::Vertical,
+                        alignment: ViewLayoutFlowAlignment::Start,
+                        justify: ViewLayoutFlowJustify::Start,
+                        overflow: ViewLayoutOverflow::Overflow,
+                        gap: 4.0,
+                    };
+                    v
+                }
+                .into_untyped(),
+            ]
+        });
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Flow {
             direction: ViewLayoutFlowDirection::Vertical,
             alignment: ViewLayoutFlowAlignment::Start,
@@ -2571,50 +2626,28 @@ impl UIKitPreviewPanePresenter {
             gap: 0.0,
         };
         ctx.view_set_parent(container, content_view);
-        let label =
-            ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input(Single Line)".into())));
-        ctx.view_set_parent(label, container);
-        let controls_container = ctx.construct_view(|_| Box::new(ContainerView));
-        {
-            let controls_view = ctx
-                .view_layout_mut(controls_container)
-                .expect("query failed");
-            controls_view.padding.left = 8.0;
-            controls_view.child = ViewLayoutChild::Flow {
-                direction: ViewLayoutFlowDirection::Vertical,
-                alignment: ViewLayoutFlowAlignment::Start,
-                justify: ViewLayoutFlowJustify::Start,
-                overflow: ViewLayoutOverflow::Overflow,
-                gap: 4.0,
-            };
-        }
-        ctx.view_set_parent(controls_container, container);
-        let text_input_view = ctx.construct_view(|id| {
-            Box::new(TextInputView::new(
-                id,
-                Rc::downgrade(&text_input_backing_store1),
-            ))
-        });
-        ctx.view_set_parent(text_input_view, controls_container);
-        {
-            let l = ctx.view_layout_mut(text_input_view).expect("query failed");
-            l.width = ViewSize::Fixed(128.0);
-            l.height = ViewSize::Fixed(20.0);
-        }
-        let text_input_view2 = ctx.construct_view(|id| {
-            Box::new(TextInputView::new(
-                id,
-                Rc::downgrade(&text_input_backing_store2),
-            ))
-        });
-        {
-            let l = ctx.view_layout_mut(text_input_view2).expect("query failed");
-            l.width = ViewSize::Fixed(128.0);
-            l.height = ViewSize::Fixed(20.0);
-        }
-        ctx.view_set_parent(text_input_view2, controls_container);
 
-        let container = ctx.construct_view(|_| Box::new(ContainerView));
+        let container = ctx.construct_view2(ContainerViewInit, |ctx| {
+            [
+                ctx.construct_view2(
+                    StaticTextViewInit {
+                        content: "Text Input (Multiline)".into(),
+                        ..Default::default()
+                    },
+                    |_| [],
+                )
+                .into_untyped(),
+                {
+                    let v =
+                        ctx.construct_view(|id| Box::new(uikit::MultilineTextInputView::new(id)));
+                    let l = ctx.view_layout_mut(v).expect("query failed");
+                    l.width = ViewSize::FillAvailable;
+                    l.height = ViewSize::Fixed(100.0);
+                    v
+                }
+                .into_untyped(),
+            ]
+        });
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Flow {
             direction: ViewLayoutFlowDirection::Vertical,
             alignment: ViewLayoutFlowAlignment::Start,
@@ -2624,26 +2657,17 @@ impl UIKitPreviewPanePresenter {
         };
         ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillAvailable;
         ctx.view_set_parent(container, content_view);
-        let label =
-            ctx.construct_view(|_| Box::new(StaticTextView::new("Text Input (Multiline)".into())));
-        ctx.view_set_parent(label, container);
-        let ml_text_editor_view =
-            ctx.construct_view(|id| Box::new(uikit::MultilineTextInputView::new(id)));
-        {
-            let l = ctx
-                .view_layout_mut(ml_text_editor_view)
-                .expect("query failed");
-            l.width = ViewSize::FillAvailable;
-            l.height = ViewSize::Fixed(100.0);
-        }
-        ctx.view_set_parent(ml_text_editor_view, container);
 
-        ytop = 1000.0;
         let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
             color: Cell::new(0xffffffff),
         });
-        let label = ctx
-            .construct_view(|_| Box::new(StaticTextView::new("Color Picker(Standalone)".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Color Picker(Standalone)".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, content_view);
         let color_picker = ColorPickerView::new(
             ctx.alloc_view_id_without_instance(),
@@ -2657,7 +2681,7 @@ impl UIKitPreviewPanePresenter {
         ctx.view_set_parent(toggle_button, content_view);
 
         // inline controls preview
-        let container = ctx.construct_view(|_| Box::new(ContainerView));
+        let container = ctx.construct_view2(ContainerViewInit, |_| []);
         ctx.view_set_parent(container, content_view);
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Grid {
             cols: vec![
@@ -2670,8 +2694,13 @@ impl UIKitPreviewPanePresenter {
         };
         ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillAvailable;
 
-        let label = ctx
-            .construct_view(|_| Box::new(StaticTextView::new("Color Picker(Button Style)".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Color Picker(Button Style)".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let editable_color_button =
             ctx.construct_view(|id| Box::new(EditableColorButtonView::new(id, 0xffffffff)));
@@ -2686,7 +2715,13 @@ impl UIKitPreviewPanePresenter {
 
         let numeric_input_view_backing_store =
             Rc::new(UIKitPreviewNumericInputValueStore(Cell::new(0)));
-        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Numeric Input".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Numeric Input".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let numeric_input_view = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
@@ -2707,7 +2742,13 @@ impl UIKitPreviewPanePresenter {
         ctx.view_set_parent(numeric_input_view, container);
 
         let dropdown_value_store = Rc::new(UIKitPreviewDropdownValueStore(Cell::new(0)));
-        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Dropdown".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Dropdown".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let dropdown_box = ctx.construct_view(|id| {
             Box::new(uikit::dropdown_box::View::new(
@@ -2727,32 +2768,58 @@ impl UIKitPreviewPanePresenter {
         }
         ctx.view_set_parent(dropdown_box, container);
 
-        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Single Checkbox".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Single Checkbox".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let checkbox = ctx.construct_view(|_| Box::new(uikit::CheckboxView::new()));
         ctx.view_set_parent(checkbox, container);
 
         let rgc1 = ctx.create_view_group();
-        let label =
-            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Radio Button (Group 1)".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let radio_button1 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button1, rgc1);
         ctx.view_set_parent(radio_button1, container);
-        let label =
-            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Radio Button (Group 1)".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let radio_button2 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button2, rgc1);
         ctx.view_set_parent(radio_button2, container);
-        let label =
-            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (Group 1)".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Radio Button (Group 1)".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let radio_button3 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button3, rgc1);
         ctx.view_set_parent(radio_button3, container);
-        let label =
-            ctx.construct_view(|_| Box::new(StaticTextView::new("Radio Button (No group)".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Radio Button (No group)".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, container);
         let radio_button4 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
         ctx.view_set_parent(radio_button4, container);

@@ -7,9 +7,40 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{RenderContext, TeardownContext, View, ViewLayoutStateStore, ViewRenderElements},
+    uikit::{
+        RenderContext, TeardownContext, View, ViewConstructor, ViewLayoutStateStore,
+        ViewRenderElements,
+    },
     utils::{LogicalUnit, Rect, Size},
 };
+
+pub struct StaticTextViewInit {
+    pub content: String,
+    pub font: FontID,
+    pub allow_wrapping: bool,
+    pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
+    pub vertical_alignment: CompositeRectTextVerticalAlignment,
+}
+impl Default for StaticTextViewInit {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            content: String::new(),
+            font: FontID::UIDefault,
+            allow_wrapping: false,
+            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
+            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+        }
+    }
+}
+impl ViewConstructor for StaticTextViewInit {
+    type ConcreteView = StaticTextView;
+
+    #[inline(always)]
+    fn construct(self, _id: super::TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        StaticTextView::new(self)
+    }
+}
 
 pub struct StaticTextView {
     content: String,
@@ -28,37 +59,21 @@ impl Drop for StaticTextView {
     }
 }
 impl StaticTextView {
-    pub fn new(content: String) -> Self {
+    pub fn new(init: StaticTextViewInit) -> Self {
         Self {
-            content,
-            font: FontID::UIDefault,
-            allow_wrapping: false,
-            horizontal_alignment: CompositeRectTextHorizontalAlignment::Start,
-            vertical_alignment: CompositeRectTextVerticalAlignment::Start,
+            content: init.content,
+            font: init.font,
+            allow_wrapping: init.allow_wrapping,
+            horizontal_alignment: init.horizontal_alignment,
+            vertical_alignment: init.vertical_alignment,
             ct: None,
             content_changed: false,
         }
     }
 
-    pub fn set_font(&mut self, font: FontID) {
-        self.font = font;
-    }
-
-    pub fn allow_wrapping(&mut self) {
-        self.allow_wrapping = true;
-    }
-
     pub fn set_text(&mut self, content: String) {
         self.content = content;
         self.content_changed = true;
-    }
-
-    pub fn set_horizontal_alignment(&mut self, alignment: CompositeRectTextHorizontalAlignment) {
-        self.horizontal_alignment = alignment;
-    }
-
-    pub fn set_vertical_alignment(&mut self, alignment: CompositeRectTextVerticalAlignment) {
-        self.vertical_alignment = alignment;
     }
 }
 impl View for StaticTextView {

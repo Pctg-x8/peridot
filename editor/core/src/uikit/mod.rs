@@ -432,6 +432,16 @@ impl View for ContainerView {
     }
 }
 
+pub struct ContainerViewInit;
+impl ViewConstructor for ContainerViewInit {
+    type ConcreteView = ContainerView;
+
+    #[inline(always)]
+    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        ContainerView
+    }
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ViewIdentifier(NonZeroUsize);
@@ -1260,12 +1270,33 @@ pub fn view_layout_mut(
     )
 }
 
+pub trait ViewConstructor {
+    type ConcreteView: View + 'static;
+
+    fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView;
+}
+
 pub trait ViewRegisterable {
     fn construct_view<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T>;
     fn free_view_untyped(&mut self, id: ViewIdentifier);
+
+    fn construct_view2<Ctor: ViewConstructor, Children: IntoIterator<Item = ViewIdentifier>>(
+        &mut self,
+        ctor: Ctor,
+        children: impl FnOnce(&mut Self) -> Children,
+    ) -> TypedViewIdentifier<Ctor::ConcreteView>
+    where
+        Self: ViewRelationControllable,
+    {
+        let id = self.construct_view(move |id| Box::new(ctor.construct(id)));
+        for child in children(self) {
+            self.view_set_parent_untyped(child, id.into_untyped());
+        }
+        id
+    }
 
     #[inline(always)]
     fn free_view<T>(&mut self, id: TypedViewIdentifier<T>) {
@@ -1674,9 +1705,7 @@ mod label;
 pub use self::label::*;
 
 mod button;
-pub use self::button::{
-    SimpleButtonConstantEventHandler, SimpleButtonEventHandler, SimpleButtonView,
-};
+pub use self::button::*;
 
 mod menu;
 pub use self::menu::{

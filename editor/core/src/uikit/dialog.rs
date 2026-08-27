@@ -7,11 +7,11 @@ use crate::{
     },
     uikit::{
         OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
-        SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextView, TeardownContext,
+        SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextViewInit, TeardownContext,
         TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
-        ViewRelationControllable, ViewSize, popup::PopupCloseContext,
+        ViewRelationControllable, ViewSize, button::SimpleButtonViewInit, popup::PopupCloseContext,
     },
     utils::Size,
 };
@@ -64,22 +64,26 @@ impl AlertDialogPresenter {
             };
         }
 
-        let msg = ctx.construct_view(|_| {
-            let mut v = Box::new(StaticTextView::new(message));
-            v.allow_wrapping();
-            v.set_horizontal_alignment(CompositeRectTextHorizontalAlignment::Middle);
-            v
-        });
+        let msg = ctx.construct_view2(
+            StaticTextViewInit {
+                content: message,
+                allow_wrapping: true,
+                horizontal_alignment: CompositeRectTextHorizontalAlignment::Middle,
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_layout_mut(msg).expect("query failed").width = ViewSize::Fixed(text_width);
 
-        let confirm_button = ctx.construct_view(|_| {
-            Box::new(SimpleButtonView::new(
-                "OK".into(),
-                Some(Box::new(SimpleButtonConstantEventHandler(
+        let confirm_button = ctx.construct_view2(
+            SimpleButtonViewInit {
+                label: "OK".into(),
+                event_handler: Some(Box::new(SimpleButtonConstantEventHandler(
                     Event::PopupClose { id: popup_id },
                 ))),
-            ))
-        });
+            },
+            |_| [],
+        );
         {
             let confirm_button = ctx.view_layout_mut(confirm_button).expect("query failed");
             confirm_button.width = ViewSize::Fixed(64.0);

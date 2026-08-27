@@ -19,7 +19,10 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{RenderContext, TeardownContext, View, ViewLayoutStateStore, ViewRenderElements},
+    uikit::{
+        RenderContext, TeardownContext, View, ViewConstructor, ViewLayoutStateStore,
+        ViewRenderElements,
+    },
     utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
@@ -34,6 +37,28 @@ impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
     }
 }
 
+pub struct SimpleButtonViewInit {
+    pub label: String,
+    pub event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
+}
+impl Default for SimpleButtonViewInit {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            event_handler: None,
+        }
+    }
+}
+impl ViewConstructor for SimpleButtonViewInit {
+    type ConcreteView = SimpleButtonView;
+
+    #[inline(always)]
+    fn construct(self, _id: super::TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        SimpleButtonView::new(self)
+    }
+}
+
 pub struct SimpleButtonView {
     entity: Option<Rc<SimpleButtonActionHandler>>,
     label: String,
@@ -43,14 +68,11 @@ pub struct SimpleButtonView {
 impl SimpleButtonView {
     const ROUNDING: f32 = 8.0;
 
-    pub fn new(
-        init_label: String,
-        event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
-    ) -> Self {
+    pub fn new(init: SimpleButtonViewInit) -> Self {
         Self {
             entity: None,
-            label: init_label,
-            event_handler,
+            label: init.label,
+            event_handler: init.event_handler,
             interactive_changes: None,
         }
     }

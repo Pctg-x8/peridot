@@ -21,14 +21,14 @@ use crate::{
     },
     ui::dock::PaneContentResizeContext,
     uikit::{
-        ContainerView, NumericInputView, NumericInputViewIO, NumericInputViewInit, ScrollContainer,
-        StaticTextView, TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
-        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
-        ViewFeedbackRegisterable, ViewIdentifier, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
-        ViewLayoutFlowBasis, ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow,
-        ViewRegisterable, ViewRelationControllable, ViewRenderer, ViewSize,
-        checkbox::CheckmarkVisual,
+        ContainerView, ContainerViewInit, NumericInputView, NumericInputViewIO,
+        NumericInputViewInit, ScrollContainer, StaticTextView, StaticTextViewInit, TeardownContext,
+        TextInputView, TextInputViewIO, TypedViewIdentifier, View, ViewFeedbackContext,
+        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
+        ViewRelationControllable, ViewRenderer, ViewSize, checkbox::CheckmarkVisual,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -56,8 +56,13 @@ impl Presenter {
                 };
             }
 
-            let selected_object_label =
-                ctx.construct_view(|_| Box::new(StaticTextView::new("No selection".into())));
+            let selected_object_label = ctx.construct_view2(
+                StaticTextViewInit {
+                    content: "No selection".into(),
+                    ..Default::default()
+                },
+                |_| [],
+            );
             let selected_object_name =
                 ctx.construct_view(|id| Box::new(TextInputView::new(id, eh.clone())));
             ctx.view_layout_mut(selected_object_name)
@@ -69,7 +74,7 @@ impl Presenter {
             ctx.view_set_parent(selected_object_label, root_content_view);
             ctx.view_set_parent(selected_object_name, root_content_view);
 
-            let content_view = ctx.construct_view(|_| Box::new(ContainerView));
+            let content_view = ctx.construct_view2(ContainerViewInit, |_| []);
             {
                 let l = ctx.view_layout_mut(content_view).expect("query failed");
                 l.child = ViewLayoutChild::Flow {
@@ -83,29 +88,38 @@ impl Presenter {
                 l.padding.right = 8.0;
             }
 
-            let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new("POSITION".into()));
-                v.set_font(FontID::UIFormLiftedLabel);
-                v
-            });
+            let label = ctx.construct_view2(
+                StaticTextViewInit {
+                    content: "POSITION".into(),
+                    font: FontID::UIFormLiftedLabel,
+                    ..Default::default()
+                },
+                |_| [],
+            );
             ctx.view_set_parent(label, content_view);
             let position_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(position_editor.root_view, content_view);
 
-            let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new("ROTATION".into()));
-                v.set_font(FontID::UIFormLiftedLabel);
-                v
-            });
+            let label = ctx.construct_view2(
+                StaticTextViewInit {
+                    content: "ROTATION".into(),
+                    font: FontID::UIFormLiftedLabel,
+                    ..Default::default()
+                },
+                |_| [],
+            );
             ctx.view_set_parent(label, content_view);
             let rotation_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(rotation_editor.root_view, content_view);
 
-            let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new("SCALE".into()));
-                v.set_font(FontID::UIFormLiftedLabel);
-                v
-            });
+            let label = ctx.construct_view2(
+                StaticTextViewInit {
+                    content: "SCALE".into(),
+                    font: FontID::UIFormLiftedLabel,
+                    ..Default::default()
+                },
+                |_| [],
+            );
             ctx.view_set_parent(label, content_view);
             let scale_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(scale_editor.root_view, content_view);
@@ -117,11 +131,14 @@ impl Presenter {
                 .width = ViewSize::FillAvailable;
             ctx.view_set_parent(render_section_header, content_view);
 
-            let label = ctx.construct_view(|_| {
-                let mut v = Box::new(StaticTextView::new("SHAPE".into()));
-                v.set_font(FontID::UIFormLiftedLabel);
-                v
-            });
+            let label = ctx.construct_view2(
+                StaticTextViewInit {
+                    content: "SHAPE".into(),
+                    font: FontID::UIFormLiftedLabel,
+                    ..Default::default()
+                },
+                |_| [],
+            );
             let shape_selector = ctx.construct_view(|id| {
                 Box::new(crate::uikit::dropdown_box::View::new(
                     id,
@@ -238,7 +255,13 @@ impl Vec3EditorComponent {
             };
         }
 
-        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("X".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "X".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, root_view);
         let x = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
@@ -255,7 +278,13 @@ impl Vec3EditorComponent {
             l.width = ViewSize::FillAvailable;
         }
         ctx.view_set_parent(x, root_view);
-        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Y".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Y".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, root_view);
         let y = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
@@ -272,7 +301,13 @@ impl Vec3EditorComponent {
             l.width = ViewSize::FillAvailable;
         }
         ctx.view_set_parent(y, root_view);
-        let label = ctx.construct_view(|_| Box::new(StaticTextView::new("Z".into())));
+        let label = ctx.construct_view2(
+            StaticTextViewInit {
+                content: "Z".into(),
+                ..Default::default()
+            },
+            |_| [],
+        );
         ctx.view_set_parent(label, root_view);
         let z = ctx.construct_view(|id| {
             Box::new(NumericInputView::new(
