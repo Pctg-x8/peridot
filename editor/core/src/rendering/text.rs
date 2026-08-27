@@ -583,6 +583,7 @@ impl TextLayout {
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
             None,
+            None,
         )
         .height()
     }
