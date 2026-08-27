@@ -265,6 +265,7 @@ impl super::View for View {
                     ctx.system_link.font_set(),
                     CompositeRectTextHorizontalAlignment::Start,
                     None,
+                    None,
                 )
                 .size()
             })

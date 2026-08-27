@@ -2895,7 +2895,7 @@ impl View for AssetExplorerFileListView {
                     ctx.composite_tree,
                     ctx.ht_manager,
                     ctx.system_link,
-                    "toolongelementname".into(),
+                    "toolongelementname.asset".into(),
                 );
                 ctx.composite_tree.add_child(ct_root, element.ct_root);
                 ctx.ht_manager.add_child(ht_root, element.ht_root);
@@ -2945,9 +2945,9 @@ struct AssetExplorerTiledElementSubView {
     ht_root: HitTestTreeRef,
 }
 impl AssetExplorerTiledElementSubView {
-    const MARGIN: f32 = 4.0;
+    const MARGIN: f32 = 8.0;
     const ICON_TEXT_MARGIN: f32 = 2.0;
-    const TEXT_WIDTH_MAX: f32 = 48.0;
+    const TEXT_WIDTH_MAX: f32 = 64.0;
 
     pub fn new<E>(
         composite_tree: &mut CompositeTree<E>,
@@ -2961,6 +2961,7 @@ impl AssetExplorerTiledElementSubView {
             syslink.font_set(),
             CompositeRectTextHorizontalAlignment::Middle,
             Some(Self::TEXT_WIDTH_MAX),
+            Some(2),
         )
         .size();
 
@@ -2990,7 +2991,8 @@ impl AssetExplorerTiledElementSubView {
                 CompositeRectText::build()
                     .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
                     .horizontal_middle()
-                    .allow_wrapping(),
+                    .allow_wrapping()
+                    .limit_lines(2),
             )
             .size_imm(Self::TEXT_WIDTH_MAX, 0.0)
             .offset_imm(Self::MARGIN, Self::MARGIN + 32.0 + Self::ICON_TEXT_MARGIN)

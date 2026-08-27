@@ -659,6 +659,7 @@ pub struct CompositeRectText<Event> {
     pub vertical_alignment: CompositeRectTextVerticalAlignment,
     pub offset: [f32; 2],
     pub allow_wrapping: bool,
+    pub max_lines: Option<usize>,
 }
 impl<Event> Default for CompositeRectText<Event> {
     fn default() -> Self {
@@ -668,6 +669,7 @@ impl<Event> Default for CompositeRectText<Event> {
             vertical_alignment: Default::default(),
             offset: [0.0, 0.0],
             allow_wrapping: false,
+            max_lines: None,
         }
     }
 }
@@ -724,6 +726,11 @@ impl<Event> CompositeRectTextBuilder<Event> {
 
     pub const fn allow_wrapping(mut self) -> Self {
         self.0.allow_wrapping = true;
+        self
+    }
+
+    pub const fn limit_lines(mut self, max_lines: usize) -> Self {
+        self.0.max_lines = Some(max_lines);
         self
     }
 }
@@ -2682,6 +2689,7 @@ impl<Event> CompositeTreeRender<Event> {
                         font_set,
                         t.horizontal_alignment,
                         wrap_width,
+                        t.max_lines,
                     );
                     cache.text_rects.clear();
                     cache

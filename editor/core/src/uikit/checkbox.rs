@@ -278,6 +278,7 @@ impl View for ToggleButtonView {
             ctx.system_link.font_set(),
             CompositeRectTextHorizontalAlignment::Start,
             None,
+            None,
         )
         .size();
 

@@ -38,6 +38,7 @@ impl AlertDialogPresenter {
             ctx.system_link.font_set(),
             CompositeRectTextHorizontalAlignment::Middle,
             Some(owner_window.client_size().width * 0.8),
+            None,
         );
         let text_width = tl
             .visual_width(ctx.system_link.font_set())

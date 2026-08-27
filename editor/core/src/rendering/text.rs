@@ -463,6 +463,7 @@ impl TextLayout {
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
         max_width: Option<f32>,
+        max_lines: Option<usize>,
     ) -> Self {
         Self::new(
             core::iter::once(TextRun {
@@ -473,6 +474,7 @@ impl TextLayout {
             font_set,
             alignment,
             max_width,
+            max_lines,
         )
     }
 
@@ -481,6 +483,7 @@ impl TextLayout {
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
         max_width: Option<f32>,
+        max_lines: Option<usize>,
     ) -> Self {
         profiler::scope!(CREATE_TEXT_LAYOUT);
 
@@ -492,7 +495,7 @@ impl TextLayout {
                 text_runs, font_set, alignment, max_width,
             ),
             #[cfg(windows)]
-            internal: dwrite::TextLayout::new(text_runs, font_set, alignment, max_width),
+            internal: dwrite::TextLayout::new(text_runs, font_set, alignment, max_width, max_lines),
         }
     }
 
@@ -593,6 +596,7 @@ impl TextLayout {
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
             None,
+            None,
         );
 
         #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
@@ -632,6 +636,7 @@ impl TextLayout {
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
             None,
+            None,
         );
 
         #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
@@ -662,6 +667,7 @@ impl TextLayout {
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
             None,
+            None,
         )
         .visual_width(font_set);
     }
@@ -677,6 +683,7 @@ impl TextLayout {
             }),
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
+            None,
             None,
         );
 
@@ -709,6 +716,7 @@ impl TextLayout {
             font,
             font_set,
             CompositeRectTextHorizontalAlignment::Start,
+            None,
             None,
         );
 

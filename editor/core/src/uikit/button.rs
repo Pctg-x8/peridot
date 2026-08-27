@@ -197,6 +197,7 @@ impl View for SimpleButtonView {
             ctx.system_link.font_set(),
             CompositeRectTextHorizontalAlignment::Start,
             None,
+            None,
         )
         .size();
         // consider rounding pads

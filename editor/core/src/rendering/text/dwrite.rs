@@ -10,16 +10,18 @@ use windows::Win32::{
         },
         DirectWrite::{
             DWRITE_GLYPH_METRICS, DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION,
-            DWRITE_HIT_TEST_METRICS, DWRITE_MATRIX, DWRITE_MEASURING_MODE, DWRITE_STRIKETHROUGH,
-            DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
-            DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_RANGE, DWRITE_UNDERLINE,
+            DWRITE_HIT_TEST_METRICS, DWRITE_LINE_METRICS, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
+            DWRITE_STRIKETHROUGH, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+            DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_RANGE, DWRITE_TRIMMING,
+            DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_UNDERLINE,
             DWRITE_WORD_WRAPPING_EMERGENCY_BREAK, IDWriteInlineObject, IDWritePixelSnapping_Impl,
             IDWriteTextLayout, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
         },
     },
 };
 use windows_core::{
-    BOOL, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR, implement, interface,
+    BOOL, ComObjectInterface, HRESULT, IUnknown, IUnknown_Vtbl, Interface, PCWSTR, implement,
+    interface,
 };
 
 use crate::{
@@ -41,6 +43,7 @@ impl TextLayout {
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
         max_width: Option<f32>,
+        max_lines: Option<usize>,
     ) -> Self {
         let (lb, ub) = runs.size_hint();
         let mut run_str_utf16s = Vec::new();
@@ -140,9 +143,6 @@ impl TextLayout {
                 layout
                     .SetMaxWidth(metrics.width)
                     .expect("dwrite.layout.set_max_width");
-                layout
-                    .SetMaxHeight(metrics.height)
-                    .expect("dwrite.layout.set_max_height");
             }
         }
         unsafe {
@@ -153,6 +153,66 @@ impl TextLayout {
                     CompositeRectTextHorizontalAlignment::End => DWRITE_TEXT_ALIGNMENT_TRAILING,
                 })
                 .expect("dwrite.layout.set_text_alignment");
+        }
+
+        if let Some(max_lines) = max_lines {
+            // lint count limiting
+            let mut line_metrics = Vec::<DWRITE_LINE_METRICS>::with_capacity(4);
+            let mut actual_line_count = core::mem::MaybeUninit::uninit();
+            match unsafe {
+                layout.GetLineMetrics(
+                    Some(core::mem::transmute(line_metrics.spare_capacity_mut())),
+                    actual_line_count.as_mut_ptr(),
+                )
+            } {
+                Err(e) if e.code() == ERROR_INSUFFICIENT_BUFFER.to_hresult() => {
+                    // extend and retry
+                    line_metrics.reserve(unsafe { actual_line_count.assume_init() } as _);
+                    unsafe {
+                        layout
+                            .GetLineMetrics(
+                                Some(core::mem::transmute(line_metrics.spare_capacity_mut())),
+                                actual_line_count.as_mut_ptr(),
+                            )
+                            .expect("dwrite.layout.get_line_metrics");
+                    }
+                }
+                e => e.expect("dwrite.layout.get_line_metrics"),
+            }
+            unsafe {
+                line_metrics.set_len(actual_line_count.assume_init() as _);
+            }
+            unsafe {
+                layout
+                    .SetMaxHeight(
+                        line_metrics
+                            .iter()
+                            .take(max_lines)
+                            .map(|x| x.height)
+                            .sum::<f32>(),
+                    )
+                    .expect("dwrite.layout.set_max_height");
+            }
+
+            // TODO: Trimming以外も指定できるようにするか？
+            let trimming_sign = unsafe {
+                font_set
+                    .dw_factory
+                    .CreateEllipsisTrimmingSign(&layout)
+                    .expect("dwrite.create_ellipsis_trimming_sign")
+            };
+            unsafe {
+                layout
+                    .SetTrimming(
+                        &DWRITE_TRIMMING {
+                            granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                            delimiter: 0,
+                            delimiterCount: 0,
+                        },
+                        &trimming_sign,
+                    )
+                    .expect("dwrite.layout.set_trimming");
+            }
         }
 
         Self { layout }
@@ -430,10 +490,15 @@ impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
         _glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
         clientdrawingeffect: windows_core::Ref<IUnknown>,
     ) -> windows_core::Result<()> {
-        let var = clientdrawingeffect
-            .unwrap()
-            .cast::<IAppDrawingEffect>()
-            .expect("clientdrawingeffect.cast.appDrawingEffect");
+        let var = clientdrawingeffect.as_ref().map(|x| {
+            x.cast::<IAppDrawingEffect>()
+                .expect("clientdrawingeffect.cast.appDrawingEffect")
+        });
+        let font_id = var
+            .as_ref()
+            .map_or(FontID::UIDefault, |x| unsafe { x.font_id() });
+        let offset_x = var.as_ref().map_or(0.0, |x| unsafe { x.offset_x() });
+
         // tracing::debug!(?var, fid = ?unsafe { var.font_id() }, baselineoriginx);
 
         let glyphrun = unsafe { &*glyphrun };
@@ -472,7 +537,7 @@ impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
 
             let (r, is_new) = unsafe {
                 (*self.atlas).acquire_for_glyph(
-                    (var.font_id() as _, *glyphrun.glyphIndices.add(n)),
+                    (font_id as _, *glyphrun.glyphIndices.add(n)),
                     glyph_width.ceil() as _,
                     glyph_height.ceil() as _,
                 )
@@ -482,7 +547,7 @@ impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
                 left: ((baselineoriginx
                     + glyph_metrics[n].leftSideBearing as f32 * glyphrun.fontEmSize
                         / design_unit as f32)
-                    + unsafe { var.offset_x() })
+                    + offset_x)
                     * self.dip_to_pixels_scaling,
                 top: (baselineoriginy
                     - (glyph_metrics[n].verticalOriginY as f32
@@ -555,15 +620,25 @@ impl IDWriteTextRenderer_Impl for TextLayoutRenderer_Impl<'_> {
 
     fn DrawInlineObject(
         &self,
-        _clientdrawingcontext: *const core::ffi::c_void,
-        _originx: f32,
-        _originy: f32,
-        _inlineobject: windows_core::Ref<IDWriteInlineObject>,
-        _issideways: BOOL,
-        _isrighttoleft: BOOL,
-        _clientdrawingeffect: windows_core::Ref<IUnknown>,
+        clientdrawingcontext: *const core::ffi::c_void,
+        originx: f32,
+        originy: f32,
+        inlineobject: windows_core::Ref<IDWriteInlineObject>,
+        issideways: BOOL,
+        isrighttoleft: BOOL,
+        clientdrawingeffect: windows_core::Ref<IUnknown>,
     ) -> windows_core::Result<()> {
-        unimplemented!();
+        unsafe {
+            inlineobject.as_ref().expect("null inline object").Draw(
+                Some(clientdrawingcontext),
+                self.as_interface_ref(),
+                originx,
+                originy,
+                issideways.as_bool(),
+                isrighttoleft.as_bool(),
+                clientdrawingeffect.as_ref(),
+            )
+        }
     }
 
     fn DrawStrikethrough(
