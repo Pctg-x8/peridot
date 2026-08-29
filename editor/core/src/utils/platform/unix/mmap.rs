@@ -47,3 +47,71 @@ impl MappedMemory {
         self.addr
     }
 }
+
+pub struct ReadonlyMappedFile {
+    ptr: *const core::ffi::c_void,
+    size: usize,
+}
+unsafe impl Sync for ReadonlyMappedFile {}
+unsafe impl Send for ReadonlyMappedFile {}
+impl Drop for ReadonlyMappedFile {
+    fn drop(&mut self) {
+        if unsafe { libc::munmap(self.ptr.cast_mut(), self.size) } < 0 {
+            let e = std::io::Error::last_os_error();
+            tracing::warn!(reason = %e, "munmap");
+        }
+    }
+}
+impl core::ops::Deref for ReadonlyMappedFile {
+    type Target = [u8];
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::slice::from_raw_parts(self.ptr.cast(), self.size) }
+    }
+}
+impl ReadonlyMappedFile {
+    pub fn open(path: &core::ffi::CStr) -> std::io::Result<Self> {
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let size = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        if size < 0 {
+            if unsafe { libc::close(fd) } < 0 {
+                let e = std::io::Error::last_os_error();
+                panic!("close: {e}");
+            }
+
+            return Err(std::io::Error::last_os_error());
+        }
+        let size: usize = size.try_into().expect("mapping too large file!");
+
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                fd,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            if unsafe { libc::close(fd) } < 0 {
+                let e = std::io::Error::last_os_error();
+                panic!("close: {e}");
+            }
+
+            return Err(std::io::Error::last_os_error());
+        }
+
+        if unsafe { libc::close(fd) } < 0 {
+            let e = std::io::Error::last_os_error();
+            panic!("close: {e}");
+        }
+
+        Ok(Self { ptr, size })
+    }
+}

@@ -1,7 +1,10 @@
 pub mod mmap;
 pub mod shm;
 
-pub use self::{mmap::MappedMemory, shm::TemporalSharedMemory};
+pub use self::{
+    mmap::{MappedMemory, ReadonlyMappedFile},
+    shm::TemporalSharedMemory,
+};
 
 // free function wrapper
 #[inline(always)]

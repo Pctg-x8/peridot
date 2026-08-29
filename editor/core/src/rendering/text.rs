@@ -1,7 +1,7 @@
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
-use peridot_tp_freetype::{self as ft, raw::FT_Memory};
+use peridot_tp_freetype::{self as ft};
 #[cfg(feature = "harfbuzz")]
 use peridot_tp_harfbuzz as hb;
 
@@ -83,77 +83,6 @@ impl Drop for FaceShapingSet {
 }
 
 #[cfg(feature = "freetype")]
-pub struct ReadonlyMappedFile {
-    ptr: *const core::ffi::c_void,
-    size: usize,
-}
-#[cfg(feature = "freetype")]
-unsafe impl Sync for ReadonlyMappedFile {}
-#[cfg(feature = "freetype")]
-unsafe impl Send for ReadonlyMappedFile {}
-impl Drop for ReadonlyMappedFile {
-    fn drop(&mut self) {
-        if unsafe { libc::munmap(self.ptr.cast_mut(), self.size) } < 0 {
-            let e = std::io::Error::last_os_error();
-            tracing::warn!(reason = %e, "munmap");
-        }
-    }
-}
-impl core::ops::Deref for ReadonlyMappedFile {
-    type Target = [u8];
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        unsafe { core::slice::from_raw_parts(self.ptr.cast(), self.size) }
-    }
-}
-impl ReadonlyMappedFile {
-    pub fn open(path: &core::ffi::CStr) -> std::io::Result<Self> {
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let size = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
-        if size < 0 {
-            if unsafe { libc::close(fd) } < 0 {
-                let e = std::io::Error::last_os_error();
-                panic!("close: {e}");
-            }
-
-            return Err(std::io::Error::last_os_error());
-        }
-        let size: usize = size.try_into().expect("mapping too large file!");
-
-        let ptr = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                size,
-                libc::PROT_READ,
-                libc::MAP_PRIVATE,
-                fd,
-                0,
-            )
-        };
-        if ptr == libc::MAP_FAILED {
-            if unsafe { libc::close(fd) } < 0 {
-                let e = std::io::Error::last_os_error();
-                panic!("close: {e}");
-            }
-
-            return Err(std::io::Error::last_os_error());
-        }
-
-        if unsafe { libc::close(fd) } < 0 {
-            let e = std::io::Error::last_os_error();
-            panic!("close: {e}");
-        }
-
-        Ok(Self { ptr, size })
-    }
-}
-
-#[cfg(feature = "freetype")]
 struct FontContentReference {
     blob_index: usize,
     face_index: i32,
@@ -161,7 +90,7 @@ struct FontContentReference {
 
 pub struct RootFontSet {
     #[cfg(feature = "freetype")]
-    font_blobs: Vec<ReadonlyMappedFile>,
+    font_blobs: Vec<crate::utils::platform::unix::ReadonlyMappedFile>,
     #[cfg(feature = "freetype")]
     ui_common_font: Vec<FontContentReference>,
 }
@@ -216,7 +145,8 @@ impl RootFontSet {
                     std::collections::hash_map::Entry::Occupied(x) => *x.get(),
                     std::collections::hash_map::Entry::Vacant(x) => {
                         font_blobs.push(
-                            ReadonlyMappedFile::open(x.key()).expect("root_font_set.file.open"),
+                            crate::utils::platform::unix::ReadonlyMappedFile::open(x.key())
+                                .expect("root_font_set.file.open"),
                         );
                         *x.insert(font_blobs.len() - 1)
                     }
