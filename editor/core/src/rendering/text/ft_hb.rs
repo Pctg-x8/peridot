@@ -645,19 +645,6 @@ impl TextLayout {
                                 .iter()
                                 .map(|p| p.x_advance as f32 / 64.0)
                                 .sum::<f32>();
-                            section_visual_right = match (glyph_positions, glyph_infos) {
-                                (&[], &[]) => 0.0,
-                                (&[ref pos @ .., _], &[.., ref last_glyph]) => {
-                                    unsafe {
-                                        load_glyph(face, last_glyph.codepoint, LoadFlags::DEFAULT)
-                                            .expect("ft.load_glyph");
-                                    }
-                                    let metrics = unsafe { &(*(*face).glyph).metrics };
-                                    pos.iter().map(|x| x.x_advance as f32 / 64.0).sum::<f32>()
-                                        + metrics.width as f32 / 64.0
-                                }
-                                _ => unreachable!(),
-                            };
 
                             // post_bufferはsection_buffersの0を置き替える
                             section_buffers[0].buffer = post_buffer;
@@ -677,6 +664,8 @@ impl TextLayout {
                             // freetype2のdescenderは符号が逆になってるのでこれで正解
                             section_height =
                                 (face_metrics.ascender - face_metrics.descender) as f32 / 64.0;
+                            section_visual_right = section_buffers[0].left_offset
+                                + section_buffers[0].visual_width(font_set);
                             section_left_offset = run_right;
 
                             // 後ろにいるsection_bufferの位置を調整
@@ -703,28 +692,8 @@ impl TextLayout {
                                 section_height = section_height.max(
                                     (face_metrics.ascender - face_metrics.descender) as f32 / 64.0,
                                 );
-                                section_visual_right = section_visual_right.max(
-                                    section_left_offset
-                                        + match (glyph_positions, glyph_infos) {
-                                            (&[], &[]) => 0.0,
-                                            (&[ref pos @ .., _], &[.., ref last_glyph]) => {
-                                                unsafe {
-                                                    load_glyph(
-                                                        face,
-                                                        last_glyph.codepoint,
-                                                        LoadFlags::DEFAULT,
-                                                    )
-                                                    .expect("ft.load_glyph");
-                                                }
-                                                let metrics = unsafe { &(*(*face).glyph).metrics };
-                                                pos.iter()
-                                                    .map(|x| x.x_advance as f32 / 64.0)
-                                                    .sum::<f32>()
-                                                    + metrics.width as f32 / 64.0
-                                            }
-                                            _ => unreachable!(),
-                                        },
-                                );
+                                section_visual_right = section_visual_right
+                                    .max(section_left_offset + x.visual_width(font_set));
                                 section_left_offset = run_right;
                             }
                         }
@@ -740,14 +709,15 @@ impl TextLayout {
 
                     if n < line_count - 1 {
                         // newline
-                        lines.last_mut().expect("empty lines").baseline_y_offset += line_y_offset;
-                        lines.last_mut().expect("empty lines").height = final_line_height;
-                        lines
-                            .last_mut()
-                            .expect("empty lines")
-                            .width_with_trailing_whitespace = line_left_offset;
 
-                        line_y_offset += line_height;
+                        // confirm current line
+                        let cl = lines.last_mut().expect("empty lines");
+                        cl.baseline_y_offset += line_y_offset;
+                        cl.height = core::mem::replace(&mut final_line_height, 0.0);
+                        cl.width_with_trailing_whitespace =
+                            core::mem::replace(&mut line_left_offset, 0.0);
+
+                        line_y_offset += core::mem::replace(&mut line_height, 0.0);
                         lines.push(LineLayout {
                             buffers: Vec::new(),
                             width_with_trailing_whitespace: 0.0,
@@ -755,10 +725,6 @@ impl TextLayout {
                             line_top_offset: line_y_offset,
                             baseline_y_offset: 0.0,
                         });
-
-                        line_height = 0.0;
-                        final_line_height = 0.0;
-                        line_left_offset = 0.0;
                     }
 
                     left_offset = line_left_offset;
