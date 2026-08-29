@@ -2959,20 +2959,46 @@ impl View for AssetExplorerFileListView {
                     ..Default::default()
                 });
 
+                let mut elements = Vec::new();
                 let element = AssetExplorerTiledElementSubView::new(
                     ctx.composite_tree,
                     ctx.ht_manager,
                     ctx.system_link,
                     "toolongelementname.asset".into(),
+                    Point::new_logical(0.0, 0.0),
                 );
                 ctx.composite_tree.add_child(ct_root, element.ct_root);
                 ctx.ht_manager.add_child(ht_root, element.ht_root);
+                elements.push(element);
+                let element = AssetExplorerTiledElementSubView::new(
+                    ctx.composite_tree,
+                    ctx.ht_manager,
+                    ctx.system_link,
+                    "Stage1.asset".into(),
+                    Point::new_logical(AssetExplorerTiledElementSubView::ITEM_WIDTH, 0.0),
+                );
+                ctx.composite_tree.add_child(ct_root, element.ct_root);
+                ctx.ht_manager.add_child(ht_root, element.ht_root);
+                elements.push(element);
+                let element = AssetExplorerTiledElementSubView::new(
+                    ctx.composite_tree,
+                    ctx.ht_manager,
+                    ctx.system_link,
+                    "tex.png".into(),
+                    Point::new_logical(AssetExplorerTiledElementSubView::ITEM_WIDTH * 2.0, 0.0),
+                );
+                ctx.composite_tree.add_child(ct_root, element.ct_root);
+                ctx.ht_manager.add_child(ht_root, element.ht_root);
+                elements.push(element);
 
                 let entity = Rc::new(AssetExplorerFileListViewEntity {
                     ct_root,
                     ht_root,
-                    elements: vec![element],
+                    elements,
                 });
+                for e in entity.elements.iter() {
+                    ctx.ht_manager.set_action_handler(e.ht_root, &entity);
+                }
 
                 &*self.entity.insert(entity)
             }
@@ -3007,6 +3033,39 @@ struct AssetExplorerFileListViewEntity {
     ht_root: HitTestTreeRef,
     elements: Vec<AssetExplorerTiledElementSubView>,
 }
+impl HitTestTreeActionHandler for AssetExplorerFileListViewEntity {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        for e in self.elements.iter() {
+            if e.ht_root == sender {
+                e.lit(context.composite_tree, context.current_sec);
+                break;
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        for e in self.elements.iter() {
+            if e.ht_root == sender {
+                e.unlit(context.composite_tree, context.current_sec);
+                break;
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
 
 struct AssetExplorerTiledElementSubView {
     ct_root: CompositeTreeRef,
@@ -3016,12 +3075,14 @@ impl AssetExplorerTiledElementSubView {
     const MARGIN: f32 = 8.0;
     const ICON_TEXT_MARGIN: f32 = 2.0;
     const TEXT_WIDTH_MAX: f32 = 64.0;
+    const ITEM_WIDTH: f32 = Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0;
 
     pub fn new<E>(
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         syslink: &SystemLink,
         label: String,
+        left_top: Point<LogicalUnit>,
     ) -> Self {
         let label_metric = TextLayout::new_single(
             &label,
@@ -3035,14 +3096,15 @@ impl AssetExplorerTiledElementSubView {
 
         let ct_root = CompositeRect::build()
             .use_ui_scale()
+            .offset_imm(left_top.x, left_top.y)
             .size_imm(
-                Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
+                Self::ITEM_WIDTH,
                 32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
             )
             .composite_fill_color_imm([0.0; 4])
             .border(Border {
                 thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.0]),
                 ..Default::default()
             })
             .corner_radius(CornerRadius::all(4.0))
@@ -3066,7 +3128,9 @@ impl AssetExplorerTiledElementSubView {
             .offset_imm(Self::MARGIN, Self::MARGIN + 32.0 + Self::ICON_TEXT_MARGIN)
             .create(composite_tree);
         let ht_root = ht_manager.create(HitTestTreeData {
-            width: Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0,
+            left: left_top.x,
+            top: left_top.y,
+            width: Self::ITEM_WIDTH,
             height: 32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
             cursor_shape: CursorShape::Pointer,
             ..Default::default()
@@ -3076,6 +3140,32 @@ impl AssetExplorerTiledElementSubView {
         composite_tree.add_child(ct_root, ct_label);
 
         Self { ct_root, ht_root }
+    }
+
+    fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .border_color(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.0],
+                to_value: [1.0, 1.0, 1.0, 0.25],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
+            })
+            .apply();
+    }
+
+    fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .border_color(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, 0.25],
+                to_value: [1.0, 1.0, 1.0, 0.0],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
+            })
+            .apply();
     }
 }
 

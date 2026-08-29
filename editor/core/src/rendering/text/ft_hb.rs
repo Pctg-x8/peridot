@@ -779,33 +779,34 @@ impl TextLayout {
 
                             let last_line = lines.last_mut().expect("empty lines");
                             // TODO: RTL support
-                            let mut break_pos = 0;
-                            'brk: while let Some(x) = section_buffers.get(0) {
-                                let pos = x.buffer.get_glyph_positions();
-                                let left_base = x.left_offset;
-                                let mut cursor = 0.0;
-                                for (p, &char_byte_offs) in
-                                    pos.into_iter().zip(x.char_offset_bytes.iter())
-                                {
-                                    let char_left = left_base + cursor;
-                                    if char_left > max_width {
-                                        // tracing::debug!(
-                                        //     char_left,
-                                        //     pre = &b[..char_byte_offs],
-                                        //     post = &b[char_byte_offs..],
-                                        //     "force line break candidate here"
-                                        // );
-                                        // これの一つ前で切る
-                                        break_pos = prev_char_byte(b, char_byte_offs);
-                                        break 'brk;
+                            let break_pos = 'brk: {
+                                while let Some(x) = section_buffers.get(0) {
+                                    let pos = x.buffer.get_glyph_positions();
+                                    let left_base = x.left_offset;
+                                    let mut cursor = 0.0;
+                                    for (p, &char_byte_offs) in
+                                        pos.into_iter().zip(x.char_offset_bytes.iter())
+                                    {
+                                        if left_base + cursor > max_width {
+                                            // これの一つ前で切る
+                                            break 'brk prev_char_byte(b, char_byte_offs);
+                                        }
+                                        cursor += p.x_advance as f32 / 64.0;
                                     }
-                                    cursor += p.x_advance as f32 / 64.0;
+
+                                    if left_base + cursor > max_width {
+                                        // これの一つ前で切る;
+                                        break 'brk x.char_offset_bytes
+                                            [x.char_offset_bytes.len() - 2];
+                                    }
+
+                                    // このSectionBufferはbreakしなくていいので今の行に追加
+                                    let unbreak_buffer = section_buffers.remove(0);
+                                    last_line.buffers.push(unbreak_buffer);
                                 }
 
-                                // このSectionBufferはbreakしなくていいので今の行に追加
-                                let unbreak_buffer = section_buffers.remove(0);
-                                last_line.buffers.push(unbreak_buffer);
-                            }
+                                unreachable!("not need to be broken?")
+                            };
                             // tracing::debug!(break_pos, "force line break");
 
                             // 前後に分ける
