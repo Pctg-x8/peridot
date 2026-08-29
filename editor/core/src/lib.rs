@@ -112,6 +112,7 @@ pub fn launch() {
     tracing_subscriber::fmt()
         .pretty()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_thread_names(true)
         .init();
 
     profiler::init_profiler();
