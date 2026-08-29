@@ -1,10 +1,19 @@
 pub mod mmap;
 pub mod shm;
+pub mod xdg;
+
+use std::path::PathBuf;
 
 pub use self::{
     mmap::{MappedMemory, ReadonlyMappedFile},
     shm::TemporalSharedMemory,
 };
+
+/// A path to the home directory of a current user.
+#[inline(always)]
+pub fn home_dir() -> PathBuf {
+    PathBuf::from(std::env::var_os("HOME").expect("no $HOME set"))
+}
 
 // free function wrapper
 #[inline(always)]

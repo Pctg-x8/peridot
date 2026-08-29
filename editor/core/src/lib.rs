@@ -6617,23 +6617,6 @@ impl FileSystem {
             .expect("fs.resources_base_pat.current_exe.parent")
             .join("../Resources/resources");
 
-        #[cfg(target_os = "linux")]
-        let cache_base_path = 'cache_base_path: {
-            if let Some(p) = std::env::var_os("XDG_CACHE_HOME") {
-                break 'cache_base_path PathBuf::from(p).join("io.ct2.peridot.editor");
-            }
-
-            if let Some(p) = std::env::var_os("HOME") {
-                break 'cache_base_path PathBuf::from(p).join(".cache/io.ct2.peridot.editor");
-            }
-
-            tracing::warn!(
-                "neither XDG_CACHE_HOME nor HOME is set, generating cache into current working directory"
-            );
-            std::env::current_dir()
-                .expect("fs.cache_base_path.current_dir")
-                .join(".cache/io.ct2.peridot.editor")
-        };
         #[cfg(target_os = "macos")]
         let cache_base_path = PathBuf::from(unsafe {
             core::ffi::CStr::from_ptr(
@@ -6653,24 +6636,12 @@ impl FileSystem {
         })
         .join("peridot/.editor");
 
-        #[cfg(target_os = "linux")]
-        let persist_state_base_path = 'persist_state_base_path: {
-            if let Some(p) = std::env::var_os("XDG_DATA_HOME") {
-                break 'persist_state_base_path PathBuf::from(p).join("io.ct2.peridot.editor");
-            }
-
-            if let Some(p) = std::env::var_os("HOME") {
-                break 'persist_state_base_path PathBuf::from(p)
-                    .join(".local/share/io.ct2.peridot.editor");
-            }
-
-            tracing::warn!(
-                "neither XDG_DATA_HOME nor HOME is set, generating persisted-state data into current working directory"
-            );
-            std::env::current_dir()
-                .expect("fs.persist_state_base_path.current_dir")
-                .join(".persist-state/io.ct2.peridot.editor")
-        };
+        #[cfg(unix)]
+        let cache_base_path =
+            crate::utils::platform::unix::xdg::cache_home().join("io.ct2.peridot.editor");
+        #[cfg(unix)]
+        let persist_state_base_path =
+            crate::utils::platform::unix::xdg::state_home().join("io.ct2.peridot.editor");
 
         #[cfg(windows)]
         let appdata_base_path =
@@ -8393,7 +8364,7 @@ pub struct PreviewPaneFeedbackReceiver {
 impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPaneFeedbackReceiver {
     fn accept_feedback<'a, 'h>(
         &self,
-        feedback: &ViewFeedbackPreviewEditToolTypeChanged,
+        _feedback: &ViewFeedbackPreviewEditToolTypeChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         let is_selecting =
@@ -8437,7 +8408,7 @@ impl PreviewView {
 impl View for PreviewView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> uikit::ViewRenderElements {
@@ -8492,7 +8463,10 @@ impl View for PreviewView {
         ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut uikit::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 
@@ -8524,9 +8498,9 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
 
     fn on_pointer_leave(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerActionArgs,
     ) -> EventContinueControl {
         unsafe { &mut *self.input_state }.pointer_pos = None;
         EventContinueControl::empty()
@@ -8570,9 +8544,9 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
 
     fn on_drag_start(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         unsafe { &mut *self.input_state }.grabbing = true;
         EventContinueControl::GRAB_POINTER | EventContinueControl::STOP_PROPAGATION
@@ -8580,9 +8554,9 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
 
     fn on_drag_end(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         unsafe { &mut *self.input_state }.grabbing = false;
         EventContinueControl::RELEASE_CAPTURE_ELEMENT | EventContinueControl::STOP_PROPAGATION
@@ -8603,9 +8577,9 @@ impl HitTestTreeActionHandler for PreviewViewEntity {
 
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
+        _sender: HitTestTreeRef,
+        _context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         unsafe { &mut *self.input_state }.clicked = true;
 
