@@ -49,7 +49,7 @@ use crate::{
             GradientRef, TextureMappingMode, TextureType,
         },
         preview::HandlePointing,
-        text::{FontID, FontSet, TextLayout},
+        text::{FontID, FontSet, RootFontSet, TextLayout},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
@@ -133,7 +133,7 @@ pub fn launch() {
     #[cfg(target_os = "linux")]
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
-    let root_font_set = FontSet::new();
+    let root_font_set = RootFontSet::new();
     let vk_device = Graphics::init(&fs);
     #[cfg(windows)]
     assert!(
@@ -216,7 +216,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     gfx: &'sys Graphics,
     rt_sender: RenderMessageSender,
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    root_font_set: &'sys FontSet,
+    root_font_set: &'sys RootFontSet,
     preview_state: &'sys Mutex<rendering::preview::CommittedState>,
     #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
@@ -292,7 +292,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         },
         #[cfg(windows)]
         SystemLink {
-            font_set: root_font_set,
+            font_set: FontSet::new(root_font_set),
             rt_sender: rt_sender.clone(),
             gfx,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
@@ -308,7 +308,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         SystemLink {
             rt_sender: rt_sender.clone(),
             gfx,
-            font_set: root_font_set,
+            font_set: FontSet::new(root_font_set),
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
             dbus,
@@ -362,7 +362,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             global_time_base,
             event_bus: &sync_event_bus,
             message_receiver: rt_receiver,
-            font_set: &root_font_set,
+            root_font_set,
             preview_state,
             #[cfg(windows)]
             dx_context,
@@ -6013,7 +6013,7 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
 pub struct SystemLink<'sys> {
     gfx: *const Graphics<'sys>,
     rt_sender: RenderMessageSender,
-    font_set: *const FontSet,
+    font_set: FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,
     #[cfg(all(unix, not(target_os = "macos")))]
     display_server: platform::unix::DisplayServerLink,
@@ -6042,7 +6042,7 @@ impl SystemLink<'_> {
 
     #[inline(always)]
     pub const fn font_set(&self) -> &FontSet {
-        unsafe { &*self.font_set }
+        &self.font_set
     }
 
     #[inline(always)]

@@ -1,7 +1,7 @@
 #[cfg(feature = "fontconfig")]
 use peridot_tp_fontconfig as fc;
 #[cfg(feature = "freetype")]
-use peridot_tp_freetype as ft;
+use peridot_tp_freetype::{self as ft, raw::FT_Memory};
 #[cfg(feature = "harfbuzz")]
 use peridot_tp_harfbuzz as hb;
 
@@ -82,6 +82,165 @@ impl Drop for FaceShapingSet {
     }
 }
 
+#[cfg(feature = "freetype")]
+pub struct ReadonlyMappedFile {
+    ptr: *const core::ffi::c_void,
+    size: usize,
+}
+#[cfg(feature = "freetype")]
+unsafe impl Sync for ReadonlyMappedFile {}
+#[cfg(feature = "freetype")]
+unsafe impl Send for ReadonlyMappedFile {}
+impl Drop for ReadonlyMappedFile {
+    fn drop(&mut self) {
+        if unsafe { libc::munmap(self.ptr.cast_mut(), self.size) } < 0 {
+            let e = std::io::Error::last_os_error();
+            tracing::warn!(reason = %e, "munmap");
+        }
+    }
+}
+impl core::ops::Deref for ReadonlyMappedFile {
+    type Target = [u8];
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::slice::from_raw_parts(self.ptr.cast(), self.size) }
+    }
+}
+impl ReadonlyMappedFile {
+    pub fn open(path: &core::ffi::CStr) -> std::io::Result<Self> {
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+
+        let size = unsafe { libc::lseek(fd, 0, libc::SEEK_END) };
+        if size < 0 {
+            if unsafe { libc::close(fd) } < 0 {
+                let e = std::io::Error::last_os_error();
+                panic!("close: {e}");
+            }
+
+            return Err(std::io::Error::last_os_error());
+        }
+        let size: usize = size.try_into().expect("mapping too large file!");
+
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                fd,
+                0,
+            )
+        };
+        if ptr == libc::MAP_FAILED {
+            if unsafe { libc::close(fd) } < 0 {
+                let e = std::io::Error::last_os_error();
+                panic!("close: {e}");
+            }
+
+            return Err(std::io::Error::last_os_error());
+        }
+
+        if unsafe { libc::close(fd) } < 0 {
+            let e = std::io::Error::last_os_error();
+            panic!("close: {e}");
+        }
+
+        Ok(Self { ptr, size })
+    }
+}
+
+#[cfg(feature = "freetype")]
+struct FontContentReference {
+    blob_index: usize,
+    face_index: i32,
+}
+
+pub struct RootFontSet {
+    #[cfg(feature = "freetype")]
+    font_blobs: Vec<ReadonlyMappedFile>,
+    #[cfg(feature = "freetype")]
+    ui_common_font: Vec<FontContentReference>,
+}
+impl RootFontSet {
+    pub fn new() -> Self {
+        let mut font_blobs = Vec::new();
+        #[cfg(feature = "fontconfig")]
+        let ui_common_font = unsafe {
+            use std::collections::{HashMap, HashSet};
+
+            fc::init().expect("FontConfig.init");
+            let mut pat = fc::Pattern::new().expect("FcPattern.create");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_FAMILY, c"Inter Display")
+                .expect("FcPattern.add.family");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_WEIGHT, &fc::raw::FC_WEIGHT_REGULAR)
+                .expect("FcPattern.add.weight");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_SIZE, &(12.0 as core::ffi::c_double))
+                .expect("FcPattern.add.size");
+            fc::Config::current()
+                .unwrap_unchecked()
+                .as_mut()
+                .substitute(pat.as_mut(), fc::MatchKind::Pattern)
+                .expect("FcConfig.substitute");
+            pat.as_mut().default_substitute();
+            let fonts = fc::sort(
+                fc::Config::current().unwrap_unchecked().as_mut(),
+                pat.as_mut(),
+                false,
+                None,
+            )
+            .expect("FontConfig.sort");
+
+            let mut selected_fonts = HashSet::new();
+            let mut loaded_fonts = HashMap::new();
+            let mut fonts_ordered = Vec::new();
+            for n in 0..fonts.as_ref().nfont {
+                let f = *fonts.as_ref().fonts.add(n as usize);
+                let file: &core::ffi::CStr = (*f)
+                    .get(fc::Pattern::KEY_FILE)
+                    .expect("FcPattern.get.file")
+                    .expect("FcPattern.get.not_exist.file");
+                let file = file.to_owned();
+                let index: core::ffi::c_int = (*f)
+                    .get(fc::Pattern::KEY_INDEX)
+                    .expect("FcPattern.get.index")
+                    .expect("FcPattern.get.not_exist.index");
+
+                let blob_index = match loaded_fonts.entry(file) {
+                    std::collections::hash_map::Entry::Occupied(x) => *x.get(),
+                    std::collections::hash_map::Entry::Vacant(x) => {
+                        font_blobs.push(
+                            ReadonlyMappedFile::open(x.key()).expect("root_font_set.file.open"),
+                        );
+                        *x.insert(font_blobs.len() - 1)
+                    }
+                };
+
+                if selected_fonts.insert((blob_index, index)) {
+                    // 未知のフォント
+                    fonts_ordered.push(FontContentReference {
+                        blob_index,
+                        face_index: index,
+                    });
+                }
+            }
+
+            fonts_ordered
+        };
+
+        Self {
+            font_blobs,
+            ui_common_font,
+        }
+    }
+}
+
 pub struct FontSet {
     #[cfg(target_os = "macos")]
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
@@ -112,9 +271,9 @@ pub struct FontSet {
     #[cfg(windows)]
     ui_form_lifted_label: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
 }
-#[cfg(any(target_os = "macos", feature = "freetype"))]
+#[cfg(target_os = "macos")]
 unsafe impl Sync for FontSet {}
-#[cfg(any(target_os = "macos", feature = "freetype"))]
+#[cfg(target_os = "macos")]
 unsafe impl Send for FontSet {}
 impl FontSet {
     #[cfg(windows)]
@@ -198,79 +357,22 @@ impl FontSet {
     }
 
     #[cfg(feature = "freetype")]
-    pub fn new() -> Self {
+    pub fn new(root_font_set: &RootFontSet) -> Self {
         let ft_lib = FreeType::init().expect("freetype.init");
-
-        let mut font_binary_paths = Vec::new();
-        #[cfg(feature = "fontconfig")]
-        let ui_common_font_data = unsafe {
-            use std::collections::{HashMap, HashSet};
-
-            fc::init().expect("FontConfig.init");
-            let mut pat = fc::Pattern::new().expect("FcPattern.create");
-            pat.as_mut()
-                .add(fc::Pattern::KEY_FAMILY, c"Inter Display")
-                .expect("FcPattern.add.family");
-            pat.as_mut()
-                .add(fc::Pattern::KEY_WEIGHT, &fc::raw::FC_WEIGHT_REGULAR)
-                .expect("FcPattern.add.weight");
-            pat.as_mut()
-                .add(fc::Pattern::KEY_SIZE, &(12.0 as core::ffi::c_double))
-                .expect("FcPattern.add.size");
-            fc::Config::current()
-                .unwrap_unchecked()
-                .as_mut()
-                .substitute(pat.as_mut(), fc::MatchKind::Pattern)
-                .expect("FcConfig.substitute");
-            pat.as_mut().default_substitute();
-            let fonts = fc::sort(
-                fc::Config::current().unwrap_unchecked().as_mut(),
-                pat.as_mut(),
-                false,
-                None,
-            )
-            .expect("FontConfig.sort");
-
-            let mut selected_fonts = HashSet::new();
-            let mut loaded_fonts = HashMap::new();
-            let mut fonts_ordered = Vec::new();
-            for n in 0..fonts.as_ref().nfont {
-                let f = *fonts.as_ref().fonts.add(n as usize);
-                let file: &core::ffi::CStr = (*f)
-                    .get(fc::Pattern::KEY_FILE)
-                    .expect("FcPattern.get.file")
-                    .expect("FcPattern.get.not_exist.file");
-                let file = file.to_owned();
-                let index: core::ffi::c_int = (*f)
-                    .get(fc::Pattern::KEY_INDEX)
-                    .expect("FcPattern.get.index")
-                    .expect("FcPattern.get.not_exist.index");
-
-                let font_binary_index = match loaded_fonts.entry(file) {
-                    std::collections::hash_map::Entry::Occupied(x) => *x.get(),
-                    std::collections::hash_map::Entry::Vacant(x) => {
-                        font_binary_paths.push(x.key().clone());
-                        *x.insert(font_binary_paths.len() - 1)
-                    }
-                };
-
-                if selected_fonts.insert((font_binary_index, index)) {
-                    // 未知のフォント
-                    fonts_ordered.push((font_binary_index, index));
-                }
-            }
-
-            fonts_ordered
-        };
 
         use ft::FractionalExt;
 
-        let ui_default = ui_common_font_data
+        let ui_default = root_font_set
+            .ui_common_font
             .iter()
-            .map(|&(f, ix)| {
+            .map(|x| {
                 let face = unsafe {
-                    ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
-                        .expect("FreeType.new_face.ui_default")
+                    ft::new_memory_face(
+                        ft_lib.0,
+                        &root_font_set.font_blobs[x.blob_index],
+                        x.face_index as _,
+                    )
+                    .expect("FreeType.new_face.ui_default")
                 };
                 if let Err(e) =
                     unsafe { ft::set_char_size(face, 0, 12.0f32.to_f26dot6_lossy(), 0, 72) }
@@ -281,12 +383,17 @@ impl FontSet {
                 face
             })
             .collect::<Vec<_>>();
-        let ui_title_project_name = ui_common_font_data
+        let ui_title_project_name = root_font_set
+            .ui_common_font
             .iter()
-            .map(|&(f, ix)| {
+            .map(|x| {
                 let face = unsafe {
-                    ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
-                        .expect("FreeType.new_face.ui_title_project_name")
+                    ft::new_memory_face(
+                        ft_lib.0,
+                        &root_font_set.font_blobs[x.blob_index],
+                        x.face_index as _,
+                    )
+                    .expect("FreeType.new_face.ui_title_project_name")
                 };
                 if let Err(e) =
                     unsafe { ft::set_char_size(face, 0, 10.0f32.to_f26dot6_lossy(), 0, 72) }
@@ -297,12 +404,17 @@ impl FontSet {
                 face
             })
             .collect::<Vec<_>>();
-        let ui_form_lifted_label = ui_common_font_data
+        let ui_form_lifted_label = root_font_set
+            .ui_common_font
             .iter()
-            .map(|&(f, ix)| {
+            .map(|x| {
                 let face = unsafe {
-                    ft::new_face(ft_lib.0, &font_binary_paths[f], ix as _)
-                        .expect("FreeType.new_face.ui_form_lifted_label")
+                    ft::new_memory_face(
+                        ft_lib.0,
+                        &root_font_set.font_blobs[x.blob_index],
+                        x.face_index as _,
+                    )
+                    .expect("FreeType.new_face.ui_form_lifted_label")
                 };
                 if let Err(e) =
                     unsafe { ft::set_char_size(face, 0, 8.0f32.to_f26dot6_lossy(), 0, 72) }

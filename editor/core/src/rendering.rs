@@ -26,7 +26,7 @@ use crate::{
             CustomRenderContext, CustomRenderHandlerFn, CustomRenderToken,
             EmptyCustomRenderHandler,
         },
-        text::FontSet,
+        text::{FontSet, RootFontSet},
         vg::VectorRasterizationState,
     },
     uikit::MountTarget,
@@ -185,7 +185,7 @@ pub struct RenderThread<'main> {
     pub global_time_base: &'main std::time::Instant,
     pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    pub font_set: &'main FontSet,
+    pub root_font_set: &'main RootFontSet,
     pub preview_state: &'main Mutex<preview::CommittedState>,
     #[cfg(windows)]
     pub dx_context: &'main crate::platform::windows::DxContext,
@@ -263,6 +263,7 @@ impl<'main> RenderThread<'main> {
                 self.ref_count = 0;
             }
         }
+        let font_set = FontSet::new(self.root_font_set);
         let mut glyph_atlas_per_scale: HashMap<SafeF32, GlyphAtlasDataPerDpi> = HashMap::new();
         let mut windows: HashMap<WindowHandle, WindowRenderer> = HashMap::new();
         let mut context_menus: HashMap<FlyoutSurfaceHandle, ContextMenuRenderer> = HashMap::new();
@@ -705,7 +706,7 @@ impl<'main> RenderThread<'main> {
                     &mut glyph_atlas_mgr.atlas_rects,
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
-                    self.font_set,
+                    &font_set,
                     &mut preview_composite,
                     |preview_composite, ctx| {
                         profiler::scope!(VALIDATE_PREVIEW_RENDERING);
@@ -911,7 +912,7 @@ impl<'main> RenderThread<'main> {
                     &mut glyph_atlas_mgr.atlas_rects,
                     &mut glyph_atlas_mgr.vector_raster_state,
                     self.event_bus,
-                    self.font_set,
+                    &font_set,
                 );
 
                 let mut render_wait_semaphores = Vec::with_capacity(1);
