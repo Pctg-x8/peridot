@@ -4,7 +4,7 @@ use core::convert::identity;
 
 use peridot_tp_budoux as budoux;
 use peridot_tp_freetype::{
-    LoadFlags, OutlineFuncs, Vector, get_char_index, load_glyph, outline_decompose,
+    LoadFlags, OutlineFuncs, Vector, get_char_index, load_char, load_glyph, outline_decompose,
 };
 use peridot_tp_harfbuzz::ffi::{
     hb_buffer_add_utf8, hb_buffer_create, hb_buffer_destroy, hb_buffer_get_glyph_infos,
@@ -33,6 +33,7 @@ impl TextLayout {
         font_set: &FontSet,
         alignment: CompositeRectTextHorizontalAlignment,
         max_width: Option<f32>,
+        max_lines: Option<usize>,
     ) -> Self {
         let mut lines = vec![LineLayout {
             buffers: Vec::new(),
@@ -297,7 +298,8 @@ impl TextLayout {
                             line_left_offset = 0.0;
                         }
 
-                        if section_visual_right > max_width {
+                        while section_visual_right > max_width {
+                            // force line break
                             // tracing::warn!(
                             //     section_visual_right,
                             //     max_width,
@@ -305,19 +307,243 @@ impl TextLayout {
                             //     "todo: force line break"
                             // );
 
+                            if let Some(max_lines) = max_lines
+                                && lines.len() >= max_lines
+                            {
+                                // cannot wrap exceeding max_lines: truncate
+                                let trimming_sign_face_index = 'find_trimming_sign_font: {
+                                    for n in 0.. {
+                                        if unsafe {
+                                            get_char_index(
+                                                font_set.select(FontID::UIDefault).faces[n],
+                                                '\u{2026}' as _,
+                                            )
+                                        } != 0
+                                        {
+                                            // this font has the character!
+                                            break 'find_trimming_sign_font n;
+                                        }
+                                    }
+
+                                    todo!("fallback: no font have a horizontal ellipsis character");
+                                };
+                                let mut trimming_sign_buffer = Buffer::new();
+                                trimming_sign_buffer.add("\u{2026}", 0);
+                                trimming_sign_buffer.guess_segment_properties();
+                                unsafe {
+                                    hb_shape(
+                                        font_set.select_shaping(FontID::UIDefault).faces
+                                            [trimming_sign_face_index]
+                                            .as_ptr(),
+                                        trimming_sign_buffer.0.as_ptr(),
+                                        core::ptr::null(),
+                                        0,
+                                    );
+                                }
+                                let trimming_sign_width = trimming_sign_buffer
+                                    .get_glyph_positions()
+                                    .iter()
+                                    .fold(0.0, |a, p| a + p.x_advance as f32 / 64.0);
+
+                                let last_line = lines.last_mut().expect("empty lines");
+                                let pre_post_limit_width = (max_width - trimming_sign_width) / 2.0;
+                                let pre_break_pos = 'brk: {
+                                    while let Some(x) = section_buffers.first() {
+                                        let pos = x.buffer.get_glyph_positions();
+                                        let left_base = x.left_offset;
+                                        let mut cursor = 0.0;
+                                        for (p, &char_byte_offs) in
+                                            pos.into_iter().zip(x.char_offset_bytes.iter())
+                                        {
+                                            if left_base + cursor >= pre_post_limit_width {
+                                                // pre strip here
+                                                break 'brk prev_char_byte(b, char_byte_offs);
+                                            }
+
+                                            cursor += p.x_advance as f32 / 64.0;
+                                        }
+
+                                        // このSectionBufferはbreakしなくていいので今の行に追加
+                                        let unbreak_buffer = section_buffers.remove(0);
+                                        last_line.buffers.push(unbreak_buffer);
+                                    }
+
+                                    unreachable!("not need to be truncated?")
+                                };
+                                let post_break_pos = 'brk: {
+                                    // TODO: いったんleft_offsetは考えない(ちょっとややこしい)
+                                    let mut cursor = 0.0;
+                                    while let Some(x) = section_buffers.last() {
+                                        let pos = x.buffer.get_glyph_positions();
+                                        for (p, &char_byte_offs) in pos
+                                            .into_iter()
+                                            .rev()
+                                            .zip(x.char_offset_bytes.iter().rev())
+                                        {
+                                            if cursor >= pre_post_limit_width {
+                                                break 'brk char_byte_offs;
+                                            }
+
+                                            cursor += p.x_advance as f32 / 64.0;
+                                        }
+
+                                        // このSectionBufferはbreakしなくていいので今の行に追加(位置を調整する)
+                                        let mut unbreak_buffer =
+                                            section_buffers.pop().expect("empty section buffers");
+                                        unbreak_buffer.left_offset = max_width - cursor;
+                                        last_line.buffers.push(unbreak_buffer);
+                                    }
+
+                                    unreachable!("not need to be truncated?")
+                                };
+                                let pre_byte_range = core::range::Range::from(
+                                    section_buffers[0].char_offset_bytes[0]..pre_break_pos,
+                                );
+                                let post_byte_range = core::range::Range::from(
+                                    post_break_pos
+                                        ..*section_buffers
+                                            .last()
+                                            .unwrap()
+                                            .char_offset_bytes
+                                            .last()
+                                            .unwrap(),
+                                );
+                                let mut pre_buffer = Buffer::new();
+                                let mut post_buffer = Buffer::new();
+                                pre_buffer.add(&b[pre_byte_range], 0);
+                                post_buffer.add(&b[post_byte_range], 0);
+                                pre_buffer.guess_segment_properties();
+                                post_buffer.guess_segment_properties();
+                                unsafe {
+                                    hb_shape(
+                                        font_set.select_shaping(section_buffers[0].font_id).faces
+                                            [section_buffers[0].face_index]
+                                            .as_ptr(),
+                                        pre_buffer.0.as_ptr(),
+                                        core::ptr::null(),
+                                        0,
+                                    );
+                                    hb_shape(
+                                        font_set
+                                            .select_shaping(section_buffers.last().unwrap().font_id)
+                                            .faces[section_buffers.last().unwrap().face_index]
+                                            .as_ptr(),
+                                        post_buffer.0.as_ptr(),
+                                        core::ptr::null(),
+                                        0,
+                                    );
+                                }
+
+                                let truncated_section_left = section_buffers[0].left_offset;
+                                let pre_font_id = section_buffers[0].font_id;
+                                let pre_face_index = section_buffers[0].face_index;
+                                let post_font_id = section_buffers.last().unwrap().font_id;
+                                let pos_face_index = section_buffers.last().unwrap().face_index;
+                                let pre_width = pre_buffer
+                                    .get_glyph_positions()
+                                    .into_iter()
+                                    .fold(0.0, |a, p| a + p.x_advance as f32 / 64.0);
+                                section_buffers.clear();
+                                section_buffers.extend([
+                                    ShapedTextRun {
+                                        buffer: pre_buffer,
+                                        char_offset_bytes: b[pre_byte_range]
+                                            .char_indices()
+                                            .map(|(i, _)| pre_byte_range.start + i)
+                                            .chain(core::iter::once(pre_byte_range.end))
+                                            .collect(),
+                                        left_offset: truncated_section_left,
+                                        font_id: pre_font_id,
+                                        face_index: pre_face_index,
+                                    },
+                                    ShapedTextRun {
+                                        buffer: trimming_sign_buffer,
+                                        char_offset_bytes: vec![
+                                            pre_byte_range.end,
+                                            post_byte_range.start,
+                                        ],
+                                        left_offset: truncated_section_left + pre_width,
+                                        font_id: FontID::UIDefault,
+                                        face_index: trimming_sign_face_index,
+                                    },
+                                    ShapedTextRun {
+                                        buffer: post_buffer,
+                                        char_offset_bytes: b[post_byte_range]
+                                            .char_indices()
+                                            .map(|(i, _)| post_byte_range.start + i)
+                                            .chain(core::iter::once(post_byte_range.end))
+                                            .collect(),
+                                        left_offset: truncated_section_left
+                                            + pre_width
+                                            + trimming_sign_width,
+                                        font_id: post_font_id,
+                                        face_index: pos_face_index,
+                                    },
+                                ]);
+                                // recompute metrics
+                                for x in section_buffers.iter_mut() {
+                                    let face = font_set.select(x.font_id).faces[x.face_index];
+
+                                    let glyph_infos = x.buffer.get_glyph_infos();
+                                    let glyph_positions = x.buffer.get_glyph_positions();
+                                    assert_eq!(glyph_infos.len(), glyph_positions.len());
+                                    let run_right = glyph_positions
+                                        .iter()
+                                        .map(|p| p.x_advance as f32 / 64.0)
+                                        .sum::<f32>();
+
+                                    let face_metrics = unsafe {
+                                        &(*(*font_set.select(x.font_id).faces[x.face_index]).size)
+                                            .metrics
+                                    };
+                                    baseline_y_offset =
+                                        baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                                    section_line_height =
+                                        section_line_height.max(face_metrics.height as f32 / 64.0);
+                                    section_height = section_height.max(
+                                        (face_metrics.ascender - face_metrics.descender) as f32
+                                            / 64.0,
+                                    );
+                                    section_visual_right = section_visual_right.max(
+                                        section_left_offset
+                                            + match (glyph_positions, glyph_infos) {
+                                                (&[], &[]) => 0.0,
+                                                (&[ref pos @ .., _], &[.., ref last_glyph]) => {
+                                                    unsafe {
+                                                        load_glyph(
+                                                            face,
+                                                            last_glyph.codepoint,
+                                                            LoadFlags::DEFAULT,
+                                                        )
+                                                        .expect("ft.load_glyph");
+                                                    }
+                                                    let metrics =
+                                                        unsafe { &(*(*face).glyph).metrics };
+                                                    pos.iter()
+                                                        .map(|x| x.x_advance as f32 / 64.0)
+                                                        .sum::<f32>()
+                                                        + metrics.width as f32 / 64.0
+                                                }
+                                                _ => unreachable!(),
+                                            },
+                                    );
+                                    section_left_offset = run_right;
+                                }
+
+                                break;
+                            }
+
                             let last_line = lines.last_mut().expect("empty lines");
                             // TODO: RTL support
-                            let mut bytes_iter = b.char_indices();
                             let mut break_pos = 0;
                             'brk: while let Some(x) = section_buffers.get(0) {
                                 let pos = x.buffer.get_glyph_positions();
                                 let left_base = x.left_offset;
                                 let mut cursor = 0.0;
-                                for p in pos {
+                                for (p, &char_byte_offs) in
+                                    pos.into_iter().zip(x.char_offset_bytes.iter())
+                                {
                                     let char_left = left_base + cursor;
-                                    // TODO: may need ligature handling?
-                                    let (char_byte_offs, _) =
-                                        bytes_iter.next().expect("bytes overflow");
                                     if char_left > max_width {
                                         // tracing::debug!(
                                         //     char_left,
@@ -406,9 +632,10 @@ impl TextLayout {
                             line_left_offset = run_right;
 
                             // 新規行発行
-                            last_line.baseline_y_offset = last_line
-                                .baseline_y_offset
-                                .max(core::mem::replace(&mut baseline_y_offset, 0.0));
+                            last_line.baseline_y_offset = last_line.line_top_offset
+                                + last_line
+                                    .baseline_y_offset
+                                    .max(core::mem::replace(&mut baseline_y_offset, 0.0));
                             last_line.height = last_line
                                 .height
                                 .max(core::mem::replace(&mut section_height, 0.0));
@@ -431,6 +658,19 @@ impl TextLayout {
                                 .iter()
                                 .map(|p| p.x_advance as f32 / 64.0)
                                 .sum::<f32>();
+                            section_visual_right = match (glyph_positions, glyph_infos) {
+                                (&[], &[]) => 0.0,
+                                (&[ref pos @ .., _], &[.., ref last_glyph]) => {
+                                    unsafe {
+                                        load_glyph(face, last_glyph.codepoint, LoadFlags::DEFAULT)
+                                            .expect("ft.load_glyph");
+                                    }
+                                    let metrics = unsafe { &(*(*face).glyph).metrics };
+                                    pos.iter().map(|x| x.x_advance as f32 / 64.0).sum::<f32>()
+                                        + metrics.width as f32 / 64.0
+                                }
+                                _ => unreachable!(),
+                            };
 
                             // post_bufferはsection_buffersの0を置き替える
                             section_buffers[0].buffer = post_buffer;
@@ -475,6 +715,28 @@ impl TextLayout {
                                     section_line_height.max(face_metrics.height as f32 / 64.0);
                                 section_height = section_height.max(
                                     (face_metrics.ascender - face_metrics.descender) as f32 / 64.0,
+                                );
+                                section_visual_right = section_visual_right.max(
+                                    section_left_offset
+                                        + match (glyph_positions, glyph_infos) {
+                                            (&[], &[]) => 0.0,
+                                            (&[ref pos @ .., _], &[.., ref last_glyph]) => {
+                                                unsafe {
+                                                    load_glyph(
+                                                        face,
+                                                        last_glyph.codepoint,
+                                                        LoadFlags::DEFAULT,
+                                                    )
+                                                    .expect("ft.load_glyph");
+                                                }
+                                                let metrics = unsafe { &(*(*face).glyph).metrics };
+                                                pos.iter()
+                                                    .map(|x| x.x_advance as f32 / 64.0)
+                                                    .sum::<f32>()
+                                                    + metrics.width as f32 / 64.0
+                                            }
+                                            _ => unreachable!(),
+                                        },
                                 );
                                 section_left_offset = run_right;
                             }

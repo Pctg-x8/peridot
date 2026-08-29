@@ -489,7 +489,7 @@ impl TextLayout {
 
         Self {
             #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
-            internal: ft_hb::TextLayout::new(text_runs, font_set, alignment, max_width),
+            internal: ft_hb::TextLayout::new(text_runs, font_set, alignment, max_width, max_lines),
             #[cfg(target_os = "macos")]
             internal: darwin_coretext::CoreTextLayout::new(
                 text_runs, font_set, alignment, max_width,
