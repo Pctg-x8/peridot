@@ -4,11 +4,11 @@ use core::convert::identity;
 
 use peridot_tp_budoux as budoux;
 use peridot_tp_freetype::{
-    LoadFlags, OutlineFuncs, Vector, get_char_index, load_char, load_glyph, outline_decompose,
+    LoadFlags, OutlineFuncs, Vector, get_char_index, load_glyph, outline_decompose,
 };
 use peridot_tp_harfbuzz::ffi::{
     hb_buffer_add_utf8, hb_buffer_create, hb_buffer_destroy, hb_buffer_get_glyph_infos,
-    hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_buffer_t,
+    hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_buffer_t, hb_font_t,
     hb_glyph_info_t, hb_glyph_position_t, hb_shape,
 };
 use peridot_tp_icu as icu;
@@ -151,7 +151,7 @@ impl TextLayout {
 
                 let line_count = line_boundary_clusters.len();
                 for (n, line) in line_boundary_clusters.into_iter().enumerate() {
-                    let mut baseline_y_offset = 0.0f32;
+                    let mut local_baseline_y_offset = 0.0f32;
                     let mut line_left_offset = left_offset;
                     for b in line {
                         let mut section_buffers = Vec::new();
@@ -173,25 +173,14 @@ impl TextLayout {
                                 shaped_bytes += c.len_utf8();
                             }
 
-                            if starting_bytes != shaped_bytes {
+                            let byte_range = core::range::Range::from(starting_bytes..shaped_bytes);
+                            if !byte_range.is_empty() {
                                 // needs shaping
                                 let face = font.faces[face_index];
                                 let shaping_face = shaping_set.faces[face_index];
-                                let byte_range =
-                                    core::range::Range::from(starting_bytes..shaped_bytes);
 
-                                let mut buf = Buffer::new();
-                                buf.add(&b[byte_range], 0);
-                                buf.guess_segment_properties();
-                                unsafe {
-                                    hb_shape(
-                                        shaping_face.as_ptr(),
-                                        buf.0.as_ptr(),
-                                        core::ptr::null(),
-                                        0,
-                                    );
-                                }
-
+                                let buf =
+                                    build_shaped_buffer(&b[byte_range], shaping_face.as_ptr());
                                 let glyph_infos = buf.get_glyph_infos();
                                 let glyph_positions = buf.get_glyph_positions();
                                 assert_eq!(glyph_infos.len(), glyph_positions.len());
@@ -237,12 +226,10 @@ impl TextLayout {
 
                                 // update metrics
                                 let face_metrics = unsafe { &(*(*face).size).metrics };
-
-                                baseline_y_offset =
-                                    baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                                local_baseline_y_offset = local_baseline_y_offset
+                                    .max(face_metrics.ascender as f32 / 64.0);
                                 section_line_height =
                                     section_line_height.max(face_metrics.height as f32 / 64.0);
-
                                 // freetype2のdescenderは符号が逆になってるのでこれで正解
                                 section_height = section_height.max(
                                     (face_metrics.ascender - face_metrics.descender) as f32 / 64.0,
@@ -299,7 +286,7 @@ impl TextLayout {
                         }
 
                         while section_visual_right > max_width {
-                            // force line break
+                            // force line break/truncate
                             // tracing::warn!(
                             //     section_visual_right,
                             //     max_width,
@@ -496,8 +483,8 @@ impl TextLayout {
                                         &(*(*font_set.select(x.font_id).faces[x.face_index]).size)
                                             .metrics
                                     };
-                                    baseline_y_offset =
-                                        baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                                    local_baseline_y_offset = local_baseline_y_offset
+                                        .max(face_metrics.ascender as f32 / 64.0);
                                     section_line_height =
                                         section_line_height.max(face_metrics.height as f32 / 64.0);
                                     section_height = section_height.max(
@@ -621,8 +608,8 @@ impl TextLayout {
 
                             // update metrics
                             let face_metrics = unsafe { &(*(*face).size).metrics };
-                            baseline_y_offset =
-                                baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                            local_baseline_y_offset =
+                                local_baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
                             section_line_height =
                                 section_line_height.max(face_metrics.height as f32 / 64.0);
                             // freetype2のdescenderは符号が逆になってるのでこれで正解
@@ -635,7 +622,7 @@ impl TextLayout {
                             last_line.baseline_y_offset = last_line.line_top_offset
                                 + last_line
                                     .baseline_y_offset
-                                    .max(core::mem::replace(&mut baseline_y_offset, 0.0));
+                                    .max(core::mem::replace(&mut local_baseline_y_offset, 0.0));
                             last_line.height = last_line
                                 .height
                                 .max(core::mem::replace(&mut section_height, 0.0));
@@ -685,7 +672,7 @@ impl TextLayout {
 
                             // update metrics
                             let face_metrics = unsafe { &(*(*face).size).metrics };
-                            baseline_y_offset = face_metrics.ascender as f32 / 64.0;
+                            local_baseline_y_offset = face_metrics.ascender as f32 / 64.0;
                             section_line_height = face_metrics.height as f32 / 64.0;
                             // freetype2のdescenderは符号が逆になってるのでこれで正解
                             section_height =
@@ -709,8 +696,8 @@ impl TextLayout {
                                     &(*(*font_set.select(x.font_id).faces[x.face_index]).size)
                                         .metrics
                                 };
-                                baseline_y_offset =
-                                    baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
+                                local_baseline_y_offset = local_baseline_y_offset
+                                    .max(face_metrics.ascender as f32 / 64.0);
                                 section_line_height =
                                     section_line_height.max(face_metrics.height as f32 / 64.0);
                                 section_height = section_height.max(
@@ -745,7 +732,7 @@ impl TextLayout {
                         let last_line = lines.last_mut().expect("empty lines");
                         last_line.buffers.extend(section_buffers);
                         last_line.baseline_y_offset =
-                            last_line.baseline_y_offset.max(baseline_y_offset);
+                            last_line.baseline_y_offset.max(local_baseline_y_offset);
                         line_left_offset += section_left_offset;
                         line_height = line_height.max(section_line_height);
                         final_line_height = final_line_height.max(section_height);
@@ -1308,6 +1295,17 @@ impl LineLayout {
             .map(|tr| tr.left_offset + tr.visual_width(font_set))
             .fold(0.0, f32::max)
     }
+}
+
+fn build_shaped_buffer(text: &str, font: *mut hb_font_t) -> Buffer {
+    let mut b = Buffer::new();
+    b.add(text, 0);
+    b.guess_segment_properties();
+    unsafe {
+        hb_shape(font, b.0.as_ptr(), core::ptr::null(), 0);
+    }
+
+    b
 }
 
 #[repr(transparent)]
