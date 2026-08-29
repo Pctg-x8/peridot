@@ -3,13 +3,17 @@
 use core::convert::identity;
 
 use peridot_tp_budoux as budoux;
+#[cfg(feature = "fontconfig")]
+use peridot_tp_fontconfig as fc;
 use peridot_tp_freetype::{
-    LoadFlags, OutlineFuncs, Vector, get_char_index, load_glyph, outline_decompose,
+    Face, FractionalExt, LoadFlags, OutlineFuncs, Vector, done_face, done_freetype, get_char_index,
+    init_freetype, load_glyph, new_memory_face, outline_decompose, set_char_size,
 };
 use peridot_tp_harfbuzz::ffi::{
     hb_buffer_add_utf8, hb_buffer_create, hb_buffer_destroy, hb_buffer_get_glyph_infos,
-    hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_buffer_t, hb_font_t,
-    hb_glyph_info_t, hb_glyph_position_t, hb_shape,
+    hb_buffer_get_glyph_positions, hb_buffer_guess_segment_properties, hb_buffer_t,
+    hb_font_destroy, hb_font_t, hb_ft_font_create_referenced, hb_glyph_info_t, hb_glyph_position_t,
+    hb_shape,
 };
 use peridot_tp_icu as icu;
 
@@ -17,11 +21,264 @@ use crate::{
     rendering::{
         MaskTextureAtlasManager,
         composite::CompositeRectTextHorizontalAlignment,
-        text::{FontID, FontSet, GlyphPlacementBox, TextRun},
+        text::{FontID, GlyphPlacementBox, TextRun},
         vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
     },
-    utils::{LogicalUnit, Point, Rect, Size, text::prev_char_byte},
+    utils::{
+        LogicalUnit, Point, Rect, Size, platform::unix::ReadonlyMappedFile, text::prev_char_byte,
+    },
 };
+
+struct FontContentReference {
+    blob_index: usize,
+    face_index: i32,
+}
+
+pub struct RootFontSet {
+    font_blobs: Vec<ReadonlyMappedFile>,
+    ui_common_font: Vec<FontContentReference>,
+}
+impl RootFontSet {
+    #[profiler::instrument("RootFontSet.Initialize")]
+    pub fn new() -> Self {
+        let mut font_blobs = Vec::new();
+        #[cfg(feature = "fontconfig")]
+        let ui_common_font = unsafe {
+            use std::collections::{HashMap, HashSet};
+
+            fc::init().expect("FontConfig.init");
+            let mut pat = fc::Pattern::new().expect("FcPattern.create");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_FAMILY, c"Inter Display")
+                .expect("FcPattern.add.family");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_WEIGHT, &fc::raw::FC_WEIGHT_REGULAR)
+                .expect("FcPattern.add.weight");
+            pat.as_mut()
+                .add(fc::Pattern::KEY_SIZE, &(12.0 as core::ffi::c_double))
+                .expect("FcPattern.add.size");
+            fc::Config::current()
+                .unwrap_unchecked()
+                .as_mut()
+                .substitute(pat.as_mut(), fc::MatchKind::Pattern)
+                .expect("FcConfig.substitute");
+            pat.as_mut().default_substitute();
+            let fonts = fc::sort(
+                fc::Config::current().unwrap_unchecked().as_mut(),
+                pat.as_mut(),
+                false,
+                None,
+            )
+            .expect("FontConfig.sort");
+
+            let mut selected_fonts = HashSet::new();
+            let mut loaded_fonts = HashMap::new();
+            let mut fonts_ordered = Vec::new();
+            for n in 0..fonts.as_ref().nfont {
+                let f = *fonts.as_ref().fonts.add(n as usize);
+                let file: &core::ffi::CStr = (*f)
+                    .get(fc::Pattern::KEY_FILE)
+                    .expect("FcPattern.get.file")
+                    .expect("FcPattern.get.not_exist.file");
+                let file = file.to_owned();
+                let index: core::ffi::c_int = (*f)
+                    .get(fc::Pattern::KEY_INDEX)
+                    .expect("FcPattern.get.index")
+                    .expect("FcPattern.get.not_exist.index");
+
+                let blob_index = match loaded_fonts.entry(file) {
+                    std::collections::hash_map::Entry::Occupied(x) => *x.get(),
+                    std::collections::hash_map::Entry::Vacant(x) => {
+                        font_blobs.push(
+                            ReadonlyMappedFile::open(x.key()).expect("root_font_set.file.open"),
+                        );
+                        *x.insert(font_blobs.len() - 1)
+                    }
+                };
+
+                if selected_fonts.insert((blob_index, index)) {
+                    // 未知のフォント
+                    fonts_ordered.push(FontContentReference {
+                        blob_index,
+                        face_index: index,
+                    });
+                }
+            }
+
+            fonts_ordered
+        };
+
+        Self {
+            font_blobs,
+            ui_common_font,
+        }
+    }
+}
+
+pub struct FontSet {
+    ui_default: FaceSet,
+    ui_title_project_name: FaceSet,
+    ui_form_lifted_label: FaceSet,
+    ui_default_shaping: FaceShapingSet,
+    ui_title_project_name_shaping: FaceShapingSet,
+    ui_form_lifted_label_shaping: FaceShapingSet,
+    _ft_lib: FreeType,
+}
+impl FontSet {
+    #[profiler::instrument("FontSet.Initialize")]
+    pub fn new(root_font_set: &RootFontSet) -> Self {
+        let ft_lib = FreeType::init().expect("freetype.init");
+
+        let ui_default = root_font_set
+            .ui_common_font
+            .iter()
+            .map(|x| {
+                let face = unsafe {
+                    new_memory_face(
+                        ft_lib.0,
+                        &root_font_set.font_blobs[x.blob_index],
+                        x.face_index as _,
+                    )
+                    .expect("FreeType.new_face.ui_default")
+                };
+                if let Err(e) = unsafe { set_char_size(face, 0, 12.0f32.to_f26dot6_lossy(), 0, 72) }
+                {
+                    tracing::error!(reason = %e, "FreeType.set_char_size.ui_default");
+                }
+
+                face
+            })
+            .collect::<Vec<_>>();
+        let ui_title_project_name = root_font_set
+            .ui_common_font
+            .iter()
+            .map(|x| {
+                let face = unsafe {
+                    new_memory_face(
+                        ft_lib.0,
+                        &root_font_set.font_blobs[x.blob_index],
+                        x.face_index as _,
+                    )
+                    .expect("FreeType.new_face.ui_title_project_name")
+                };
+                if let Err(e) = unsafe { set_char_size(face, 0, 10.0f32.to_f26dot6_lossy(), 0, 72) }
+                {
+                    tracing::error!(reason = %e, "FreeType.set_char_size.ui_title_project_name");
+                }
+
+                face
+            })
+            .collect::<Vec<_>>();
+        let ui_form_lifted_label = root_font_set
+            .ui_common_font
+            .iter()
+            .map(|x| {
+                let face = unsafe {
+                    new_memory_face(
+                        ft_lib.0,
+                        &root_font_set.font_blobs[x.blob_index],
+                        x.face_index as _,
+                    )
+                    .expect("FreeType.new_face.ui_form_lifted_label")
+                };
+                if let Err(e) = unsafe { set_char_size(face, 0, 8.0f32.to_f26dot6_lossy(), 0, 72) }
+                {
+                    tracing::error!(reason = %e, "FreeType.set_char_size.ui_form_lifted_label");
+                }
+
+                face
+            })
+            .collect::<Vec<_>>();
+
+        let ui_default_shaping = ui_default
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe { hb_ft_font_create_referenced(f) })
+                    .expect("hb_ft_font_create_referenced.ui_default")
+            })
+            .collect::<Vec<_>>();
+        let ui_title_project_name_shaping = ui_title_project_name
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe { hb_ft_font_create_referenced(f) })
+                    .expect("hb_ft_font_create_referenced.ui_title_project_name")
+            })
+            .collect::<Vec<_>>();
+        let ui_form_lifted_label_shaping = ui_form_lifted_label
+            .iter()
+            .map(|&f| {
+                core::ptr::NonNull::new(unsafe { hb_ft_font_create_referenced(f) })
+                    .expect("hb_ft_font_create_referenced.ui_form_lifted_label")
+            })
+            .collect::<Vec<_>>();
+
+        Self {
+            _ft_lib: ft_lib,
+            ui_default: FaceSet { faces: ui_default },
+            ui_title_project_name: FaceSet {
+                faces: ui_title_project_name,
+            },
+            ui_form_lifted_label: FaceSet {
+                faces: ui_form_lifted_label,
+            },
+            ui_default_shaping: FaceShapingSet {
+                faces: ui_default_shaping,
+            },
+            ui_title_project_name_shaping: FaceShapingSet {
+                faces: ui_title_project_name_shaping,
+            },
+            ui_form_lifted_label_shaping: FaceShapingSet {
+                faces: ui_form_lifted_label_shaping,
+            },
+        }
+    }
+
+    #[inline]
+    const fn select(&self, category: FontID) -> &FaceSet {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
+        }
+    }
+
+    #[inline]
+    const fn select_shaping(&self, category: FontID) -> &FaceShapingSet {
+        match category {
+            FontID::UIDefault => &self.ui_default_shaping,
+            FontID::UITitleProjectName => &self.ui_title_project_name_shaping,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label_shaping,
+        }
+    }
+}
+
+#[repr(transparent)]
+struct FaceSet {
+    faces: Vec<Face>,
+}
+impl Drop for FaceSet {
+    fn drop(&mut self) {
+        for x in self.faces.drain(..) {
+            if let Err(e) = unsafe { done_face(x) } {
+                tracing::error!(reason = %e, "ft.done_face");
+            }
+        }
+    }
+}
+
+#[repr(transparent)]
+struct FaceShapingSet {
+    faces: Vec<core::ptr::NonNull<hb_font_t>>,
+}
+impl Drop for FaceShapingSet {
+    fn drop(&mut self) {
+        for x in self.faces.drain(..) {
+            unsafe {
+                hb_font_destroy(x.as_ptr());
+            }
+        }
+    }
+}
 
 pub struct TextLayout {
     lines: Vec<LineLayout>,
@@ -1266,7 +1523,24 @@ fn build_shaped_buffer(text: &str, font: *mut hb_font_t) -> Buffer {
 }
 
 #[repr(transparent)]
-pub struct Buffer(core::ptr::NonNull<hb_buffer_t>);
+struct FreeType(peridot_tp_freetype::Library);
+impl Drop for FreeType {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { done_freetype(self.0) } {
+            tracing::error!(reason = ?e, "FreeType.done");
+        }
+    }
+}
+impl FreeType {
+    #[inline(always)]
+    fn init() -> peridot_tp_freetype::Result<Self> {
+        init_freetype().map(Self)
+    }
+}
+
+#[repr(transparent)]
+struct Buffer(core::ptr::NonNull<hb_buffer_t>);
 impl Drop for Buffer {
     #[inline(always)]
     fn drop(&mut self) {
