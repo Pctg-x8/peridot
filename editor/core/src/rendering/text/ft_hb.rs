@@ -773,6 +773,7 @@ impl TextLayout {
             lines.last_mut().expect("empty lines").height = final_line_height;
         } else {
             // no max width(no autowrapping): optimal path
+            let mut local_baseline_y_offset = 0.0f32;
             for x in text_runs {
                 left_offset += x.spacing_inline_start;
 
@@ -805,15 +806,11 @@ impl TextLayout {
                         // needs shaping
                         any_shaped_on_line = true;
                         let face = font.faces[face_index];
-                        let shaping_face = shaping_set.faces[face_index];
 
-                        let mut buf = Buffer::new();
-                        buf.add(&x.content[shaped_range], 0);
-                        buf.guess_segment_properties();
-                        unsafe {
-                            hb_shape(shaping_face.as_ptr(), buf.0.as_ptr(), core::ptr::null(), 0);
-                        }
-
+                        let buf = build_shaped_buffer(
+                            &x.content[shaped_range],
+                            shaping_set.faces[face_index].as_ptr(),
+                        );
                         let glyph_infos = buf.get_glyph_infos();
                         let glyph_positions = buf.get_glyph_positions();
                         assert_eq!(glyph_infos.len(), glyph_positions.len());
@@ -837,46 +834,43 @@ impl TextLayout {
 
                         // update metrics
                         let face_metrics = unsafe { &(*(*face).size).metrics };
-
-                        last_line.baseline_y_offset = last_line
-                            .baseline_y_offset
-                            .max(face_metrics.ascender as f32 / 64.0);
+                        local_baseline_y_offset =
+                            local_baseline_y_offset.max(face_metrics.ascender as f32 / 64.0);
                         line_height = line_height.max(face_metrics.height as f32 / 64.0);
-
                         // freetype2のdescenderは符号が逆になってるのでこれで正解
                         final_line_height = final_line_height
                             .max((face_metrics.ascender - face_metrics.descender) as f32 / 64.0);
-
                         left_offset += buf_total_advances;
 
                         // reset for next chunk
                         face_index = 0;
                     } else {
-                        if !newline_break {
-                            // no chars available for this font, fallback
-                            face_index += 1;
-                        }
+                        // no chars available for this font, fallback
+                        face_index += 1;
                     }
 
                     if newline_break {
                         // broke actual run by newline
-                        let last_line = lines.last_mut().expect("empty lines");
-                        if !any_shaped_on_line {
+                        if !core::mem::replace(&mut any_shaped_on_line, false) {
                             // no chars processed on the line
-                            // final_line_heightが0なのでいいかんじに計算する
+                            // もろもろのmetricsが0なのでいいかんじに計算する
                             let face_metrics = unsafe { &(*(*font.faces[0]).size).metrics };
 
-                            last_line.baseline_y_offset = face_metrics.ascender as f32 / 64.0;
+                            local_baseline_y_offset = face_metrics.ascender as f32 / 64.0;
                             line_height = face_metrics.height as f32 / 64.0;
                             final_line_height =
                                 (face_metrics.ascender - face_metrics.descender) as f32 / 64.0;
                         }
 
-                        last_line.baseline_y_offset += line_y_offset;
-                        last_line.width_with_trailing_whitespace = left_offset;
-                        last_line.height = final_line_height;
+                        // confirm last line
+                        let last_line = lines.last_mut().expect("empty lines");
+                        last_line.baseline_y_offset = last_line.line_top_offset
+                            + core::mem::replace(&mut local_baseline_y_offset, 0.0);
+                        last_line.width_with_trailing_whitespace =
+                            core::mem::replace(&mut left_offset, 0.0);
+                        last_line.height = core::mem::replace(&mut final_line_height, 0.0);
+                        line_y_offset += core::mem::replace(&mut line_height, 0.0);
 
-                        line_y_offset += line_height;
                         lines.push(LineLayout {
                             buffers: Vec::new(),
                             width_with_trailing_whitespace: 0.0,
@@ -885,18 +879,15 @@ impl TextLayout {
                             baseline_y_offset: 0.0,
                         });
 
-                        final_line_height = 0.0;
-                        line_height = 0.0;
-                        left_offset = 0.0;
-                        any_shaped_on_line = false;
                         shaped_bytes += 1;
+                        // reset for next chunk(next chunk may use the face index prior to current)
+                        face_index = 0;
                     }
                 }
             }
 
             let last_line = lines.last_mut().expect("empty lines");
-
-            last_line.baseline_y_offset += line_y_offset;
+            last_line.baseline_y_offset = last_line.line_top_offset + local_baseline_y_offset;
             last_line.width_with_trailing_whitespace = left_offset;
             last_line.height = final_line_height;
         }
@@ -950,9 +941,9 @@ impl TextLayout {
         for l in self.lines.iter() {
             for x in l.buffers.iter() {
                 let font = font_set.select(x.font_id).faces[x.face_index];
-
                 let glyph_infos = x.buffer.get_glyph_infos();
                 let glyph_positions = x.buffer.get_glyph_positions();
+                assert_eq!(glyph_infos.len(), glyph_positions.len());
 
                 let mut left_cursor = x.left_offset;
                 for (glyph_info, glyph_position) in
