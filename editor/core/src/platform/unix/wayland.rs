@@ -2148,6 +2148,7 @@ struct OutputProperties {
     y: i32,
 }
 
+#[tracing::instrument(skip(context), fields(make = ?unsafe { core::ffi::CStr::from_ptr(make) }, model = ?unsafe { core::ffi::CStr::from_ptr(model) }))]
 extern "C" fn output_event_geometry(
     context: *mut core::ffi::c_void,
     sender: *mut wl::Output,
@@ -2160,28 +2161,17 @@ extern "C" fn output_event_geometry(
     model: *const core::ffi::c_char,
     transform: i32,
 ) {
+    event_trace!();
+
     if context.is_null() {
         return;
     }
 
     let store = unsafe { &mut *context.cast::<OutputProperties>() };
-    let make = unsafe { core::ffi::CStr::from_ptr(make) };
-    let model = unsafe { core::ffi::CStr::from_ptr(model) };
-
-    tracing::debug!(
-        x,
-        y,
-        physical_width,
-        physical_height,
-        subpixel,
-        ?make,
-        ?model,
-        transform,
-        "output geometry {sender:p}"
-    );
     store.x = x;
     store.y = y;
 }
+#[tracing::instrument(skip(context))]
 extern "C" fn output_event_mode(
     context: *mut core::ffi::c_void,
     _sender: *mut wl::Output,
@@ -2190,54 +2180,57 @@ extern "C" fn output_event_mode(
     height: i32,
     refresh: i32,
 ) {
+    event_trace!();
+
     if context.is_null() {
         return;
     }
-
-    tracing::debug!(flags, width, height, refresh, "output mode");
 }
+#[tracing::instrument(skip(context))]
 extern "C" fn output_event_done(context: *mut core::ffi::c_void, sender: *mut wl::Output) {
+    event_trace!();
+
     if context.is_null() {
         return;
     }
 
-    tracing::debug!("output done {sender:p}");
     unsafe { &mut *sender }.set_user_data(core::ptr::null_mut());
 }
+#[tracing::instrument(skip(context))]
 extern "C" fn output_event_scale(
     context: *mut core::ffi::c_void,
     _sender: *mut wl::Output,
     scale: i32,
 ) {
+    event_trace!();
+
     if context.is_null() {
         return;
     }
-
-    tracing::debug!(scale, "output scale");
 }
+#[tracing::instrument(skip(context), fields(name = ?unsafe { core::ffi::CStr::from_ptr(name) }))]
 extern "C" fn output_event_name(
     context: *mut core::ffi::c_void,
     _sender: *mut wl::Output,
     name: *const core::ffi::c_char,
 ) {
+    event_trace!();
+
     if context.is_null() {
         return;
     }
-
-    let name = unsafe { core::ffi::CStr::from_ptr(name) };
-    tracing::debug!(?name, "output name");
 }
+#[tracing::instrument(skip(context), fields(description = ?unsafe { core::ffi::CStr::from_ptr(description) }))]
 extern "C" fn output_event_description(
     context: *mut core::ffi::c_void,
     _sender: *mut wl::Output,
     description: *const core::ffi::c_char,
 ) {
+    event_trace!();
+
     if context.is_null() {
         return;
     }
-
-    let description = unsafe { core::ffi::CStr::from_ptr(description) };
-    tracing::debug!(?description, "output description");
 }
 const OUTPUT_EVENT_LISTENER_IMPL: &wl::OutputEventListenerImpl = &wl::OutputEventListenerImpl {
     geometry: output_event_geometry,
