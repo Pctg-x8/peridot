@@ -107,7 +107,7 @@ impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
     }
 }
 impl ViewRegisterable for ViewInitContext<'_, '_> {
-    fn construct_view<T: View + 'static>(
+    fn construct_view_direct<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T> {
@@ -1277,13 +1277,13 @@ pub trait ViewConstructor {
 }
 
 pub trait ViewRegisterable {
-    fn construct_view<T: View + 'static>(
+    fn construct_view_direct<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T>;
     fn free_view_untyped(&mut self, id: ViewIdentifier);
 
-    fn construct_view2<Ctor: ViewConstructor, Children: IntoIterator<Item = ViewIdentifier>>(
+    fn construct_view<Ctor: ViewConstructor, Children: IntoIterator<Item = ViewIdentifier>>(
         &mut self,
         ctor: Ctor,
         children: impl FnOnce(&mut Self) -> Children,
@@ -1291,7 +1291,7 @@ pub trait ViewRegisterable {
     where
         Self: ViewRelationControllable,
     {
-        let id = self.construct_view(move |id| Box::new(ctor.construct(id)));
+        let id = self.construct_view_direct(move |id| Box::new(ctor.construct(id)));
         for child in children(self) {
             self.view_set_parent_untyped(child, id.into_untyped());
         }
@@ -1569,7 +1569,7 @@ impl ApplicationAccess for ViewFeedbackContext<'_, '_> {
 }
 impl ViewRegisterable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
-    fn construct_view<T: View + 'static>(
+    fn construct_view_direct<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T> {

@@ -45,8 +45,8 @@ impl AlertDialogPresenter {
             .max(64.0)
             .min(owner_window.client_size().width * 0.8);
 
-        let mask = ctx.construct_view(|_| Box::new(OverlayPopupBasicMaskView::new()));
-        let frame = ctx.construct_view(|_| {
+        let mask = ctx.construct_view_direct(|_| Box::new(OverlayPopupBasicMaskView::new()));
+        let frame = ctx.construct_view_direct(|_| {
             Box::new(OverlayPopupBasicFrameView::new(Size::new_logical(
                 text_width + Self::AROUND_PADDING * 2.0,
                 tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
@@ -64,7 +64,7 @@ impl AlertDialogPresenter {
             };
         }
 
-        let msg = ctx.construct_view2(
+        let msg = ctx.construct_view(
             StaticTextViewInit {
                 content: message,
                 allow_wrapping: true,
@@ -75,7 +75,7 @@ impl AlertDialogPresenter {
         );
         ctx.view_layout_mut(msg).expect("query failed").width = ViewSize::Fixed(text_width);
 
-        let confirm_button = ctx.construct_view2(
+        let confirm_button = ctx.construct_view(
             SimpleButtonViewInit {
                 label: "OK".into(),
                 event_handler: Some(Box::new(SimpleButtonConstantEventHandler(

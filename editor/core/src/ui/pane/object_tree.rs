@@ -46,7 +46,7 @@ impl Presenter {
     pub const ID: &str = internal_pane_identifier!("ObjectTree");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
-        let root_view_id = ctx.construct_view(|_| Box::new(View::new()));
+        let root_view_id = ctx.construct_view_direct(|_| Box::new(View::new()));
         {
             let l = ctx.view_layout_mut(root_view_id).expect("query failed");
             l.child = ViewLayoutChild::Flow {
@@ -247,7 +247,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 context.free_view(x);
             }
             for (x, name, indent_level) in crate::model::object_tree_content(context.application) {
-                let rv = context.construct_view(|id| {
+                let rv = context.construct_view_direct(|id| {
                     Box::new(ObjectRowView::new(id, x, name.into(), indent_level))
                 });
                 context.view_layout_mut(rv).expect("query failed").width = ViewSize::FillAvailable;

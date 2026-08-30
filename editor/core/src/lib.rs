@@ -2363,7 +2363,7 @@ impl EditableColorButtonPickerFlyoutView {
         backing_store: &std::rc::Weak<EditableColorButtonEventHandler>,
     ) -> Self {
         let v = ColorPickerView::new(ctx.alloc_view_id_without_instance(), backing_store.clone());
-        Self(ctx.construct_view(|_| Box::new(v)))
+        Self(ctx.construct_view_direct(|_| Box::new(v)))
     }
 }
 impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
@@ -2482,7 +2482,7 @@ impl UIKitPreviewPanePresenter {
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
 
-        let content_view = ctx.construct_view(|id| Box::new(ContainerView));
+        let content_view = ctx.construct_view_direct(|id| Box::new(ContainerView));
         {
             let l = ctx.view_layout_mut(content_view).expect("query failed");
             l.width = ViewSize::Fixed(256.0);
@@ -2510,8 +2510,8 @@ impl UIKitPreviewPanePresenter {
             }
         }
 
-        let container = ctx.construct_view2(ContainerViewInit, |ctx| {
-            let label = ctx.construct_view2(
+        let container = ctx.construct_view(ContainerViewInit, |ctx| {
+            let label = ctx.construct_view(
                 StaticTextViewInit {
                     content: "Simple Buttons + Alert Dialog".into(),
                     ..Default::default()
@@ -2519,15 +2519,15 @@ impl UIKitPreviewPanePresenter {
                 |_| [],
             );
 
-            let button_container = ctx.construct_view2(ContainerViewInit, |ctx| {
+            let button_container = ctx.construct_view(ContainerViewInit, |ctx| {
                 const LONG_MESSAGE: &str = "とてもとても長いメッセージで自動折り返しをしてみる ああああああああああああああああああああああああああああああ";
 
-                    [ctx.construct_view2(SimpleButtonViewInit {
+                    [ctx.construct_view(SimpleButtonViewInit {
                          label: "Test Alert".into(),
                                         event_handler: Some(Box::new(AlertButtonEventHandler(
                                             "てすとめっせーじ from button\n改行もしてみる".into(),
                                         ))),
-                                    }, |_| []).into_untyped(), ctx.construct_view2(SimpleButtonViewInit {
+                                    }, |_| []).into_untyped(), ctx.construct_view(SimpleButtonViewInit {
                                         label: "Test Alert 2".into(),
                                         event_handler: Some(Box::new(AlertButtonEventHandler(LONG_MESSAGE.into()))),
                                     }, |_| []).into_untyped()]
@@ -2564,9 +2564,9 @@ impl UIKitPreviewPanePresenter {
         let text_input_backing_store2 =
             Rc::new(UIKitPreviewTextInputValueStore(RefCell::new(String::new())));
 
-        let container = ctx.construct_view2(ContainerViewInit, |ctx| {
+        let container = ctx.construct_view(ContainerViewInit, |ctx| {
             [
-                ctx.construct_view2(
+                ctx.construct_view(
                     StaticTextViewInit {
                         content: "Text Input(Single Line)".into(),
                         ..Default::default()
@@ -2575,10 +2575,10 @@ impl UIKitPreviewPanePresenter {
                 )
                 .into_untyped(),
                 {
-                    let v = ctx.construct_view2(ContainerViewInit, |ctx| {
+                    let v = ctx.construct_view(ContainerViewInit, |ctx| {
                         [
                             {
-                                let v = ctx.construct_view(|id| {
+                                let v = ctx.construct_view_direct(|id| {
                                     Box::new(TextInputView::new(
                                         id,
                                         Rc::downgrade(&text_input_backing_store1),
@@ -2591,7 +2591,7 @@ impl UIKitPreviewPanePresenter {
                             }
                             .into_untyped(),
                             {
-                                let v = ctx.construct_view(|id| {
+                                let v = ctx.construct_view_direct(|id| {
                                     Box::new(TextInputView::new(
                                         id,
                                         Rc::downgrade(&text_input_backing_store2),
@@ -2628,9 +2628,9 @@ impl UIKitPreviewPanePresenter {
         };
         ctx.view_set_parent(container, content_view);
 
-        let container = ctx.construct_view2(ContainerViewInit, |ctx| {
+        let container = ctx.construct_view(ContainerViewInit, |ctx| {
             [
-                ctx.construct_view2(
+                ctx.construct_view(
                     StaticTextViewInit {
                         content: "Text Input (Multiline)".into(),
                         ..Default::default()
@@ -2639,8 +2639,9 @@ impl UIKitPreviewPanePresenter {
                 )
                 .into_untyped(),
                 {
-                    let v =
-                        ctx.construct_view(|id| Box::new(uikit::MultilineTextInputView::new(id)));
+                    let v = ctx.construct_view_direct(|id| {
+                        Box::new(uikit::MultilineTextInputView::new(id))
+                    });
                     let l = ctx.view_layout_mut(v).expect("query failed");
                     l.width = ViewSize::FillAvailable;
                     l.height = ViewSize::Fixed(100.0);
@@ -2662,7 +2663,7 @@ impl UIKitPreviewPanePresenter {
         let color_picker_backing_store = Rc::new(ColorPickerTestBackingStore {
             color: Cell::new(0xffffffff),
         });
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Color Picker(Standalone)".into(),
                 ..Default::default()
@@ -2674,15 +2675,15 @@ impl UIKitPreviewPanePresenter {
             ctx.alloc_view_id_without_instance(),
             Rc::downgrade(&color_picker_backing_store),
         );
-        let color_picker = ctx.construct_view(|_| Box::new(color_picker));
+        let color_picker = ctx.construct_view_direct(|_| Box::new(color_picker));
         ctx.view_set_parent(color_picker, content_view);
 
         let toggle_button =
-            ctx.construct_view(|_| Box::new(uikit::ToggleButtonView::new("Toggle".into())));
+            ctx.construct_view_direct(|_| Box::new(uikit::ToggleButtonView::new("Toggle".into())));
         ctx.view_set_parent(toggle_button, content_view);
 
         // inline controls preview
-        let container = ctx.construct_view2(ContainerViewInit, |_| []);
+        let container = ctx.construct_view(ContainerViewInit, |_| []);
         ctx.view_set_parent(container, content_view);
         ctx.view_layout_mut(container).expect("query failed").child = ViewLayoutChild::Grid {
             cols: vec![
@@ -2695,7 +2696,7 @@ impl UIKitPreviewPanePresenter {
         };
         ctx.view_layout_mut(container).expect("query failed").width = ViewSize::FillAvailable;
 
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Color Picker(Button Style)".into(),
                 ..Default::default()
@@ -2704,7 +2705,7 @@ impl UIKitPreviewPanePresenter {
         );
         ctx.view_set_parent(label, container);
         let editable_color_button =
-            ctx.construct_view(|id| Box::new(EditableColorButtonView::new(id, 0xffffffff)));
+            ctx.construct_view_direct(|id| Box::new(EditableColorButtonView::new(id, 0xffffffff)));
         {
             let l = ctx
                 .view_layout_mut(editable_color_button)
@@ -2716,7 +2717,7 @@ impl UIKitPreviewPanePresenter {
 
         let numeric_input_view_backing_store =
             Rc::new(UIKitPreviewNumericInputValueStore(Cell::new(0)));
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Numeric Input".into(),
                 ..Default::default()
@@ -2724,15 +2725,13 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let numeric_input_view = ctx.construct_view(|id| {
-            Box::new(NumericInputView::new(
-                id,
-                NumericInputViewInit {
-                    value: Rc::downgrade(&numeric_input_view_backing_store),
-                    ..Default::default()
-                },
-            ))
-        });
+        let numeric_input_view = ctx.construct_view(
+            NumericInputViewInit {
+                value: Rc::downgrade(&numeric_input_view_backing_store),
+                ..Default::default()
+            },
+            |_| [],
+        );
         {
             let l = ctx
                 .view_layout_mut(numeric_input_view)
@@ -2743,7 +2742,7 @@ impl UIKitPreviewPanePresenter {
         ctx.view_set_parent(numeric_input_view, container);
 
         let dropdown_value_store = Rc::new(UIKitPreviewDropdownValueStore(Cell::new(0)));
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Dropdown".into(),
                 ..Default::default()
@@ -2751,7 +2750,7 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let dropdown_box = ctx.construct_view(|id| {
+        let dropdown_box = ctx.construct_view_direct(|id| {
             Box::new(uikit::dropdown_box::View::new(
                 id,
                 Rc::downgrade(&dropdown_value_store),
@@ -2769,7 +2768,7 @@ impl UIKitPreviewPanePresenter {
         }
         ctx.view_set_parent(dropdown_box, container);
 
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Single Checkbox".into(),
                 ..Default::default()
@@ -2777,11 +2776,11 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let checkbox = ctx.construct_view(|_| Box::new(uikit::CheckboxView::new()));
+        let checkbox = ctx.construct_view_direct(|_| Box::new(uikit::CheckboxView::new()));
         ctx.view_set_parent(checkbox, container);
 
         let rgc1 = ctx.create_view_group();
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Radio Button (Group 1)".into(),
                 ..Default::default()
@@ -2789,10 +2788,10 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let radio_button1 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
+        let radio_button1 = ctx.construct_view_direct(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button1, rgc1);
         ctx.view_set_parent(radio_button1, container);
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Radio Button (Group 1)".into(),
                 ..Default::default()
@@ -2800,10 +2799,10 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let radio_button2 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
+        let radio_button2 = ctx.construct_view_direct(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button2, rgc1);
         ctx.view_set_parent(radio_button2, container);
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Radio Button (Group 1)".into(),
                 ..Default::default()
@@ -2811,10 +2810,10 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let radio_button3 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
+        let radio_button3 = ctx.construct_view_direct(|id| Box::new(RadioButtonView::new(id)));
         ctx.join_view_group(radio_button3, rgc1);
         ctx.view_set_parent(radio_button3, container);
-        let label = ctx.construct_view2(
+        let label = ctx.construct_view(
             StaticTextViewInit {
                 content: "Radio Button (No group)".into(),
                 ..Default::default()
@@ -2822,10 +2821,10 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, container);
-        let radio_button4 = ctx.construct_view(|id| Box::new(RadioButtonView::new(id)));
+        let radio_button4 = ctx.construct_view_direct(|id| Box::new(RadioButtonView::new(id)));
         ctx.view_set_parent(radio_button4, container);
 
-        let scroll_container = ctx.construct_view(|id| {
+        let scroll_container = ctx.construct_view_direct(|id| {
             Box::new(ScrollContainer::new(
                 id,
                 Rect::from_lt_size(
@@ -2886,7 +2885,7 @@ impl TimelinePanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
+            root_view_id: ctx.construct_view_direct(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -2914,7 +2913,7 @@ impl ProjectSettingsPanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
+            root_view_id: ctx.construct_view_direct(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -2942,7 +2941,7 @@ impl AssetPreviewPanePresenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view(|_| Box::new(ContainerView)),
+            root_view_id: ctx.construct_view_direct(|_| Box::new(ContainerView)),
         }
     }
 }
@@ -3141,7 +3140,8 @@ async fn run<'sys>(
             AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
         ))
         .apply();
-    let main_window_root_view = view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
+    let main_window_root_view =
+        view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
     let window_header = ui::window_header::Component::new(
         ui::window_header::Caption::Main {
             project_name: "New Project".into(),
@@ -3157,7 +3157,7 @@ async fn run<'sys>(
     );
 
     let app_menu_view = if system_link.needs_app_menu_in_surface() {
-        let app_menu_view = view_init_ctx.construct_view(|_| {
+        let app_menu_view = view_init_ctx.construct_view_direct(|_| {
             Box::new(ui::app_menu_bar::View::new(
                 ui::window_header::View::THICKNESS,
                 vec![
@@ -3244,7 +3244,7 @@ async fn run<'sys>(
     };
 
     let window_footer_view =
-        view_init_ctx.construct_view(|_| Box::new(ui::window_footer::View::new()));
+        view_init_ctx.construct_view_direct(|_| Box::new(ui::window_footer::View::new()));
     view_init_ctx.view_set_parent(window_footer_view, main_window_root_view);
 
     let initial_dock_state = DockState::Splitted {
@@ -3405,7 +3405,8 @@ async fn run<'sys>(
                         main_thread_texture_id_issuer: &mut texture_id_issuer,
                         application: &application,
                     };
-                    let root_view = view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
+                    let root_view =
+                        view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
                     let window_header_view = ui::window_header::Component::new(
                         ui::window_header::Caption::Sub,
                         ui::window_header::ComponentInit {
@@ -5048,8 +5049,8 @@ async fn run<'sys>(
                                     main_thread_texture_id_issuer: &mut texture_id_issuer,
                                     application: &application,
                                 };
-                                let root_view =
-                                    view_init_ctx.construct_view(|_| Box::new(WindowRootView {}));
+                                let root_view = view_init_ctx
+                                    .construct_view_direct(|_| Box::new(WindowRootView {}));
                                 let window_header_view = ui::window_header::Component::new(
                                     ui::window_header::Caption::Sub,
                                     ui::window_header::ComponentInit {
@@ -6206,7 +6207,7 @@ impl DockState {
                             ui::dock::DockDirection::ToBottom(Cell::new(w))
                         }
                     },
-                    splitter: create_context.construct_view(|_| {
+                    splitter: create_context.construct_view_direct(|_| {
                         Box::new(ui::dock::DockedPaneSplitterView::new(
                             match direction {
                                 DockDirection::Left(_) | DockDirection::Right(_) => {
@@ -8108,8 +8109,8 @@ impl PreviewPanePresenter {
     const ID: &str = internal_pane_identifier!("Preview");
 
     fn new(ctx: &mut ViewInitContext, input_state: *mut PreviewInputState) -> Self {
-        let root_view = ctx.construct_view(|_| Box::new(PreviewView::new(input_state)));
-        let translate_control_button = ctx.construct_view(|_| {
+        let root_view = ctx.construct_view_direct(|_| Box::new(PreviewView::new(input_state)));
+        let translate_control_button = ctx.construct_view_direct(|_| {
             Box::new(PreviewToolSelectorButtonView::new(
                 true,
                 false,
@@ -8118,7 +8119,7 @@ impl PreviewPanePresenter {
                 PreviewEditToolType::Translate,
             ))
         });
-        let rotate_control_button = ctx.construct_view(|_| {
+        let rotate_control_button = ctx.construct_view_direct(|_| {
             Box::new(PreviewToolSelectorButtonView::new(
                 false,
                 false,
@@ -8127,7 +8128,7 @@ impl PreviewPanePresenter {
                 PreviewEditToolType::Rotate,
             ))
         });
-        let scale_control_button = ctx.construct_view(|_| {
+        let scale_control_button = ctx.construct_view_direct(|_| {
             Box::new(PreviewToolSelectorButtonView::new(
                 false,
                 true,

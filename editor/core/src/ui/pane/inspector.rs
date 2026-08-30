@@ -41,7 +41,28 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let eh = Rc::new_cyclic(|eh| {
-            let root_content_view = ctx.construct_view(|_| Box::new(ContainerView));
+            let selected_object_label = ctx.construct_view(
+                StaticTextViewInit {
+                    content: "No selection".into(),
+                    ..Default::default()
+                },
+                |_| [],
+            );
+            let selected_object_name =
+                ctx.construct_view_direct(|id| Box::new(TextInputView::new(id, eh.clone())));
+            ctx.view_layout_mut(selected_object_name)
+                .expect("query failed")
+                .width = ViewSize::FillAvailable;
+            ctx.view_layout_mut(selected_object_name)
+                .expect("query failed")
+                .height = ViewSize::Fixed(20.0);
+
+            let root_content_view = ctx.construct_view(ContainerViewInit, |_| {
+                [
+                    selected_object_label.into_untyped(),
+                    selected_object_name.into_untyped(),
+                ]
+            });
             {
                 let l = ctx
                     .view_layout_mut(root_content_view)
@@ -56,25 +77,7 @@ impl Presenter {
                 };
             }
 
-            let selected_object_label = ctx.construct_view2(
-                StaticTextViewInit {
-                    content: "No selection".into(),
-                    ..Default::default()
-                },
-                |_| [],
-            );
-            let selected_object_name =
-                ctx.construct_view(|id| Box::new(TextInputView::new(id, eh.clone())));
-            ctx.view_layout_mut(selected_object_name)
-                .expect("query failed")
-                .width = ViewSize::FillAvailable;
-            ctx.view_layout_mut(selected_object_name)
-                .expect("query failed")
-                .height = ViewSize::Fixed(20.0);
-            ctx.view_set_parent(selected_object_label, root_content_view);
-            ctx.view_set_parent(selected_object_name, root_content_view);
-
-            let content_view = ctx.construct_view2(ContainerViewInit, |_| []);
+            let content_view = ctx.construct_view(ContainerViewInit, |_| []);
             {
                 let l = ctx.view_layout_mut(content_view).expect("query failed");
                 l.child = ViewLayoutChild::Flow {
@@ -88,7 +91,7 @@ impl Presenter {
                 l.padding.right = 8.0;
             }
 
-            let label = ctx.construct_view2(
+            let label = ctx.construct_view(
                 StaticTextViewInit {
                     content: "POSITION".into(),
                     font: FontID::UIFormLiftedLabel,
@@ -100,7 +103,7 @@ impl Presenter {
             let position_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(position_editor.root_view, content_view);
 
-            let label = ctx.construct_view2(
+            let label = ctx.construct_view(
                 StaticTextViewInit {
                     content: "ROTATION".into(),
                     font: FontID::UIFormLiftedLabel,
@@ -112,7 +115,7 @@ impl Presenter {
             let rotation_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(rotation_editor.root_view, content_view);
 
-            let label = ctx.construct_view2(
+            let label = ctx.construct_view(
                 StaticTextViewInit {
                     content: "SCALE".into(),
                     font: FontID::UIFormLiftedLabel,
@@ -124,14 +127,15 @@ impl Presenter {
             let scale_editor = Vec3EditorComponent::new(ctx, eh.clone());
             ctx.view_set_parent(scale_editor.root_view, content_view);
 
-            let render_section_header = ctx
-                .construct_view(|_| Box::new(SectionHeaderView::new("Render".into(), eh.clone())));
+            let render_section_header = ctx.construct_view_direct(|_| {
+                Box::new(SectionHeaderView::new("Render".into(), eh.clone()))
+            });
             ctx.view_layout_mut(render_section_header)
                 .expect("query failed")
                 .width = ViewSize::FillAvailable;
             ctx.view_set_parent(render_section_header, content_view);
 
-            let label = ctx.construct_view2(
+            let label = ctx.construct_view(
                 StaticTextViewInit {
                     content: "SHAPE".into(),
                     font: FontID::UIFormLiftedLabel,
@@ -139,7 +143,7 @@ impl Presenter {
                 },
                 |_| [],
             );
-            let shape_selector = ctx.construct_view(|id| {
+            let shape_selector = ctx.construct_view_direct(|id| {
                 Box::new(crate::uikit::dropdown_box::View::new(
                     id,
                     eh.clone(),
@@ -158,7 +162,7 @@ impl Presenter {
             ctx.view_layout_mut(content_view)
                 .expect("query failed")
                 .width = ViewSize::Fixed(128.0 + 16.0);
-            let items_container_view = ctx.construct_view(|id| {
+            let items_container_view = ctx.construct_view_direct(|id| {
                 Box::new(ScrollContainer::new(
                     id,
                     Rect::from_lt_size(
@@ -242,7 +246,74 @@ impl Vec3EditorComponent {
         ctx: &mut (impl ViewRegisterable + ViewRelationControllable + ViewInstanceQueryableMut + ?Sized),
         value_io: std::rc::Weak<impl NumericInputViewIO + 'static>,
     ) -> Self {
-        let root_view = ctx.construct_view(|_| Box::new(ContainerView));
+        let x = ctx.construct_view(
+            NumericInputViewInit {
+                value: value_io.clone(),
+                ..Default::default()
+            },
+            |_| [],
+        );
+        {
+            let l = ctx.view_layout_mut(x).expect("query failed");
+            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+            l.width = ViewSize::FillAvailable;
+        }
+        let y = ctx.construct_view(
+            NumericInputViewInit {
+                value: value_io.clone(),
+                ..Default::default()
+            },
+            |_| [],
+        );
+        {
+            let l = ctx.view_layout_mut(y).expect("query failed");
+            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+            l.width = ViewSize::FillAvailable;
+        }
+        let z = ctx.construct_view(
+            NumericInputViewInit {
+                value: value_io.clone(),
+                ..Default::default()
+            },
+            |_| [],
+        );
+        {
+            let l = ctx.view_layout_mut(z).expect("query failed");
+            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+            l.width = ViewSize::FillAvailable;
+        }
+
+        let root_view = ctx.construct_view(ContainerViewInit, |ctx| {
+            [
+                ctx.construct_view(
+                    StaticTextViewInit {
+                        content: "X".into(),
+                        ..Default::default()
+                    },
+                    |_| [],
+                )
+                .into_untyped(),
+                x.into_untyped(),
+                ctx.construct_view(
+                    StaticTextViewInit {
+                        content: "Y".into(),
+                        ..Default::default()
+                    },
+                    |_| [],
+                )
+                .into_untyped(),
+                y.into_untyped(),
+                ctx.construct_view(
+                    StaticTextViewInit {
+                        content: "Z".into(),
+                        ..Default::default()
+                    },
+                    |_| [],
+                )
+                .into_untyped(),
+                z.into_untyped(),
+            ]
+        });
         {
             let l = ctx.view_layout_mut(root_view).expect("query failed");
             l.width = ViewSize::FillAvailable;
@@ -254,76 +325,6 @@ impl Vec3EditorComponent {
                 gap: 4.0,
             };
         }
-
-        let label = ctx.construct_view2(
-            StaticTextViewInit {
-                content: "X".into(),
-                ..Default::default()
-            },
-            |_| [],
-        );
-        ctx.view_set_parent(label, root_view);
-        let x = ctx.construct_view(|id| {
-            Box::new(NumericInputView::new(
-                id,
-                NumericInputViewInit {
-                    value: value_io.clone(),
-                    ..Default::default()
-                },
-            ))
-        });
-        {
-            let l = ctx.view_layout_mut(x).expect("query failed");
-            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
-            l.width = ViewSize::FillAvailable;
-        }
-        ctx.view_set_parent(x, root_view);
-        let label = ctx.construct_view2(
-            StaticTextViewInit {
-                content: "Y".into(),
-                ..Default::default()
-            },
-            |_| [],
-        );
-        ctx.view_set_parent(label, root_view);
-        let y = ctx.construct_view(|id| {
-            Box::new(NumericInputView::new(
-                id,
-                NumericInputViewInit {
-                    value: value_io.clone(),
-                    ..Default::default()
-                },
-            ))
-        });
-        {
-            let l = ctx.view_layout_mut(y).expect("query failed");
-            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
-            l.width = ViewSize::FillAvailable;
-        }
-        ctx.view_set_parent(y, root_view);
-        let label = ctx.construct_view2(
-            StaticTextViewInit {
-                content: "Z".into(),
-                ..Default::default()
-            },
-            |_| [],
-        );
-        ctx.view_set_parent(label, root_view);
-        let z = ctx.construct_view(|id| {
-            Box::new(NumericInputView::new(
-                id,
-                NumericInputViewInit {
-                    value: value_io.clone(),
-                    ..Default::default()
-                },
-            ))
-        });
-        {
-            let l = ctx.view_layout_mut(z).expect("query failed");
-            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
-            l.width = ViewSize::FillAvailable;
-        }
-        ctx.view_set_parent(z, root_view);
 
         Self { root_view, x, y, z }
     }

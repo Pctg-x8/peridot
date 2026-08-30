@@ -27,8 +27,8 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uikit::{
-        RenderContext, TypedViewIdentifier, View, ViewIdentifier, ViewLayoutStateStore,
-        ViewRenderElements, ViewRenderQueue, ViewRenderer,
+        RenderContext, TypedViewIdentifier, View, ViewConstructor, ViewIdentifier,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,
@@ -1961,6 +1961,19 @@ impl<ValueIO: NumericInputViewIO + 'static> Default for NumericInputViewInit<Val
         }
     }
 }
+impl<ValueIO: NumericInputViewIO + 'static> ViewConstructor for NumericInputViewInit<ValueIO> {
+    type ConcreteView = NumericInputView;
+
+    #[inline(always)]
+    fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        NumericInputView {
+            id,
+            eh: None,
+            value: self.value as _,
+            should_revalidate_on_next_render: Cell::new(true),
+        }
+    }
+}
 
 pub struct NumericInputView {
     id: TypedViewIdentifier<Self>,
@@ -1969,18 +1982,6 @@ pub struct NumericInputView {
     should_revalidate_on_next_render: Cell<bool>,
 }
 impl NumericInputView {
-    pub fn new(
-        id: TypedViewIdentifier<Self>,
-        init: NumericInputViewInit<impl NumericInputViewIO + 'static>,
-    ) -> Self {
-        Self {
-            id,
-            eh: None,
-            value: init.value as _,
-            should_revalidate_on_next_render: Cell::new(true),
-        }
-    }
-
     pub fn revalidate(&self) {
         self.should_revalidate_on_next_render.set(true);
     }

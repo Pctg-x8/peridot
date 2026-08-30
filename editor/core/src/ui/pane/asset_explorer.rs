@@ -34,7 +34,7 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         Self {
-            root_view_id: ctx.construct_view2(FileListViewInit, |_| []),
+            root_view_id: ctx.construct_view(FileListViewInit, |_| []),
         }
     }
 }

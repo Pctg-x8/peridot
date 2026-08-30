@@ -505,11 +505,11 @@ pub struct RedockingContext<'a, 'h> {
 }
 impl ViewRegisterable for RedockingContext<'_, '_> {
     #[inline(always)]
-    fn construct_view<T: View + 'static>(
+    fn construct_view_direct<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T> {
-        self.view_init_ctx.construct_view(ctor)
+        self.view_init_ctx.construct_view_direct(ctor)
     }
 
     #[inline(always)]
@@ -662,7 +662,7 @@ impl DockingManager {
         store: &mut DockStore,
         dock_ctor: impl FnOnce(&mut ViewInitContext, &mut ViewRenderQueue, &mut DockStore) -> DockID,
     ) -> Self {
-        let root_view_id = ctx.construct_view(|_| {
+        let root_view_id = ctx.construct_view_direct(|_| {
             Box::new(WindowDockRootView {
                 window: bound_window,
             })
@@ -814,7 +814,7 @@ fn split_new(
 ) {
     let onto = store.get(new_rest).parent().expect("no parent?");
     let new_dock = store.alloc_recurse(|parent_id, store| {
-        let splitter = view_init_ctx.construct_view(|_| {
+        let splitter = view_init_ctx.construct_view_direct(|_| {
             Box::new(DockedPaneSplitterView::new(
                 direction.splitter_direction(),
                 parent_id,
@@ -1793,11 +1793,11 @@ pub struct PaneGroupCreateContext<'env, 'a, 'h> {
 }
 impl ViewRegisterable for PaneGroupCreateContext<'_, '_, '_> {
     #[inline(always)]
-    fn construct_view<T: View + 'static>(
+    fn construct_view_direct<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T> {
-        self.view_init_context.construct_view(ctor)
+        self.view_init_context.construct_view_direct(ctor)
     }
 
     #[inline(always)]
@@ -2123,7 +2123,7 @@ impl PaneGroupViewController {
         dock: DockID,
         initial_active_index: usize,
     ) -> Self {
-        let tab_strip_view = ctx.construct_view(|_| Box::new(PaneGroupTabStripView::new()));
+        let tab_strip_view = ctx.construct_view_direct(|_| Box::new(PaneGroupTabStripView::new()));
 
         let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let contents = contents
@@ -2132,7 +2132,7 @@ impl PaneGroupViewController {
             .map(|(index, c)| {
                 let tab_name = c.name();
                 let tab_width = PaneGroupTabView::compute_width(&tab_name, ctx.system_link());
-                let tab_view = ctx.construct_view(|id| {
+                let tab_view = ctx.construct_view_direct(|id| {
                     Box::new(PaneGroupTabView::new(
                         id,
                         tab_name,
@@ -2140,7 +2140,8 @@ impl PaneGroupViewController {
                         index == initial_active_index,
                     ))
                 });
-                let container = ctx.construct_view(|_| Box::new(PaneGroupContainerView::new()));
+                let container =
+                    ctx.construct_view_direct(|_| Box::new(PaneGroupContainerView::new()));
                 ctx.view_set_parent_untyped(c.root_view_id(), container.into_untyped());
                 ctx.view_set_visibility(container, index == initial_active_index);
                 ctx.view_set_parent(tab_view, tab_strip_view);
@@ -2249,7 +2250,7 @@ impl PaneGroupViewController {
     ) {
         let tab_name = content.name();
         let tab_width = PaneGroupTabView::compute_width(&tab_name, env.system_link());
-        let tab_view = env.construct_view(|id| {
+        let tab_view = env.construct_view_direct(|id| {
             Box::new(PaneGroupTabView::new(
                 id,
                 tab_name,
@@ -2257,7 +2258,7 @@ impl PaneGroupViewController {
                 with_activate,
             ))
         });
-        let container = env.construct_view(|_| Box::new(PaneGroupContainerView::new()));
+        let container = env.construct_view_direct(|_| Box::new(PaneGroupContainerView::new()));
         env.view_set_parent_untyped(content.root_view_id(), container.into_untyped());
         env.view_set_parent(tab_view, self.tab_strip_view);
         env.view_set_parent(container, dock_root_view);
@@ -2293,7 +2294,7 @@ impl PaneGroupViewController {
     ) {
         let tab_name = content.name();
         let tab_width = PaneGroupTabView::compute_width(&tab_name, env.system_link());
-        let tab_view = env.construct_view(|id| {
+        let tab_view = env.construct_view_direct(|id| {
             Box::new(PaneGroupTabView::new(
                 id,
                 tab_name,
@@ -2301,7 +2302,7 @@ impl PaneGroupViewController {
                 with_activate,
             ))
         });
-        let container = env.construct_view(|_| Box::new(PaneGroupContainerView::new()));
+        let container = env.construct_view_direct(|_| Box::new(PaneGroupContainerView::new()));
         env.view_set_parent(tab_view, self.tab_strip_view);
         env.view_set_parent_untyped(content.root_view_id(), container.into_untyped());
         env.view_set_parent(container, dock_root_view);

@@ -48,18 +48,18 @@ impl Component {
         init: ComponentInit,
         ctx: &mut (impl ViewRegisterable + ViewRelationControllable + ?Sized),
     ) -> Self {
-        let main = ctx.construct_view(|_| Box::new(View::new(caption)));
+        let main = ctx.construct_view_direct(|_| Box::new(View::new(caption)));
         let command_buttons = if init.with_system_command_buttons {
-            let close_button = ctx.construct_view(|_| {
+            let close_button = ctx.construct_view_direct(|_| {
                 Box::new(SystemCommandButtonView::new(0.0, SystemCommand::Close))
             });
-            let maximize_restore_button = ctx.construct_view(|_| {
+            let maximize_restore_button = ctx.construct_view_direct(|_| {
                 Box::new(SystemCommandButtonView::new(
                     SystemCommandButtonView::WIDTH,
                     SystemCommand::Maximize,
                 ))
             });
-            let minimize_button = ctx.construct_view(|_| {
+            let minimize_button = ctx.construct_view_direct(|_| {
                 Box::new(SystemCommandButtonView::new(
                     SystemCommandButtonView::WIDTH * 2.0,
                     SystemCommand::Minimize,
