@@ -49,16 +49,16 @@ use crate::{
             GradientRef, TextureMappingMode, TextureType,
         },
         preview::HandlePointing,
-        text::{FontID, FontSet, RootFontSet, TextLayout},
+        text::{FontID, FontSet, RootFontSet},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
         ContainerView, ContainerViewInit, MenuEventHandler, MenuItem, MenuItemCommonResources,
-        MenuItemInteractableElement, MountContext, MountTarget, NumericInputView,
-        NumericInputViewIO, NumericInputViewInit, PopupID, PopupManager, RadioButtonView,
-        RenderContext, ScrollContainer, SimpleButtonEventHandler, SimpleButtonViewInit,
-        StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier,
-        View, ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler,
+        MenuItemInteractableElement, MountContext, MountTarget, NumericInputViewIO,
+        NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
+        ScrollContainer, SimpleButtonEventHandler, SimpleButtonViewInit, StaticTextViewInit,
+        TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
+        ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackQueue,
         ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
         ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
@@ -3037,7 +3037,7 @@ async fn run<'sys>(
     profiler::begin!(perf = INITIALIZE);
 
     let mut application = Application::new();
-    let mut view_feedback_store = VecDeque::new();
+    let mut view_feedback_store = ViewFeedbackQueue::new();
     let mut view_feedback_registry_delayed_ops = VecDeque::new();
 
     let mut composite_tree = CompositeTree::new();
@@ -3513,10 +3513,12 @@ async fn run<'sys>(
         view_render_queue: &mut view_render_queue,
     };
 
-    for x in view_feedback_store.drain(..) {
-        x.dispatch(&view_feedback_registry, &mut fb_context);
+    for (t, p) in view_feedback_store.iter() {
+        unsafe {
+            view_feedback_registry.dispatch_dynamic_unchecked(p, t, &mut fb_context);
+        }
     }
-
+    view_feedback_store.clear();
     view_feedback_registry.perform_atomic(&mut fb_context);
 
     view_render_queue.perform(
@@ -5289,10 +5291,12 @@ async fn run<'sys>(
                 view_render_queue: &mut view_render_queue,
             };
 
-            for x in view_feedback_store.drain(..) {
-                x.dispatch(&view_feedback_registry, &mut fb_context);
+            for (t, p) in view_feedback_store.iter() {
+                unsafe {
+                    view_feedback_registry.dispatch_dynamic_unchecked(p, t, &mut fb_context);
+                }
             }
-
+            view_feedback_store.clear();
             view_feedback_registry.perform_atomic(&mut fb_context);
         }
 

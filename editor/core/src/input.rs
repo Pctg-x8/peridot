@@ -95,7 +95,7 @@ impl ApplicationMutableAccess for InputEventContext<'_, '_, '_> {
     }
 
     #[inline(always)]
-    fn dispatch_view_feedback(&mut self, feedback: crate::model::ViewFeedback) {
+    fn dispatch_view_feedback<T: 'static>(&mut self, feedback: T) {
         self.application.dispatch_view_feedback(feedback);
     }
 }

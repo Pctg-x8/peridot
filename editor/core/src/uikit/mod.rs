@@ -1515,19 +1515,20 @@ impl ViewFeedbackRegistry {
         }
     }
 
-    pub fn dispatch<'a, 'h, T: 'static>(
+    pub unsafe fn dispatch_dynamic_unchecked<'a, 'h>(
         &self,
-        feedback: T,
+        feedback: *const (),
+        feedback_type: &core::any::TypeId,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
-        let Some(subscribers) = self.feedback_receivers.get(&core::any::TypeId::of::<T>()) else {
+        let Some(subscribers) = self.feedback_receivers.get(feedback_type) else {
             // no subscribers
             return;
         };
 
         for x in subscribers {
             unsafe {
-                x.try_invoke(&feedback, context);
+                x.try_invoke_untyped(feedback, context);
             }
         }
     }
@@ -1655,6 +1656,53 @@ impl ViewRenderer for ViewFeedbackContext<'_, '_> {
     }
 }
 
+pub struct ViewFeedbackQueue {
+    bytes: Vec<u8>,
+    types: Vec<(core::any::TypeId, usize)>,
+}
+impl ViewFeedbackQueue {
+    pub fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            types: Vec::new(),
+        }
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.types.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.types.clear();
+        self.bytes.clear();
+    }
+
+    pub fn push<T: 'static>(&mut self, feedback: T) {
+        self.types
+            .push((core::any::TypeId::of::<T>(), size_of::<T>()));
+        let bytes_head = self.bytes.len();
+        self.bytes
+            .try_reserve(size_of::<T>())
+            .expect("view_feedback_queue.push");
+        unsafe {
+            self.bytes.set_len(bytes_head + size_of::<T>());
+            self.bytes
+                .as_mut_ptr()
+                .byte_add(bytes_head)
+                .cast::<T>()
+                .write_unaligned(feedback);
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&core::any::TypeId, *const ())> + '_ {
+        self.types.iter().scan(0, |offset, type_id| {
+            let bytes = unsafe { self.bytes.as_ptr().byte_add(*offset) };
+            *offset += type_id.1;
+            Some((&type_id.0, bytes.cast()))
+        })
+    }
+}
+
 pub trait ViewFeedbackHandler<T> {
     fn accept_feedback<'a, 'h>(&self, feedback: &T, context: &mut ViewFeedbackContext<'a, 'h>);
 }
@@ -1675,9 +1723,9 @@ impl ViewFeedbackHandlerUntyped {
         }
     }
 
-    unsafe fn try_invoke<'a, 'h, T>(
+    unsafe fn try_invoke_untyped<'a, 'h>(
         &self,
-        feedback: &T,
+        feedback: *const (),
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) -> bool {
         let Some(target) = self.target.upgrade() else {
@@ -1686,7 +1734,7 @@ impl ViewFeedbackHandlerUntyped {
 
         (self.accept_feedback_fn)(
             core::ptr::from_ref(target.as_ref()).cast(),
-            core::ptr::from_ref(feedback).cast(),
+            feedback,
             context,
         );
 

@@ -5,7 +5,7 @@ use std::{
 
 use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Ray3, Sphere3, Vector3F32};
 
-use crate::uikit::{ViewFeedbackContext, ViewFeedbackRegistry};
+use crate::uikit::ViewFeedbackQueue;
 
 pub mod asset_explorer;
 
@@ -156,12 +156,10 @@ impl Application {
         }
     }
 
-    pub fn sync(&self, feedback_queue: &mut VecDeque<ViewFeedback>) {
-        feedback_queue.extend([
-            ViewFeedback::object_tree_changed(),
-            ViewFeedback::object_selection_changed(),
-            ViewFeedback::preview_edit_tool_type_changed(),
-        ]);
+    pub fn sync(&self, feedback_queue: &mut ViewFeedbackQueue) {
+        feedback_queue.push(ViewFeedbackObjectTreeChanged);
+        feedback_queue.push(ViewFeedbackObjectSelectionChanged);
+        feedback_queue.push(ViewFeedbackPreviewEditToolTypeChanged);
     }
 
     fn alloc_object(&mut self, o: Object) -> ObjectID {
@@ -230,7 +228,7 @@ impl ApplicationAccess for Application {
 
 pub trait ApplicationMutableAccess: ApplicationAccess {
     fn application_mut(&mut self) -> &mut Application;
-    fn dispatch_view_feedback(&mut self, feedback: ViewFeedback);
+    fn dispatch_view_feedback<T: 'static>(&mut self, feedback: T);
 }
 
 pub fn object_is_selected(env: &(impl ApplicationAccess + ?Sized), id: ObjectID) -> bool {
@@ -396,7 +394,7 @@ pub fn object_create_of_shape(
 ) -> ObjectID {
     let id = env.application_mut().alloc_object(Object::new(name));
     env.application_mut().objects[id.into_array_index()].render_shape = shape;
-    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectTreeChanged);
     id
 }
 
@@ -448,7 +446,7 @@ pub fn object_duplicate_selected(
         );
     }
 
-    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectTreeChanged);
     Some(id)
 }
 
@@ -493,8 +491,8 @@ pub fn object_destroy_selected(env: &mut (impl ApplicationMutableAccess + ?Sized
     // TODO: compactionの頻度を減らすかはあとで検討
     state.compaction_objects();
 
-    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
-    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectTreeChanged);
+    env.dispatch_view_feedback(ViewFeedbackObjectSelectionChanged);
 }
 
 pub fn object_set_parent(
@@ -526,7 +524,7 @@ pub fn object_set_parent(
         .children
         .push(id);
     env.application_mut().should_world_matrix_recompute(id);
-    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectTreeChanged);
 }
 
 pub fn object_detach_parent(env: &mut (impl ApplicationMutableAccess + ?Sized), child: ObjectID) {
@@ -544,7 +542,7 @@ pub fn object_detach_parent(env: &mut (impl ApplicationMutableAccess + ?Sized), 
     env.application_mut().root_objects.push(child);
     env.application_mut().should_world_matrix_recompute(child);
 
-    env.dispatch_view_feedback(ViewFeedback::object_tree_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectTreeChanged);
 }
 
 pub fn object_modify_data(
@@ -553,7 +551,7 @@ pub fn object_modify_data(
     updater: impl FnOnce(&mut Object),
 ) {
     updater(&mut env.application_mut().objects[id.into_array_index()]);
-    env.dispatch_view_feedback(ViewFeedback::object_data_changed(id));
+    env.dispatch_view_feedback(ViewFeedbackObjectDataChanged(id));
 }
 
 pub fn object_name(env: &(impl ApplicationAccess + ?Sized), id: ObjectID) -> &str {
@@ -579,7 +577,7 @@ pub fn set_selected_object_name(env: &mut (impl ApplicationMutableAccess + ?Size
     };
 
     env.application_mut().objects[selected.into_array_index()].name = name;
-    env.dispatch_view_feedback(ViewFeedback::object_name_changed(selected));
+    env.dispatch_view_feedback(ViewFeedbackObjectNameChanged(selected));
 }
 
 // TODO: multiple selection
@@ -811,7 +809,7 @@ pub fn select_object(env: &mut (impl ApplicationMutableAccess + ?Sized), id: Obj
 
     env.application_mut().selected_objects.clear();
     env.application_mut().selected_objects.insert(id);
-    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectSelectionChanged);
 }
 
 pub fn toggle_object_selection_additive(
@@ -823,12 +821,12 @@ pub fn toggle_object_selection_additive(
         env.application_mut().selected_objects.remove(&id);
     }
 
-    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectSelectionChanged);
 }
 
 pub fn object_deselect_all(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
     env.application_mut().selected_objects.clear();
-    env.dispatch_view_feedback(ViewFeedback::object_selection_changed());
+    env.dispatch_view_feedback(ViewFeedbackObjectSelectionChanged);
 }
 
 pub fn set_preview_edit_tool_type(
@@ -836,12 +834,12 @@ pub fn set_preview_edit_tool_type(
     tool_type: PreviewEditToolType,
 ) {
     env.application_mut().preview_edit_tool_type = tool_type;
-    env.dispatch_view_feedback(ViewFeedback::preview_edit_tool_type_changed());
+    env.dispatch_view_feedback(ViewFeedbackPreviewEditToolTypeChanged);
 }
 
 pub struct ApplicationMutation<'a> {
     pub state: &'a mut Application,
-    pub view_feedbacks: &'a mut VecDeque<ViewFeedback>,
+    pub view_feedbacks: &'a mut ViewFeedbackQueue,
 }
 impl core::ops::Deref for ApplicationMutation<'_> {
     type Target = Application;
@@ -864,65 +862,14 @@ impl ApplicationMutableAccess for ApplicationMutation<'_> {
     }
 
     #[inline(always)]
-    fn dispatch_view_feedback(&mut self, feedback: ViewFeedback) {
-        self.view_feedbacks.push_back(feedback);
+    fn dispatch_view_feedback<T: 'static>(&mut self, feedback: T) {
+        self.view_feedbacks.push(feedback);
     }
 }
 
-pub enum ViewFeedback {
-    ObjectTreeChanged(ViewFeedbackObjectTreeChanged),
-    ObjectSelectionChanged(ViewFeedbackObjectSelectionChanged),
-    ObjectNameChanged(ViewFeedbackObjectNameChanged),
-    ObjectDataChanged(ViewFeedbackObjectDataChanged),
-    PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged),
-    AssetExplorerCurrentDirectoryChanged(self::asset_explorer::ViewFeedbackCurrentDirectoryChanged),
-}
-impl ViewFeedback {
-    pub const fn object_tree_changed() -> Self {
-        Self::ObjectTreeChanged(ViewFeedbackObjectTreeChanged)
-    }
-
-    pub const fn object_selection_changed() -> Self {
-        Self::ObjectSelectionChanged(ViewFeedbackObjectSelectionChanged)
-    }
-
-    pub const fn object_name_changed(object_id: ObjectID) -> Self {
-        Self::ObjectNameChanged(ViewFeedbackObjectNameChanged(object_id))
-    }
-
-    pub const fn object_data_changed(object_id: ObjectID) -> Self {
-        Self::ObjectDataChanged(ViewFeedbackObjectDataChanged(object_id))
-    }
-
-    pub const fn preview_edit_tool_type_changed() -> Self {
-        Self::PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged)
-    }
-
-    pub const fn asset_explorer_current_directory_changed() -> Self {
-        Self::AssetExplorerCurrentDirectoryChanged(
-            self::asset_explorer::ViewFeedbackCurrentDirectoryChanged,
-        )
-    }
-
-    pub fn dispatch(self, registry: &ViewFeedbackRegistry, context: &mut ViewFeedbackContext) {
-        match self {
-            Self::ObjectTreeChanged(o) => registry.dispatch(o, context),
-            Self::ObjectSelectionChanged(o) => registry.dispatch(o, context),
-            Self::ObjectNameChanged(o) => registry.dispatch(o, context),
-            Self::ObjectDataChanged(o) => registry.dispatch(o, context),
-            Self::PreviewEditToolTypeChanged(o) => registry.dispatch(o, context),
-            Self::AssetExplorerCurrentDirectoryChanged(o) => registry.dispatch(o, context),
-        }
-    }
-}
-
-#[derive(Clone)]
 pub struct ViewFeedbackObjectTreeChanged;
-
 pub struct ViewFeedbackObjectSelectionChanged;
-
 pub struct ViewFeedbackObjectNameChanged(pub ObjectID);
-
 pub struct ViewFeedbackObjectDataChanged(pub ObjectID);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

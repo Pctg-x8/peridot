@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::model::{ApplicationAccess, ApplicationMutableAccess, ViewFeedback};
+use crate::model::{ApplicationAccess, ApplicationMutableAccess};
 
 pub(super) struct State {
     current_dir: PathBuf,
@@ -47,7 +47,7 @@ pub fn interact(state: &mut (impl ApplicationMutableAccess + ?Sized), etype: &Fi
         FileEntryType::File => {}
         FileEntryType::Directory(path) => {
             state.application_mut().asset_explorer.current_dir = path.clone();
-            state.dispatch_view_feedback(ViewFeedback::asset_explorer_current_directory_changed());
+            state.dispatch_view_feedback(ViewFeedbackCurrentDirectoryChanged);
         }
     }
 }
