@@ -9,13 +9,16 @@ use windows::Win32::{
             ID2D1SimplifiedGeometrySink, ID2D1SimplifiedGeometrySink_Impl,
         },
         DirectWrite::{
-            DWRITE_GLYPH_METRICS, DWRITE_GLYPH_RUN, DWRITE_GLYPH_RUN_DESCRIPTION,
-            DWRITE_HIT_TEST_METRICS, DWRITE_LINE_METRICS, DWRITE_MATRIX, DWRITE_MEASURING_MODE,
-            DWRITE_STRIKETHROUGH, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+            DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_METRICS, DWRITE_GLYPH_RUN,
+            DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_HIT_TEST_METRICS, DWRITE_LINE_METRICS,
+            DWRITE_MATRIX, DWRITE_MEASURING_MODE, DWRITE_STRIKETHROUGH,
+            DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
             DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_RANGE, DWRITE_TRIMMING,
             DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_UNDERLINE,
-            DWRITE_WORD_WRAPPING_EMERGENCY_BREAK, IDWriteInlineObject, IDWritePixelSnapping_Impl,
-            IDWriteTextLayout, IDWriteTextRenderer, IDWriteTextRenderer_Impl,
+            DWRITE_WORD_WRAPPING_EMERGENCY_BREAK, DWriteCreateFactory, IDWriteFactory,
+            IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteTextFormat, IDWriteTextLayout,
+            IDWriteTextRenderer, IDWriteTextRenderer_Impl,
         },
     },
 };
@@ -28,11 +31,97 @@ use crate::{
     rendering::{
         MaskTextureAtlasManager,
         composite::CompositeRectTextHorizontalAlignment,
-        text::{FontID, FontSet, GlyphPlacementBox, TextRun},
+        text::{FontID, GlyphPlacementBox, TextRun},
         vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
+
+pub struct RootFontSet {
+    dw_factory: IDWriteFactory,
+    ui_default: IDWriteTextFormat,
+    ui_title_project_name: IDWriteTextFormat,
+    ui_form_lifted_label: IDWriteTextFormat,
+}
+impl RootFontSet {
+    pub fn new() -> Self {
+        let locale_name = crate::utils::platform::windows::user_language();
+
+        let dw: IDWriteFactory = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) }
+            .expect("dwrite.factory.create");
+
+        let ui_default = unsafe {
+            dw.CreateTextFormat(
+                windows_core::w!("Inter Display"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                12.0,
+                PCWSTR(locale_name.as_ptr()),
+            )
+            .expect("dwrite.textformat.create.ui_default")
+        };
+        let ui_title_project_name = unsafe {
+            dw.CreateTextFormat(
+                windows_core::w!("Inter Display"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                10.0,
+                PCWSTR(locale_name.as_ptr()),
+            )
+            .expect("dwrite.textformat.create.ui_title_project_name")
+        };
+        let ui_form_lifted_label = unsafe {
+            dw.CreateTextFormat(
+                windows_core::w!("Inter Display"),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                8.0,
+                PCWSTR(locale_name.as_ptr()),
+            )
+            .expect("dwrite.textformat.create.ui_form_lifted_label")
+        };
+
+        Self {
+            dw_factory: dw,
+            ui_default,
+            ui_title_project_name,
+            ui_form_lifted_label,
+        }
+    }
+}
+
+pub struct FontSet {
+    dw_factory: IDWriteFactory,
+    ui_default: IDWriteTextFormat,
+    ui_title_project_name: IDWriteTextFormat,
+    ui_form_lifted_label: IDWriteTextFormat,
+}
+impl FontSet {
+    #[inline(always)]
+    pub fn new(root_font_set: &RootFontSet) -> Self {
+        Self {
+            dw_factory: root_font_set.dw_factory.clone(),
+            ui_default: root_font_set.ui_default.clone(),
+            ui_title_project_name: root_font_set.ui_title_project_name.clone(),
+            ui_form_lifted_label: root_font_set.ui_form_lifted_label.clone(),
+        }
+    }
+
+    #[inline]
+    const fn select(&self, category: FontID) -> &IDWriteTextFormat {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
+        }
+    }
+}
 
 pub struct TextLayout {
     layout: IDWriteTextLayout,
@@ -64,7 +153,7 @@ impl TextLayout {
 
         let layout = unsafe {
             font_set
-                .native_factory()
+                .dw_factory
                 .CreateTextLayout(
                     &run_str_utf16s,
                     font_set.select(FontID::UIDefault),
@@ -399,7 +488,7 @@ impl TextLayout {
         let mut metrics = MaybeUninit::uninit();
         unsafe {
             font_set
-                .native_factory()
+                .dw_factory
                 .CreateTextLayout(
                     &text.encode_utf16().collect::<Vec<_>>(),
                     font_set.select(font),

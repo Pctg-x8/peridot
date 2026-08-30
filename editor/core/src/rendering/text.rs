@@ -22,10 +22,12 @@ pub enum FontID {
     UIFormLiftedLabel,
 }
 
+#[cfg(windows)]
+pub use self::dwrite::{FontSet, RootFontSet};
 #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
 pub use self::ft_hb::{FontSet, RootFontSet};
 
-#[cfg(not(all(feature = "freetype", feature = "harfbuzz")))]
+#[cfg(not(any(all(feature = "freetype", feature = "harfbuzz"), windows)))]
 pub struct FontSet {
     #[cfg(target_os = "macos")]
     ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
@@ -33,101 +35,13 @@ pub struct FontSet {
     ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
     #[cfg(target_os = "macos")]
     ui_form_lifted_label: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-    #[cfg(windows)]
-    dw_factory: windows::Win32::Graphics::DirectWrite::IDWriteFactory,
-    #[cfg(windows)]
-    ui_default: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
-    #[cfg(windows)]
-    ui_title_project_name: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
-    #[cfg(windows)]
-    ui_form_lifted_label: windows::Win32::Graphics::DirectWrite::IDWriteTextFormat,
 }
 #[cfg(target_os = "macos")]
 unsafe impl Sync for FontSet {}
 #[cfg(target_os = "macos")]
 unsafe impl Send for FontSet {}
-#[cfg(not(all(feature = "freetype", feature = "harfbuzz")))]
+#[cfg(not(any(all(feature = "freetype", feature = "harfbuzz"), windows)))]
 impl FontSet {
-    #[cfg(windows)]
-    pub fn new() -> Self {
-        use windows::Win32::{
-            Globalization::GetUserDefaultLocaleName, Graphics::DirectWrite::IDWriteFactory,
-        };
-
-        let dw: IDWriteFactory = unsafe {
-            use windows::Win32::Graphics::DirectWrite::{
-                DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory,
-            };
-
-            DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).expect("dwrite.factory.create")
-        };
-
-        let mut locale_name = [const { core::mem::MaybeUninit::uninit() }; 32];
-        let len = unsafe {
-            GetUserDefaultLocaleName(core::mem::transmute::<
-                &mut [core::mem::MaybeUninit<u16>; 32],
-                &mut [u16; 32],
-            >(&mut locale_name))
-        };
-        let locale_name = if len == 0 {
-            // fallback to en_US
-            let e = std::io::Error::last_os_error();
-            tracing::warn!(reason = ?e, "GetUserDefaultLocaleName.fallback");
-
-            &[b'e' as u16, b'n' as _, b'_' as _, b'U' as _, b'S' as _, 0]
-        } else {
-            unsafe {
-                core::mem::transmute::<&[core::mem::MaybeUninit<u16>], &[u16]>(
-                    &locale_name[..len as usize],
-                )
-            }
-        };
-
-        let ui_default = unsafe {
-            dw.CreateTextFormat(
-                windows_core::w!("Inter Display"),
-                None,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-                12.0,
-                windows_core::PCWSTR(locale_name.as_ptr()),
-            )
-            .expect("dwrite.textformat.create.ui_default")
-        };
-        let ui_title_project_name = unsafe {
-            dw.CreateTextFormat(
-                windows_core::w!("Inter Display"),
-                None,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-                10.0,
-                windows_core::PCWSTR(locale_name.as_ptr()),
-            )
-            .expect("dwrite.textformat.create.ui_title_project_name")
-        };
-        let ui_form_lifted_label = unsafe {
-            dw.CreateTextFormat(
-                windows_core::w!("Inter Display"),
-                None,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_WEIGHT_NORMAL,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STYLE_NORMAL,
-                windows::Win32::Graphics::DirectWrite::DWRITE_FONT_STRETCH_NORMAL,
-                8.0,
-                windows_core::PCWSTR(locale_name.as_ptr()),
-            )
-            .expect("dwrite.textformat.create.ui_form_lifted_label")
-        };
-
-        Self {
-            dw_factory: dw,
-            ui_default,
-            ui_title_project_name,
-            ui_form_lifted_label,
-        }
-    }
-
     #[cfg(target_os = "macos")]
     pub fn new() -> Self {
         let ui_default = apple_sdk_port::text::Font::new_ui(
@@ -153,25 +67,6 @@ impl FontSet {
     #[cfg(target_os = "macos")]
     #[inline]
     pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
-            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
-        }
-    }
-
-    #[cfg(windows)]
-    #[inline(always)]
-    pub const fn native_factory(&self) -> &windows::Win32::Graphics::DirectWrite::IDWriteFactory {
-        &self.dw_factory
-    }
-
-    #[cfg(windows)]
-    #[inline]
-    pub fn select(
-        &self,
-        category: FontID,
-    ) -> &windows::Win32::Graphics::DirectWrite::IDWriteTextFormat {
         match category {
             FontID::UIDefault => &self.ui_default,
             FontID::UITitleProjectName => &self.ui_title_project_name,

@@ -1798,7 +1798,7 @@ fn find_maximized_base_left_top(monitor_index: usize) -> Option<Point<PixelsUnit
 }
 
 pub struct SystemLink<'sys> {
-    pub font_set: &'sys FontSet,
+    pub font_set: FontSet,
     pub gfx: *const Graphics<'sys>,
     pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
@@ -1818,8 +1818,8 @@ impl<'sys> SystemLink<'sys> {
     }
 
     #[inline(always)]
-    pub const fn font_set(&self) -> &'sys FontSet {
-        self.font_set
+    pub const fn font_set(&self) -> &FontSet {
+        &self.font_set
     }
 
     #[inline(always)]
