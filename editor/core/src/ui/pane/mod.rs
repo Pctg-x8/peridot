@@ -5,5 +5,6 @@ macro_rules! internal_pane_identifier {
     };
 }
 
+pub mod asset_explorer;
 pub mod inspector;
 pub mod object_tree;
