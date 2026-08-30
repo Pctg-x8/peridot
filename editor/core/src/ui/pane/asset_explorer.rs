@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use crate::{
     SystemLink,
@@ -20,22 +20,26 @@ use crate::{
     ui::dock::PaneContentPresenter,
     uikit::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
-        ViewIdentifier, ViewInitContext, ViewLayoutStateStore, ViewRegisterable,
-        ViewRenderElements,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewInitContext, ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRegisterable,
+        ViewRenderElements, ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct Presenter {
-    root_view_id: TypedViewIdentifier<FileListView>,
+    eh: Rc<EventHandler>,
 }
 impl Presenter {
     pub const ID: &str = internal_pane_identifier!("AssetExplorer");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
-        Self {
-            root_view_id: ctx.construct_view(FileListViewInit, |_| []),
-        }
+        let eh = Rc::new(EventHandler {
+            file_list_view: ctx.construct_view(FileListViewInit, |_| []),
+        });
+        ctx.subscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&eh);
+
+        Self { eh }
     }
 }
 impl PaneContentPresenter for Presenter {
@@ -48,7 +52,30 @@ impl PaneContentPresenter for Presenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view_id.into_untyped()
+        self.eh.file_list_view.into_untyped()
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        ctx.unsubscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&self.eh);
+    }
+}
+
+struct EventHandler {
+    file_list_view: TypedViewIdentifier<FileListView>,
+}
+impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
+    for EventHandler
+{
+    fn accept_feedback<'a, 'h>(
+        &self,
+        _feedback: &crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged,
+        context: &mut ViewFeedbackContext<'a, 'h>,
+    ) {
+        context
+            .view_instance_mut(self.file_list_view)
+            .expect("query failed")
+            .revalidate_elements = true;
+        context.schedule_view_render(self.file_list_view);
     }
 }
 
@@ -58,12 +85,16 @@ impl ViewConstructor for FileListViewInit {
 
     #[inline(always)]
     fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
-        FileListView { entity: None }
+        FileListView {
+            entity: None,
+            revalidate_elements: false,
+        }
     }
 }
 
 struct FileListView {
     entity: Option<Rc<FileListViewEntity>>,
+    revalidate_elements: bool,
 }
 impl View for FileListView {
     fn render(
@@ -73,7 +104,42 @@ impl View for FileListView {
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
-            Some(ref e) => e,
+            Some(ref entity) => {
+                if core::mem::replace(&mut self.revalidate_elements, false) {
+                    // revalidate elements
+                    // TODO: 最適化とか仮想化はあとまわし
+                    for e in entity.elements.borrow_mut().drain(..) {
+                        ctx.composite_tree.free_all(e.ct_root);
+                        ctx.ht_manager.free_all(e.ht_root);
+                    }
+
+                    let mut left_offset = 0.0;
+                    let mut top_offset = 0.0;
+                    entity.elements.borrow_mut().extend(
+                        crate::model::asset_explorer::current_dir_entries(ctx.application).map(
+                            |e| {
+                                let element = TiledElementSubView::new(
+                                    ctx.composite_tree,
+                                    ctx.ht_manager,
+                                    ctx.system_link,
+                                    e,
+                                    Point::new_logical(left_offset, top_offset),
+                                );
+                                ctx.composite_tree
+                                    .add_child(entity.ct_root, element.ct_root);
+                                ctx.ht_manager.add_child(entity.ht_root, element.ht_root);
+                                ctx.ht_manager.set_action_handler(element.ht_root, entity);
+
+                                left_offset += TiledElementSubView::ITEM_WIDTH;
+
+                                element
+                            },
+                        ),
+                    );
+                }
+
+                entity
+            }
             None => {
                 let ct_root = CompositeRect::build()
                     .expand_full()
@@ -92,7 +158,7 @@ impl View for FileListView {
                             ctx.composite_tree,
                             ctx.ht_manager,
                             ctx.system_link,
-                            e.name,
+                            e,
                             Point::new_logical(left_offset, top_offset),
                         );
                         ctx.composite_tree.add_child(ct_root, element.ct_root);
@@ -107,9 +173,9 @@ impl View for FileListView {
                 let entity = Rc::new(FileListViewEntity {
                     ct_root,
                     ht_root,
-                    elements,
+                    elements: RefCell::new(elements),
                 });
-                for e in entity.elements.iter() {
+                for e in entity.elements.borrow().iter() {
                     ctx.ht_manager.set_action_handler(e.ht_root, &entity);
                 }
 
@@ -141,7 +207,7 @@ impl View for FileListView {
 struct FileListViewEntity {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    elements: Vec<TiledElementSubView>,
+    elements: RefCell<Vec<TiledElementSubView>>,
 }
 impl HitTestTreeActionHandler for FileListViewEntity {
     fn on_pointer_enter(
@@ -150,7 +216,7 @@ impl HitTestTreeActionHandler for FileListViewEntity {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        for e in self.elements.iter() {
+        for e in self.elements.borrow().iter() {
             if e.ht_root == sender {
                 e.lit(context.composite_tree, context.current_sec);
                 break;
@@ -166,9 +232,25 @@ impl HitTestTreeActionHandler for FileListViewEntity {
         context: &mut InputEventContext,
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
-        for e in self.elements.iter() {
+        for e in self.elements.borrow().iter() {
             if e.ht_root == sender {
                 e.unlit(context.composite_tree, context.current_sec);
+                break;
+            }
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        for e in self.elements.borrow().iter() {
+            if e.ht_root == sender {
+                crate::model::asset_explorer::interact(context, &e.entry_type);
                 break;
             }
         }
@@ -180,6 +262,7 @@ impl HitTestTreeActionHandler for FileListViewEntity {
 struct TiledElementSubView {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
+    entry_type: crate::model::asset_explorer::FileEntryType,
 }
 impl TiledElementSubView {
     const MARGIN: f32 = 8.0;
@@ -191,11 +274,11 @@ impl TiledElementSubView {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         syslink: &SystemLink,
-        label: String,
+        model: crate::model::asset_explorer::FileEntry,
         left_top: Point<LogicalUnit>,
     ) -> Self {
         let label_metric = TextLayout::new_single(
-            &label,
+            &model.name,
             FontID::UIDefault,
             syslink.font_set(),
             CompositeRectTextHorizontalAlignment::Middle,
@@ -229,7 +312,7 @@ impl TiledElementSubView {
         let ct_label = CompositeRect::build()
             .text(
                 CompositeRectText::build()
-                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .run(CompositeRectTextRun::build(model.name).color_imm([1.0, 1.0, 1.0, 1.0]))
                     .horizontal_middle()
                     .allow_wrapping()
                     .limit_lines(2),
@@ -249,7 +332,11 @@ impl TiledElementSubView {
         composite_tree.add_child(ct_root, ct_icon);
         composite_tree.add_child(ct_root, ct_label);
 
-        Self { ct_root, ht_root }
+        Self {
+            ct_root,
+            ht_root,
+            entry_type: model.r#type,
+        }
     }
 
     fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {

@@ -140,7 +140,7 @@ pub struct Application {
     preview_edit_tool_type: PreviewEditToolType,
     pub removed_object_render_ids: Vec<usize>,
     pub world_matrix_recompute_targets: HashSet<ObjectID>,
-    pub asset_explorer: self::asset_explorer::State,
+    asset_explorer: self::asset_explorer::State,
 }
 impl Application {
     pub fn new() -> Self {
@@ -875,6 +875,7 @@ pub enum ViewFeedback {
     ObjectNameChanged(ViewFeedbackObjectNameChanged),
     ObjectDataChanged(ViewFeedbackObjectDataChanged),
     PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged),
+    AssetExplorerCurrentDirectoryChanged(self::asset_explorer::ViewFeedbackCurrentDirectoryChanged),
 }
 impl ViewFeedback {
     pub const fn object_tree_changed() -> Self {
@@ -897,6 +898,12 @@ impl ViewFeedback {
         Self::PreviewEditToolTypeChanged(ViewFeedbackPreviewEditToolTypeChanged)
     }
 
+    pub const fn asset_explorer_current_directory_changed() -> Self {
+        Self::AssetExplorerCurrentDirectoryChanged(
+            self::asset_explorer::ViewFeedbackCurrentDirectoryChanged,
+        )
+    }
+
     pub fn dispatch(self, registry: &ViewFeedbackRegistry, context: &mut ViewFeedbackContext) {
         match self {
             Self::ObjectTreeChanged(o) => registry.dispatch(o, context),
@@ -904,6 +911,7 @@ impl ViewFeedback {
             Self::ObjectNameChanged(o) => registry.dispatch(o, context),
             Self::ObjectDataChanged(o) => registry.dispatch(o, context),
             Self::PreviewEditToolTypeChanged(o) => registry.dispatch(o, context),
+            Self::AssetExplorerCurrentDirectoryChanged(o) => registry.dispatch(o, context),
         }
     }
 }
