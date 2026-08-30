@@ -84,32 +84,25 @@ impl View for FileListView {
                     ..Default::default()
                 });
 
-                let items = std::fs::read_dir(std::env::current_dir().expect("current_dir"))
-                    .expect("read_dir")
-                    .map(|e| {
-                        let e = e.expect("read_dir.iter");
-
-                        e.file_name().into_string().expect("invalid file name str")
-                    })
-                    .collect::<Vec<_>>();
-
-                let mut elements = Vec::with_capacity(items.len());
                 let mut left_offset = 0.0;
                 let mut top_offset = 0.0;
-                for x in &items {
-                    let element = TiledElementSubView::new(
-                        ctx.composite_tree,
-                        ctx.ht_manager,
-                        ctx.system_link,
-                        x.into(),
-                        Point::new_logical(left_offset, top_offset),
-                    );
-                    ctx.composite_tree.add_child(ct_root, element.ct_root);
-                    ctx.ht_manager.add_child(ht_root, element.ht_root);
-                    elements.push(element);
+                let elements = crate::model::asset_explorer::current_dir_entries(ctx.application)
+                    .map(|e| {
+                        let element = TiledElementSubView::new(
+                            ctx.composite_tree,
+                            ctx.ht_manager,
+                            ctx.system_link,
+                            e.name,
+                            Point::new_logical(left_offset, top_offset),
+                        );
+                        ctx.composite_tree.add_child(ct_root, element.ct_root);
+                        ctx.ht_manager.add_child(ht_root, element.ht_root);
 
-                    left_offset += TiledElementSubView::ITEM_WIDTH;
-                }
+                        left_offset += TiledElementSubView::ITEM_WIDTH;
+
+                        element
+                    })
+                    .collect::<Vec<_>>();
 
                 let entity = Rc::new(FileListViewEntity {
                     ct_root,
