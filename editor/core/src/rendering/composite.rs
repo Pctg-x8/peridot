@@ -2873,7 +2873,7 @@ impl<Event> CompositeTreeSyncBuffer<Event> {
                         render.dirty_flags[n].text_layout_dirty || df.text_layout_dirty;
                 }
                 DirtyRectSync::Deleted => {
-                    // TODO: 今はすることがない そのうちCompositeRectに有効無効のフラグもたせるかも
+                    render.rects[n].active = false;
                 }
             }
         }
