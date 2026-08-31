@@ -551,7 +551,7 @@ impl TextInputViewCore {
             ct_selection_bg,
             has_focus: core::cell::Cell::new(false),
             content_h_offset: core::cell::Cell::new(0.0),
-            content_visible_width: 128.0 - 4.0,
+            content_visible_width: core::cell::Cell::new(128.0 - 4.0),
             text_edit_state: RefCell::new(SingleLineTextEditState::new(String::new())),
             #[cfg(windows)]
             native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
@@ -597,6 +597,7 @@ impl TextInputViewCore {
             .begin_mod_chain(self.ct_text_clip)
             .size_imm(rect.width - 4.0, rect.height - 4.0)
             .apply();
+        self.eh.content_visible_width.set(rect.width);
     }
 }
 
@@ -609,7 +610,7 @@ pub struct TextInputViewCoreEventHandler {
     ct_selection_bg: CompositeTreeRef,
     has_focus: core::cell::Cell<bool>,
     content_h_offset: core::cell::Cell<f32>,
-    content_visible_width: f32,
+    content_visible_width: core::cell::Cell<f32>,
     text_edit_state: RefCell<SingleLineTextEditState>,
     // content: core::cell::RefCell<String>,
     // cursor_pos_bytes: core::cell::Cell<usize>,
@@ -1051,14 +1052,14 @@ impl TextInputViewCoreEventHandler {
                 .set(self.content_h_offset.get() - cursor_x_display);
             text_scroll_occured = true;
             cursor_x_display = 0.0;
-        } else if self.content_visible_width - 2.0 < cursor_x_display {
+        } else if self.content_visible_width.get() - 2.0 < cursor_x_display {
             // 範囲外になる(右すぎ cursor_display_xがcontent_visible_widthになるようにスクロール量を調整)
             self.content_h_offset.set(
                 self.content_h_offset.get()
-                    - (cursor_x_display - (self.content_visible_width - 2.0)),
+                    - (cursor_x_display - (self.content_visible_width.get() - 2.0)),
             );
             text_scroll_occured = true;
-            cursor_x_display = self.content_visible_width - 2.0;
+            cursor_x_display = self.content_visible_width.get() - 2.0;
         }
 
         composite_tree
