@@ -19,27 +19,64 @@ use crate::{
     },
     ui::dock::PaneContentPresenter,
     uikit::{
-        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ContainerView, ContainerViewInit, MeasureContext, RenderContext, TeardownContext,
+        TextInputView, TextInputViewIO, TypedViewIdentifier, View, ViewConstructor,
         ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewIdentifier,
-        ViewInitContext, ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRegisterable,
-        ViewRenderElements, ViewRenderer,
+        ViewInitContext, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore,
+        ViewRegisterable, ViewRenderElements, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct Presenter {
+    root_view: TypedViewIdentifier<ContainerView>,
     eh: Rc<EventHandler>,
 }
 impl Presenter {
     pub const ID: &str = internal_pane_identifier!("AssetExplorer");
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
-        let eh = Rc::new(EventHandler {
-            file_list_view: ctx.construct_view(FileListViewInit, |_| []),
+        let eh = Rc::new_cyclic(|eh| {
+            let path_input_view =
+                ctx.construct_view_direct(|id| Box::new(TextInputView::new(id, eh.clone())));
+            let file_list_view = ctx.construct_view(FileListViewInit, |_| []);
+            ctx.view_instance_mut(path_input_view)
+                .expect("query failed")
+                .revalidate();
+
+            ctx.view_layout_mut(path_input_view)
+                .expect("query failed")
+                .width = ViewSize::FillAvailable;
+            ctx.view_layout_mut(path_input_view)
+                .expect("query failed")
+                .height = ViewSize::Fixed(20.0);
+
+            EventHandler {
+                path_input_view,
+                file_list_view,
+            }
         });
         ctx.subscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&eh);
 
-        Self { eh }
+        let root_view = ctx.construct_view(ContainerViewInit, |_| {
+            [
+                eh.path_input_view.into_untyped(),
+                eh.file_list_view.into_untyped(),
+            ]
+        });
+        {
+            let l = ctx.view_layout_mut(root_view).expect("query failed");
+            l.child = ViewLayoutChild::Flow {
+                direction: ViewLayoutFlowDirection::Vertical,
+                alignment: ViewLayoutFlowAlignment::Start,
+                justify: ViewLayoutFlowJustify::Stretch,
+                overflow: ViewLayoutOverflow::Overflow,
+                gap: 2.0,
+            };
+        }
+
+        Self { root_view, eh }
     }
 }
 impl PaneContentPresenter for Presenter {
@@ -52,7 +89,20 @@ impl PaneContentPresenter for Presenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.eh.file_list_view.into_untyped()
+        self.root_view.into_untyped()
+    }
+
+    fn resize(
+        &self,
+        new_size: &Size<LogicalUnit>,
+        context: &mut crate::ui::dock::PaneContentResizeContext,
+    ) {
+        let l = context
+            .view_layout_mut(self.root_view)
+            .expect("query failed");
+        l.width = ViewSize::Fixed(new_size.width);
+        l.height = ViewSize::Fixed(new_size.height);
+        context.schedule_view_render(self.root_view);
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
@@ -61,6 +111,7 @@ impl PaneContentPresenter for Presenter {
 }
 
 struct EventHandler {
+    path_input_view: TypedViewIdentifier<TextInputView>,
     file_list_view: TypedViewIdentifier<FileListView>,
 }
 impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
@@ -72,10 +123,38 @@ impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirect
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         context
+            .view_instance_mut(self.path_input_view)
+            .expect("query failed")
+            .revalidate();
+        context.schedule_view_render(self.path_input_view);
+
+        context
             .view_instance_mut(self.file_list_view)
             .expect("query failed")
             .revalidate_elements = true;
         context.schedule_view_render(self.file_list_view);
+    }
+}
+impl TextInputViewIO for EventHandler {
+    fn text(&self, requester: ViewIdentifier, app: &crate::model::Application) -> String {
+        if requester == self.path_input_view {
+            return crate::model::asset_explorer::current_path(app)
+                .display()
+                .to_string();
+        }
+
+        String::new()
+    }
+
+    fn set_text(
+        &self,
+        sender: ViewIdentifier,
+        app: &mut crate::model::ApplicationMutation,
+        text: String,
+    ) {
+        if sender == self.path_input_view {
+            tracing::debug!(text, "todo: set_text path_input_view");
+        }
     }
 }
 
@@ -99,12 +178,21 @@ struct FileListView {
 impl View for FileListView {
     fn render(
         &mut self,
-        _layout_rect: Rect<LogicalUnit>,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref entity) => {
+                ctx.composite_tree
+                    .begin_mod_chain(entity.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager.get_data_mut(entity.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(entity.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(entity.ht_root).width = layout_rect.width;
+                ctx.ht_manager.get_data_mut(entity.ht_root).height = layout_rect.height;
+
                 if core::mem::replace(&mut self.revalidate_elements, false) {
                     // revalidate elements
                     // TODO: 最適化とか仮想化はあとまわし
@@ -142,11 +230,13 @@ impl View for FileListView {
             }
             None => {
                 let ct_root = CompositeRect::build()
-                    .expand_full()
+                    .rect_imm(layout_rect.clone())
                     .create(ctx.composite_tree);
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width_adjustment_factor: 1.0,
-                    height_adjustment_factor: 1.0,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
                     ..Default::default()
                 });
 

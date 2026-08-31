@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::model::{ApplicationAccess, ApplicationMutableAccess};
 
@@ -11,6 +11,10 @@ impl State {
             current_dir: std::env::current_dir().expect("current_dir"),
         }
     }
+}
+
+pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> &Path {
+    &state.application().asset_explorer.current_dir
 }
 
 pub enum FileEntryType {
