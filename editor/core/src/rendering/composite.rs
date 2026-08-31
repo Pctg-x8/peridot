@@ -1599,6 +1599,26 @@ impl CompositeSharedBuffers {
     }
 }
 
+struct CompositeInstanceEmitter<'a> {
+    manager: &'a mut CompositeInstanceManager,
+    mapped_ptr: *mut core::ffi::c_void,
+}
+impl CompositeInstanceEmitter<'_> {
+    #[inline(always)]
+    fn write(&mut self, index: usize, x: CompositeInstanceData) {
+        if index >= self.manager.capacity {
+            todo!("allocate new page for instance buffer");
+        }
+
+        unsafe {
+            self.mapped_ptr
+                .cast::<CompositeInstanceData>()
+                .add(index)
+                .write(x);
+        }
+    }
+}
+
 struct CompositeInstanceManager {
     buffer: br::vk::VkBuffer,
     memory: br::vk::VkDeviceMemory,
@@ -1649,7 +1669,7 @@ impl CompositeInstanceManager {
         }
     }
 
-    const INIT_CAP: usize = 1024;
+    const INIT_CAP: usize = (4 * 1024 * 1024) / size_of::<CompositeInstanceData>();
 
     fn new(gfx: &Graphics) -> Self {
         let mut buffer = br::BufferObject::new(
@@ -2456,11 +2476,11 @@ impl<Event> CompositeTreeRender<Event> {
     unsafe fn update(
         &mut self,
         root: CompositeTreeRef,
+        instance_emitter: &mut CompositeInstanceEmitter,
         inst_builder: &mut CompositeRenderingInstructionBuilder,
         size: br::Extent2D,
         ui_render_scale: f32,
         current_sec: f32,
-        mapped_head: *mut core::ffi::c_void,
         font_set: &FontSet,
         mask_atlas: &mut MaskTextureAtlasManager,
         color_atlas: &ColorTextureAtlasManager,
@@ -2479,7 +2499,6 @@ impl<Event> CompositeTreeRender<Event> {
             active_clip: Option<([SafeF32; 4], ClipConfig)>,
         }
 
-        let instances_head = mapped_head.cast::<CompositeInstanceData>();
         let mut instance_slot_index = 0;
         let mut processes = vec![Process {
             r: root,
@@ -2579,8 +2598,8 @@ impl<Event> CompositeTreeRender<Event> {
                 };
 
                 unsafe {
-                    core::ptr::write(
-                        instances_head.add(instance_slot_index),
+                    instance_emitter.write(
+                        instance_slot_index,
                         CompositeInstanceData {
                             pos_st: [w, h, 0.0, 0.0],
                             uv_st: [
@@ -2719,8 +2738,8 @@ impl<Event> CompositeTreeRender<Event> {
                 } + t.offset[1] * scale_factor;
                 for b in cache.text_rects.iter() {
                     unsafe {
-                        core::ptr::write(
-                            instances_head.add(instance_slot_index),
+                        instance_emitter.write(
+                            instance_slot_index,
                             CompositeInstanceData {
                                 pos_st: [
                                     b.width as f32,
@@ -3784,11 +3803,14 @@ impl CompositeRenderer {
         unsafe {
             tree.update(
                 root,
+                &mut CompositeInstanceEmitter {
+                    manager: &mut self.instance_manager,
+                    mapped_ptr: ptr.ptr(),
+                },
                 &mut inst_builder,
                 rt_size,
                 ui_render_scale,
                 current_sec,
-                ptr.ptr(),
                 font_set,
                 mask_atlas,
                 color_atlas,

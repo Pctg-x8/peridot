@@ -328,6 +328,9 @@ impl<'fs> Graphics<'fs> {
         let mut device_features =
             br::PhysicalDeviceFeatures2::new(br::vk::VkPhysicalDeviceFeatures {
                 fillModeNonSolid: br::vk::VK_TRUE,
+                wideLines: br::vk::VK_TRUE,
+                sparseBinding: br::vk::VK_TRUE,
+                sparseResidencyBuffer: br::vk::VK_TRUE,
                 ..Default::default()
             });
         let mut device_sync2_features = br::PhysicalDeviceSynchronization2Features::new(true);
