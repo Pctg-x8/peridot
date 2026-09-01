@@ -268,7 +268,6 @@ pub fn create_heading_visual<E>(
     composite_tree: &mut CompositeTree<E>,
 ) {
     let ct_root = CompositeRect::build()
-        .use_ui_scale()
         .expand_width()
         .size_imm(0.0, ITEM_HEIGHT)
         .offset_imm(0.0, placement_y)
@@ -307,7 +306,6 @@ impl CommandView {
             ..Default::default()
         });
         let ct_root = CompositeRect::build()
-            .use_ui_scale()
             .expand_width()
             .size_imm(0.0, ITEM_HEIGHT)
             .offset(
@@ -317,7 +315,6 @@ impl CommandView {
             .opacity_anim(&INTRO_OPACITY_ANIM, animation_base_time)
             .create(ctx.composite_tree);
         let ct_label = CompositeRect::build()
-            .use_ui_scale()
             .expand_full()
             .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
             .offset_imm(TEXT_INLINE_MARGIN, 0.0)
@@ -395,7 +392,6 @@ impl SubMenuView {
             ..Default::default()
         });
         let ct_root = CompositeRect::build()
-            .use_ui_scale()
             .expand_width()
             .size_imm(0.0, ITEM_HEIGHT)
             .offset(
@@ -405,7 +401,6 @@ impl SubMenuView {
             .opacity_anim(&INTRO_OPACITY_ANIM, animation_base_time)
             .create(ctx.composite_tree);
         let ct_label = CompositeRect::build()
-            .use_ui_scale()
             .expand_full()
             .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
             .offset_imm(TEXT_INLINE_MARGIN, 0.0)
@@ -416,7 +411,6 @@ impl SubMenuView {
             )
             .create(ctx.composite_tree);
         let ct_arrow = CompositeRect::build()
-            .use_ui_scale()
             .relative_offset_adjustment(1.0, 0.5)
             .offset_imm(
                 -Self::ICON_SIZE.width - TEXT_INLINE_MARGIN,
@@ -473,7 +467,6 @@ pub fn create_separator_visual<E>(
     composite_tree: &mut CompositeTree<E>,
 ) {
     let ct_root = CompositeRect::build()
-        .use_ui_scale()
         .expand_width()
         .size_imm(0.0, 1.0)
         .offset_imm(0.0, placement_y)

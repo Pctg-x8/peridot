@@ -956,7 +956,7 @@ impl<Event> Default for CompositeRect<Event> {
         Self {
             active: true,
             has_bitmap: false,
-            scale_factor: CompositeRectScaleFactor::NoScale,
+            scale_factor: CompositeRectScaleFactor::UI,
             corner_radius: CornerRadius::default(),
             border: None,
             softedge: 0.0,
@@ -1018,8 +1018,8 @@ impl<Event> CompositeRectBuilder<Event> {
         registry.create(self.temp)
     }
 
-    pub const fn use_ui_scale(mut self) -> Self {
-        self.temp.scale_factor = CompositeRectScaleFactor::UI;
+    pub const fn unscaled(mut self) -> Self {
+        self.temp.scale_factor = CompositeRectScaleFactor::NoScale;
         self
     }
 

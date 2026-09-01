@@ -386,7 +386,6 @@ impl View for SectionHeaderView {
             None => {
                 // first render
                 let ct_root = CompositeRect::build()
-                    .use_ui_scale()
                     .rect_imm(layout_rect.clone())
                     .composite_fill_color_imm([1.0, 1.0, 1.0, 0.0])
                     .text(
@@ -400,13 +399,11 @@ impl View for SectionHeaderView {
                     )
                     .create(ctx.composite_tree);
                 let ct_topline = CompositeRect::build()
-                    .use_ui_scale()
                     .size_imm(0.0, 1.0)
                     .expand_width()
                     .composite_fill_color_imm([1.0, 1.0, 1.0, 0.25])
                     .create(ctx.composite_tree);
                 let ct_bottomline = CompositeRect::build()
-                    .use_ui_scale()
                     .size_imm(0.0, 1.0)
                     .expand_width()
                     .anchor_parent_bottom()

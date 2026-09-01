@@ -395,7 +395,6 @@ impl crate::uikit::View for ObjectRowView {
             None => {
                 // first render
                 let ct_root = CompositeRect::build()
-                    .use_ui_scale()
                     .rect_imm(layout_rect.clone())
                     .composite_fill_color_imm([0.0, 0.25, 1.0, if selected { 1.0 } else { 0.0 }])
                     .create(ctx.composite_tree);

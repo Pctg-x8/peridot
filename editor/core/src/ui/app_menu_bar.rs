@@ -67,7 +67,6 @@ impl crate::uikit::View for View {
             None => {
                 // first render
                 let ct_root = CompositeRect::build()
-                    .use_ui_scale()
                     .expand_width()
                     .offset_imm(0.0, self.top)
                     .size_imm(0.0, ItemSubView::ITEM_HEIGHT)

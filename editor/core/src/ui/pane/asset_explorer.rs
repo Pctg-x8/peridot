@@ -20,11 +20,12 @@ use crate::{
     ui::dock::PaneContentPresenter,
     uikit::{
         ContainerView, ContainerViewInit, MeasureContext, RenderContext, TeardownContext,
-        TextInputView, TextInputViewIO, TypedViewIdentifier, View, ViewConstructor,
-        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewIdentifier,
-        ViewInitContext, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore,
-        ViewRegisterable, ViewRenderElements, ViewRenderer, ViewSize,
+        TextInputView, TextInputViewIO, TextInputViewInit, TypedViewIdentifier, View,
+        ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
+        ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutChild,
+        ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
+        ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
+        ViewRenderElements, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -38,19 +39,19 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let eh = Rc::new_cyclic(|eh| {
-            let path_input_view =
-                ctx.construct_view_direct(|id| Box::new(TextInputView::new(id, eh.clone())));
+            let path_input_view = ctx.construct_view(TextInputViewInit::new(eh.clone()), |_| []);
             let file_list_view = ctx.construct_view(FileListViewInit, |_| []);
             ctx.view_instance_mut(path_input_view)
                 .expect("query failed")
                 .revalidate();
 
-            ctx.view_layout_mut(path_input_view)
-                .expect("query failed")
-                .width = ViewSize::FillAvailable;
-            ctx.view_layout_mut(path_input_view)
-                .expect("query failed")
-                .height = ViewSize::Fixed(20.0);
+            let l = ctx.view_layout_mut(path_input_view).expect("query failed");
+            l.width = ViewSize::FillAvailable;
+            l.height = ViewSize::Fixed(20.0);
+
+            let l = ctx.view_layout_mut(file_list_view).expect("query failed");
+            l.width = ViewSize::FillAvailable;
+            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
 
             EventHandler {
                 path_input_view,
@@ -70,7 +71,7 @@ impl Presenter {
             l.child = ViewLayoutChild::Flow {
                 direction: ViewLayoutFlowDirection::Vertical,
                 alignment: ViewLayoutFlowAlignment::Start,
-                justify: ViewLayoutFlowJustify::Stretch,
+                justify: ViewLayoutFlowJustify::Start,
                 overflow: ViewLayoutOverflow::Overflow,
                 gap: 2.0,
             };
@@ -290,7 +291,7 @@ impl View for FileListView {
     }
 
     fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(0.0, 0.0)
+        Size::new_logical(10.0, 10.0)
     }
 }
 
@@ -378,7 +379,6 @@ impl TiledElementSubView {
         .size();
 
         let ct_root = CompositeRect::build()
-            .use_ui_scale()
             .offset_imm(left_top.x, left_top.y)
             .size_imm(
                 Self::ITEM_WIDTH,
@@ -393,7 +393,6 @@ impl TiledElementSubView {
             .corner_radius(CornerRadius::all(4.0))
             .create(composite_tree);
         let ct_icon = CompositeRect::build()
-            .use_ui_scale()
             .composite_fill_color_imm([1.0, 1.0, 1.0, 0.5])
             .size_imm(32.0, 32.0)
             .relative_offset_adjustment(0.5, 0.0)

@@ -1705,6 +1705,28 @@ pub trait TextInputViewIO {
     fn set_text(&self, sender: ViewIdentifier, app: &mut ApplicationMutation, text: String);
 }
 
+pub struct TextInputViewInit<IO: TextInputViewIO> {
+    pub io: std::rc::Weak<IO>
+}
+impl<IO: TextInputViewIO + 'static> ViewConstructor for TextInputViewInit<IO> {
+    type ConcreteView = TextInputView;
+
+    fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        TextInputView {
+            id,
+            eh: None,
+            io: self.io,
+            should_revalidate_on_next_render: false,
+        }
+    }
+}
+impl<IO: TextInputViewIO> TextInputViewInit<IO> {
+    #[inline(always)]
+    pub const fn new(io: std::rc::Weak<IO>) -> Self {
+        Self { io }
+    }
+}
+
 pub struct TextInputView {
     id: TypedViewIdentifier<Self>,
     eh: Option<Rc<TextInputViewEventHandler>>,
