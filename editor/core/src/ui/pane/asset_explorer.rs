@@ -9,6 +9,7 @@ use crate::{
             HitTestTreeRef, PointerActionArgs,
         },
     },
+    model::Application,
     rendering::{
         composite::{
             AnimatableColor, AnimationCurve, Border, CompositeRect, CompositeRectText,
@@ -19,13 +20,13 @@ use crate::{
     },
     ui::dock::PaneContentPresenter,
     uikit::{
-        ContainerView, ContainerViewInit, MeasureContext, RenderContext, ScrollContainerInit,
-        TeardownContext, TextInputView, TextInputViewIO, TextInputViewInit, TypedViewIdentifier,
-        View, ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
-        ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutChild,
-        ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
-        ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
-        ViewRenderElements, ViewRenderer, ViewSize,
+        ContainerView, ContainerViewInit, MeasureContext, RenderContext, ScrollContainer,
+        ScrollContainerInit, TeardownContext, TextInputView, TextInputViewIO, TextInputViewInit,
+        TypedViewIdentifier, View, ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackRegisterable, ViewIdentifier, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore,
+        ViewRegisterable, ViewRenderElements, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -52,22 +53,30 @@ impl Presenter {
             let l = ctx.view_layout_mut(file_list_view).expect("query failed");
             l.width = ViewSize::FillAvailable;
             l.height = ViewSize::FillAvailable;
+
+            let file_list_container_view = ctx
+                .construct_view(ScrollContainerInit::new(file_list_view), |_| {
+                    [file_list_view.into_untyped()]
+                });
+            let l = ctx
+                .view_layout_mut(file_list_container_view)
+                .expect("query failed");
+            l.width = ViewSize::FillAvailable;
+            l.height = ViewSize::FillAvailable;
             l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
 
             EventHandler {
                 path_input_view,
                 file_list_view,
+                file_list_container_view,
             }
         });
         ctx.subscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&eh);
 
-        let root_view = ctx.construct_view(ContainerViewInit, |ctx| {
+        let root_view = ctx.construct_view(ContainerViewInit, |_| {
             [
                 eh.path_input_view.into_untyped(),
-                ctx.construct_view(ScrollContainerInit::new(eh.file_list_view), |_| {
-                    [eh.file_list_view.into_untyped()]
-                })
-                .into_untyped(),
+                eh.file_list_container_view.into_untyped(),
             ]
         });
         {
@@ -107,6 +116,17 @@ impl PaneContentPresenter for Presenter {
             .expect("query failed");
         l.width = ViewSize::Fixed(new_size.width);
         l.height = ViewSize::Fixed(new_size.height);
+
+        let tile_view_height = context
+            .view_instance(self.eh.file_list_view)
+            .expect("query failed")
+            .compute_tiled_view_height(new_size.width, None);
+        let l = context
+            .view_layout_mut(self.eh.file_list_view)
+            .expect("query failed");
+        l.width = ViewSize::Fixed(new_size.width);
+        l.height = ViewSize::Fixed(tile_view_height);
+
         context.schedule_view_render(self.root_view);
     }
 
@@ -118,6 +138,7 @@ impl PaneContentPresenter for Presenter {
 struct EventHandler {
     path_input_view: TypedViewIdentifier<TextInputView>,
     file_list_view: TypedViewIdentifier<FileListView>,
+    file_list_container_view: TypedViewIdentifier<ScrollContainer>,
 }
 impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
     for EventHandler
@@ -137,7 +158,25 @@ impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirect
             .view_instance_mut(self.file_list_view)
             .expect("query failed")
             .revalidate_elements = true;
-        context.schedule_view_render(self.file_list_view);
+
+        let ViewSize::Fixed(w) = context
+            .view_layout_mut(self.file_list_view)
+            .expect("query failed")
+            .width
+        else {
+            unreachable!();
+        };
+        let tile_view_height = context
+            .view_instance(self.file_list_view)
+            .expect("query failed")
+            .compute_tiled_view_height(w, Some((context.system_link, context.application)));
+        context
+            .view_layout_mut(self.file_list_view)
+            .expect("query failed")
+            .height = ViewSize::Fixed(tile_view_height);
+
+        // スクロール範囲の再計算が必要なのでScrollContainerから再レンダリングする
+        context.schedule_view_render(self.file_list_container_view);
     }
 }
 impl TextInputViewIO for EventHandler {
@@ -179,6 +218,49 @@ impl ViewConstructor for FileListViewInit {
 struct FileListView {
     entity: Option<Rc<FileListViewEntity>>,
     revalidate_elements: bool,
+}
+impl FileListView {
+    fn compute_tiled_view_height(
+        &self,
+        available_width: f32,
+        revalidate_ctx: Option<(&SystemLink, &Application)>,
+    ) -> f32 {
+        let Some(ref entity) = self.entity else {
+            // not mounted yet
+            return 0.0;
+        };
+
+        let mut left_offset = 0.0;
+        let mut line_max_height = 0.0f32;
+        let mut top_offset = 0.0;
+        if let Some((syslink, app)) = revalidate_ctx {
+            for e in crate::model::asset_explorer::current_dir_entries(app) {
+                if left_offset + TiledElementSubView::ITEM_WIDTH >= available_width {
+                    // wrap
+                    left_offset = 0.0;
+                    top_offset += core::mem::replace(&mut line_max_height, 0.0);
+                }
+
+                left_offset += TiledElementSubView::ITEM_WIDTH;
+                line_max_height = line_max_height.max(TiledElementSubView::offline_compute_height(
+                    &e.name, syslink,
+                ));
+            }
+        } else {
+            for e in entity.elements.borrow().iter() {
+                if left_offset + TiledElementSubView::ITEM_WIDTH >= available_width {
+                    // wrap
+                    left_offset = 0.0;
+                    top_offset += core::mem::replace(&mut line_max_height, 0.0);
+                }
+
+                left_offset += TiledElementSubView::ITEM_WIDTH;
+                line_max_height = line_max_height.max(e.height);
+            }
+        }
+
+        top_offset + line_max_height
+    }
 }
 impl View for FileListView {
     fn render(
@@ -261,8 +343,6 @@ impl View for FileListView {
                     }
                 }
 
-                // TODO: relayoutの結果を自身のサイズそしてレイアウトシステムに反映する必要がある ただしrenderのタイミングでサイズいじることはできないのでlayoutフェーズで自身のサイズ計算のときに計算を差し込める必要がある
-
                 entity
             }
             None => {
@@ -331,7 +411,7 @@ impl View for FileListView {
     }
 
     fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(10.0, 10.0)
+        Size::new_logical(0.0, 0.0)
     }
 }
 
@@ -401,6 +481,20 @@ impl TiledElementSubView {
     const ICON_TEXT_MARGIN: f32 = 2.0;
     const TEXT_WIDTH_MAX: f32 = 64.0;
     const ITEM_WIDTH: f32 = Self::TEXT_WIDTH_MAX + Self::MARGIN * 2.0;
+
+    fn offline_compute_height(label: &str, syslink: &SystemLink) -> f32 {
+        32.0 + Self::MARGIN * 2.0
+            + TextLayout::new_single(
+                label,
+                FontID::UIDefault,
+                syslink.font_set(),
+                CompositeRectTextHorizontalAlignment::Start,
+                Some(Self::TEXT_WIDTH_MAX),
+                Some(2),
+            )
+            .height()
+            + Self::ICON_TEXT_MARGIN
+    }
 
     pub fn new<E>(
         composite_tree: &mut CompositeTree<E>,

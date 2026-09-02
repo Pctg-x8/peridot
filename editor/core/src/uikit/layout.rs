@@ -31,18 +31,13 @@ pub struct ViewLayout {
     pub flow_self_alignment: Option<ViewLayoutFlowAlignment>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum ViewSize {
     Fixed(f32),
     Percent(f32),
+    #[default]
     FitContent,
     FillAvailable,
-}
-impl Default for ViewSize {
-    #[inline(always)]
-    fn default() -> Self {
-        Self::FitContent
-    }
 }
 
 #[derive(Debug, Clone, Default)]
