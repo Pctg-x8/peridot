@@ -1776,25 +1776,18 @@ impl View for TextInputView {
         let eh = match self.eh {
             Some(ref eh) => {
                 eh.core.set_rect(layout_rect.clone(), ctx.composite_tree);
-                ctx.ht_manager.get_data_mut(eh.ht_root).left = layout_rect.left;
-                ctx.ht_manager.get_data_mut(eh.ht_root).top = layout_rect.top;
-                ctx.ht_manager.get_data_mut(eh.ht_root).width = layout_rect.width;
-                ctx.ht_manager.get_data_mut(eh.ht_root).height = layout_rect.height;
+                ctx.ht_manager.mod_chain(eh.ht_root).rect(layout_rect);
 
                 eh
             }
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: layout_rect.width,
-                    height: layout_rect.height,
-                    left: layout_rect.left,
-                    top: layout_rect.top,
-                    cursor_shape: CursorShape::IBeam,
-                    keyboard_focus: Some(kf_token),
-                    ..Default::default()
-                });
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect.clone())
+                    .cursor_shape(CursorShape::IBeam)
+                    .keyboard_focus(kf_token)
+                    .create(ctx.ht_manager);
                 let eh = Rc::new(TextInputViewEventHandler {
                     io: self.io.clone(),
                     core: TextInputViewCore::new(
@@ -2058,32 +2051,25 @@ impl View for NumericInputView {
         let eh = match self.eh {
             Some(ref x) => {
                 x.core.set_rect(layout_rect.clone(), ctx.composite_tree);
-                ctx.ht_manager.get_data_mut(x.ht_root).left = layout_rect.left;
-                ctx.ht_manager.get_data_mut(x.ht_root).top = layout_rect.top;
-                ctx.ht_manager.get_data_mut(x.ht_root).width = layout_rect.width;
-                ctx.ht_manager.get_data_mut(x.ht_root).height = layout_rect.height;
-
-                ctx.ht_manager.get_data_mut(x.ht_root).cursor_shape = if x.key_input_enabled.get() {
-                    CursorShape::IBeam
-                } else {
-                    CursorShape::ResizeVertical
-                };
+                ctx.ht_manager
+                    .mod_chain(x.ht_root)
+                    .rect(layout_rect)
+                    .cursor_shape(if x.key_input_enabled.get() {
+                        CursorShape::IBeam
+                    } else {
+                        CursorShape::ResizeVertical
+                    });
 
                 x
             }
             None => {
                 // first render
                 let kf_token = ctx.keyboard_focus_registry.acquire_token();
-
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: layout_rect.width,
-                    height: layout_rect.height,
-                    left: layout_rect.left,
-                    top: layout_rect.top,
-                    cursor_shape: CursorShape::ResizeVertical,
-                    keyboard_focus: Some(kf_token),
-                    ..Default::default()
-                });
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect.clone())
+                    .cursor_shape(CursorShape::ResizeVertical)
+                    .keyboard_focus(kf_token)
+                    .create(ctx.ht_manager);
                 let eh = Rc::new(NumericInputViewEventHandler {
                     core: TextInputViewCore::new(
                         ctx,

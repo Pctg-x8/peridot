@@ -59,6 +59,11 @@ impl Default for HitTestTreeData<'_> {
     }
 }
 impl<'h> HitTestTreeData<'h> {
+    #[inline(always)]
+    pub fn build() -> HitTestTreeBuilder<'h> {
+        HitTestTreeBuilder(Default::default())
+    }
+
     #[inline]
     pub fn action_handler(&self) -> Option<std::rc::Rc<dyn HitTestTreeActionHandler + 'h>> {
         self.action_handler
@@ -84,6 +89,51 @@ impl<'h> HitTestTreeData<'h> {
         self.screen_reposition_handler
             .as_ref()
             .and_then(std::rc::Weak::upgrade)
+    }
+}
+
+#[must_use = "builder should be consumed explicitly via calling `create`"]
+#[repr(transparent)]
+pub struct HitTestTreeBuilder<'h>(HitTestTreeData<'h>);
+impl<'h> HitTestTreeBuilder<'h> {
+    #[inline(always)]
+    pub fn create(self, manager: &mut HitTestTreeManager<'h>) -> HitTestTreeRef {
+        manager.create(self.0)
+    }
+
+    pub const fn rect(mut self, rect: Rect<LogicalUnit>) -> Self {
+        self.0.left = rect.left;
+        self.0.top = rect.top;
+        self.0.width = rect.width;
+        self.0.height = rect.height;
+        self
+    }
+
+    pub const fn cursor_shape(mut self, shape: CursorShape) -> Self {
+        self.0.cursor_shape = shape;
+        self
+    }
+
+    pub const fn keyboard_focus(mut self, token: FocusTargetToken) -> Self {
+        self.0.keyboard_focus = Some(token);
+        self
+    }
+}
+
+#[repr(transparent)]
+pub struct HitTestTreeDataChainedModifier<'a, 'h>(&'a mut HitTestTreeData<'h>);
+impl<'a, 'h> HitTestTreeDataChainedModifier<'a, 'h> {
+    pub const fn rect(self, rect: Rect<LogicalUnit>) -> Self {
+        self.0.left = rect.left;
+        self.0.top = rect.top;
+        self.0.width = rect.width;
+        self.0.height = rect.height;
+        self
+    }
+
+    pub const fn cursor_shape(self, shape: CursorShape) -> Self {
+        self.0.cursor_shape = shape;
+        self
     }
 }
 
@@ -150,6 +200,14 @@ impl<'h> HitTestTreeManager<'h> {
     #[inline]
     pub fn get_data_mut<'d>(&'d mut self, r: HitTestTreeRef) -> &'d mut HitTestTreeData<'h> {
         &mut self.data[r.0]
+    }
+
+    #[inline(always)]
+    pub fn mod_chain<'a>(
+        &'a mut self,
+        r: HitTestTreeRef,
+    ) -> HitTestTreeDataChainedModifier<'a, 'h> {
+        HitTestTreeDataChainedModifier(&mut self.data[r.0])
     }
 
     #[inline]
