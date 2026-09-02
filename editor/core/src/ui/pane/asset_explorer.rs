@@ -193,10 +193,9 @@ impl View for FileListView {
                     .begin_mod_chain(entity.ct_root)
                     .rect_imm(layout_rect.clone())
                     .apply();
-                ctx.ht_manager.get_data_mut(entity.ht_root).left = layout_rect.left;
-                ctx.ht_manager.get_data_mut(entity.ht_root).top = layout_rect.top;
-                ctx.ht_manager.get_data_mut(entity.ht_root).width = layout_rect.width;
-                ctx.ht_manager.get_data_mut(entity.ht_root).height = layout_rect.height;
+                ctx.ht_manager
+                    .mod_chain(entity.ht_root)
+                    .rect(layout_rect.clone());
 
                 if core::mem::replace(&mut self.revalidate_elements, false) {
                     // revalidate elements
@@ -207,10 +206,19 @@ impl View for FileListView {
                     }
 
                     let mut left_offset = 0.0;
+                    let mut line_max_height = 0.0;
                     let mut top_offset = 0.0;
                     entity.elements.borrow_mut().extend(
                         crate::model::asset_explorer::current_dir_entries(ctx.application).map(
                             |e| {
+                                if left_offset + TiledElementSubView::ITEM_WIDTH
+                                    >= layout_rect.width
+                                {
+                                    // wrap
+                                    left_offset = 0.0;
+                                    top_offset += core::mem::replace(&mut line_max_height, 0.0);
+                                }
+
                                 let element = TiledElementSubView::new(
                                     ctx.composite_tree,
                                     ctx.ht_manager,
@@ -224,12 +232,36 @@ impl View for FileListView {
                                 ctx.ht_manager.set_action_handler(element.ht_root, entity);
 
                                 left_offset += TiledElementSubView::ITEM_WIDTH;
+                                line_max_height = line_max_height.max(element.height);
 
                                 element
                             },
                         ),
                     );
+                } else {
+                    // relayout only
+                    let mut left_offset = 0.0;
+                    let mut line_max_height = 0.0;
+                    let mut top_offset = 0.0;
+                    for e in entity.elements.borrow().iter() {
+                        if left_offset + TiledElementSubView::ITEM_WIDTH >= layout_rect.width {
+                            // wrap
+                            left_offset = 0.0;
+                            top_offset += core::mem::replace(&mut line_max_height, 0.0);
+                        }
+
+                        e.set_offset(
+                            Point::new_logical(left_offset, top_offset),
+                            ctx.composite_tree,
+                            ctx.ht_manager,
+                        );
+
+                        left_offset += TiledElementSubView::ITEM_WIDTH;
+                        line_max_height = line_max_height.max(e.height);
+                    }
                 }
+
+                // TODO: relayoutの結果を自身のサイズそしてレイアウトシステムに反映する必要がある ただしrenderのタイミングでサイズいじることはできないのでlayoutフェーズで自身のサイズ計算のときに計算を差し込める必要がある
 
                 entity
             }
@@ -237,18 +269,21 @@ impl View for FileListView {
                 let ct_root = CompositeRect::build()
                     .rect_imm(layout_rect.clone())
                     .create(ctx.composite_tree);
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: layout_rect.left,
-                    top: layout_rect.top,
-                    width: layout_rect.width,
-                    height: layout_rect.height,
-                    ..Default::default()
-                });
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect.clone())
+                    .create(ctx.ht_manager);
 
                 let mut left_offset = 0.0;
+                let mut line_max_height = 0.0;
                 let mut top_offset = 0.0;
                 let elements = crate::model::asset_explorer::current_dir_entries(ctx.application)
                     .map(|e| {
+                        if left_offset + TiledElementSubView::ITEM_WIDTH >= layout_rect.width {
+                            // wrap
+                            left_offset = 0.0;
+                            top_offset += core::mem::replace(&mut line_max_height, 0.0);
+                        }
+
                         let element = TiledElementSubView::new(
                             ctx.composite_tree,
                             ctx.ht_manager,
@@ -260,6 +295,7 @@ impl View for FileListView {
                         ctx.ht_manager.add_child(ht_root, element.ht_root);
 
                         left_offset += TiledElementSubView::ITEM_WIDTH;
+                        line_max_height = line_max_height.max(element.height);
 
                         element
                     })
@@ -355,6 +391,7 @@ impl HitTestTreeActionHandler for FileListViewEntity {
 }
 
 struct TiledElementSubView {
+    height: f32,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     entry_type: crate::model::asset_explorer::FileEntryType,
@@ -426,10 +463,29 @@ impl TiledElementSubView {
         composite_tree.add_child(ct_root, ct_label);
 
         Self {
+            height: 32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
             ct_root,
             ht_root,
             entry_type: model.r#type,
         }
+    }
+
+    fn set_offset<E>(
+        &self,
+        left_top: Point<LogicalUnit>,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+    ) where
+        E: PartialEq,
+    {
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .offset_imm(left_top.x, left_top.y)
+            .apply();
+        ht_manager
+            .mod_chain(self.ht_root)
+            .left(left_top.x)
+            .top(left_top.y);
     }
 
     fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {

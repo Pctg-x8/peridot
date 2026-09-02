@@ -123,6 +123,16 @@ impl<'h> HitTestTreeBuilder<'h> {
 #[repr(transparent)]
 pub struct HitTestTreeDataChainedModifier<'a, 'h>(&'a mut HitTestTreeData<'h>);
 impl<'a, 'h> HitTestTreeDataChainedModifier<'a, 'h> {
+    pub const fn left(self, left: f32) -> Self {
+        self.0.left = left;
+        self
+    }
+
+    pub const fn top(self, top: f32) -> Self {
+        self.0.top = top;
+        self
+    }
+
     pub const fn rect(self, rect: Rect<LogicalUnit>) -> Self {
         self.0.left = rect.left;
         self.0.top = rect.top;
