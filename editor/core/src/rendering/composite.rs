@@ -2595,21 +2595,29 @@ impl<Event> CompositeTreeRender<Event> {
                     unsafe { core::mem::transmute(matrix.clone()) },
                 );
             } else if r.has_bitmap {
-                let (texatlas_rect, tex_type, tex_mapping_mode, slice_borders) =
-                    match r.composite_mode.texture() {
-                        Some(t) => (
-                            &mask_atlas_rects[t.id.rect_index()],
-                            t.r#type,
-                            t.mapping,
-                            t.slice_borders,
-                        ),
-                        None => (
-                            &AtlasRect::EMPTY,
-                            TextureType::Mask,
-                            TextureMappingMode::Stretch,
-                            [0.0; 4],
-                        ),
-                    };
+                let (texatlas_rect, tex_type, tex_mapping_mode, slice_borders) = match r
+                    .composite_mode
+                    .texture()
+                {
+                    Some(t) => (
+                        match mask_atlas_rects.get(t.id.rect_index()) {
+                            Some(r) => r,
+                            None => {
+                                tracing::warn!(id = ?t.id, "no mask texture registered at this point");
+                                &AtlasRect::EMPTY
+                            }
+                        },
+                        t.r#type,
+                        t.mapping,
+                        t.slice_borders,
+                    ),
+                    None => (
+                        &AtlasRect::EMPTY,
+                        TextureType::Mask,
+                        TextureMappingMode::Stretch,
+                        [0.0; 4],
+                    ),
+                };
                 let texatlas_size = match tex_type {
                     TextureType::Mask => mask_atlas.atlas().size(),
                     TextureType::Color => color_atlas.atlas().size(),
