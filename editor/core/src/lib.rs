@@ -3136,9 +3136,7 @@ async fn run<'sys>(
     let main_window_root_view =
         view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
     let window_header = ui::window_header::Component::new(
-        ui::window_header::Caption::Main {
-            project_name: "New Project".into(),
-        },
+        ui::window_header::Caption::Main,
         ui::window_header::ComponentInit {
             with_system_command_buttons: main_window.needs_system_command_buttons(),
         },

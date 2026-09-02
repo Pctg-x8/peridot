@@ -461,7 +461,7 @@ impl HitTestTreeActionHandler for FileListViewEntity {
     ) -> EventContinueControl {
         for e in self.elements.borrow().iter() {
             if e.ht_root == sender {
-                crate::model::asset_explorer::interact(context, &e.entry_type);
+                crate::model::asset_explorer::interact(context, &e.model);
                 break;
             }
         }
@@ -474,7 +474,7 @@ struct TiledElementSubView {
     height: f32,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    entry_type: crate::model::asset_explorer::FileEntryType,
+    model: crate::model::asset_explorer::FileEntry,
 }
 impl TiledElementSubView {
     const MARGIN: f32 = 8.0;
@@ -536,7 +536,10 @@ impl TiledElementSubView {
         let ct_label = CompositeRect::build()
             .text(
                 CompositeRectText::build()
-                    .run(CompositeRectTextRun::build(model.name).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .run(
+                        CompositeRectTextRun::build(model.name.clone())
+                            .color_imm([1.0, 1.0, 1.0, 1.0]),
+                    )
                     .horizontal_middle()
                     .allow_wrapping()
                     .limit_lines(2),
@@ -560,7 +563,7 @@ impl TiledElementSubView {
             height: 32.0 + Self::MARGIN * 2.0 + label_metric.height + Self::ICON_TEXT_MARGIN,
             ct_root,
             ht_root,
-            entry_type: model.r#type,
+            model,
         }
     }
 

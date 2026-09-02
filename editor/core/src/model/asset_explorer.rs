@@ -3,23 +3,28 @@ use std::path::{Path, PathBuf};
 use crate::model::{ApplicationAccess, ApplicationMutableAccess};
 
 pub(super) struct State {
-    current_dir: PathBuf,
+    breadcumbs: Vec<String>,
 }
 impl State {
     pub(super) fn new() -> Self {
         Self {
-            current_dir: std::env::current_dir().expect("current_dir"),
+            breadcumbs: Vec::new(),
         }
     }
 }
 
-pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> &Path {
-    &state.application().asset_explorer.current_dir
+pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> PathBuf {
+    let app = state.application();
+
+    app.asset_explorer
+        .breadcumbs
+        .iter()
+        .fold(app.project.root_dir.clone(), |a, b| a.join(b))
 }
 
 pub enum FileEntryType {
     File,
-    Directory(PathBuf),
+    Directory,
 }
 
 pub struct FileEntry {
@@ -30,7 +35,7 @@ pub struct FileEntry {
 pub fn current_dir_entries(
     state: &(impl ApplicationAccess + ?Sized),
 ) -> impl Iterator<Item = FileEntry> {
-    std::fs::read_dir(&state.application().asset_explorer.current_dir)
+    std::fs::read_dir(current_path(state))
         .expect("read_dir")
         .map(|e| {
             let e = e.expect("read_dir.iter");
@@ -38,7 +43,7 @@ pub fn current_dir_entries(
             FileEntry {
                 name: e.file_name().into_string().expect("invalid file name"),
                 r#type: if e.metadata().is_ok_and(|e| e.is_dir()) {
-                    FileEntryType::Directory(e.path())
+                    FileEntryType::Directory
                 } else {
                     FileEntryType::File
                 },
@@ -46,11 +51,15 @@ pub fn current_dir_entries(
         })
 }
 
-pub fn interact(state: &mut (impl ApplicationMutableAccess + ?Sized), etype: &FileEntryType) {
-    match etype {
+pub fn interact(state: &mut (impl ApplicationMutableAccess + ?Sized), e: &FileEntry) {
+    match e.r#type {
         FileEntryType::File => {}
-        FileEntryType::Directory(path) => {
-            state.application_mut().asset_explorer.current_dir = path.clone();
+        FileEntryType::Directory => {
+            state
+                .application_mut()
+                .asset_explorer
+                .breadcumbs
+                .push(e.name.clone());
             state.dispatch_view_feedback(ViewFeedbackCurrentDirectoryChanged);
         }
     }

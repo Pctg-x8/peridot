@@ -8,6 +8,7 @@ use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Ray3, Sphere3, Vector3F
 use crate::uikit::ViewFeedbackQueue;
 
 pub mod asset_explorer;
+pub mod project;
 
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -141,6 +142,7 @@ pub struct Application {
     pub removed_object_render_ids: Vec<usize>,
     pub world_matrix_recompute_targets: HashSet<ObjectID>,
     asset_explorer: self::asset_explorer::State,
+    project: self::project::State,
 }
 impl Application {
     pub fn new() -> Self {
@@ -153,6 +155,7 @@ impl Application {
             removed_object_render_ids: Vec::new(),
             world_matrix_recompute_targets: HashSet::new(),
             asset_explorer: self::asset_explorer::State::new(),
+            project: self::project::State::new(),
         }
     }
 

@@ -29,7 +29,7 @@ use crate::{
 };
 
 pub enum Caption {
-    Main { project_name: String },
+    Main,
     Sub,
 }
 
@@ -131,6 +131,8 @@ impl crate::uikit::View for View {
             Some(ref e) => e,
             None => {
                 // first render
+                let project_name: String = crate::model::project::name(ctx).into();
+
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     relative_size_adjustment: [1.0, 0.0],
@@ -139,7 +141,7 @@ impl crate::uikit::View for View {
                         AnimatableFloat::Value(Self::THICKNESS),
                     ],
                     text: match self.caption {
-                        Caption::Main { ref project_name } => Some(CompositeRectText {
+                        Caption::Main => Some(CompositeRectText {
                             runs: vec![
                                 CompositeRectTextRun {
                                     font_id: FontID::UIDefault,
@@ -149,7 +151,7 @@ impl crate::uikit::View for View {
                                 },
                                 CompositeRectTextRun {
                                     font_id: FontID::UITitleProjectName,
-                                    content: project_name.clone(),
+                                    content: project_name,
                                     color: AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
                                     spacing_inline_start: 4.0,
                                     ..Default::default()
