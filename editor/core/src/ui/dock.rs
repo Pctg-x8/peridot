@@ -407,11 +407,9 @@ impl core::fmt::Debug for Dock {
     }
 }
 impl Dock {
-    fn teardown<'h>(
+    fn destruct<'h>(
         self,
-        env: &mut (
-                 impl ViewRegisterable + ViewImmediateTeardownable + DeriveTeardownContext<'h> + ?Sized
-             ),
+        env: &mut (impl ViewRegisterable + ViewDestructionContext + DeriveTeardownContext<'h> + ?Sized),
     ) {
         match self {
             Self::RootContainer { .. } => {}
@@ -419,10 +417,10 @@ impl Dock {
                 group_view_controller,
                 ..
             } => {
-                group_view_controller.teardown(env);
+                group_view_controller.destruct(env);
             }
             Self::Splitted { splitter, .. } => {
-                env.teardown_view_recursive(splitter);
+                env.destruct_view_recursive(splitter);
             }
         }
     }
@@ -550,6 +548,29 @@ impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
             },
             self.view_init_ctx.view_instance_store,
             self.view_init_ctx.view_tree_relation_store,
+            self.view_init_ctx.view_render_state_store,
+        );
+    }
+}
+impl ViewDestructionContext for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
+        crate::uikit::destruct_view_recursive(
+            target,
+            &mut TeardownContext {
+                composite_tree: self.view_init_ctx.mount_context.composite_tree,
+                ht_manager: self.view_init_ctx.mount_context.ht_manager,
+                keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
+                current_sec: self.view_init_ctx.mount_context.current_sec,
+                view_feedback_subscription_delayed_ops: self
+                    .view_init_ctx
+                    .view_feedback_subscription_delayed_ops,
+            },
+            self.view_init_ctx.view_allocator,
+            self.view_init_ctx.view_instance_store,
+            self.view_init_ctx.view_tree_relation_store,
+            self.view_init_ctx.view_group_relation_store,
+            self.view_init_ctx.view_layout_state_store,
             self.view_init_ctx.view_render_state_store,
         );
     }
@@ -878,6 +899,7 @@ fn undock<'h>(
     env: &mut (
              impl ViewRegisterable
              + ViewImmediateTeardownable
+             + ViewDestructionContext
              + DeriveTeardownContext<'h>
              + DerivePaneContentResizeContext<'h>
              + ViewInstanceQueryableMut
@@ -892,7 +914,7 @@ fn undock<'h>(
             parent,
             group_view_controller,
         } => {
-            group_view_controller.teardown(env);
+            group_view_controller.destruct(env);
             let (remain_dock, parent_parent) = match store.get(parent) {
                 Dock::RootContainer { .. } => {
                     // ルートにつながるDockをundockしようとしている => 何もなくなる
@@ -927,7 +949,7 @@ fn undock<'h>(
                     store.get_mut(rest).reparent(parent);
                 }
             }
-            store.replace(parent, remain).teardown(env);
+            store.replace(parent, remain).destruct(env);
             let relayout_base = parent_parent;
             let relayout_base_rect = store.get_computed_state(relayout_base).rect.clone();
             relayout_dock(
@@ -2166,22 +2188,18 @@ impl PaneGroupViewController {
     }
 
     /// 後始末
-    fn teardown<'h>(
+    fn destruct<'h>(
         mut self,
-        env: &mut (
-                 impl ViewRegisterable + ViewImmediateTeardownable + DeriveTeardownContext<'h> + ?Sized
-             ),
+        env: &mut (impl ViewRegisterable + ViewDestructionContext + DeriveTeardownContext<'h> + ?Sized),
     ) {
         for mut x in self.contents.drain(..) {
-            env.teardown_view_recursive(x.tab_view);
-            env.free_view(x.tab_view);
-
             x.presenter.teardown(&mut env.derive_teardown_context());
-            env.teardown_view_recursive(x.container);
+
+            env.destruct_view_recursive(x.tab_view);
+            env.destruct_view_recursive(x.container);
         }
 
-        env.teardown_view_recursive(self.tab_strip_view);
-        env.free_view(self.tab_strip_view);
+        env.destruct_view_recursive(self.tab_strip_view);
     }
 
     /// 矩形を設定する
@@ -2331,15 +2349,17 @@ impl PaneGroupViewController {
                  impl ViewRenderer
                  + ViewInstanceQueryableMut
                  + ViewRegisterable
-                 + ViewImmediateTeardownable
+                 + ViewDestructionContext
                  + ViewRelationControllable
                  + ?Sized
              ),
     ) -> Box<dyn PaneContentPresenter> {
         let content_set = self.contents.remove(index);
-        env.teardown_view_recursive(content_set.tab_view);
-        env.free_view(content_set.tab_view);
+
+        // presenterだけ生かして他はdestruct
         env.view_detach_parent_untyped(content_set.presenter.root_view_id());
+        env.destruct_view_recursive(content_set.container);
+        env.destruct_view_recursive(content_set.tab_view);
 
         if self.current_active_tab_view == content_set.tab_view && !self.contents.is_empty() {
             // activate another content
@@ -2348,11 +2368,8 @@ impl PaneGroupViewController {
                 .expect("query failed")
                 .set_active(true);
             env.schedule_view_render(self.contents[new_active].tab_view);
-            env.view_set_visibility_untyped(
-                self.contents[new_active].presenter.root_view_id(),
-                true,
-            );
-            env.schedule_view_render_untyped(self.contents[new_active].presenter.root_view_id());
+            env.view_set_visibility(self.contents[new_active].container, true);
+            env.schedule_view_render(self.contents[new_active].container);
 
             self.current_active_tab_view = self.contents[new_active].tab_view;
         }
