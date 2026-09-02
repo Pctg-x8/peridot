@@ -15,7 +15,7 @@ use crate::{
         FloatAnimationTemplate,
     },
     uikit::{
-        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewIdentifier,
+        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor, ViewIdentifier,
         ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
@@ -61,56 +61,72 @@ const SCROLL_THUMB_ACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate = &FloatAnimati
 const SCROLL_THUMB_DEACTIVATE_OFFSET_ANIM: &FloatAnimationTemplate =
     &SCROLL_THUMB_ACTIVATE_OFFSET_ANIM.flip(AnimationCurve::Linear);
 
-pub struct ScrollContainer {
-    id: TypedViewIdentifier<Self>,
-    offset: Point<LogicalUnit>,
-    content_view: ViewIdentifier,
-    eh: Option<Rc<ScrollContainerEventHandler>>,
-    viewport_size: Size<LogicalUnit>,
+pub struct ScrollContainerInit {
+    pub content_view: ViewIdentifier,
 }
-impl ScrollContainer {
-    pub fn new(
-        id: TypedViewIdentifier<Self>,
-        rect: Rect<LogicalUnit>,
-        content_view: ViewIdentifier,
-    ) -> Self {
-        Self {
+impl ViewConstructor for ScrollContainerInit {
+    type ConcreteView = ScrollContainer;
+
+    #[inline(always)]
+    fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        ScrollContainer {
             id,
-            offset: rect.left_top(),
-            content_view,
+            content_view: self.content_view,
             eh: None,
-            viewport_size: rect.size(),
         }
     }
-
-    pub fn resize(&mut self, size: Size<LogicalUnit>) {
-        self.viewport_size = size;
+}
+impl ScrollContainerInit {
+    #[inline(always)]
+    pub const fn new<T>(content_view: TypedViewIdentifier<T>) -> Self {
+        Self::new_untyped(content_view.into_untyped())
     }
+
+    #[inline(always)]
+    pub const fn new_untyped(content_view: ViewIdentifier) -> Self {
+        Self { content_view }
+    }
+}
+
+pub struct ScrollContainer {
+    id: TypedViewIdentifier<Self>,
+    content_view: ViewIdentifier,
+    eh: Option<Rc<ScrollContainerEventHandler>>,
 }
 impl View for ScrollContainer {
     fn render(
         &mut self,
-        _layout_rect: Rect<LogicalUnit>,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let content_size = layout_state.get(self.content_view).layout_rect.size();
+        let viewport_size = layout_rect.size();
 
         let e = match self.eh {
             Some(ref eh) => {
+                ctx.composite_tree
+                    .begin_mod_chain(eh.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager.get_data_mut(eh.ht_root).left = layout_rect.left;
+                ctx.ht_manager.get_data_mut(eh.ht_root).top = layout_rect.top;
+                ctx.ht_manager.get_data_mut(eh.ht_root).width = viewport_size.width;
+                ctx.ht_manager.get_data_mut(eh.ht_root).height = viewport_size.height;
+
                 let mut recompute_scroll_bars = false;
-                if self.viewport_size.width != eh.viewport_size.width.get()
-                    || self.viewport_size.height != eh.viewport_size.height.get()
+                if viewport_size.width != eh.viewport_size.width.get()
+                    || viewport_size.height != eh.viewport_size.height.get()
                 {
-                    eh.viewport_size.width.set(self.viewport_size.width);
-                    eh.viewport_size.height.set(self.viewport_size.height);
+                    eh.viewport_size.width.set(viewport_size.width);
+                    eh.viewport_size.height.set(viewport_size.height);
 
                     ctx.composite_tree
                         .begin_mod_chain(eh.ct_root)
-                        .size_imm(self.viewport_size.width, self.viewport_size.height)
+                        .size_imm(viewport_size.width, viewport_size.height)
                         .apply();
-                    ctx.ht_manager.get_data_mut(eh.ht_root).width = self.viewport_size.width;
-                    ctx.ht_manager.get_data_mut(eh.ht_root).height = self.viewport_size.height;
+                    ctx.ht_manager.get_data_mut(eh.ht_root).width = viewport_size.width;
+                    ctx.ht_manager.get_data_mut(eh.ht_root).height = viewport_size.height;
 
                     recompute_scroll_bars = true;
                 }
@@ -143,12 +159,12 @@ impl View for ScrollContainer {
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     offset: [
-                        AnimatableFloat::Value(self.offset.x),
-                        AnimatableFloat::Value(self.offset.y),
+                        AnimatableFloat::Value(layout_rect.left),
+                        AnimatableFloat::Value(layout_rect.top),
                     ],
                     size: [
-                        AnimatableFloat::Value(self.viewport_size.width),
-                        AnimatableFloat::Value(self.viewport_size.height),
+                        AnimatableFloat::Value(viewport_size.width),
+                        AnimatableFloat::Value(viewport_size.height),
                     ],
                     has_bitmap: false,
                     // composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
@@ -163,10 +179,10 @@ impl View for ScrollContainer {
                     ..Default::default()
                 });
                 let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: self.offset.x,
-                    top: self.offset.y,
-                    width: self.viewport_size.width,
-                    height: self.viewport_size.height,
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: viewport_size.width,
+                    height: viewport_size.height,
                     clip_children: true,
                     ..Default::default()
                 });
@@ -179,8 +195,8 @@ impl View for ScrollContainer {
                     ..Default::default()
                 });
                 let ht_content_root = ctx.ht_manager.create(HitTestTreeData {
-                    width: self.viewport_size.width,
-                    height: self.viewport_size.height,
+                    width: viewport_size.width,
+                    height: viewport_size.height,
                     ..Default::default()
                 });
 
@@ -214,9 +230,7 @@ impl View for ScrollContainer {
                     relative_offset_adjustment: [1.0, 0.0],
                     size: [
                         AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
-                        AnimatableFloat::Value(
-                            self.viewport_size.height - SCROLL_THUMB_SPACING * 2.0,
-                        ),
+                        AnimatableFloat::Value(viewport_size.height - SCROLL_THUMB_SPACING * 2.0),
                     ],
                     has_bitmap: true,
                     composite_mode: CompositeMode::FillColor(AnimatableColor::Value(
@@ -239,7 +253,7 @@ impl View for ScrollContainer {
                     top: 0.0,
                     left_adjustment_factor: 1.0,
                     width: ACTIVE_SCROLL_BAR_THICKNESS,
-                    height: self.viewport_size.height,
+                    height: viewport_size.height,
                     ..Default::default()
                 });
 
@@ -272,9 +286,7 @@ impl View for ScrollContainer {
                     ],
                     relative_offset_adjustment: [0.0, 1.0],
                     size: [
-                        AnimatableFloat::Value(
-                            self.viewport_size.width - SCROLL_THUMB_SPACING * 2.0,
-                        ),
+                        AnimatableFloat::Value(viewport_size.width - SCROLL_THUMB_SPACING * 2.0),
                         AnimatableFloat::Value(DEFAULT_SCROLL_BAR_THICKNESS),
                     ],
                     has_bitmap: true,
@@ -297,7 +309,7 @@ impl View for ScrollContainer {
                     left: 0.0,
                     top: -ACTIVE_SCROLL_BAR_THICKNESS,
                     top_adjustment_factor: 1.0,
-                    width: self.viewport_size.width,
+                    width: viewport_size.width,
                     height: ACTIVE_SCROLL_BAR_THICKNESS,
                     ..Default::default()
                 });
@@ -320,8 +332,8 @@ impl View for ScrollContainer {
                     ht_scroll_bar_horz,
                     ct_scroll_bar_horz,
                     viewport_size: Size::new_logical_interior_mutable(
-                        self.viewport_size.width,
-                        self.viewport_size.height,
+                        viewport_size.width,
+                        viewport_size.height,
                     ),
                     content_size: Size::new_logical_interior_mutable(
                         content_size.width,
@@ -379,7 +391,10 @@ impl View for ScrollContainer {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 

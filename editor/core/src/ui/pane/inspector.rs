@@ -22,15 +22,16 @@ use crate::{
     ui::dock::PaneContentResizeContext,
     uikit::{
         ContainerView, ContainerViewInit, NumericInputView, NumericInputViewIO,
-        NumericInputViewInit, ScrollContainer, StaticTextView, StaticTextViewInit, TeardownContext,
-        TextInputView, TextInputViewIO, TypedViewIdentifier, View, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
+        NumericInputViewInit, ScrollContainer, ScrollContainerInit, StaticTextView,
+        StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO, TextInputViewInit,
+        TypedViewIdentifier, View, ViewFeedbackContext, ViewFeedbackHandler,
+        ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
         ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
         ViewRelationControllable, ViewRenderer, ViewSize, checkbox::CheckmarkVisual,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
+    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct Presenter {
@@ -49,7 +50,7 @@ impl Presenter {
                 |_| [],
             );
             let selected_object_name =
-                ctx.construct_view_direct(|id| Box::new(TextInputView::new(id, eh.clone())));
+                ctx.construct_view(TextInputViewInit::new(eh.clone()), |_| []);
             ctx.view_layout_mut(selected_object_name)
                 .expect("query failed")
                 .width = ViewSize::FillAvailable;
@@ -162,21 +163,16 @@ impl Presenter {
             ctx.view_layout_mut(content_view)
                 .expect("query failed")
                 .width = ViewSize::Fixed(128.0 + 16.0);
-            let items_container_view = ctx.construct_view_direct(|id| {
-                Box::new(ScrollContainer::new(
-                    id,
-                    Rect::from_lt_size(
-                        Point::new_logical(0.0, 8.0 + 12.0 + 20.0 + 8.0),
-                        Size::new_logical(128.0, 128.0),
-                    ),
-                    content_view.into_untyped(),
-                ))
-            });
-            ctx.view_set_parent(content_view, items_container_view);
-
-            ctx.view_layout_mut(root_content_view)
-                .expect("query failed")
-                .width = ViewSize::Fixed(128.0);
+            let items_container_view = ctx
+                .construct_view(ScrollContainerInit::new(content_view), |_| {
+                    [content_view.into_untyped()]
+                });
+            let l = ctx
+                .view_layout_mut(items_container_view)
+                .expect("query failed");
+            l.width = ViewSize::FillAvailable;
+            l.height = ViewSize::FillAvailable;
+            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
 
             EventHandler {
                 object_selection_changed: Cell::new(false),
@@ -221,16 +217,13 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
             .expect("query failed")
             .width = ViewSize::Fixed(content_width);
         context
+            .view_layout_mut(self.eh.root_content_view)
+            .expect("query failed")
+            .height = ViewSize::Fixed(new_size.height);
+        context
             .view_layout_mut(self.eh.items_content_view)
             .expect("query failed")
-            .width = ViewSize::Fixed(content_width);
-        context
-            .view_instance_mut(self.eh.items_container_view)
-            .expect("query failed")
-            .resize(Size::new_logical(
-                new_size.width,
-                new_size.height - 8.0 - 12.0 - 12.0 - 8.0,
-            ));
+            .width = ViewSize::Fixed(content_width - 16.0);
         context.schedule_view_render(self.eh.root_content_view);
     }
 }

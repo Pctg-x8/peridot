@@ -1769,7 +1769,7 @@ mod text_input;
 pub use self::text_input::*;
 
 mod scroll;
-pub use self::scroll::ScrollContainer;
+pub use self::scroll::*;
 
 pub mod dropdown_box;
 

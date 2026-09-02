@@ -19,9 +19,9 @@ use crate::{
     },
     ui::dock::PaneContentPresenter,
     uikit::{
-        ContainerView, ContainerViewInit, MeasureContext, RenderContext, TeardownContext,
-        TextInputView, TextInputViewIO, TextInputViewInit, TypedViewIdentifier, View,
-        ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
+        ContainerView, ContainerViewInit, MeasureContext, RenderContext, ScrollContainerInit,
+        TeardownContext, TextInputView, TextInputViewIO, TextInputViewInit, TypedViewIdentifier,
+        View, ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
         ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutChild,
         ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
         ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
@@ -51,6 +51,7 @@ impl Presenter {
 
             let l = ctx.view_layout_mut(file_list_view).expect("query failed");
             l.width = ViewSize::FillAvailable;
+            l.height = ViewSize::FillAvailable;
             l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
 
             EventHandler {
@@ -60,10 +61,13 @@ impl Presenter {
         });
         ctx.subscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&eh);
 
-        let root_view = ctx.construct_view(ContainerViewInit, |_| {
+        let root_view = ctx.construct_view(ContainerViewInit, |ctx| {
             [
                 eh.path_input_view.into_untyped(),
-                eh.file_list_view.into_untyped(),
+                ctx.construct_view(ScrollContainerInit::new(eh.file_list_view), |_| {
+                    [eh.file_list_view.into_untyped()]
+                })
+                .into_untyped(),
             ]
         });
         {

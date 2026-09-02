@@ -1706,7 +1706,7 @@ pub trait TextInputViewIO {
 }
 
 pub struct TextInputViewInit<IO: TextInputViewIO> {
-    pub io: std::rc::Weak<IO>
+    pub io: std::rc::Weak<IO>,
 }
 impl<IO: TextInputViewIO + 'static> ViewConstructor for TextInputViewInit<IO> {
     type ConcreteView = TextInputView;
@@ -1714,8 +1714,8 @@ impl<IO: TextInputViewIO + 'static> ViewConstructor for TextInputViewInit<IO> {
     fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
         TextInputView {
             id,
-            eh: None,
             io: self.io,
+            eh: None,
             should_revalidate_on_next_render: false,
         }
     }
@@ -1729,8 +1729,8 @@ impl<IO: TextInputViewIO> TextInputViewInit<IO> {
 
 pub struct TextInputView {
     id: TypedViewIdentifier<Self>,
-    eh: Option<Rc<TextInputViewEventHandler>>,
     io: std::rc::Weak<dyn TextInputViewIO>,
+    eh: Option<Rc<TextInputViewEventHandler>>,
     should_revalidate_on_next_render: bool,
 }
 impl TextInputView {

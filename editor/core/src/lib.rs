@@ -56,9 +56,9 @@ use crate::{
         ContainerView, ContainerViewInit, MenuEventHandler, MenuItem, MenuItemCommonResources,
         MenuItemInteractableElement, MountContext, MountTarget, NumericInputViewIO,
         NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
-        ScrollContainer, SimpleButtonEventHandler, SimpleButtonViewInit, StaticTextViewInit,
-        TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier, View,
-        ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackQueue,
+        ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler, SimpleButtonViewInit,
+        StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier,
+        View, ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackQueue,
         ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
         ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
@@ -2482,7 +2482,7 @@ impl UIKitPreviewPanePresenter {
         // TODO: ペイン内コンテンツのFocusGroupどうするか......(いったんペイン内ローカルでつくる)
         let kf_group = ctx.keyboard_focus_registry.acquire_group();
 
-        let content_view = ctx.construct_view_direct(|id| Box::new(ContainerView));
+        let content_view = ctx.construct_view(ContainerViewInit, |_| []);
         {
             let l = ctx.view_layout_mut(content_view).expect("query failed");
             l.width = ViewSize::Fixed(256.0);
@@ -2495,9 +2495,6 @@ impl UIKitPreviewPanePresenter {
                 gap: 8.0,
             };
         }
-
-        let mut ytop = 8.0;
-        let mut content_width = 8.0f32;
 
         struct AlertButtonEventHandler(String);
         impl SimpleButtonEventHandler for AlertButtonEventHandler {
@@ -2824,17 +2821,9 @@ impl UIKitPreviewPanePresenter {
         let radio_button4 = ctx.construct_view_direct(|id| Box::new(RadioButtonView::new(id)));
         ctx.view_set_parent(radio_button4, container);
 
-        let scroll_container = ctx.construct_view_direct(|id| {
-            Box::new(ScrollContainer::new(
-                id,
-                Rect::from_lt_size(
-                    Point::new_logical(0.0, 0.0),
-                    Size::new_logical(256.0, 128.0),
-                ),
-                content_view.into_untyped(),
-            ))
+        let scroll_container = ctx.construct_view(ScrollContainerInit::new(content_view), |_| {
+            [content_view.into_untyped()]
         });
-        ctx.view_set_parent(content_view, scroll_container);
 
         Self {
             kf_group,
@@ -2864,15 +2853,19 @@ impl ui::dock::PaneContentPresenter for UIKitPreviewPanePresenter {
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
         // tracing::debug!(?new_size, "resize pane");
-        context
-            .view_instance_mut(self.scroll_container)
-            .expect("query failed")
-            .resize(new_size.clone());
         let content_width = new_size.width.max(128.0);
         context
             .view_layout_mut(self.content_view)
             .expect("query failed")
             .width = ViewSize::Fixed(content_width);
+        context
+            .view_layout_mut(self.scroll_container)
+            .expect("query failed")
+            .width = ViewSize::Fixed(new_size.width);
+        context
+            .view_layout_mut(self.scroll_container)
+            .expect("query failed")
+            .height = ViewSize::Fixed(new_size.height);
         context.schedule_view_render(self.scroll_container);
     }
 }
