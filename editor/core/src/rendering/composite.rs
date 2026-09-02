@@ -1055,6 +1055,11 @@ impl<Event> CompositeRectBuilder<Event> {
         self
     }
 
+    pub const fn relative_size_adjustment(mut self, w: f32, h: f32) -> Self {
+        self.temp.relative_size_adjustment = [w, h];
+        self
+    }
+
     pub const fn expand_full(mut self) -> Self {
         self.temp.relative_size_adjustment = [1.0, 1.0];
         self
@@ -1102,12 +1107,25 @@ impl<Event> CompositeRectBuilder<Event> {
     }
 
     pub fn border(mut self, border: Border<Event>) -> Self {
+        self.temp.has_bitmap = true; // Borderはbitmap生成しないと描画されない
         self.temp.border = Some(border);
         self
     }
 
     pub fn corner_radius(mut self, corner_radius: CornerRadius) -> Self {
         self.temp.corner_radius = corner_radius;
+        self
+    }
+
+    #[inline(always)]
+    pub fn clip_child_soft_all(mut self, softness: SafeF32) -> Self {
+        self.temp.clip_child = Some(ClipConfig {
+            left_softness: softness,
+            top_softness: softness,
+            right_softness: softness,
+            bottom_softness: softness,
+        });
+
         self
     }
 

@@ -1,7 +1,5 @@
-use std::{
-    cell::{Cell, RefCell},
-    rc::Rc,
-};
+use core::cell::Cell;
+use std::{cell::RefCell, rc::Rc};
 
 use bitflags::bitflags;
 
@@ -470,71 +468,46 @@ impl TextInputViewCore {
         delegated_view_id: ViewIdentifier,
         ht_root: HitTestTreeRef,
     ) -> Self {
-        let ct_root = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(rect.width),
-                AnimatableFloat::Value(rect.height),
-            ],
-            offset: [
-                AnimatableFloat::Value(rect.left),
-                AnimatableFloat::Value(rect.top),
-            ],
-            relative_offset_adjustment: parent_anchor,
-            relative_size_adjustment: size_anchor,
-            has_bitmap: true,
-            border: Some(Border {
+        let ct_root = CompositeRect::build()
+            .rect_imm(rect.clone())
+            .relative_offset_adjustment(parent_anchor[0], parent_anchor[1])
+            .relative_size_adjustment(size_anchor[0], size_anchor[1])
+            .border(Border {
                 thickness: 1.0,
-                color: AnimatableColor::Value([1.0, 1.0, 1.0, 0.5]),
                 ..Default::default()
-            }),
-            ..Default::default()
-        });
-        let ct_text_clip = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [
-                AnimatableFloat::Value(rect.width - 4.0),
-                AnimatableFloat::Value(rect.height - 4.0),
-            ],
-            offset: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(2.0)],
-            clip_child: Some(ClipConfig {
-                left_softness: unsafe { SafeF32::new_unchecked(1.0) },
-                right_softness: unsafe { SafeF32::new_unchecked(1.0) },
-                top_softness: unsafe { SafeF32::new_unchecked(1.0) },
-                bottom_softness: unsafe { SafeF32::new_unchecked(1.0) },
-            }),
-            ..Default::default()
-        });
-        let ct_text = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            ..Default::default()
-        });
-        let ct_cursor = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(2.0), AnimatableFloat::Value(16.0)],
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(0.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_preedit_underline = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(1.0), AnimatableFloat::Value(1.0)],
-            offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(14.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([1.0, 1.0, 1.0, 1.0])),
-            opacity: AnimatableFloat::Value(0.0),
-            ..Default::default()
-        });
-        let ct_selection_bg = ctx.composite_tree.create(CompositeRect {
-            scale_factor: CompositeRectScaleFactor::UI,
-            size: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(16.0)],
-            has_bitmap: true,
-            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.2, 0.4, 1.0, 0.25])),
-            ..Default::default()
-        });
+            })
+            .create(ctx.composite_tree);
+        let ct_border_bottom = CompositeRect::build()
+            .size_imm(0.0, 1.0)
+            .expand_width()
+            .offset_imm(0.0, -1.0)
+            .anchor_parent_bottom()
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 1.0])
+            .create(ctx.composite_tree);
+        let ct_text_clip = CompositeRect::build()
+            .size_imm(rect.width - 4.0, rect.height - 4.0)
+            .offset_imm(2.0, 2.0)
+            .clip_child_soft_all(unsafe { SafeF32::new_unchecked(1.0) })
+            .create(ctx.composite_tree);
+        let ct_text = CompositeRect::build()
+            .text(CompositeRectText::build())
+            .create(ctx.composite_tree);
+        let ct_cursor = CompositeRect::build()
+            .size_imm(2.0, 16.0)
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 1.0])
+            .opacity_imm(0.0)
+            .create(ctx.composite_tree);
+        let ct_preedit_underline = CompositeRect::build()
+            .offset_imm(0.0, 14.0)
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 1.0])
+            .opacity_imm(0.0)
+            .create(ctx.composite_tree);
+        let ct_selection_bg = CompositeRect::build()
+            .size_imm(0.0, 16.0)
+            .composite_fill_color_imm([0.2, 0.4, 1.0, 0.25])
+            .create(ctx.composite_tree);
 
+        ctx.composite_tree.add_child(ct_root, ct_border_bottom);
         ctx.composite_tree.add_child(ct_text_clip, ct_selection_bg);
         ctx.composite_tree.add_child(ct_text_clip, ct_text);
         ctx.composite_tree.add_child(ct_text_clip, ct_cursor);
@@ -543,16 +516,20 @@ impl TextInputViewCore {
         ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
         let eh = Rc::new(TextInputViewCoreEventHandler {
+            delegated_view_id,
             ht_root,
             ct_root,
             ct_text,
             ct_cursor,
             ct_preedit_underline,
             ct_selection_bg,
-            has_focus: core::cell::Cell::new(false),
-            content_h_offset: core::cell::Cell::new(0.0),
-            content_visible_width: core::cell::Cell::new(128.0 - 4.0),
+            pointer_enter: Cell::new(false),
+            has_focus: Cell::new(false),
+            active_border_visual_state: Cell::new(BorderVisualState::None),
+            content_h_offset: Cell::new(0.0),
+            content_visible_width: Cell::new(128.0 - 4.0),
             text_edit_state: RefCell::new(SingleLineTextEditState::new(String::new())),
+            pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
             #[cfg(windows)]
             native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
                 ctx.system_link,
@@ -561,9 +538,8 @@ impl TextInputViewCore {
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
             #[cfg(target_os = "macos")]
             font_set_ptr: core::ptr::from_ref(ctx.system_link.font_set()),
-            pending_update_mask: core::cell::Cell::new(TextInputViewUpdateMask::empty()),
+            #[cfg(target_os = "macos")]
             event_dispatcher: ctx.system_link.event_dispatcher,
-            delegated_view_id,
         });
         ctx.ht_manager
             .set_screen_reposition_handler(eh.ht_root, &eh);
@@ -590,42 +566,46 @@ impl TextInputViewCore {
     ) {
         composite_tree
             .begin_mod_chain(self.eh.ct_root)
-            .offset_imm(rect.left, rect.top)
-            .size_imm(rect.width, rect.height)
+            .rect_imm(rect.clone())
             .apply();
         composite_tree
             .begin_mod_chain(self.ct_text_clip)
             .size_imm(rect.width - 4.0, rect.height - 4.0)
             .apply();
-        self.eh.content_visible_width.set(rect.width);
+        self.eh.content_visible_width.set(rect.width - 4.0);
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BorderVisualState {
+    None,
+    Hovering,
+    Focused,
+}
+
 pub struct TextInputViewCoreEventHandler {
+    delegated_view_id: ViewIdentifier,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
     ct_text: CompositeTreeRef,
     ct_cursor: CompositeTreeRef,
     ct_preedit_underline: CompositeTreeRef,
     ct_selection_bg: CompositeTreeRef,
-    has_focus: core::cell::Cell<bool>,
-    content_h_offset: core::cell::Cell<f32>,
-    content_visible_width: core::cell::Cell<f32>,
+    pointer_enter: Cell<bool>,
+    has_focus: Cell<bool>,
+    active_border_visual_state: Cell<BorderVisualState>,
+    content_h_offset: Cell<f32>,
+    content_visible_width: Cell<f32>,
     text_edit_state: RefCell<SingleLineTextEditState>,
-    // content: core::cell::RefCell<String>,
-    // cursor_pos_bytes: core::cell::Cell<usize>,
-    // preedit_range_start_bytes: core::cell::Cell<usize>,
-    // preedit_range_end_bytes: core::cell::Cell<usize>,
-    // selection_begin_bytes: core::cell::Cell<usize>,
+    pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     #[cfg(windows)]
     native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
     ht_manager_ptr: *const HitTestTreeManager<'static>,
     #[cfg(target_os = "macos")]
     font_set_ptr: *const FontSet,
-    pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
+    #[cfg(target_os = "macos")]
     event_dispatcher: *mut LogicFiberEventDispatcher,
-    delegated_view_id: ViewIdentifier,
 }
 impl HitTestTreeScreenRepositionHandler for TextInputViewCoreEventHandler {
     fn on_screen_reposition_required(
@@ -635,22 +615,9 @@ impl HitTestTreeScreenRepositionHandler for TextInputViewCoreEventHandler {
         _window_screen_pos: Point<PointerInputUnit>,
     ) {
         #[cfg(windows)]
-        {
-            self.native_text_input_context.notify_layout_changed();
-        }
+        self.native_text_input_context.notify_layout_changed();
     }
 }
-// impl ViewEventHandler for TextInputViewCoreEventHandler {
-//     #[inline(always)]
-//     fn update(&self, context: &mut ViewUpdateContext) {
-//         self.process_pending_updates_with_ht_mutation(
-//             context.mount_context.composite_tree,
-//             context.system_link,
-//             context.mount_context.ht_manager,
-//             context.mount_context.current_sec,
-//         );
-//     }
-// }
 impl KeyInputEventHandler for TextInputViewCoreEventHandler {
     fn focus_taken(&self, context: &mut InputEventContext) {
         // HitTestTreeへの変更がはいるので遅延させる
@@ -755,6 +722,30 @@ impl KeyInputEventHandler for TextInputViewCoreEventHandler {
     }
 }
 impl HitTestTreeActionHandler for TextInputViewCoreEventHandler {
+    fn on_pointer_enter(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.pointer_enter.set(true);
+        self.update_border_visual_state(context.composite_tree, context.current_sec);
+
+        EventContinueControl::empty()
+    }
+
+    fn on_pointer_leave(
+        &self,
+        _sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.pointer_enter.set(false);
+        self.update_border_visual_state(context.composite_tree, context.current_sec);
+
+        EventContinueControl::empty()
+    }
+
     fn on_pointer_down(
         &self,
         sender: HitTestTreeRef,
@@ -987,38 +978,58 @@ impl TextInputViewCoreEventHandler {
         )
     }
 
-    fn update_focus<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+    fn update_focus<E>(&self, composite_tree: &mut CompositeTree<E>) {
         if self.has_focus.get() {
-            composite_tree
-                .begin_mod_chain(self.ct_root)
-                .border_color(AnimatableColor::Animated {
-                    from_value: [1.0, 1.0, 1.0, 0.5],
-                    to_value: [1.0, 1.0, 1.0, 1.0],
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                    sec_duration: (current_sec..current_sec + 0.1).into(),
-                })
-                .apply();
             composite_tree
                 .begin_mod_chain(self.ct_cursor)
                 .opacity_imm(1.0)
                 .apply();
         } else {
             composite_tree
-                .begin_mod_chain(self.ct_root)
-                .border_color(AnimatableColor::Animated {
-                    from_value: [1.0, 1.0, 1.0, 1.0],
-                    to_value: [1.0, 1.0, 1.0, 0.5],
-                    curve: AnimationCurve::Linear,
-                    event_on_complete: None,
-                    sec_duration: (current_sec..current_sec + 0.1).into(),
-                })
-                .apply();
-            composite_tree
                 .begin_mod_chain(self.ct_cursor)
                 .opacity_imm(0.0)
                 .apply();
         }
+    }
+
+    fn update_border_visual_state<E>(
+        &self,
+        composite_tree: &mut CompositeTree<E>,
+        current_sec: f32,
+    ) {
+        let new_state = match (self.pointer_enter.get(), self.has_focus.get()) {
+            (_, true) => BorderVisualState::Focused,
+            (true, _) => BorderVisualState::Hovering,
+            _ => BorderVisualState::None,
+        };
+
+        let old_state = self.active_border_visual_state.replace(new_state);
+        if old_state == new_state {
+            // transit to same state
+            return;
+        }
+
+        let old_opacity = match old_state {
+            BorderVisualState::None => 0.0,
+            BorderVisualState::Focused => 0.5,
+            BorderVisualState::Hovering => 0.25,
+        };
+        let new_opacity = match new_state {
+            BorderVisualState::None => 0.0,
+            BorderVisualState::Focused => 0.5,
+            BorderVisualState::Hovering => 0.25,
+        };
+
+        composite_tree
+            .begin_mod_chain(self.ct_root)
+            .border_color(AnimatableColor::Animated {
+                from_value: [1.0, 1.0, 1.0, old_opacity],
+                to_value: [1.0, 1.0, 1.0, new_opacity],
+                curve: AnimationCurve::Linear,
+                event_on_complete: None,
+                sec_duration: (current_sec..current_sec + 0.1).into(),
+            })
+            .apply();
     }
 
     fn update_text<E>(&self, composite_tree: &mut CompositeTree<E>) {
@@ -1211,7 +1222,8 @@ impl TextInputViewCoreEventHandler {
             self.update_preedit_underline(composite_tree, system_link);
         }
         if mask.contains(TextInputViewUpdateMask::FOCUS) {
-            self.update_focus(composite_tree, current_sec);
+            self.update_focus(composite_tree);
+            self.update_border_visual_state(composite_tree, current_sec);
         }
 
         if Self::should_sync_selection_native(mask) {
@@ -1235,7 +1247,11 @@ impl TextInputViewCoreEventHandler {
         return false;
     }
 
-    fn sync_selection_native(&self, ht_manager: &HitTestTreeManager, system_link: &SystemLink) {
+    fn sync_selection_native(
+        &self,
+        #[allow(unused_variables)] ht_manager: &HitTestTreeManager,
+        #[allow(unused_variables)] system_link: &SystemLink,
+    ) {
         let state = self.text_edit_state.borrow();
 
         #[cfg(windows)]
@@ -1841,7 +1857,10 @@ impl View for TextInputView {
         ctx.keyboard_focus_registry.release_token(entity.token);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(32.0, 16.0)
     }
 }
@@ -1916,6 +1935,26 @@ impl KeyInputEventHandler for TextInputViewEventHandler {
     }
 }
 impl HitTestTreeActionHandler for TextInputViewEventHandler {
+    #[inline(always)]
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_pointer_enter(sender, context, args)
+    }
+
+    #[inline(always)]
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_pointer_leave(sender, context, args)
+    }
+
     fn on_pointer_down(
         &self,
         sender: HitTestTreeRef,
@@ -2107,7 +2146,10 @@ impl View for NumericInputView {
         ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(32.0, 16.0)
     }
 }
@@ -2183,6 +2225,26 @@ impl KeyInputEventHandler for NumericInputViewEventHandler {
     }
 }
 impl HitTestTreeActionHandler for NumericInputViewEventHandler {
+    #[inline(always)]
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_pointer_enter(sender, context, args)
+    }
+
+    #[inline(always)]
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        self.core.eh.on_pointer_leave(sender, context, args)
+    }
+
     fn on_pointer_down(
         &self,
         sender: HitTestTreeRef,
