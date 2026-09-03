@@ -1080,6 +1080,20 @@ impl<Event> CompositeRectBuilder<Event> {
         self
     }
 
+    #[inline(always)]
+    pub fn centering(mut self) -> Self {
+        let [AnimatableFloat::Value(w), AnimatableFloat::Value(h)] = self.temp.size else {
+            panic!("cannot compute centering for animated size");
+        };
+
+        self.temp.relative_offset_adjustment = [0.5, 0.5];
+        self.temp.offset = [
+            AnimatableFloat::Value(-w * 0.5),
+            AnimatableFloat::Value(-h * 0.5),
+        ];
+        self
+    }
+
     pub fn composite(mut self, mode: CompositeMode<Event>) -> Self {
         self.temp.has_bitmap = true;
         self.temp.composite_mode = mode;

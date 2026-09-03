@@ -11,10 +11,13 @@ use crate::{
     },
     model::Application,
     rendering::{
+        MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture,
+        Normalized2DStaticMeshTextureLazyInit, RenderMessageSender,
         composite::{
             AnimatableColor, AnimationCurve, Border, CompositeMode, CompositeRect,
             CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeTree, CompositeTreeRef, CornerRadius,
+            CompositeTexture, CompositeTree, CompositeTreeRef, CornerRadius, TextureMappingMode,
+            TextureType,
         },
         text::{FontID, TextLayout},
     },
@@ -216,15 +219,36 @@ impl View for PathNavigatorView {
                 if core::mem::replace(&mut self.revalidate, false) {
                     // should retrieve from the model
                     let mut label_elements = e.breadcumb_labels.borrow_mut();
+                    let mut arrow_elements = e.breadcumb_arrows.borrow_mut();
                     for e in label_elements.drain(..) {
+                        ctx.composite_tree.free_all(e.ct_root);
+                        ctx.ht_manager.free_all(e.ht_root);
+                    }
+                    for e in arrow_elements.drain(..) {
                         ctx.composite_tree.free_all(e.ct_root);
                         ctx.ht_manager.free_all(e.ht_root);
                     }
 
                     let labels = crate::model::asset_explorer::breadcumb_elements(ctx.application);
                     label_elements.reserve(labels.len());
+                    arrow_elements.reserve(labels.len() - 1);
                     let mut left_cursor = 0.0;
                     for label in labels {
+                        if !label_elements.is_empty() {
+                            let arrow = PathNavigatorBreadcumbArrowSubView::new(
+                                left_cursor,
+                                ctx.composite_tree,
+                                ctx.ht_manager,
+                                ctx.main_thread_texture_id_issuer,
+                                ctx.system_link.rt_sender(),
+                            );
+                            left_cursor += PathNavigatorBreadcumbArrowSubView::LIT_SIZE;
+                            ctx.composite_tree.add_child(e.ct_root, arrow.ct_root);
+                            ctx.ht_manager.add_child(e.ht_root, arrow.ht_root);
+                            ctx.ht_manager.set_action_handler(arrow.ht_root, e);
+                            arrow_elements.push(arrow);
+                        }
+
                         let element = PathNavigatorBreadcumbLabelSubView::new(
                             label.clone(),
                             left_cursor,
@@ -232,7 +256,7 @@ impl View for PathNavigatorView {
                             ctx.ht_manager,
                             ctx.system_link,
                         );
-                        left_cursor += element.size.width as f32 + 8.0;
+                        left_cursor += element.size.width as f32;
                         ctx.composite_tree.add_child(e.ct_root, element.ct_root);
                         ctx.ht_manager.add_child(e.ht_root, element.ht_root);
                         ctx.ht_manager.set_action_handler(element.ht_root, e);
@@ -261,8 +285,23 @@ impl View for PathNavigatorView {
 
                 let labels = crate::model::asset_explorer::breadcumb_elements(ctx.application);
                 let mut breadcumb_labels = Vec::with_capacity(labels.len());
+                let mut breadcumb_arrows = Vec::with_capacity(labels.len() - 1);
                 let mut left_cursor = 0.0;
                 for label in labels {
+                    if !breadcumb_labels.is_empty() {
+                        let arrow = PathNavigatorBreadcumbArrowSubView::new(
+                            left_cursor,
+                            ctx.composite_tree,
+                            ctx.ht_manager,
+                            ctx.main_thread_texture_id_issuer,
+                            ctx.system_link.rt_sender(),
+                        );
+                        left_cursor += PathNavigatorBreadcumbArrowSubView::LIT_SIZE;
+                        ctx.composite_tree.add_child(ct_root, arrow.ct_root);
+                        ctx.ht_manager.add_child(ht_root, arrow.ht_root);
+                        breadcumb_arrows.push(arrow);
+                    }
+
                     let element = PathNavigatorBreadcumbLabelSubView::new(
                         label.clone(),
                         left_cursor,
@@ -270,7 +309,7 @@ impl View for PathNavigatorView {
                         ctx.ht_manager,
                         ctx.system_link,
                     );
-                    left_cursor += element.size.width as f32 + 8.0;
+                    left_cursor += element.size.width as f32;
                     ctx.composite_tree.add_child(ct_root, element.ct_root);
                     ctx.ht_manager.add_child(ht_root, element.ht_root);
                     breadcumb_labels.push(element);
@@ -280,8 +319,12 @@ impl View for PathNavigatorView {
                     ct_root,
                     ht_root,
                     breadcumb_labels: RefCell::new(breadcumb_labels),
+                    breadcumb_arrows: RefCell::new(breadcumb_arrows),
                 });
                 for e in entity.breadcumb_labels.borrow().iter() {
+                    ctx.ht_manager.set_action_handler(e.ht_root, &entity);
+                }
+                for e in entity.breadcumb_arrows.borrow().iter() {
                     ctx.ht_manager.set_action_handler(e.ht_root, &entity);
                 }
 
@@ -314,6 +357,7 @@ struct PathNavigatorViewEntity {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     breadcumb_labels: RefCell<Vec<PathNavigatorBreadcumbLabelSubView>>,
+    breadcumb_arrows: RefCell<Vec<PathNavigatorBreadcumbArrowSubView>>,
 }
 impl HitTestTreeActionHandler for PathNavigatorViewEntity {
     fn on_pointer_enter(
@@ -323,6 +367,23 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
         _args: &PointerActionArgs,
     ) -> EventContinueControl {
         for e in self.breadcumb_labels.borrow().iter() {
+            if e.ht_root == sender {
+                context
+                    .composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                        from_value: [1.0, 1.0, 1.0, 0.0],
+                        to_value: [1.0, 1.0, 1.0, 0.25],
+                        curve: AnimationCurve::Linear,
+                        event_on_complete: None,
+                        sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                    }))
+                    .apply();
+
+                return EventContinueControl::STOP_PROPAGATION;
+            }
+        }
+        for e in self.breadcumb_arrows.borrow().iter() {
             if e.ht_root == sender {
                 context
                     .composite_tree
@@ -366,6 +427,23 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
                 return EventContinueControl::STOP_PROPAGATION;
             }
         }
+        for e in self.breadcumb_arrows.borrow().iter() {
+            if e.ht_root == sender {
+                context
+                    .composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                        from_value: [1.0, 1.0, 1.0, 0.25],
+                        to_value: [1.0, 1.0, 1.0, 0.0],
+                        curve: AnimationCurve::Linear,
+                        event_on_complete: None,
+                        sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                    }))
+                    .apply();
+
+                return EventContinueControl::STOP_PROPAGATION;
+            }
+        }
 
         EventContinueControl::empty()
     }
@@ -384,6 +462,70 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
         }
 
         EventContinueControl::empty()
+    }
+}
+
+static RIGHT_ARROW_ICON: Normalized2DStaticMeshTextureLazyInit =
+    Normalized2DStaticMeshTextureLazyInit::new(Normalized2DStaticMeshTexture {
+        width: 6.0,
+        height: 8.0,
+        vertices: &[
+            [0.0, 0.0],
+            [0.5, 0.0],
+            [0.5, 0.5],
+            [1.0, 0.5],
+            [0.0, 1.0],
+            [0.5, 1.0],
+        ],
+        indices: &[0, 1, 2, 1, 2, 3, 2, 3, 4, 3, 4, 5],
+    });
+struct PathNavigatorBreadcumbArrowSubView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl PathNavigatorBreadcumbArrowSubView {
+    const LIT_SIZE: f32 = 12.0;
+
+    pub fn new<E>(
+        left: f32,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        mt_tex_issuer: &mut MainThreadTextureIDIssuer,
+        rt_sender: &RenderMessageSender,
+    ) -> Self {
+        let icon = RIGHT_ARROW_ICON.get(mt_tex_issuer, rt_sender);
+        let ct_root = CompositeRect::build()
+            .size_imm(Self::LIT_SIZE, Self::LIT_SIZE)
+            .relative_offset_adjustment(0.0, 0.5)
+            .offset_imm(left, -Self::LIT_SIZE * 0.5)
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 0.0])
+            .corner_radius(CornerRadius::all(Self::LIT_SIZE * 0.5))
+            .create(composite_tree);
+        let ct_icon = CompositeRect::build()
+            .size_imm(6.0, 8.0)
+            .centering()
+            .composite(CompositeMode::ColorTint(
+                AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+                CompositeTexture {
+                    id: icon,
+                    r#type: TextureType::Mask,
+                    mapping: TextureMappingMode::Stretch,
+                    slice_borders: [0.0, 0.0, 0.0, 0.0],
+                },
+            ))
+            .create(composite_tree);
+        let ht_root = HitTestTreeData::build()
+            .interactive_defaults()
+            .rect(Rect::from_lt_size(
+                Point::new_logical(left, 0.0),
+                Size::new_logical(Self::LIT_SIZE, 0.0),
+            ))
+            .expand_height()
+            .create(ht_manager);
+
+        composite_tree.add_child(ct_root, ct_icon);
+
+        Self { ct_root, ht_root }
     }
 }
 
@@ -435,7 +577,11 @@ impl PathNavigatorBreadcumbLabelSubView {
             .create(composite_tree);
         let ht_root = HitTestTreeData::build()
             .interactive_defaults()
-            .rect(geometry.clone())
+            .rect(Rect::from_lt_size(
+                Point::new_logical(left, 0.0),
+                Size::new_logical(geometry.width, 0.0),
+            ))
+            .expand_height()
             .relative_offset_adjustment(0.0, 0.5)
             .create(ht_manager);
 

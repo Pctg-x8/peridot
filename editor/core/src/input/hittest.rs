@@ -107,6 +107,11 @@ impl<'h> HitTestTreeBuilder<'h> {
         self
     }
 
+    pub const fn expand_height(mut self) -> Self {
+        self.0.height_adjustment_factor = 1.0;
+        self
+    }
+
     pub const fn rect(mut self, rect: Rect<LogicalUnit>) -> Self {
         self.0.left = rect.left;
         self.0.top = rect.top;
