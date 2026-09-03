@@ -1,7 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
 use crate::{
-    SystemLink,
+    Event, SystemLink,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -23,11 +23,11 @@ use crate::{
     },
     ui::dock::PaneContentPresenter,
     uikit::{
-        ContainerView, ContainerViewInit, MeasureContext, RenderContext, ScrollContainer,
-        ScrollContainerInit, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
-        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewIdentifier,
-        ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild,
-        ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
+        ContainerView, ContainerViewInit, MeasureContext, MenuCommandSelectionHandler, MenuItem,
+        RenderContext, ScrollContainer, ScrollContainerInit, TeardownContext, TypedViewIdentifier,
+        View, ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
+        ViewIdentifier, ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut,
+        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
         ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
         ViewRenderElements, ViewRenderer, ViewSize,
     },
@@ -460,8 +460,48 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
                 return EventContinueControl::STOP_PROPAGATION;
             }
         }
+        for (n, e) in self.breadcumb_arrows.borrow().iter().enumerate() {
+            if e.ht_root == sender {
+                let next_dir_names =
+                    crate::model::asset_explorer::breadcumb_next_directory_list(context, n)
+                        .collect::<Vec<_>>();
+                tracing::debug!(?next_dir_names);
+                let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
+                context.system_link.dispatch_event(Event::MenuOpen {
+                    parent: context
+                        .ht_manager
+                        .query_root_window(sender)
+                        .expect("not mounted?"),
+                    items: next_dir_names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, x)| MenuItem::Command {
+                            label: x.clone(),
+                            command_id: i as _,
+                        })
+                        .collect(),
+                    command_handler: (Box::new(PathNavigatorBreadcumbArrowMenuCommandHandler {
+                        index: n,
+                    })
+                        as Box<dyn MenuCommandSelectionHandler>)
+                        .into(),
+                    surface_pos: Point::new_logical(x, y + h),
+                });
+
+                return EventContinueControl::STOP_PROPAGATION;
+            }
+        }
 
         EventContinueControl::empty()
+    }
+}
+
+struct PathNavigatorBreadcumbArrowMenuCommandHandler {
+    index: usize,
+}
+impl MenuCommandSelectionHandler for PathNavigatorBreadcumbArrowMenuCommandHandler {
+    fn on_select_command(&self, command_id: u64) {
+        tracing::debug!(command_id, "breadcumb arrow selected");
     }
 }
 

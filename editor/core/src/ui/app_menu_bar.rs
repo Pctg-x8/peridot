@@ -19,7 +19,7 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{MenuItem, ViewRenderElements},
+    uikit::{MenuCommandSelectionHandler, MenuItem, ViewRenderElements},
     utils::{Point, Size},
 };
 
@@ -187,6 +187,9 @@ impl HitTestTreeActionHandler for EventHandler {
                         parent,
                         items,
                         surface_pos: Point::new_logical(x, y + h),
+                        command_handler: (Box::new(AppMenuCommandHandler)
+                            as Box<dyn MenuCommandSelectionHandler>)
+                            .into(),
                     });
                 }
             }
@@ -242,6 +245,9 @@ impl HitTestTreeActionHandler for EventHandler {
                 .expect("invalid sender")
                 .items
                 .clone(),
+            command_handler: (Box::new(AppMenuCommandHandler)
+                as Box<dyn MenuCommandSelectionHandler>)
+                .into(),
             surface_pos: Point::new_logical(x, y + h),
         });
 
@@ -349,5 +355,12 @@ impl ItemSubView {
                 event_on_complete: None,
             });
         composite_tree.mark_dirty(self.ct_root);
+    }
+}
+
+struct AppMenuCommandHandler;
+impl MenuCommandSelectionHandler for AppMenuCommandHandler {
+    fn on_select_command(&self, command_id: u64) {
+        tracing::trace!(command_id, "todo: app menu command selection");
     }
 }

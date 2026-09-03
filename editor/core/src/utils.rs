@@ -73,6 +73,12 @@ impl<T> core::fmt::Debug for DummyDebug<T> {
             .finish_non_exhaustive()
     }
 }
+impl<T> From<T> for DummyDebug<T> {
+    #[inline(always)]
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
 
 #[repr(transparent)]
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -80,6 +86,19 @@ pub struct NonCloneable<T>(pub T);
 impl<T> Clone for NonCloneable<T> {
     fn clone(&self) -> Self {
         panic!("cannot clone this type: {}", std::any::type_name::<T>())
+    }
+}
+impl<T> From<T> for NonCloneable<T> {
+    #[inline(always)]
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
+
+impl<T> From<T> for NonCloneable<DummyDebug<T>> {
+    #[inline(always)]
+    fn from(value: T) -> Self {
+        NonCloneable(DummyDebug(value))
     }
 }
 

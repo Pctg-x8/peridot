@@ -16,6 +16,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
+    process::Command,
     rc::Rc,
     sync::Mutex,
 };
@@ -53,15 +54,15 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uikit::{
-        ContainerView, ContainerViewInit, MenuEventHandler, MenuItem, MenuItemCommonResources,
-        MenuItemInteractableElement, MountContext, MountTarget, NumericInputViewIO,
-        NumericInputViewInit, PopupID, PopupManager, RadioButtonView, RenderContext,
-        ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler, SimpleButtonViewInit,
-        StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO, TypedViewIdentifier,
-        View, ViewDestructionContext, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackQueue,
-        ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID, ViewGroupRegisterable,
-        ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
-        ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
+        ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuEventHandler, MenuItem,
+        MenuItemCommonResources, MenuItemInteractableElement, MountContext, MountTarget,
+        NumericInputViewIO, NumericInputViewInit, PopupID, PopupManager, RadioButtonView,
+        RenderContext, ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler,
+        SimpleButtonViewInit, StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO,
+        TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
+        ViewFeedbackHandler, ViewFeedbackQueue, ViewFeedbackRegisterable, ViewFeedbackRegistry,
+        ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
+        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
         ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
@@ -847,11 +848,13 @@ pub enum Event {
         parent: WindowHandle,
         items: Vec<MenuItem>,
         surface_pos: Point<LogicalUnit>,
+        command_handler: NonCloneable<DummyDebug<Box<dyn MenuCommandSelectionHandler>>>,
     },
     MenuReopen {
         parent: WindowHandle,
         items: Vec<MenuItem>,
         surface_pos: Point<LogicalUnit>,
+        command_handler: NonCloneable<DummyDebug<Box<dyn MenuCommandSelectionHandler>>>,
     },
     DropdownMenuOpen {
         parent: WindowHandle,
@@ -4320,10 +4323,12 @@ async fn run<'sys>(
                 parent,
                 items,
                 surface_pos,
+                command_handler,
             } => {
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
+                    command_handler.0.0,
                     surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -4352,6 +4357,7 @@ async fn run<'sys>(
                 parent,
                 items,
                 surface_pos,
+                command_handler,
             } => {
                 if let Some(c) = current_active_menu_session.take() {
                     c.terminate(
@@ -4365,6 +4371,7 @@ async fn run<'sys>(
                 current_active_menu_session = Some(MenuSession::new(
                     parent,
                     items,
+                    command_handler.0.0,
                     surface_pos,
                     &mut ViewInitContext {
                         mount_context: MountContext {
@@ -4646,7 +4653,7 @@ async fn run<'sys>(
                 tracing::debug!(id, "ContextMenuSelectCommand");
 
                 // コマンド選択したらとじる
-                if let Some(c) = current_active_menu_session.take() {
+                let ch = if let Some(c) = current_active_menu_session.take() {
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
@@ -4661,7 +4668,7 @@ async fn run<'sys>(
                         );
                     }
 
-                    c.terminate(
+                    let ch = c.terminate(
                         &system_link,
                         &mut composite_tree,
                         &mut ht_manager,
@@ -4670,6 +4677,14 @@ async fn run<'sys>(
 
                     composite_tree
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+
+                    Some(ch)
+                } else {
+                    None
+                };
+
+                if let Some(ch) = ch {
+                    ch.on_select_command(id);
                 }
 
                 match id {
@@ -5622,6 +5637,7 @@ impl MenuSurface {
 pub struct MenuSession {
     parent: WindowHandle,
     items: Vec<MenuItem>,
+    command_handler: Box<dyn MenuCommandSelectionHandler>,
     opening_surfaces: Vec<MenuSurface>,
     active_selection: Option<(usize, usize)>,
 }
@@ -5629,6 +5645,7 @@ impl MenuSession {
     pub fn new(
         parent: WindowHandle,
         items: Vec<MenuItem>,
+        command_handler: Box<dyn MenuCommandSelectionHandler>,
         surface_pos: Point<LogicalUnit>,
         view_init_context: &mut ViewInitContext,
         delayed_render_messages: &mut Vec<RenderMessage>,
@@ -5653,6 +5670,7 @@ impl MenuSession {
             )],
             parent,
             items,
+            command_handler,
             active_selection: None,
         }
     }
@@ -5744,7 +5762,7 @@ impl MenuSession {
         composite_tree: &mut CompositeTree<SyncEvent>,
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
+    ) -> Box<dyn MenuCommandSelectionHandler> {
         while let Some(c) = self.opening_surfaces.pop() {
             c.handle.close(
                 system_link,
@@ -5756,6 +5774,8 @@ impl MenuSession {
 
         #[cfg(target_os = "macos")]
         system_link.flyout_surface_context.unobserve_global_click();
+
+        self.command_handler
     }
 
     pub fn select_item(

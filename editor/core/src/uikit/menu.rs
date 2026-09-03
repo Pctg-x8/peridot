@@ -28,6 +28,10 @@ pub enum MenuItem {
     Separator,
 }
 
+pub trait MenuCommandSelectionHandler {
+    fn on_select_command(&self, command_id: u64);
+}
+
 pub enum MenuItemInteractableElement {
     Command(CommandView),
     SubMenu(SubMenuView),

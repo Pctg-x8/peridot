@@ -29,11 +29,11 @@ use crate::{
     },
     ui::dock::PaneContentResizeContext,
     uikit::{
-        MenuItem, TeardownContext, TypedViewIdentifier, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowDirection, ViewRegisterable,
-        ViewRelationControllable, ViewRenderElements, ViewRenderer, ViewSize,
+        MenuCommandSelectionHandler, MenuItem, TeardownContext, TypedViewIdentifier,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
+        ViewFeedbackRegisterable, ViewIdentifier, ViewImmediateTeardownable, ViewInitContext,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowDirection,
+        ViewRegisterable, ViewRelationControllable, ViewRenderElements, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -211,6 +211,9 @@ impl HitTestTreeActionHandler for ViewEntity {
                         }],
                     },
                 ],
+                command_handler: (Box::new(ContextMenuCommandHandler)
+                    as Box<dyn MenuCommandSelectionHandler>)
+                    .into(),
                 surface_pos: args.client_pos,
             });
 
@@ -571,6 +574,9 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
                         }],
                     },
                 ],
+                command_handler: (Box::new(ContextMenuCommandHandler)
+                    as Box<dyn MenuCommandSelectionHandler>)
+                    .into(),
                 surface_pos: args.client_pos,
             });
         }
@@ -586,4 +592,9 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventH
     ) {
         context.schedule_view_render(self.view_id);
     }
+}
+
+struct ContextMenuCommandHandler;
+impl MenuCommandSelectionHandler for ContextMenuCommandHandler {
+    fn on_select_command(&self, _command_id: u64) {}
 }

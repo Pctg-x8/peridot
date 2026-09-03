@@ -1759,7 +1759,8 @@ mod menu;
 pub use self::menu::{
     CommandView as MenuItemCommandView, CommonResources as MenuItemCommonResources,
     DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS, EventHandler as MenuEventHandler,
-    MenuItem, MenuItemInteractableElement, MenuItemLayout, SubMenuView as MenuItemSubMenuView,
+    MenuCommandSelectionHandler, MenuItem, MenuItemInteractableElement, MenuItemLayout,
+    SubMenuView as MenuItemSubMenuView,
 };
 
 mod layout;

@@ -2821,7 +2821,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                 },
             );
         } else {
-            context.system_link.dispatch_event(Event::MenuOpen {
+            /*context.system_link.dispatch_event(Event::MenuOpen {
                 parent: context
                     .ht_manager
                     .query_root_window(sender)
@@ -2856,7 +2856,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                     },
                 ],
                 surface_pos: args.client_pos,
-            });
+            });*/
         }
 
         EventContinueControl::STOP_PROPAGATION

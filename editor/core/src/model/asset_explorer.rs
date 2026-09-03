@@ -29,6 +29,32 @@ pub fn move_dir_by_breadcumb_index(
     state.dispatch_view_feedback(ViewFeedbackCurrentDirectoryChanged);
 }
 
+pub fn breadcumb_next_directory_list(
+    state: &(impl ApplicationAccess + ?Sized),
+    index: usize,
+) -> impl Iterator<Item = String> {
+    let app = state.application();
+    let base_dir = app
+        .asset_explorer
+        .breadcumbs
+        .iter()
+        .skip(1)
+        .take(index)
+        .fold(app.project.root_dir.clone(), |a, b| a.join(b));
+
+    std::fs::read_dir(base_dir)
+        .expect("read_dir")
+        .filter_map(|e| {
+            let e = e.expect("read_dir.element");
+
+            if e.metadata().expect("read_dir.element.metadata").is_dir() {
+                Some(e.file_name().into_string().expect("invalid str"))
+            } else {
+                None
+            }
+        })
+}
+
 pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> PathBuf {
     let app = state.application();
 
