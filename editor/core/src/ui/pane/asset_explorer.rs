@@ -6,27 +6,27 @@ use crate::{
         EventContinueControl, InputEventContext,
         hittest::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
-            HitTestTreeRef, PointerActionArgs,
+            HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
         },
     },
     model::Application,
     rendering::{
         composite::{
-            AnimatableColor, AnimationCurve, Border, CompositeRect, CompositeRectText,
-            CompositeRectTextHorizontalAlignment, CompositeRectTextRun, CompositeTree,
-            CompositeTreeRef, CornerRadius,
+            AnimatableColor, AnimationCurve, Border, CompositeMode, CompositeRect,
+            CompositeRectText, CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
+            CompositeTree, CompositeTreeRef, CornerRadius,
         },
         text::{FontID, TextLayout},
     },
     ui::dock::PaneContentPresenter,
     uikit::{
         ContainerView, ContainerViewInit, MeasureContext, RenderContext, ScrollContainer,
-        ScrollContainerInit, TeardownContext, TextInputView, TextInputViewIO, TextInputViewInit,
-        TypedViewIdentifier, View, ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackRegisterable, ViewIdentifier, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore,
-        ViewRegisterable, ViewRenderElements, ViewRenderer, ViewSize,
+        ScrollContainerInit, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild,
+        ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
+        ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
+        ViewRenderElements, ViewRenderer, ViewSize,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };
@@ -40,15 +40,14 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let eh = Rc::new_cyclic(|eh| {
-            let path_input_view = ctx.construct_view(TextInputViewInit::new(eh.clone()), |_| []);
+            let path_navigator_view = ctx.construct_view(PathNavigatorViewInit, |_| []);
             let file_list_view = ctx.construct_view(FileListViewInit, |_| []);
-            ctx.view_instance_mut(path_input_view)
-                .expect("query failed")
-                .revalidate();
 
-            let l = ctx.view_layout_mut(path_input_view).expect("query failed");
+            let l = ctx
+                .view_layout_mut(path_navigator_view)
+                .expect("query failed");
             l.width = ViewSize::FillAvailable;
-            l.height = ViewSize::Fixed(20.0);
+            l.height = ViewSize::Fixed(24.0);
 
             let l = ctx.view_layout_mut(file_list_view).expect("query failed");
             l.width = ViewSize::FillAvailable;
@@ -66,7 +65,7 @@ impl Presenter {
             l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
 
             EventHandler {
-                path_input_view,
+                path_navigator_view,
                 file_list_view,
                 file_list_container_view,
             }
@@ -75,7 +74,7 @@ impl Presenter {
 
         let root_view = ctx.construct_view(ContainerViewInit, |_| {
             [
-                eh.path_input_view.into_untyped(),
+                eh.path_navigator_view.into_untyped(),
                 eh.file_list_container_view.into_untyped(),
             ]
         });
@@ -136,7 +135,7 @@ impl PaneContentPresenter for Presenter {
 }
 
 struct EventHandler {
-    path_input_view: TypedViewIdentifier<TextInputView>,
+    path_navigator_view: TypedViewIdentifier<PathNavigatorView>,
     file_list_view: TypedViewIdentifier<FileListView>,
     file_list_container_view: TypedViewIdentifier<ScrollContainer>,
 }
@@ -149,10 +148,10 @@ impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirect
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         context
-            .view_instance_mut(self.path_input_view)
+            .view_instance_mut(self.path_navigator_view)
             .expect("query failed")
-            .revalidate();
-        context.schedule_view_render(self.path_input_view);
+            .revalidate = true;
+        context.schedule_view_render(self.path_navigator_view);
 
         context
             .view_instance_mut(self.file_list_view)
@@ -179,25 +178,271 @@ impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirect
         context.schedule_view_render(self.file_list_container_view);
     }
 }
-impl TextInputViewIO for EventHandler {
-    fn text(&self, requester: ViewIdentifier, app: &crate::model::Application) -> String {
-        if requester == self.path_input_view {
-            return crate::model::asset_explorer::current_path(app)
-                .display()
-                .to_string();
-        }
 
-        String::new()
+struct PathNavigatorViewInit;
+impl ViewConstructor for PathNavigatorViewInit {
+    type ConcreteView = PathNavigatorView;
+
+    #[inline(always)]
+    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        PathNavigatorView {
+            entity: None,
+            revalidate: false,
+        }
+    }
+}
+
+struct PathNavigatorView {
+    entity: Option<Rc<PathNavigatorViewEntity>>,
+    revalidate: bool,
+}
+impl View for PathNavigatorView {
+    fn render(
+        &mut self,
+        layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => {
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager
+                    .mod_chain(e.ht_root)
+                    .rect(layout_rect.clone());
+
+                if core::mem::replace(&mut self.revalidate, false) {
+                    // should retrieve from the model
+                    let mut label_elements = e.breadcumb_labels.borrow_mut();
+                    for e in label_elements.drain(..) {
+                        ctx.composite_tree.free_all(e.ct_root);
+                        ctx.ht_manager.free_all(e.ht_root);
+                    }
+
+                    let labels = crate::model::asset_explorer::breadcumb_elements(ctx.application);
+                    label_elements.reserve(labels.len());
+                    let mut left_cursor = 0.0;
+                    for label in labels {
+                        let element = PathNavigatorBreadcumbLabelSubView::new(
+                            label.clone(),
+                            left_cursor,
+                            ctx.composite_tree,
+                            ctx.ht_manager,
+                            ctx.system_link,
+                        );
+                        left_cursor += element.size.width as f32 + 8.0;
+                        ctx.composite_tree.add_child(e.ct_root, element.ct_root);
+                        ctx.ht_manager.add_child(e.ht_root, element.ht_root);
+                        ctx.ht_manager.set_action_handler(element.ht_root, e);
+                        label_elements.push(element);
+                    }
+                }
+
+                e
+            }
+            None => {
+                let ct_root = CompositeRect::build()
+                    .rect_imm(layout_rect.clone())
+                    .create(ctx.composite_tree);
+                let ct_bottom_border = CompositeRect::build()
+                    .anchor_parent_bottom()
+                    .expand_width()
+                    .size_imm(0.0, 1.0)
+                    .offset_imm(0.0, -0.5)
+                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.25])
+                    .create(ctx.composite_tree);
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect)
+                    .create(ctx.ht_manager);
+
+                ctx.composite_tree.add_child(ct_root, ct_bottom_border);
+
+                let labels = crate::model::asset_explorer::breadcumb_elements(ctx.application);
+                let mut breadcumb_labels = Vec::with_capacity(labels.len());
+                let mut left_cursor = 0.0;
+                for label in labels {
+                    let element = PathNavigatorBreadcumbLabelSubView::new(
+                        label.clone(),
+                        left_cursor,
+                        ctx.composite_tree,
+                        ctx.ht_manager,
+                        ctx.system_link,
+                    );
+                    left_cursor += element.size.width as f32 + 8.0;
+                    ctx.composite_tree.add_child(ct_root, element.ct_root);
+                    ctx.ht_manager.add_child(ht_root, element.ht_root);
+                    breadcumb_labels.push(element);
+                }
+
+                let entity = Rc::new(PathNavigatorViewEntity {
+                    ct_root,
+                    ht_root,
+                    breadcumb_labels: RefCell::new(breadcumb_labels),
+                });
+                for e in entity.breadcumb_labels.borrow().iter() {
+                    ctx.ht_manager.set_action_handler(e.ht_root, &entity);
+                }
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
+        }
     }
 
-    fn set_text(
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(entity) = self.entity.take() else {
+            return;
+        };
+
+        ctx.composite_tree.free_all(entity.ct_root);
+        ctx.ht_manager.free_all(entity.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+}
+
+struct PathNavigatorViewEntity {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    breadcumb_labels: RefCell<Vec<PathNavigatorBreadcumbLabelSubView>>,
+}
+impl HitTestTreeActionHandler for PathNavigatorViewEntity {
+    fn on_pointer_enter(
         &self,
-        sender: ViewIdentifier,
-        app: &mut crate::model::ApplicationMutation,
-        text: String,
-    ) {
-        if sender == self.path_input_view {
-            tracing::debug!(text, "todo: set_text path_input_view");
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        for e in self.breadcumb_labels.borrow().iter() {
+            if e.ht_root == sender {
+                context
+                    .composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                        from_value: [1.0, 1.0, 1.0, 0.0],
+                        to_value: [1.0, 1.0, 1.0, 0.25],
+                        curve: AnimationCurve::Linear,
+                        event_on_complete: None,
+                        sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                    }))
+                    .apply();
+
+                return EventContinueControl::STOP_PROPAGATION;
+            }
+        }
+
+        EventContinueControl::empty()
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        for e in self.breadcumb_labels.borrow().iter() {
+            if e.ht_root == sender {
+                context
+                    .composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                        from_value: [1.0, 1.0, 1.0, 0.25],
+                        to_value: [1.0, 1.0, 1.0, 0.0],
+                        curve: AnimationCurve::Linear,
+                        event_on_complete: None,
+                        sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                    }))
+                    .apply();
+
+                return EventContinueControl::STOP_PROPAGATION;
+            }
+        }
+
+        EventContinueControl::empty()
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        for (n, e) in self.breadcumb_labels.borrow().iter().enumerate() {
+            if e.ht_root == sender {
+                crate::model::asset_explorer::move_dir_by_breadcumb_index(context, n);
+                return EventContinueControl::STOP_PROPAGATION;
+            }
+        }
+
+        EventContinueControl::empty()
+    }
+}
+
+struct PathNavigatorBreadcumbLabelSubView {
+    size: Size<LogicalUnit>,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+}
+impl PathNavigatorBreadcumbLabelSubView {
+    const ROUNDING: f32 = 4.0;
+    const MARGIN_X: f32 = 12.0;
+    const MARGIN_Y: f32 = 2.0;
+
+    pub fn new<E>(
+        label: String,
+        left: f32,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
+        syslink: &SystemLink,
+    ) -> Self {
+        let label_size = TextLayout::new_single(
+            &label,
+            FontID::UIDefault,
+            syslink.font_set(),
+            CompositeRectTextHorizontalAlignment::Start,
+            None,
+            None,
+        )
+        .size();
+        let geometry = Rect::from_lt_size(
+            Point::new_logical(left, -label_size.height * 0.5 - Self::MARGIN_Y),
+            Size::new_logical(
+                label_size.width + Self::MARGIN_X * 2.0,
+                label_size.height + Self::MARGIN_Y * 2.0,
+            ),
+        );
+
+        let ct_root = CompositeRect::build()
+            .rect_imm(geometry.clone())
+            .relative_offset_adjustment(0.0, 0.5)
+            .text(
+                CompositeRectText::build()
+                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                    .horizontal_middle()
+                    .vertical_middle(),
+            )
+            .corner_radius(CornerRadius::all(Self::ROUNDING))
+            .composite_fill_color_imm([1.0, 1.0, 1.0, 0.0])
+            .create(composite_tree);
+        let ht_root = HitTestTreeData::build()
+            .interactive_defaults()
+            .rect(geometry.clone())
+            .relative_offset_adjustment(0.0, 0.5)
+            .create(ht_manager);
+
+        Self {
+            size: geometry.size(),
+            ct_root,
+            ht_root,
         }
     }
 }

@@ -8,9 +8,25 @@ pub(super) struct State {
 impl State {
     pub(super) fn new() -> Self {
         Self {
-            breadcumbs: Vec::new(),
+            breadcumbs: vec!["Project Root".into()],
         }
     }
+}
+
+pub fn breadcumb_elements(state: &(impl ApplicationAccess + ?Sized)) -> &[String] {
+    &state.application().asset_explorer.breadcumbs
+}
+
+pub fn move_dir_by_breadcumb_index(
+    state: &mut (impl ApplicationMutableAccess + ?Sized),
+    index: usize,
+) {
+    state
+        .application_mut()
+        .asset_explorer
+        .breadcumbs
+        .truncate(index + 1);
+    state.dispatch_view_feedback(ViewFeedbackCurrentDirectoryChanged);
 }
 
 pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> PathBuf {
@@ -19,6 +35,7 @@ pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> PathBuf {
     app.asset_explorer
         .breadcumbs
         .iter()
+        .skip(1)
         .fold(app.project.root_dir.clone(), |a, b| a.join(b))
 }
 

@@ -101,6 +101,12 @@ impl<'h> HitTestTreeBuilder<'h> {
         manager.create(self.0)
     }
 
+    pub const fn relative_offset_adjustment(mut self, x: f32, y: f32) -> Self {
+        self.0.left_adjustment_factor = x;
+        self.0.top_adjustment_factor = y;
+        self
+    }
+
     pub const fn rect(mut self, rect: Rect<LogicalUnit>) -> Self {
         self.0.left = rect.left;
         self.0.top = rect.top;
@@ -117,6 +123,12 @@ impl<'h> HitTestTreeBuilder<'h> {
     pub const fn keyboard_focus(mut self, token: FocusTargetToken) -> Self {
         self.0.keyboard_focus = Some(token);
         self
+    }
+
+    // presets //
+
+    pub const fn interactive_defaults(self) -> Self {
+        self.cursor_shape(CursorShape::Pointer)
     }
 }
 
