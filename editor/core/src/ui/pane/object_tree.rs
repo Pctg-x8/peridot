@@ -20,8 +20,8 @@ use crate::{
         },
     },
     model::{
-        ObjectID, ViewFeedbackObjectNameChanged, ViewFeedbackObjectSelectionChanged,
-        ViewFeedbackObjectTreeChanged,
+        ApplicationMutation, ObjectID, ViewFeedbackObjectNameChanged,
+        ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged,
     },
     rendering::composite::{
         AnimatableColor, AnimationCurve, CompositeMode, CompositeRect, CompositeRectText,
@@ -596,5 +596,5 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventH
 
 struct ContextMenuCommandHandler;
 impl MenuCommandSelectionHandler for ContextMenuCommandHandler {
-    fn on_select_command(&self, _command_id: u64) {}
+    fn on_select_command(&mut self, _command_id: u64, _context: &mut ApplicationMutation) {}
 }

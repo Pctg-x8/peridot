@@ -10,6 +10,7 @@ use crate::{
             PointerActionArgs, PointerButtonActionArgs,
         },
     },
+    model::ApplicationMutation,
     rendering::{
         composite::{
             AnimatableColor, AnimatableFloat, AnimationCurve, CompositeMode, CompositeRect,
@@ -360,7 +361,7 @@ impl ItemSubView {
 
 struct AppMenuCommandHandler;
 impl MenuCommandSelectionHandler for AppMenuCommandHandler {
-    fn on_select_command(&self, command_id: u64) {
+    fn on_select_command(&mut self, command_id: u64, _context: &mut ApplicationMutation) {
         tracing::trace!(command_id, "todo: app menu command selection");
     }
 }

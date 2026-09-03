@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::model::{ApplicationAccess, ApplicationMutableAccess};
 
@@ -53,6 +53,18 @@ pub fn breadcumb_next_directory_list(
                 None
             }
         })
+}
+
+pub fn move_dir_by_breadcumb_index_and_next_directory(
+    state: &mut (impl ApplicationMutableAccess + ?Sized),
+    breadcumb_index: usize,
+    next_directory_name: String,
+) {
+    let app = state.application_mut();
+    app.asset_explorer.breadcumbs.truncate(breadcumb_index + 1);
+    app.asset_explorer.breadcumbs.push(next_directory_name);
+
+    state.dispatch_view_feedback(ViewFeedbackCurrentDirectoryChanged);
 }
 
 pub fn current_path(state: &(impl ApplicationAccess + ?Sized)) -> PathBuf {

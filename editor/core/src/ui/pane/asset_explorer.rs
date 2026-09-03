@@ -9,7 +9,7 @@ use crate::{
             HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
         },
     },
-    model::Application,
+    model::{Application, ApplicationMutation},
     rendering::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture,
         Normalized2DStaticMeshTextureLazyInit, RenderMessageSender,
@@ -482,6 +482,7 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
                         .collect(),
                     command_handler: (Box::new(PathNavigatorBreadcumbArrowMenuCommandHandler {
                         index: n,
+                        dir_names: next_dir_names,
                     })
                         as Box<dyn MenuCommandSelectionHandler>)
                         .into(),
@@ -498,10 +499,15 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
 
 struct PathNavigatorBreadcumbArrowMenuCommandHandler {
     index: usize,
+    dir_names: Vec<String>,
 }
 impl MenuCommandSelectionHandler for PathNavigatorBreadcumbArrowMenuCommandHandler {
-    fn on_select_command(&self, command_id: u64) {
-        tracing::debug!(command_id, "breadcumb arrow selected");
+    fn on_select_command(&mut self, command_id: u64, context: &mut ApplicationMutation) {
+        crate::model::asset_explorer::move_dir_by_breadcumb_index_and_next_directory(
+            context,
+            self.index,
+            core::mem::replace(&mut self.dir_names[command_id as usize], String::new()),
+        );
     }
 }
 

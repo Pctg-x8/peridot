@@ -3,6 +3,7 @@ use std::rc::Rc;
 use crate::{
     Event, FlyoutSurfaceHandle,
     input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
+    model::ApplicationMutation,
     rendering::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
         RenderMessageSender, TextureID,
@@ -29,7 +30,7 @@ pub enum MenuItem {
 }
 
 pub trait MenuCommandSelectionHandler {
-    fn on_select_command(&self, command_id: u64);
+    fn on_select_command(&mut self, command_id: u64, context: &mut ApplicationMutation);
 }
 
 pub enum MenuItemInteractableElement {

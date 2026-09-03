@@ -4683,8 +4683,14 @@ async fn run<'sys>(
                     None
                 };
 
-                if let Some(ch) = ch {
-                    ch.on_select_command(id);
+                if let Some(mut ch) = ch {
+                    ch.on_select_command(
+                        id,
+                        &mut ApplicationMutation {
+                            state: &mut application,
+                            view_feedbacks: &mut view_feedback_store,
+                        },
+                    );
                 }
 
                 match id {
