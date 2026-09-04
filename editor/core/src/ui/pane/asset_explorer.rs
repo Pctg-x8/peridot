@@ -628,7 +628,6 @@ impl PathNavigatorBreadcumbLabelSubView {
                 Size::new_logical(geometry.width, 0.0),
             ))
             .expand_height()
-            .relative_offset_adjustment(0.0, 0.5)
             .create(ht_manager);
 
         Self {

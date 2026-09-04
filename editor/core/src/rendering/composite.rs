@@ -2637,68 +2637,66 @@ impl<Event> CompositeTreeRender<Event> {
                     TextureType::Color => color_atlas.atlas().size(),
                 };
 
-                unsafe {
-                    instance_emitter.write(
-                        instance_slot_index,
-                        CompositeInstanceData {
-                            pos_st: [w, h, 0.0, 0.0],
-                            uv_st: [
-                                ((texatlas_rect.right as f32 - texatlas_rect.left as f32) - 1.0)
-                                    / texatlas_size.width as f32,
-                                ((texatlas_rect.bottom as f32 - texatlas_rect.top as f32) - 1.0)
-                                    / texatlas_size.height as f32,
-                                (texatlas_rect.left as f32 + 0.5) / texatlas_size.width as f32,
-                                (texatlas_rect.top as f32 + 0.5) / texatlas_size.height as f32,
-                            ],
-                            position_modifier_matrix: matrix.clone().transpose(),
-                            slice_borders,
-                            tex_size_pixels: [texatlas_size.width as _, texatlas_size.height as _],
-                            composite_mode: r.composite_mode.shader_mode_value(),
-                            opacity,
-                            color_tint: match r.composite_mode {
-                                CompositeMode::ColorTint(ref t, _)
-                                | CompositeMode::FillColor(ref t)
-                                | CompositeMode::ColorTintBackdropBlur(ref t, _, _)
-                                | CompositeMode::FillColorBackdropBlur(ref t, _)
-                                | CompositeMode::FillCornerGradient(_, ref t)
-                                | CompositeMode::ColorPickerGradientBox(ref t) => {
-                                    t.evaluate(current_sec, &self.parameter_store)
-                                }
-                                CompositeMode::DirectSourceOver(_)
-                                | CompositeMode::FillLinearGradient(_)
-                                | CompositeMode::FillRadialGradient(_) => [0.0; 4],
-                            },
-                            corner_radius_x: [
-                                r.corner_radius.left_top[0] * scale_factor,
-                                r.corner_radius.right_top[0] * scale_factor,
-                                r.corner_radius.left_bottom[0] * scale_factor,
-                                r.corner_radius.right_bottom[0] * scale_factor,
-                            ],
-                            corner_radius_y: [
-                                r.corner_radius.left_top[1] * scale_factor,
-                                r.corner_radius.right_top[1] * scale_factor,
-                                r.corner_radius.left_bottom[1] * scale_factor,
-                                r.corner_radius.right_bottom[1] * scale_factor,
-                            ],
-                            border_color,
-                            border_thickness: r
-                                .border
-                                .as_ref()
-                                .map_or(0.0, |b| b.thickness * scale_factor),
-                            softedge: r.softedge * scale_factor,
-                            gradient_data_index: r.composite_mode.gradient_data_index() as _,
-                            source_texture_index: tex_type.to_index() as _,
-                            border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
-                                [
-                                    b.break_pattern[0] * scale_factor,
-                                    b.break_pattern[1] * scale_factor,
-                                ]
-                            }),
-                            texture_mapping_mode: tex_mapping_mode.shader_mode_value(),
-                            _padding: 0.0,
+                instance_emitter.write(
+                    instance_slot_index,
+                    CompositeInstanceData {
+                        pos_st: [w, h, 0.0, 0.0],
+                        uv_st: [
+                            ((texatlas_rect.right as f32 - texatlas_rect.left as f32) - 1.0)
+                                / texatlas_size.width as f32,
+                            ((texatlas_rect.bottom as f32 - texatlas_rect.top as f32) - 1.0)
+                                / texatlas_size.height as f32,
+                            (texatlas_rect.left as f32 + 0.5) / texatlas_size.width as f32,
+                            (texatlas_rect.top as f32 + 0.5) / texatlas_size.height as f32,
+                        ],
+                        position_modifier_matrix: matrix.clone().transpose(),
+                        slice_borders,
+                        tex_size_pixels: [texatlas_size.width as _, texatlas_size.height as _],
+                        composite_mode: r.composite_mode.shader_mode_value(),
+                        opacity,
+                        color_tint: match r.composite_mode {
+                            CompositeMode::ColorTint(ref t, _)
+                            | CompositeMode::FillColor(ref t)
+                            | CompositeMode::ColorTintBackdropBlur(ref t, _, _)
+                            | CompositeMode::FillColorBackdropBlur(ref t, _)
+                            | CompositeMode::FillCornerGradient(_, ref t)
+                            | CompositeMode::ColorPickerGradientBox(ref t) => {
+                                t.evaluate(current_sec, &self.parameter_store)
+                            }
+                            CompositeMode::DirectSourceOver(_)
+                            | CompositeMode::FillLinearGradient(_)
+                            | CompositeMode::FillRadialGradient(_) => [0.0; 4],
                         },
-                    );
-                }
+                        corner_radius_x: [
+                            r.corner_radius.left_top[0] * scale_factor,
+                            r.corner_radius.right_top[0] * scale_factor,
+                            r.corner_radius.left_bottom[0] * scale_factor,
+                            r.corner_radius.right_bottom[0] * scale_factor,
+                        ],
+                        corner_radius_y: [
+                            r.corner_radius.left_top[1] * scale_factor,
+                            r.corner_radius.right_top[1] * scale_factor,
+                            r.corner_radius.left_bottom[1] * scale_factor,
+                            r.corner_radius.right_bottom[1] * scale_factor,
+                        ],
+                        border_color,
+                        border_thickness: r
+                            .border
+                            .as_ref()
+                            .map_or(0.0, |b| b.thickness * scale_factor),
+                        softedge: r.softedge * scale_factor,
+                        gradient_data_index: r.composite_mode.gradient_data_index() as _,
+                        source_texture_index: tex_type.to_index() as _,
+                        border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
+                            [
+                                b.break_pattern[0] * scale_factor,
+                                b.break_pattern[1] * scale_factor,
+                            ]
+                        }),
+                        texture_mapping_mode: tex_mapping_mode.shader_mode_value(),
+                        _padding: 0.0,
+                    },
+                );
 
                 let backdrop_buffer_index = match r.composite_mode {
                     CompositeMode::ColorTintBackdropBlur(_, ref stdev, _)
@@ -2777,48 +2775,45 @@ impl<Event> CompositeTreeRender<Event> {
                     CompositeRectTextVerticalAlignment::Middle => (h - cache.text_height) * 0.5,
                 } + t.offset[1] * scale_factor;
                 for b in cache.text_rects.iter() {
-                    unsafe {
-                        instance_emitter.write(
-                            instance_slot_index,
-                            CompositeInstanceData {
-                                pos_st: [
-                                    b.width as f32,
-                                    b.height as f32,
-                                    b.left + x_offset,
-                                    b.top + y_offset,
-                                ],
-                                uv_st: [
-                                    b.width as f32 / mask_atlas.atlas().size().width as f32,
-                                    b.height as f32 / mask_atlas.atlas().size().height as f32,
-                                    b.tex_left as f32 / mask_atlas.atlas().size().width as f32,
-                                    b.tex_top as f32 / mask_atlas.atlas().size().height as f32,
-                                ],
-                                position_modifier_matrix: matrix.clone().transpose(),
-                                slice_borders: [0.0; 4],
-                                tex_size_pixels: [
-                                    mask_atlas.atlas().size().width as _,
-                                    mask_atlas.atlas().size().height as _,
-                                ],
-                                composite_mode: 1.0,
-                                opacity,
-                                // TODO: color by run
-                                color_tint: t.runs[0]
-                                    .color
-                                    .evaluate(current_sec, &self.parameter_store),
-                                corner_radius_x: [0.0; 4],
-                                corner_radius_y: [0.0; 4],
-                                border_thickness: 0.0,
-                                border_color: [0.0; 4],
-                                softedge: 0.0,
-                                gradient_data_index: 0.0,
-                                source_texture_index: 0.0, // force mono
-                                border_break_pattern: [0.0, 0.0],
-                                texture_mapping_mode: TextureMappingMode::Stretch
-                                    .shader_mode_value(),
-                                _padding: 0.0,
-                            },
-                        );
-                    }
+                    instance_emitter.write(
+                        instance_slot_index,
+                        CompositeInstanceData {
+                            pos_st: [
+                                b.width as f32,
+                                b.height as f32,
+                                b.left + x_offset,
+                                b.top + y_offset,
+                            ],
+                            uv_st: [
+                                b.width as f32 / mask_atlas.atlas().size().width as f32,
+                                b.height as f32 / mask_atlas.atlas().size().height as f32,
+                                b.tex_left as f32 / mask_atlas.atlas().size().width as f32,
+                                b.tex_top as f32 / mask_atlas.atlas().size().height as f32,
+                            ],
+                            position_modifier_matrix: matrix.clone().transpose(),
+                            slice_borders: [0.0; 4],
+                            tex_size_pixels: [
+                                mask_atlas.atlas().size().width as _,
+                                mask_atlas.atlas().size().height as _,
+                            ],
+                            composite_mode: 1.0,
+                            opacity,
+                            // TODO: color by run
+                            color_tint: t.runs[0]
+                                .color
+                                .evaluate(current_sec, &self.parameter_store),
+                            corner_radius_x: [0.0; 4],
+                            corner_radius_y: [0.0; 4],
+                            border_thickness: 0.0,
+                            border_color: [0.0; 4],
+                            softedge: 0.0,
+                            gradient_data_index: 0.0,
+                            source_texture_index: 0.0, // force mono
+                            border_break_pattern: [0.0, 0.0],
+                            texture_mapping_mode: TextureMappingMode::Stretch.shader_mode_value(),
+                            _padding: 0.0,
+                        },
+                    );
 
                     inst_builder.draw_instance(instance_slot_index, 0);
                     instance_slot_index += 1;
