@@ -18,7 +18,7 @@ use windows::{
     },
     Win32::{
         Devices::HumanInterfaceDevice::KEYBOARD_OVERRUN_MAKE_CODE,
-        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM},
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
             Direct3D12::{
@@ -36,7 +36,12 @@ use windows::{
             },
         },
         System::{
-            SystemServices::{MK_CONTROL, MK_SHIFT},
+            Com::IDataObject,
+            Ole::{
+                DROPEFFECT, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl, OleInitialize,
+                OleUninitialize, RegisterDragDrop, RevokeDragDrop,
+            },
+            SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS},
             WinRT::{
                 Composition::{ICompositorDesktopInterop, ICompositorInterop},
                 CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
@@ -82,7 +87,7 @@ use windows::{
         },
     },
 };
-use windows_core::{HSTRING, IInspectable, Interface, PCWSTR, h, w};
+use windows_core::{HSTRING, IInspectable, Interface, PCWSTR, h, implement, w};
 use windows_numerics::{Vector2, Vector3};
 
 use core::cell::Cell;
@@ -1025,6 +1030,11 @@ impl WindowEventHandler {
         }
 
         if msg == WM_DESTROY {
+            // unregister from drop target
+            unsafe {
+                RevokeDragDrop(hwnd).expect("win32.revoke_drag_drop");
+            }
+
             unsafe {
                 drop(Box::from_raw(
                     core::ptr::with_exposed_provenance_mut::<Self>(
@@ -1049,6 +1059,12 @@ impl WindowEventHandler {
                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE,
                 )
                 .expect("create.swp.framechange");
+            }
+
+            // register as drop target
+            unsafe {
+                RegisterDragDrop(hwnd, &IDropTarget::from(DropTarget))
+                    .expect("win32.register_drag_drop");
             }
 
             return LRESULT(0);
@@ -1664,8 +1680,19 @@ pub struct ApplicationContext {
     drag_preview_popover: DragPreviewPopover,
     pane_dragging: Cell<bool>,
 }
+impl Drop for ApplicationContext {
+    fn drop(&mut self) {
+        unsafe {
+            OleUninitialize();
+        }
+    }
+}
 impl ApplicationContext {
     pub fn new() -> Self {
+        unsafe {
+            OleInitialize(None).expect("win32.ole.initialize");
+        }
+
         // required for winrt functionalities
         let dispatcher_queue = unsafe {
             CreateDispatcherQueueController(DispatcherQueueOptions {
@@ -2347,5 +2374,55 @@ impl NativeTextInputContext {
                 EndCaretPosition: end_acp,
             })
             .expect("edit_context.NotifySelectionChanged");
+    }
+}
+
+#[implement(IDropTarget)]
+struct DropTarget;
+impl IDropTarget_Impl for DropTarget_Impl {
+    fn DragEnter(
+        &self,
+        pdataobj: windows_core::Ref<IDataObject>,
+        grfkeystate: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdweffect: *mut DROPEFFECT,
+    ) -> windows_core::Result<()> {
+        tracing::debug!(?pt, ?grfkeystate, "drag enter");
+        unsafe {
+            pdweffect.write(DROPEFFECT_NONE);
+        }
+        Ok(())
+    }
+
+    fn DragOver(
+        &self,
+        grfkeystate: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdweffect: *mut DROPEFFECT,
+    ) -> windows_core::Result<()> {
+        tracing::debug!(?pt, ?grfkeystate, "drag over");
+        unsafe {
+            pdweffect.write(DROPEFFECT_NONE);
+        }
+        Ok(())
+    }
+
+    fn DragLeave(&self) -> windows_core::Result<()> {
+        tracing::debug!("drag leave");
+        Ok(())
+    }
+
+    fn Drop(
+        &self,
+        pdataobj: windows_core::Ref<IDataObject>,
+        grfkeystate: MODIFIERKEYS_FLAGS,
+        pt: &POINTL,
+        pdweffect: *mut DROPEFFECT,
+    ) -> windows_core::Result<()> {
+        tracing::debug!(?pt, ?grfkeystate, "drop");
+        unsafe {
+            pdweffect.write(DROPEFFECT_NONE);
+        }
+        Ok(())
     }
 }
