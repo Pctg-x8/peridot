@@ -3,9 +3,8 @@ use std::{
     num::NonZeroUsize,
 };
 
-use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Ray3, Sphere3, Vector3F32};
-
-use crate::utils::NonDropAnyTypeQueue;
+use peridot_marble_editor_shared::NonDropAnyTypeQueue;
+use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Ray3, Vector3F32};
 
 pub mod asset_explorer;
 pub mod project;
@@ -112,7 +111,7 @@ impl Object {
         )
     }
 
-    pub fn hittest_ray(&self, ray: &Ray3<f32>) -> bool {
+    pub fn hittest_ray(&self, _ray: &Ray3<f32>) -> bool {
         if !self.render_enabled {
             // no hittest geometry
             return false;

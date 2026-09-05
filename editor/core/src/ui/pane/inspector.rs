@@ -1,16 +1,15 @@
 use std::{cell::Cell, rc::Rc};
 
+use model::{
+    Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation,
+    ObjectSelectionState,
+};
 use peridot_math::Vector3;
 
 use crate::{
     input::{
         EventContinueControl,
         hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
-    },
-    model::{
-        Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation,
-        ObjectSelectionState, ViewFeedbackObjectDataChanged, ViewFeedbackObjectNameChanged,
-        ViewFeedbackObjectSelectionChanged,
     },
     rendering::{
         composite::{
@@ -573,9 +572,9 @@ impl EventHandler {
         env: &mut (impl ViewFeedbackRegisterable + ?Sized),
     ) {
         env.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(self);
-        env.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(self);
-        env.subscribe_view_feedback::<ViewFeedbackObjectNameChanged>(self);
-        env.subscribe_view_feedback::<ViewFeedbackObjectDataChanged>(self);
+        env.subscribe_view_feedback::<model::ViewFeedbackObjectSelectionChanged>(self);
+        env.subscribe_view_feedback::<model::ViewFeedbackObjectNameChanged>(self);
+        env.subscribe_view_feedback::<model::ViewFeedbackObjectDataChanged>(self);
     }
 
     fn unsubscribe_view_feedbacks(
@@ -583,9 +582,9 @@ impl EventHandler {
         env: &mut (impl ViewFeedbackRegisterable + ?Sized),
     ) {
         env.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(self);
-        env.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(self);
-        env.unsubscribe_view_feedback::<ViewFeedbackObjectNameChanged>(self);
-        env.unsubscribe_view_feedback::<ViewFeedbackObjectDataChanged>(self);
+        env.unsubscribe_view_feedback::<model::ViewFeedbackObjectSelectionChanged>(self);
+        env.unsubscribe_view_feedback::<model::ViewFeedbackObjectNameChanged>(self);
+        env.unsubscribe_view_feedback::<model::ViewFeedbackObjectDataChanged>(self);
     }
 
     fn revalidate_all(
@@ -605,7 +604,7 @@ impl EventHandler {
             env.view_instance(x.z).expect("query failed").revalidate();
         }
 
-        let render_enabled = crate::model::selected_object_render_is_enabled(env);
+        let render_enabled = model::selected_object_render_is_enabled(env);
         if env
             .view_instance_mut(self.render_section_header_view)
             .expect("query failed")
@@ -622,7 +621,7 @@ impl EventHandler {
     }
 
     fn on_toggle_render_enable(&self, ctx: &mut (impl ApplicationMutableAccess + ?Sized)) {
-        crate::model::toggle_selected_object_render_enable(ctx);
+        model::toggle_selected_object_render_enable(ctx);
     }
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
@@ -634,7 +633,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
         let object_selection_changed = self.object_selection_changed.replace(false);
 
         if object_selection_changed {
-            match crate::model::selection_state(context) {
+            match model::selection_state(context) {
                 ObjectSelectionState::None => {
                     context
                         .view_instance_mut(self.selected_object_label)
@@ -689,19 +688,19 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
         }
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for EventHandler {
+impl ViewFeedbackHandler<model::ViewFeedbackObjectSelectionChanged> for EventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &ViewFeedbackObjectSelectionChanged,
+        _feedback: &model::ViewFeedbackObjectSelectionChanged,
         _context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.object_selection_changed.set(true);
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for EventHandler {
+impl ViewFeedbackHandler<model::ViewFeedbackObjectNameChanged> for EventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &ViewFeedbackObjectNameChanged,
+        _feedback: &model::ViewFeedbackObjectNameChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         if !self.object_name_editing.replace(false) {
@@ -714,10 +713,10 @@ impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for EventHandler {
         }
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectDataChanged> for EventHandler {
+impl ViewFeedbackHandler<model::ViewFeedbackObjectDataChanged> for EventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &ViewFeedbackObjectDataChanged,
+        _feedback: &model::ViewFeedbackObjectDataChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.revalidate_all(true, context);
@@ -729,58 +728,40 @@ impl TextInputViewIO for EventHandler {
             // pos x
             format!(
                 "{:.3}",
-                crate::model::selected_object_local_translate_x(application)
+                model::selected_object_local_translate_x(application)
             )
         } else if requester == self.vec3_editors[0].y {
             // pos y
             format!(
                 "{:.3}",
-                crate::model::selected_object_local_translate_y(application)
+                model::selected_object_local_translate_y(application)
             )
         } else if requester == self.vec3_editors[0].z {
             // pos z
             format!(
                 "{:.3}",
-                crate::model::selected_object_local_translate_z(application)
+                model::selected_object_local_translate_z(application)
             )
         } else if requester == self.vec3_editors[1].x {
             // rotate x
-            format!(
-                "{:.3}",
-                crate::model::selected_object_local_rotate_x(application)
-            )
+            format!("{:.3}", model::selected_object_local_rotate_x(application))
         } else if requester == self.vec3_editors[1].y {
             // rotate y
-            format!(
-                "{:.3}",
-                crate::model::selected_object_local_rotate_y(application)
-            )
+            format!("{:.3}", model::selected_object_local_rotate_y(application))
         } else if requester == self.vec3_editors[1].z {
             // rotate z
-            format!(
-                "{:.3}",
-                crate::model::selected_object_local_rotate_z(application)
-            )
+            format!("{:.3}", model::selected_object_local_rotate_z(application))
         } else if requester == self.vec3_editors[2].x {
             // scale x
-            format!(
-                "{:.3}",
-                crate::model::selected_object_local_scale_x(application)
-            )
+            format!("{:.3}", model::selected_object_local_scale_x(application))
         } else if requester == self.vec3_editors[2].y {
             // scale y
-            format!(
-                "{:.3}",
-                crate::model::selected_object_local_scale_y(application)
-            )
+            format!("{:.3}", model::selected_object_local_scale_y(application))
         } else if requester == self.vec3_editors[2].z {
             // scale z
-            format!(
-                "{:.3}",
-                crate::model::selected_object_local_scale_z(application)
-            )
+            format!("{:.3}", model::selected_object_local_scale_z(application))
         } else if requester == self.selected_object_name {
-            crate::model::selected_object_name(application)
+            model::selected_object_name(application)
                 .unwrap_or("")
                 .into()
         } else {
@@ -800,67 +781,67 @@ impl TextInputViewIO for EventHandler {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_translate_x(application, v);
+            model::set_selected_object_local_translate_x(application, v);
         } else if sender == self.vec3_editors[0].y {
             // pos y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_translate_y(application, v);
+            model::set_selected_object_local_translate_y(application, v);
         } else if sender == self.vec3_editors[0].z {
             // pos z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_translate_z(application, v);
+            model::set_selected_object_local_translate_z(application, v);
         } else if sender == self.vec3_editors[1].x {
             // rotate x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_rotation_x(application, v);
+            model::set_selected_object_local_rotation_x(application, v);
         } else if sender == self.vec3_editors[1].y {
             // rotate y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_rotation_y(application, v);
+            model::set_selected_object_local_rotation_y(application, v);
         } else if sender == self.vec3_editors[1].z {
             // rotate z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_rotation_z(application, v);
+            model::set_selected_object_local_rotation_z(application, v);
         } else if sender == self.vec3_editors[2].x {
             // scale x
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_scale_x(application, v);
+            model::set_selected_object_local_scale_x(application, v);
         } else if sender == self.vec3_editors[2].y {
             // scale y
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_scale_y(application, v);
+            model::set_selected_object_local_scale_y(application, v);
         } else if sender == self.vec3_editors[2].z {
             // scale z
             let Some(v) = input.parse::<f32>().ok() else {
                 // invalid input
                 return;
             };
-            crate::model::set_selected_object_local_scale_z(application, v);
+            model::set_selected_object_local_scale_z(application, v);
         } else if sender == self.selected_object_name {
             // Note: compositioning中にテキストセットするのを想定してないのでループバックしてこないようにする
             self.object_name_editing.set(true);
-            crate::model::set_selected_object_name(application, input);
+            model::set_selected_object_name(application, input);
         }
     }
 }
@@ -868,55 +849,46 @@ impl NumericInputViewIO for EventHandler {
     fn set_delta(&self, sender: ViewIdentifier, application: &mut ApplicationMutation, delta: f32) {
         if sender == self.vec3_editors[0].x {
             // pos x
-            crate::model::apply_selected_object_local_translate_delta(
+            model::apply_selected_object_local_translate_delta(
                 application,
                 Vector3(delta * 0.1, 0.0, 0.0),
             );
         } else if sender == self.vec3_editors[0].y {
             // pos y
-            crate::model::apply_selected_object_local_translate_delta(
+            model::apply_selected_object_local_translate_delta(
                 application,
                 Vector3(0.0, delta * 0.1, 0.0),
             );
         } else if sender == self.vec3_editors[0].z {
             // pos z
-            crate::model::apply_selected_object_local_translate_delta(
+            model::apply_selected_object_local_translate_delta(
                 application,
                 Vector3(0.0, 0.0, delta * 0.1),
             );
         } else if sender == self.vec3_editors[1].x {
             // rotate x
-            crate::model::apply_selected_object_local_rotate_delta(
-                application,
-                Vector3(delta, 0.0, 0.0),
-            );
+            model::apply_selected_object_local_rotate_delta(application, Vector3(delta, 0.0, 0.0));
         } else if sender == self.vec3_editors[1].y {
             // rotate y
-            crate::model::apply_selected_object_local_rotate_delta(
-                application,
-                Vector3(0.0, delta, 0.0),
-            );
+            model::apply_selected_object_local_rotate_delta(application, Vector3(0.0, delta, 0.0));
         } else if sender == self.vec3_editors[1].z {
             // rotate z
-            crate::model::apply_selected_object_local_rotate_delta(
-                application,
-                Vector3(0.0, 0.0, delta),
-            );
+            model::apply_selected_object_local_rotate_delta(application, Vector3(0.0, 0.0, delta));
         } else if sender == self.vec3_editors[2].x {
             // scale x
-            crate::model::apply_selected_object_local_scale_delta(
+            model::apply_selected_object_local_scale_delta(
                 application,
                 Vector3(delta * 0.1, 0.0, 0.0),
             );
         } else if sender == self.vec3_editors[2].y {
             // scale y
-            crate::model::apply_selected_object_local_scale_delta(
+            model::apply_selected_object_local_scale_delta(
                 application,
                 Vector3(0.0, delta * 0.1, 0.0),
             );
         } else if sender == self.vec3_editors[2].z {
             // scale z
-            crate::model::apply_selected_object_local_scale_delta(
+            model::apply_selected_object_local_scale_delta(
                 application,
                 Vector3(0.0, 0.0, delta * 0.1),
             );
@@ -926,8 +898,8 @@ impl NumericInputViewIO for EventHandler {
 impl crate::uikit::dropdown_box::IO for EventHandler {
     fn selected_index(&self, requester: ViewIdentifier, application: &Application) -> usize {
         if requester == self.render_shape_selector_view {
-            return crate::model::selected_object_render_shape(application)
-                .unwrap_or(crate::model::ObjectRenderShape::Cube) as _;
+            return model::selected_object_render_shape(application)
+                .unwrap_or(model::ObjectRenderShape::Cube) as _;
         }
 
         tracing::warn!(?requester, "receiving from unknown view");
@@ -941,7 +913,7 @@ impl crate::uikit::dropdown_box::IO for EventHandler {
         application: &mut ApplicationMutation,
     ) {
         if sender == self.render_shape_selector_view {
-            crate::model::set_selected_object_render_shape(application, unsafe {
+            model::set_selected_object_render_shape(application, unsafe {
                 core::mem::transmute(u8::try_from(index).expect("too large value"))
             });
             return;

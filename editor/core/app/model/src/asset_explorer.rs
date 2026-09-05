@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use crate::model::{ApplicationAccess, ApplicationMutableAccess};
+use crate::{ApplicationAccess, ApplicationMutableAccess};
 
 pub(super) struct State {
     breadcumbs: Vec<String>,

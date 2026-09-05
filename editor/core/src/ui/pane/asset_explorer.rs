@@ -73,7 +73,9 @@ impl Presenter {
                 file_list_container_view,
             }
         });
-        ctx.subscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&eh);
+        ctx.subscribe_view_feedback::<model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(
+            &eh,
+        );
 
         let root_view = ctx.construct_view(ContainerViewInit, |_| {
             [
@@ -133,7 +135,7 @@ impl PaneContentPresenter for Presenter {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        ctx.unsubscribe_view_feedback::<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(&self.eh);
     }
 }
 
@@ -142,12 +144,12 @@ struct EventHandler {
     file_list_view: TypedViewIdentifier<FileListView>,
     file_list_container_view: TypedViewIdentifier<ScrollContainer>,
 }
-impl ViewFeedbackHandler<crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
+impl ViewFeedbackHandler<model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
     for EventHandler
 {
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &crate::model::asset_explorer::ViewFeedbackCurrentDirectoryChanged,
+        _feedback: &model::asset_explorer::ViewFeedbackCurrentDirectoryChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         context
@@ -229,7 +231,7 @@ impl View for PathNavigatorView {
                         ctx.ht_manager.free_all(e.ht_root);
                     }
 
-                    let labels = crate::model::asset_explorer::breadcumb_elements(ctx.application);
+                    let labels = model::asset_explorer::breadcumb_elements(ctx.application);
                     label_elements.reserve(labels.len());
                     arrow_elements.reserve(labels.len() - 1);
                     let mut left_cursor = 0.0;
@@ -283,7 +285,7 @@ impl View for PathNavigatorView {
 
                 ctx.composite_tree.add_child(ct_root, ct_bottom_border);
 
-                let labels = crate::model::asset_explorer::breadcumb_elements(ctx.application);
+                let labels = model::asset_explorer::breadcumb_elements(ctx.application);
                 let mut breadcumb_labels = Vec::with_capacity(labels.len());
                 let mut breadcumb_arrows = Vec::with_capacity(labels.len() - 1);
                 let mut left_cursor = 0.0;
@@ -456,14 +458,14 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
     ) -> EventContinueControl {
         for (n, e) in self.breadcumb_labels.borrow().iter().enumerate() {
             if e.ht_root == sender {
-                crate::model::asset_explorer::move_dir_by_breadcumb_index(context, n);
+                model::asset_explorer::move_dir_by_breadcumb_index(context, n);
                 return EventContinueControl::STOP_PROPAGATION;
             }
         }
         for (n, e) in self.breadcumb_arrows.borrow().iter().enumerate() {
             if e.ht_root == sender {
                 let next_dir_names =
-                    crate::model::asset_explorer::breadcumb_next_directory_list(context, n)
+                    model::asset_explorer::breadcumb_next_directory_list(context, n)
                         .collect::<Vec<_>>();
                 tracing::debug!(?next_dir_names);
                 let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
@@ -503,7 +505,7 @@ struct PathNavigatorBreadcumbArrowMenuCommandHandler {
 }
 impl MenuCommandSelectionHandler for PathNavigatorBreadcumbArrowMenuCommandHandler {
     fn on_select_command(&mut self, command_id: u64, context: &mut ApplicationMutation) {
-        crate::model::asset_explorer::move_dir_by_breadcumb_index_and_next_directory(
+        model::asset_explorer::move_dir_by_breadcumb_index_and_next_directory(
             context,
             self.index,
             core::mem::replace(&mut self.dir_names[command_id as usize], String::new()),
@@ -670,7 +672,7 @@ impl FileListView {
         let mut line_max_height = 0.0f32;
         let mut top_offset = 0.0;
         if let Some((syslink, app)) = revalidate_ctx {
-            for e in crate::model::asset_explorer::current_dir_entries(app) {
+            for e in model::asset_explorer::current_dir_entries(app) {
                 if left_offset + TiledElementSubView::ITEM_WIDTH >= available_width {
                     // wrap
                     left_offset = 0.0;
@@ -727,34 +729,30 @@ impl View for FileListView {
                     let mut line_max_height = 0.0;
                     let mut top_offset = 0.0;
                     entity.elements.borrow_mut().extend(
-                        crate::model::asset_explorer::current_dir_entries(ctx.application).map(
-                            |e| {
-                                if left_offset + TiledElementSubView::ITEM_WIDTH
-                                    >= layout_rect.width
-                                {
-                                    // wrap
-                                    left_offset = 0.0;
-                                    top_offset += core::mem::replace(&mut line_max_height, 0.0);
-                                }
+                        model::asset_explorer::current_dir_entries(ctx.application).map(|e| {
+                            if left_offset + TiledElementSubView::ITEM_WIDTH >= layout_rect.width {
+                                // wrap
+                                left_offset = 0.0;
+                                top_offset += core::mem::replace(&mut line_max_height, 0.0);
+                            }
 
-                                let element = TiledElementSubView::new(
-                                    ctx.composite_tree,
-                                    ctx.ht_manager,
-                                    ctx.system_link,
-                                    e,
-                                    Point::new_logical(left_offset, top_offset),
-                                );
-                                ctx.composite_tree
-                                    .add_child(entity.ct_root, element.ct_root);
-                                ctx.ht_manager.add_child(entity.ht_root, element.ht_root);
-                                ctx.ht_manager.set_action_handler(element.ht_root, entity);
+                            let element = TiledElementSubView::new(
+                                ctx.composite_tree,
+                                ctx.ht_manager,
+                                ctx.system_link,
+                                e,
+                                Point::new_logical(left_offset, top_offset),
+                            );
+                            ctx.composite_tree
+                                .add_child(entity.ct_root, element.ct_root);
+                            ctx.ht_manager.add_child(entity.ht_root, element.ht_root);
+                            ctx.ht_manager.set_action_handler(element.ht_root, entity);
 
-                                left_offset += TiledElementSubView::ITEM_WIDTH;
-                                line_max_height = line_max_height.max(element.height);
+                            left_offset += TiledElementSubView::ITEM_WIDTH;
+                            line_max_height = line_max_height.max(element.height);
 
-                                element
-                            },
-                        ),
+                            element
+                        }),
                     );
                 } else {
                     // relayout only
@@ -792,7 +790,7 @@ impl View for FileListView {
                 let mut left_offset = 0.0;
                 let mut line_max_height = 0.0;
                 let mut top_offset = 0.0;
-                let elements = crate::model::asset_explorer::current_dir_entries(ctx.application)
+                let elements = model::asset_explorer::current_dir_entries(ctx.application)
                     .map(|e| {
                         if left_offset + TiledElementSubView::ITEM_WIDTH >= layout_rect.width {
                             // wrap
@@ -897,7 +895,7 @@ impl HitTestTreeActionHandler for FileListViewEntity {
     ) -> EventContinueControl {
         for e in self.elements.borrow().iter() {
             if e.ht_root == sender {
-                crate::model::asset_explorer::interact(context, &e.model);
+                model::asset_explorer::interact(context, &e.model);
                 break;
             }
         }
@@ -910,7 +908,7 @@ struct TiledElementSubView {
     height: f32,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    model: crate::model::asset_explorer::FileEntry,
+    model: model::asset_explorer::FileEntry,
 }
 impl TiledElementSubView {
     const MARGIN: f32 = 8.0;
@@ -936,7 +934,7 @@ impl TiledElementSubView {
         composite_tree: &mut CompositeTree<E>,
         ht_manager: &mut HitTestTreeManager,
         syslink: &SystemLink,
-        model: crate::model::asset_explorer::FileEntry,
+        model: model::asset_explorer::FileEntry,
         left_top: Point<LogicalUnit>,
     ) -> Self {
         let label_metric = TextLayout::new_single(

@@ -131,7 +131,7 @@ impl crate::uikit::View for View {
             Some(ref e) => e,
             None => {
                 // first render
-                let project_name: String = crate::model::project::name(ctx).into();
+                let project_name: String = model::project::name(ctx).into();
 
                 let ct_root = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,

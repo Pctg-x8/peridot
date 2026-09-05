@@ -31,6 +31,8 @@ members = [
     "base-lib/pinned-futures-helper",
     "modules/sprite-atlas",
     "editor/core",
+    "editor/core/app/shared",
+    "editor/core/app/model",
     "editor/core/bindgen",
     "editor/core/profiler",
     "editor/core/profiler-attr",

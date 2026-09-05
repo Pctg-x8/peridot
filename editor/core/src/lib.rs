@@ -1,12 +1,17 @@
+extern crate peridot_marble_editor_model as model;
+extern crate peridot_marble_editor_shared as shared;
+
 use bitflags::Flags;
 use core::cell::Cell;
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
 use linux_eventfd::{EventFD, EventFDFlags};
+use model::{Application, ApplicationMutation, ObjectID, ObjectRenderShape, PreviewEditToolType};
 use peridot_math::{One, Zero};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
+use shared::NonDropAnyTypeQueue;
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(not(windows))]
@@ -33,10 +38,6 @@ use crate::{
             HitTestTreeManager, HitTestTreeRef, PointerActionArgs, PointerButton,
             PointerButtonActionArgs,
         },
-    },
-    model::{
-        Application, ApplicationMutation, ObjectID, ObjectRenderShape, PreviewEditToolType,
-        ViewFeedbackPreviewEditToolTypeChanged,
     },
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
@@ -68,7 +69,7 @@ use crate::{
         ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
     utils::{
-        Color32, DummyDebug, LogicalUnit, NonCloneable, NonDropAnyTypeQueue, Point, Rect, Size,
+        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
         UnsafeMainThreadOnlyOnceCell,
     },
 };
@@ -77,7 +78,6 @@ use crate::{
 mod bindgen;
 mod graphics;
 mod input;
-mod model;
 mod platform;
 mod proto;
 mod rendering;
@@ -6594,10 +6594,10 @@ impl PreviewMainThreadState {
 
                         match selected_oid {
                             Some(oid) => {
-                                crate::model::select_object(application, oid);
+                                model::select_object(application, oid);
                             }
                             None => {
-                                crate::model::object_deselect_all(application);
+                                model::object_deselect_all(application);
                             }
                         }
                     }
@@ -6609,7 +6609,7 @@ impl PreviewMainThreadState {
                             && let Some(pointer_pos) = input.pointer_pos
                         {
                             let current_handle_shape =
-                                match crate::model::preview_edit_tool_type(application) {
+                                match model::preview_edit_tool_type(application) {
                                     PreviewEditToolType::Translate => {
                                         rendering::preview::HandleShape::Translation
                                     }
@@ -6830,19 +6830,19 @@ impl PreviewMainThreadState {
 
                     match pointing {
                         HandlePointing::X => {
-                            crate::model::set_selected_object_local_translate_x(
+                            model::set_selected_object_local_translate_x(
                                 application,
                                 base_object_pos.0 + move_delta.0,
                             );
                         }
                         HandlePointing::Y => {
-                            crate::model::set_selected_object_local_translate_y(
+                            model::set_selected_object_local_translate_y(
                                 application,
                                 base_object_pos.1 + move_delta.1,
                             );
                         }
                         HandlePointing::Z => {
-                            crate::model::set_selected_object_local_translate_z(
+                            model::set_selected_object_local_translate_z(
                                 application,
                                 base_object_pos.2 + move_delta.2,
                             );
@@ -6879,19 +6879,19 @@ impl PreviewMainThreadState {
                     // TODO: ここ見る軸はこれであってるか？
                     match pointing {
                         HandlePointing::X => {
-                            crate::model::set_selected_object_local_rotation_x(
+                            model::set_selected_object_local_rotation_x(
                                 application,
                                 base_object_rot.0 - move_delta.1,
                             );
                         }
                         HandlePointing::Y => {
-                            crate::model::set_selected_object_local_rotation_y(
+                            model::set_selected_object_local_rotation_y(
                                 application,
                                 base_object_rot.1 + move_delta.0,
                             );
                         }
                         HandlePointing::Z => {
-                            crate::model::set_selected_object_local_rotation_z(
+                            model::set_selected_object_local_rotation_z(
                                 application,
                                 base_object_rot.2 - move_delta.1,
                             );
@@ -6927,26 +6927,26 @@ impl PreviewMainThreadState {
 
                     match pointing {
                         HandlePointing::X => {
-                            crate::model::set_selected_object_local_scale_x(
+                            model::set_selected_object_local_scale_x(
                                 application,
                                 base_object_scale.0 + move_delta.0,
                             );
                         }
                         HandlePointing::Y => {
-                            crate::model::set_selected_object_local_scale_y(
+                            model::set_selected_object_local_scale_y(
                                 application,
                                 base_object_scale.1 + move_delta.1,
                             );
                         }
                         HandlePointing::Z => {
-                            crate::model::set_selected_object_local_scale_z(
+                            model::set_selected_object_local_scale_z(
                                 application,
                                 base_object_scale.2 + move_delta.2,
                             );
                         }
                         HandlePointing::All => {
                             let scale_all = move_delta.len();
-                            crate::model::set_selected_object_local_scale(
+                            model::set_selected_object_local_scale(
                                 application,
                                 base_object_scale
                                     + peridot_math::Vector3(scale_all, scale_all, scale_all),
@@ -7085,7 +7085,7 @@ impl PreviewMainThreadState {
                 committed_state.handle_data_dirtified = true;
             }
 
-            current_handle_shape = Some(match crate::model::preview_edit_tool_type(application) {
+            current_handle_shape = Some(match model::preview_edit_tool_type(application) {
                 PreviewEditToolType::Translate => rendering::preview::HandleShape::Translation,
                 PreviewEditToolType::Rotate => rendering::preview::HandleShape::Rotation,
                 PreviewEditToolType::Scale => rendering::preview::HandleShape::Scale,
@@ -7958,7 +7958,7 @@ impl HitTestTreeActionHandler for PreviewToolSelectorButtonViewEntity {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        crate::model::set_preview_edit_tool_type(context, self.bound_tool_type);
+        model::set_preview_edit_tool_type(context, self.bound_tool_type);
 
         EventContinueControl::STOP_PROPAGATION
     }
@@ -8009,7 +8009,9 @@ impl PreviewPanePresenter {
             rotate_tool_button_view_id: rotate_control_button,
             scale_tool_button_view_id: scale_control_button,
         });
-        ctx.subscribe_view_feedback::<ViewFeedbackPreviewEditToolTypeChanged>(&feedback_receiver);
+        ctx.subscribe_view_feedback::<model::ViewFeedbackPreviewEditToolTypeChanged>(
+            &feedback_receiver,
+        );
 
         Self {
             root_view_id: root_view,
@@ -8041,7 +8043,7 @@ impl ui::dock::PaneContentPresenter for PreviewPanePresenter {
     }
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
-        ctx.unsubscribe_view_feedback::<ViewFeedbackPreviewEditToolTypeChanged>(
+        ctx.unsubscribe_view_feedback::<model::ViewFeedbackPreviewEditToolTypeChanged>(
             &self.feedback_receiver,
         );
     }
@@ -8052,30 +8054,29 @@ pub struct PreviewPaneFeedbackReceiver {
     rotate_tool_button_view_id: TypedViewIdentifier<PreviewToolSelectorButtonView>,
     scale_tool_button_view_id: TypedViewIdentifier<PreviewToolSelectorButtonView>,
 }
-impl ViewFeedbackHandler<ViewFeedbackPreviewEditToolTypeChanged> for PreviewPaneFeedbackReceiver {
+impl ViewFeedbackHandler<model::ViewFeedbackPreviewEditToolTypeChanged>
+    for PreviewPaneFeedbackReceiver
+{
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &ViewFeedbackPreviewEditToolTypeChanged,
+        _feedback: &model::ViewFeedbackPreviewEditToolTypeChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
-        let is_selecting =
-            crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Translate;
+        let is_selecting = model::preview_edit_tool_type(context) == PreviewEditToolType::Translate;
         context
             .view_instance_mut(self.translate_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
         context.schedule_view_render(self.translate_tool_button_view_id);
 
-        let is_selecting =
-            crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Rotate;
+        let is_selecting = model::preview_edit_tool_type(context) == PreviewEditToolType::Rotate;
         context
             .view_instance_mut(self.rotate_tool_button_view_id)
             .expect("query failed")
             .set_selecting(is_selecting);
         context.schedule_view_render(self.rotate_tool_button_view_id);
 
-        let is_selecting =
-            crate::model::preview_edit_tool_type(context) == PreviewEditToolType::Scale;
+        let is_selecting = model::preview_edit_tool_type(context) == PreviewEditToolType::Scale;
         context
             .view_instance_mut(self.scale_tool_button_view_id)
             .expect("query failed")

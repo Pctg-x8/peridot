@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::model::ApplicationAccess;
+use crate::ApplicationAccess;
 
 pub(super) struct State {
     pub(super) name: String,

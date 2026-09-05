@@ -4,6 +4,8 @@ use std::{
     rc::Rc,
 };
 
+use model::{ApplicationMutation, ObjectID, ObjectRenderShape};
+
 use crate::{
     Event,
     input::{
@@ -12,10 +14,6 @@ use crate::{
             CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef,
             PointerActionArgs, PointerButton, PointerButtonActionArgs,
         },
-    },
-    model::{
-        ApplicationMutation, ObjectID, ObjectRenderShape, ViewFeedbackObjectNameChanged,
-        ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged,
     },
     rendering::composite::{
         AnimatableColor, AnimationCurve, CompositeMode, CompositeRect, CompositeRectText,
@@ -59,8 +57,8 @@ impl Presenter {
             row_views: RefCell::new(Vec::new()),
         });
         ctx.subscribe_view_feedback::<ViewFeedbackPerformAtomic>(&eh);
-        ctx.subscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&eh);
-        ctx.subscribe_view_feedback::<ViewFeedbackObjectNameChanged>(&eh);
+        ctx.subscribe_view_feedback::<model::ViewFeedbackObjectTreeChanged>(&eh);
+        ctx.subscribe_view_feedback::<model::ViewFeedbackObjectNameChanged>(&eh);
 
         Self { eh, root_view_id }
     }
@@ -80,8 +78,8 @@ impl crate::ui::dock::PaneContentPresenter for Presenter {
 
     fn teardown(&mut self, ctx: &mut TeardownContext) {
         ctx.unsubscribe_view_feedback::<ViewFeedbackPerformAtomic>(&self.eh);
-        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectTreeChanged>(&self.eh);
-        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectNameChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<model::ViewFeedbackObjectTreeChanged>(&self.eh);
+        ctx.unsubscribe_view_feedback::<model::ViewFeedbackObjectNameChanged>(&self.eh);
     }
 
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {
@@ -243,7 +241,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                 context.teardown_view_recursive(x);
                 context.free_view(x);
             }
-            for (x, name, indent_level) in crate::model::object_tree_content(context.application) {
+            for (x, name, indent_level) in model::object_tree_content(context.application) {
                 let rv = context.construct_view_direct(|id| {
                     Box::new(ObjectRowView::new(id, x, name.into(), indent_level))
                 });
@@ -262,7 +260,7 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
                         .assigned_object
                         == oid
                     {
-                        let name = crate::model::object_name(context, oid).into();
+                        let name = model::object_name(context, oid).into();
 
                         context
                             .view_instance_mut(view)
@@ -276,19 +274,19 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
         }
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventHandler {
+impl ViewFeedbackHandler<model::ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &ViewFeedbackObjectTreeChanged,
+        _feedback: &model::ViewFeedbackObjectTreeChanged,
         _context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.object_tree_changed.set(true);
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectNameChanged> for ObjectTreePaneEventHandler {
+impl ViewFeedbackHandler<model::ViewFeedbackObjectNameChanged> for ObjectTreePaneEventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        feedback: &ViewFeedbackObjectNameChanged,
+        feedback: &model::ViewFeedbackObjectNameChanged,
         _context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         self.changed_object_ids.borrow_mut().insert(feedback.0);
@@ -334,7 +332,7 @@ impl crate::uikit::View for ObjectRowView {
         ctx: &mut crate::uikit::RenderContext,
         _layout_state: &crate::uikit::ViewLayoutStateStore,
     ) -> ViewRenderElements {
-        let selected = crate::model::object_is_selected(ctx, self.assigned_object);
+        let selected = model::object_is_selected(ctx, self.assigned_object);
 
         let e = match self.eh {
             // TODO: reflect state changes
@@ -427,7 +425,7 @@ impl crate::uikit::View for ObjectRowView {
                     ht_root,
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
-                ctx.subscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&eh);
+                ctx.subscribe_view_feedback::<model::ViewFeedbackObjectSelectionChanged>(&eh);
 
                 &*self.eh.insert(eh)
             }
@@ -446,7 +444,7 @@ impl crate::uikit::View for ObjectRowView {
             return;
         };
 
-        ctx.unsubscribe_view_feedback::<ViewFeedbackObjectSelectionChanged>(&entity);
+        ctx.unsubscribe_view_feedback::<model::ViewFeedbackObjectSelectionChanged>(&entity);
         ctx.composite_tree.free_all(entity.ct_root);
         ctx.ht_manager.free_all(entity.ht_root);
     }
@@ -517,9 +515,9 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         if args.key_modifier.contains(ModifierKey::CONTROL) {
-            crate::model::toggle_object_selection_additive(context, self.assigned_object);
+            model::toggle_object_selection_additive(context, self.assigned_object);
         } else {
-            crate::model::select_object(context, self.assigned_object);
+            model::select_object(context, self.assigned_object);
         }
 
         if args.button == PointerButton::Secondary {
@@ -578,10 +576,10 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
         EventContinueControl::STOP_PROPAGATION
     }
 }
-impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventHandler {
+impl ViewFeedbackHandler<model::ViewFeedbackObjectSelectionChanged> for ObjectRowEventHandler {
     fn accept_feedback<'a, 'h>(
         &self,
-        _feedback: &ViewFeedbackObjectSelectionChanged,
+        _feedback: &model::ViewFeedbackObjectSelectionChanged,
         context: &mut ViewFeedbackContext<'a, 'h>,
     ) {
         context.schedule_view_render(self.view_id);
@@ -608,66 +606,66 @@ impl MenuCommandSelectionHandler for ContextMenuCommandHandler {
     fn on_select_command(&mut self, command_id: u64, context: &mut ApplicationMutation) {
         match command_id {
             MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
-                crate::model::object_create_of_shape(context, ObjectRenderShape::Plane);
+                model::object_create_of_shape(context, ObjectRenderShape::Plane);
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
-                crate::model::object_create_of_shape(context, ObjectRenderShape::Cube);
+                model::object_create_of_shape(context, ObjectRenderShape::Cube);
             }
             MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
-                crate::model::object_create_of_shape(context, ObjectRenderShape::Sphere);
+                model::object_create_of_shape(context, ObjectRenderShape::Sphere);
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
-                crate::model::object_create_of_shape(context, ObjectRenderShape::Cylinder);
+                model::object_create_of_shape(context, ObjectRenderShape::Cylinder);
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
-                crate::model::object_create_of_shape(context, ObjectRenderShape::Capsule);
+                model::object_create_of_shape(context, ObjectRenderShape::Capsule);
             }
             MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
                 // TODO: terrain support?
-                crate::model::object_create_of_shape(context, ObjectRenderShape::Plane);
+                model::object_create_of_shape(context, ObjectRenderShape::Plane);
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE => {
-                crate::model::object_create_of_shape_children_of_selected(
+                model::object_create_of_shape_children_of_selected(
                     context,
                     ObjectRenderShape::Plane,
                 );
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE => {
-                crate::model::object_create_of_shape_children_of_selected(
+                model::object_create_of_shape_children_of_selected(
                     context,
                     ObjectRenderShape::Cube,
                 );
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE => {
-                crate::model::object_create_of_shape_children_of_selected(
+                model::object_create_of_shape_children_of_selected(
                     context,
                     ObjectRenderShape::Sphere,
                 );
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER => {
-                crate::model::object_create_of_shape_children_of_selected(
+                model::object_create_of_shape_children_of_selected(
                     context,
                     ObjectRenderShape::Cylinder,
                 );
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE => {
-                crate::model::object_create_of_shape_children_of_selected(
+                model::object_create_of_shape_children_of_selected(
                     context,
                     ObjectRenderShape::Capsule,
                 );
             }
             MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN => {
                 // TODO: terrain support?
-                crate::model::object_create_of_shape_children_of_selected(
+                model::object_create_of_shape_children_of_selected(
                     context,
                     ObjectRenderShape::Plane,
                 );
             }
             MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED => {
-                crate::model::object_destroy_selected(context);
+                model::object_destroy_selected(context);
             }
             MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED => {
-                crate::model::object_duplicate_selected(context);
+                model::object_duplicate_selected(context);
             }
             _ => {}
         }

@@ -15,6 +15,10 @@ harfbuzz = ["dep:peridot-tp-harfbuzz"]
 enable-profiling = ["profiler/active", "windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
 
 [dependencies]
+profiler.path = "./profiler"
+peridot-marble-editor-shared.path = "./app/shared"
+peridot-marble-editor-model.path = "./app/model"
+
 bedrock = { workspace = true, features = [
   "Implements",
   "DynamicLoaded",
@@ -36,7 +40,6 @@ uuid = { version = "1.22.0", features = ["v4"] }
 unicode-segmentation = "1"
 time = { version = "0.3", features = ["formatting", "std", "macros"] }
 thiserror = "2"
-profiler.path = "./profiler"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
