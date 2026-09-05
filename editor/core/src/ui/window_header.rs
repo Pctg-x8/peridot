@@ -1,6 +1,8 @@
 use core::cell::Cell;
 use std::rc::Rc;
 
+use shared::{LogicalUnit, Rect, Size};
+
 use crate::{
     SyncEvent,
     input::{
@@ -26,7 +28,6 @@ use crate::{
         ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable,
         ViewRenderElements, ViewRenderer,
     },
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub enum Caption {

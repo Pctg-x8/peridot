@@ -1,29 +1,27 @@
 use std::collections::HashMap;
 
 use bedrock as br;
+use shared::{Point, SafeF32};
 
-use crate::{
-    rendering::{TextureID, atlas::AtlasRect},
-    utils::{Point, SafeF32},
-};
+use crate::rendering::{TextureID, atlas::AtlasRect};
 
 #[derive(Clone, Copy)]
 pub enum VectorTextureUnit {}
-impl crate::utils::Unit for VectorTextureUnit {
+impl shared::Unit for VectorTextureUnit {
     const DBG_NAME: &'static str = "VectorTextureUnit";
 
     type SignedValueType = f32;
     type UnsignedValueType = f32;
 }
-impl Point<VectorTextureUnit> {
-    pub const fn new_vector_texture(x: f32, y: f32) -> Self {
-        Self::new_custom(x, y)
-    }
 
-    #[inline(always)]
-    pub fn to_lyon(&self) -> lyon_geom::Point<f32> {
-        lyon_geom::point(self.x, self.y)
-    }
+#[inline(always)]
+pub const fn point_new_vector_texture(x: f32, y: f32) -> Point<VectorTextureUnit> {
+    Point::new_custom(x, y)
+}
+
+#[inline(always)]
+fn point_to_lyon(p: &Point<VectorTextureUnit>) -> lyon_geom::Point<f32> {
+    lyon_geom::point(p.x, p.y)
 }
 
 pub struct VectorRasterizationState {
@@ -72,7 +70,7 @@ impl<'a> VectorVertexRenderer<'a> {
     pub fn new(state: &'a mut VectorRasterizationState) -> Self {
         Self {
             state,
-            pen: Point::new_vector_texture(0.0, 0.0),
+            pen: point_new_vector_texture(0.0, 0.0),
             current_figure: None,
         }
     }
@@ -134,10 +132,10 @@ impl<'a> VectorVertexRenderer<'a> {
         };
 
         lyon_geom::CubicBezierSegment {
-            from: self.pen.to_lyon(),
-            ctrl1: ctrl1.to_lyon(),
-            ctrl2: ctrl2.to_lyon(),
-            to: to.to_lyon(),
+            from: point_to_lyon(&self.pen),
+            ctrl1: point_to_lyon(&ctrl1),
+            ctrl2: point_to_lyon(&ctrl2),
+            to: point_to_lyon(&to),
         }
         .for_each_quadratic_bezier(0.1, &mut |q| {
             let filltri_index1 = self.state.fill_tri_points.len() - 1;

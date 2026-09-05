@@ -1,6 +1,8 @@
 use core::cell::Cell;
 use std::{collections::BTreeSet, rc::Rc};
 
+use shared::{LogicalUnit, Point, Rect, Size};
+
 use crate::{
     Event, SyncEvent, SystemLink, WindowHandle,
     input::{
@@ -28,7 +30,7 @@ use crate::{
         ViewRegisterable, ViewRelationControllable, ViewRenderElements, ViewRenderQueue,
         ViewRenderer,
     },
-    utils::{LogicalUnit, Point, Rect, Size, UnsafeMainThreadOnlyOnceCell},
+    utils::UnsafeMainThreadOnlyOnceCell,
 };
 
 /// デザイン定数

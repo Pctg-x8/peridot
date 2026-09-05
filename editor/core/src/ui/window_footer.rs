@@ -1,3 +1,5 @@
+use shared::{LogicalUnit, Rect, Size};
+
 use crate::{
     rendering::composite::{
         CompositeRect, CompositeRectText, CompositeRectTextRun, CompositeTreeRef,
@@ -5,7 +7,6 @@ use crate::{
     uicore::{
         MeasureContext, RenderContext, TeardownContext, ViewLayoutStateStore, ViewRenderElements,
     },
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct View {

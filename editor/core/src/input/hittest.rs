@@ -1,11 +1,14 @@
 use std::collections::BTreeSet;
 
+#[cfg(windows)]
+use shared::PixelsUnit;
+use shared::{LogicalUnit, Point, Rect, Size};
+
 use crate::{
     PointerID, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, ModifierKey, PointerInputUnit,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct HitTestTreeData<'h> {
@@ -532,11 +535,8 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn compute_screen_rect_with_render_scale(
         &self,
         r: HitTestTreeRef,
-    ) -> (Rect<crate::utils::LogicalUnit>, f32) {
-        fn rec(
-            this: &HitTestTreeManager,
-            r: HitTestTreeRef,
-        ) -> (Rect<crate::utils::LogicalUnit>, f32) {
+    ) -> (Rect<LogicalUnit>, f32) {
+        fn rec(this: &HitTestTreeManager, r: HitTestTreeRef) -> (Rect<LogicalUnit>, f32) {
             let d = &this.data[r.0];
             match this.relations[r.0].parent {
                 None => {
@@ -603,7 +603,7 @@ impl<'h> HitTestTreeManager<'h> {
         r: HitTestTreeRef,
         inset_lt: Point<LogicalUnit>,
         inset_rb: Point<LogicalUnit>,
-    ) -> Rect<crate::utils::PixelsUnit> {
+    ) -> Rect<PixelsUnit> {
         let (gx, gy, gw, gh, root_ht) = self.compute_global_rect_autoroot(r);
         let (wx, wy, s) = match self.data[root_ht.0].root_of_window {
             None => (0, 0, 1.0),

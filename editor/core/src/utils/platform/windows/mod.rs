@@ -1,3 +1,4 @@
+mod extensions;
 mod log_writer;
 
 use std::path::PathBuf;
@@ -24,6 +25,7 @@ use windows::{
 };
 use windows_core::{BOOL, HSTRING, PCWSTR};
 
+pub use self::extensions::*;
 pub use self::log_writer::DebugOutputWriter;
 
 pub fn set_panic_hook() {

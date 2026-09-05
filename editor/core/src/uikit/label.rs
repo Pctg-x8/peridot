@@ -1,3 +1,5 @@
+use shared::{LogicalUnit, Rect, Size};
+
 use crate::{
     rendering::{
         composite::{
@@ -11,7 +13,6 @@ use crate::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
         ViewLayoutStateStore, ViewRenderElements,
     },
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct StaticTextViewInit {

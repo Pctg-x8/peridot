@@ -1,5 +1,6 @@
 use core::mem::MaybeUninit;
 
+use shared::{LogicalUnit, Point, Rect, Size};
 use windows::Win32::{
     Foundation::ERROR_INSUFFICIENT_BUFFER,
     Graphics::{
@@ -27,14 +28,13 @@ use windows_core::{
     interface,
 };
 
-use crate::{
-    rendering::{
-        MaskTextureAtlasManager,
-        composite::CompositeRectTextHorizontalAlignment,
-        text::{FontID, GlyphPlacementBox, TextRun},
-        vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
+use crate::rendering::{
+    MaskTextureAtlasManager,
+    composite::CompositeRectTextHorizontalAlignment,
+    text::{FontID, GlyphPlacementBox, TextRun},
+    vg::{
+        VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer, point_new_vector_texture,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct RootFontSet {
@@ -762,7 +762,7 @@ struct GlyphOutlineSink<'a> {
 impl GlyphOutlineSink<'_> {
     #[inline(always)]
     const fn make_vg_point(&self, p: &windows_numerics::Vector2) -> Point<VectorTextureUnit> {
-        Point::new_vector_texture(
+        point_new_vector_texture(
             p.X * self.dip_to_pixels_scale + self.translate.X,
             -p.Y * self.dip_to_pixels_scale + self.translate.Y,
         )

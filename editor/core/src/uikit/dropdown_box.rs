@@ -1,5 +1,8 @@
 use std::rc::{Rc, Weak};
 
+use peridot_math::Zero;
+use shared::{LogicalUnit, Point, Rect, SafeF32, Size};
+
 use crate::{
     Event,
     input::{
@@ -26,7 +29,6 @@ use crate::{
         TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut,
         ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
-    utils::{LogicalUnit, Point, Rect, SafeF32, Size},
 };
 
 const ARROW_PRESS_Y_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {

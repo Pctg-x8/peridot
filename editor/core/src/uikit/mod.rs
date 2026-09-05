@@ -1,11 +1,10 @@
 //! Non-Application related common ui kits
 
-use crate::{
-    uicore::{
-        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, ViewConstructor,
-        ViewLayoutStateStore, ViewRenderElements,
-    },
-    utils::{LogicalUnit, Rect, Size},
+use shared::{LogicalUnit, Rect, Size};
+
+use crate::uicore::{
+    MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, ViewConstructor,
+    ViewLayoutStateStore, ViewRenderElements,
 };
 
 /// なにもしないView(他のViewをいれるためだけに使う)

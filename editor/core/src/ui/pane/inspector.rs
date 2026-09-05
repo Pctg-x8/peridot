@@ -5,6 +5,7 @@ use model::{
     ObjectSelectionState,
 };
 use peridot_math::Vector3;
+use shared::{LogicalUnit, Rect, Size};
 
 use crate::{
     input::{
@@ -33,7 +34,6 @@ use crate::{
         NumericInputViewInit, ScrollContainer, ScrollContainerInit, StaticTextView,
         StaticTextViewInit, TextInputView, TextInputViewIO, TextInputViewInit,
     },
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct Presenter {

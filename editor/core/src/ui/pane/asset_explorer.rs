@@ -1,5 +1,7 @@
 use std::{cell::RefCell, rc::Rc};
 
+use shared::{LogicalUnit, Point, Rect, Size};
+
 use crate::{
     Event, SystemLink,
     input::{
@@ -34,7 +36,6 @@ use crate::{
         ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuItem, ScrollContainer,
         ScrollContainerInit,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub struct Presenter {

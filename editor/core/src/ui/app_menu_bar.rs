@@ -1,6 +1,8 @@
 use core::cell::Cell;
 use std::rc::Rc;
 
+use shared::{LogicalUnit, Point, Rect, Size};
+
 use crate::{
     Event, SystemLink,
     input::{
@@ -24,7 +26,6 @@ use crate::{
         MeasureContext, RenderContext, TeardownContext, ViewLayoutStateStore, ViewRenderElements,
     },
     uikit::{MenuCommandSelectionHandler, MenuItem},
-    utils::{Point, Size},
 };
 
 pub struct View {
@@ -62,7 +63,7 @@ impl View {
 impl crate::uicore::View for View {
     fn render(
         &mut self,
-        _layout_rect: crate::utils::Rect<crate::utils::LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
@@ -132,10 +133,7 @@ impl crate::uicore::View for View {
         ctx.ht_manager.free_all(e.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut MeasureContext,
-    ) -> Size<crate::utils::LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, ItemSubView::ITEM_HEIGHT)
     }
 }

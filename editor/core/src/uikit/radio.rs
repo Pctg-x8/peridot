@@ -1,6 +1,8 @@
 use core::cell::Cell;
 use std::rc::Rc;
 
+use shared::{LogicalUnit, Rect, Size};
+
 use crate::{
     input::{
         EventContinueControl, InputEventContext,
@@ -17,7 +19,6 @@ use crate::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View,
         ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct RadioButtonView {

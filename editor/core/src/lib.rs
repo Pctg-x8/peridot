@@ -11,7 +11,7 @@ use model::{Application, ApplicationMutation, ObjectID, ObjectRenderShape, Previ
 use peridot_math::{One, Zero};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
-use shared::NonDropAnyTypeQueue;
+use shared::{Color32, LogicalUnit, NonDropAnyTypeQueue, PixelsUnit, Point, Rect, Size};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(not(windows))]
@@ -71,10 +71,7 @@ use crate::{
         SimpleButtonEventHandler, SimpleButtonViewInit, StaticTextViewInit, TextInputView,
         TextInputViewIO,
     },
-    utils::{
-        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
-        UnsafeMainThreadOnlyOnceCell,
-    },
+    utils::{DummyDebug, NonCloneable, UnsafeMainThreadOnlyOnceCell},
 };
 
 #[cfg(windows)]
@@ -6123,7 +6120,7 @@ trait PersistStateSerializable: Sized {
         r: &mut (impl std::io::Read + ?Sized),
     ) -> Result<Self, PersistStateDeserializeError>;
 }
-impl PersistStateSerializable for Rect<crate::utils::LogicalUnit> {
+impl PersistStateSerializable for Rect<LogicalUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&f32::to_ne_bytes(self.left))?;
         w.write_all(&f32::to_ne_bytes(self.top))?;
@@ -6154,7 +6151,7 @@ impl PersistStateSerializable for Rect<crate::utils::LogicalUnit> {
         ))
     }
 }
-impl PersistStateSerializable for Rect<crate::utils::PixelsUnit> {
+impl PersistStateSerializable for Rect<PixelsUnit> {
     fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&i32::to_ne_bytes(self.left))?;
         w.write_all(&i32::to_ne_bytes(self.top))?;

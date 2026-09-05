@@ -6,6 +6,8 @@ use std::{
     rc::{Rc, Weak},
 };
 
+use shared::{LogicalUnit, Rect, Size};
+
 use crate::{
     SyncEvent, SystemLink,
     input::{
@@ -16,7 +18,6 @@ use crate::{
         MainThreadTextureIDIssuer,
         composite::{CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub trait SystemLinkAccess {

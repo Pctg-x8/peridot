@@ -1,3 +1,4 @@
+/// 32-bit color(r8g8b8a8)
 pub struct Color32 {
     pub r: u8,
     pub g: u8,
@@ -32,15 +33,5 @@ impl Color32 {
 
     pub const fn a_u32(&self) -> u32 {
         (0xffffffffu32 as f32 * (self.a as f32 / 255.0).min(1.0)) as u32
-    }
-
-    #[cfg(windows)]
-    pub const fn windows_native_color(&self) -> windows::UI::Color {
-        windows::UI::Color {
-            A: self.a,
-            R: self.r,
-            G: self.g,
-            B: self.b,
-        }
     }
 }

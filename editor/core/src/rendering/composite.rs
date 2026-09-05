@@ -9,7 +9,10 @@ use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, MemoryBound, QueueMut, RenderPass,
     ShaderModule, TypedVulkanStructure, VkHandle,
 };
-use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4};
+use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4, Zero};
+use shared::{
+    LogicalUnit, PixelsUnit, Rect, SafeF32, Size, is_beyond_of_range, range_from_len, rate_of_range,
+};
 
 use crate::{
     graphics::{
@@ -21,10 +24,6 @@ use crate::{
         atlas::AtlasRect,
         text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
         vg::VectorRasterizationState,
-    },
-    utils::{
-        LogicalUnit, PixelsUnit, Rect, SafeF32, Size,
-        range_helper::{is_beyond, range_from_len, rate_of},
     },
 };
 
@@ -276,7 +275,7 @@ impl<Event> AnimatableFloat<Event> {
                 ref curve,
                 ..
             } => lerp(
-                curve.interpolate(rate_of(sec_duration, current_sec)),
+                curve.interpolate(rate_of_range(sec_duration, current_sec)),
                 from_value,
                 to_value,
             ),
@@ -289,7 +288,7 @@ impl<Event> AnimatableFloat<Event> {
             ref mut event_on_complete,
             ..
         } = self
-            && is_beyond(sec_duration, current_sec)
+            && is_beyond_of_range(sec_duration, current_sec)
         {
             if let Some(e) = event_on_complete.take() {
                 cb(e);
@@ -351,7 +350,7 @@ impl<Event> AnimatableColor<Event> {
                 ref curve,
                 ..
             } => lerp4(
-                curve.interpolate(rate_of(sec_duration, current_sec)),
+                curve.interpolate(rate_of_range(sec_duration, current_sec)),
                 from_value,
                 to_value,
             ),
@@ -364,7 +363,7 @@ impl<Event> AnimatableColor<Event> {
             ref mut event_on_complete,
             ..
         } = self
-            && is_beyond(sec_duration, current_sec)
+            && is_beyond_of_range(sec_duration, current_sec)
         {
             if let Some(e) = event_on_complete.take() {
                 cb(e);

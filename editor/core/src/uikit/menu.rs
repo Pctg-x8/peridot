@@ -1,5 +1,7 @@
 use std::rc::Rc;
 
+use shared::{LogicalUnit, SafeF32, Size};
+
 use crate::{
     Event, FlyoutSurfaceHandle,
     input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
@@ -16,7 +18,6 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uicore::{MountTarget, ViewInitContext},
-    utils::{LogicalUnit, SafeF32, Size},
 };
 
 pub const DELAYED_ACTION_TIMEOUT_MS: u32 = 400;

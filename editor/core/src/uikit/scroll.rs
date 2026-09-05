@@ -1,5 +1,8 @@
 use std::rc::Rc;
 
+use peridot_math::Zero;
+use shared::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size};
+
 use crate::{
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
@@ -18,7 +21,6 @@ use crate::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
         ViewIdentifier, ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
-    utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
 
 const DEFAULT_SCROLL_BAR_THICKNESS: f32 = 4.0;

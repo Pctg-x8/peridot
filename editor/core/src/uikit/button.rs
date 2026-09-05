@@ -1,6 +1,8 @@
 use core::cell::Cell;
 use std::rc::Rc;
 
+use shared::{LogicalUnit, Rect, Size, range_from_len};
+
 use crate::{
     Event, SyncEvent, SystemLink, WindowHandle,
     input::{
@@ -23,7 +25,6 @@ use crate::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
         ViewLayoutStateStore, ViewRenderElements,
     },
-    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
 pub trait SimpleButtonEventHandler {

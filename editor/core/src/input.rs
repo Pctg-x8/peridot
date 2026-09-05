@@ -5,6 +5,7 @@ use std::{
 };
 
 use bitflags::bitflags;
+use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
     FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
@@ -20,7 +21,6 @@ use crate::{
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRenderQueue, ViewRenderer,
         view_iter_self_group_participants,
     },
-    utils::{LogicalUnit, Point, Rect, Size},
 };
 
 pub mod hittest;
@@ -207,7 +207,7 @@ impl NativeDesktopSurface {
     pub fn client_pos_to_screen_pos(
         &self,
         client_pos: Point<PointerInputUnit>,
-    ) -> Point<crate::utils::PixelsUnit> {
+    ) -> Point<shared::PixelsUnit> {
         match self {
             Self::Window(w) => w.client_pos_to_screen_pos(client_pos),
             Self::ContextMenu(w) => w.client_pos_to_screen_pos(client_pos),

@@ -1,9 +1,8 @@
-use crate::{
-    rendering::{
-        MaskTextureAtlasManager, composite::CompositeRectTextHorizontalAlignment,
-        vg::VectorRasterizationState,
-    },
-    utils::{LogicalUnit, Rect, Size},
+use shared::{LogicalUnit, Rect, Size};
+
+use crate::rendering::{
+    MaskTextureAtlasManager, composite::CompositeRectTextHorizontalAlignment,
+    vg::VectorRasterizationState,
 };
 
 #[cfg(target_os = "macos")]

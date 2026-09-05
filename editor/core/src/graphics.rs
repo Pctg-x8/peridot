@@ -4,11 +4,9 @@ use bedrock::{
     self as br, Device, DeviceCreateRenderPass2Extension, Instance, InstanceChild, PhysicalDevice,
     Swapchain, VkHandle, VkRawHandle, VulkanStructure,
 };
+use shared::{PixelsUnit, Size};
 
-use crate::{
-    FileSystem,
-    utils::{PixelsUnit, Size},
-};
+use crate::FileSystem;
 
 pub const VI_STATE_EMPTY: &br::PipelineVertexInputStateCreateInfo =
     &br::PipelineVertexInputStateCreateInfo::new(&[], &[]);

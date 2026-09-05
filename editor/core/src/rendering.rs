@@ -10,6 +10,7 @@ use bedrock::{
     ImageChild, MemoryBound, QueueMut, RenderPass, ShaderModule, SpecializationConstants,
     SwapchainMut, VkHandle, VkHandleMut,
 };
+use shared::SafeF32;
 
 use crate::{
     FlyoutSurfaceHandle, SyncEvent, SyncEventBus, WindowHandle,
@@ -30,7 +31,7 @@ use crate::{
         vg::VectorRasterizationState,
     },
     uicore::MountTarget,
-    utils::{SafeF32, UnsafeMainThreadOnlyOnceCell},
+    utils::{UnsafeMainThreadOnlyOnceCell, size_to_vk},
 };
 
 pub mod atlas;
@@ -300,12 +301,14 @@ impl<'main> RenderThread<'main> {
 
         let mut preview_rt_buffer = preview::PreviewRenderTargetBuffer::new(
             self.gfx,
-            self.preview_state
-                .lock()
-                .expect("poisoned")
-                .viewport_size
-                .to_pixels_ceil(1.0)
-                .to_vk(),
+            size_to_vk(
+                &self
+                    .preview_state
+                    .lock()
+                    .expect("poisoned")
+                    .viewport_size
+                    .to_pixels_ceil(1.0),
+            ),
         );
         let mut preview_renderer = preview::Renderer::new(
             self.gfx,
@@ -713,10 +716,11 @@ impl<'main> RenderThread<'main> {
                         let mut committed_state = self.preview_state.lock().expect("poisoned");
                         let resource_recreated = preview_rt_buffer.validate(
                             self.gfx,
-                            committed_state
-                                .viewport_size
-                                .to_pixels_ceil(render_scale.value())
-                                .to_vk(),
+                            size_to_vk(
+                                &committed_state
+                                    .viewport_size
+                                    .to_pixels_ceil(render_scale.value()),
+                            ),
                         );
 
                         if resource_recreated {
@@ -1235,7 +1239,7 @@ impl<'d> ContextMenuRenderer<'d> {
         let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.w.pixels_size());
 
         #[cfg(windows)]
-        let presentation_size = create_data.w.pixels_size().to_vk();
+        let presentation_size = size_to_vk(&create_data.w.pixels_size());
         #[cfg(windows)]
         let mut presentation_buffers = Vec::with_capacity(2);
         #[cfg(windows)]

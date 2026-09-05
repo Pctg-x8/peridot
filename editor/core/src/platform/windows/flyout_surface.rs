@@ -1,3 +1,4 @@
+use shared::{LogicalUnit, PixelsUnit, Point, Size};
 use windows::{
     UI::Composition::{
         CompositionEffectFactory, CompositionEffectSourceParameter, Desktop::DesktopWindowTarget,
@@ -52,9 +53,8 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     uikit::MenuItemSubMenuView,
-    utils::{
-        LogicalUnit, PixelsUnit, Point, Size,
-        platform::windows::{WaitableTimer, WindowByClassIter, register_class},
+    utils::platform::windows::{
+        WaitableTimer, WindowByClassIter, point_from_win32, point_to_win32, register_class,
     },
 };
 
@@ -143,11 +143,11 @@ impl Handle {
 
     #[inline(always)]
     pub fn client_pos_to_screen_pos(&self, p: Point<LogicalUnit>) -> Point<PixelsUnit> {
-        let mut p = [p.to_pixels_round(self.render_scale()).to_win32()];
+        let mut p = [point_to_win32(&p.to_pixels_round(self.render_scale()))];
         unsafe {
             MapWindowPoints(Some(self.0), None, &mut p);
         }
-        Point::from_win32(p[0])
+        point_from_win32(p[0])
     }
 
     #[inline(always)]
@@ -276,15 +276,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
         };*/
 
-        let mut p = [Point::new_pixels(
+        let mut p = [point_to_win32(&Point::new_pixels(
             (lparam.0 & 0xffff) as i16 as _,
             ((lparam.0 >> 16) & 0xffff) as i16 as _,
-        )
-        .to_win32()];
+        ))];
         unsafe {
             MapWindowPoints(None, Some(hwnd), &mut p);
         }
-        let client_pos = Point::from_win32(p[0]);
+        let client_pos = point_from_win32(p[0]);
 
         let mut client_size = core::mem::MaybeUninit::uninit();
         unsafe {
@@ -660,11 +659,11 @@ impl super::SystemLink<'_> {
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) -> Handle {
         let render_scale = parent.ui_scale_factor();
-        let mut ps = [pos.to_pixels_round(render_scale).to_win32()];
+        let mut ps = [point_to_win32(&pos.to_pixels_round(render_scale))];
         unsafe {
             MapWindowPoints(Some(parent.0), None, &mut ps);
         }
-        let screen_pos = Point::from_win32(ps[0]);
+        let screen_pos = point_from_win32(ps[0]);
         let pixels_size = size.to_pixels_ceil(render_scale);
 
         tracing::debug!(?screen_pos, ?pixels_size, "new_flyout_surface");

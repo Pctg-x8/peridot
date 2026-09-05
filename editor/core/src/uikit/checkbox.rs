@@ -1,6 +1,8 @@
 use core::cell::Cell;
 use std::rc::Rc;
 
+use shared::{LogicalUnit, Rect, Size, range_from_len};
+
 use crate::{
     input::{
         EventContinueControl, InputEventContext,
@@ -25,7 +27,6 @@ use crate::{
         MeasureContext, RenderContext, TeardownContext, View, ViewLayoutStateStore,
         ViewRenderElements,
     },
-    utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
 const CHECKMARK_ACTIVATE_OPACITY_ANIM: FloatAnimationTemplate = FloatAnimationTemplate {

@@ -1,4 +1,5 @@
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
+use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
 use windows::{
     Foundation::TypedEventHandler,
     System::DispatcherQueueController,
@@ -105,12 +106,10 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
         text::FontSet,
     },
-    utils::{
-        LogicalUnit, PixelsUnit, Point, Rect, Size,
-        platform::windows::{
-            EnumerateDisplayMonitorContinuous, WaitableTimer, current_instance_handle,
-            enumerate_display_monitors, primary_monitor, register_class,
-        },
+    utils::platform::windows::{
+        EnumerateDisplayMonitorContinuous, WaitableTimer, current_instance_handle,
+        enumerate_display_monitors, point_from_win32, point_to_win32, primary_monitor,
+        register_class, windows_native_color,
     },
 };
 
@@ -268,11 +267,11 @@ impl WindowHandle {
 
     #[inline(always)]
     pub fn client_pos_to_screen_pos(&self, p: Point<LogicalUnit>) -> Point<PixelsUnit> {
-        let mut p = [p.to_pixels_round(self.ui_scale_factor()).to_win32()];
+        let mut p = [point_to_win32(&p.to_pixels_round(self.ui_scale_factor()))];
         unsafe {
             MapWindowPoints(Some(self.0), None, &mut p);
         }
-        Point::from_win32(p[0])
+        point_from_win32(p[0])
     }
 
     #[inline(always)]
@@ -752,7 +751,7 @@ impl WindowEventHandler {
                 MapWindowPoints(None, Some(dest_window.0), &mut p);
             }
             let client_pos_in_dest =
-                Point::from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
+                point_from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
 
             unsafe {
                 SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
@@ -863,7 +862,7 @@ impl WindowEventHandler {
         unsafe {
             MapWindowPoints(None, Some(dest_window.0), &mut p);
         }
-        let client_pos_in_dest = Point::from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
+        let client_pos_in_dest = point_from_win32(p[0]).to_logical(dest_window.ui_scale_factor());
 
         unsafe {
             SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
@@ -878,11 +877,11 @@ impl WindowEventHandler {
     }
 
     fn non_client_hittest(&self, hwnd: HWND, screen_pos: Point<PixelsUnit>) -> Option<u32> {
-        let mut p = [screen_pos.to_win32()];
+        let mut p = [point_to_win32(&screen_pos)];
         unsafe {
             MapWindowPoints(None, Some(hwnd), &mut p);
         }
-        let client_pos = Point::from_win32(p[0]);
+        let client_pos = point_from_win32(p[0]);
 
         let mut client_size = core::mem::MaybeUninit::uninit();
         unsafe {
@@ -1547,9 +1546,9 @@ impl DragPreviewPopover {
         color_tint_visual
             .SetBrush(
                 &native_compositor
-                    .CreateColorBrushWithColor(
-                        crate::DRAG_PREVIEW_POPOVER_BG_COLOR.windows_native_color(),
-                    )
+                    .CreateColorBrushWithColor(windows_native_color(
+                        &crate::DRAG_PREVIEW_POPOVER_BG_COLOR,
+                    ))
                     .expect("drag.visual.color_tint.brush.create"),
             )
             .expect("drag.visual.color_tint.set_brush");
@@ -1913,15 +1912,16 @@ impl<'sys> SystemLink<'sys> {
                 rect,
                 position_ref_window,
             } => {
-                let mut grect_lt = [rect
-                    .left_top()
-                    .to_pixels_round(position_ref_window.ui_scale_factor())
-                    .to_win32()];
+                let mut grect_lt = [point_to_win32(
+                    &rect
+                        .left_top()
+                        .to_pixels_round(position_ref_window.ui_scale_factor()),
+                )];
                 unsafe {
                     MapWindowPoints(Some(position_ref_window.0), None, &mut grect_lt);
                 }
 
-                initial_pos = Some(Point::from_win32(grect_lt[0]));
+                initial_pos = Some(point_from_win32(grect_lt[0]));
                 initial_size = Some(
                     rect.size()
                         .to_pixels_ceil(position_ref_window.ui_scale_factor()),

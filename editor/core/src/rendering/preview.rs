@@ -9,7 +9,11 @@ use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, ImageChild,
     MemoryBound, VkHandle,
 };
-use peridot_math::{Camera, Matrix4, Matrix4F32, One, Vector3};
+use peridot_math::{Camera, Matrix4, Matrix4F32, One};
+use shared::{
+    LogicalUnit, PixelsUnit, SafeF32, Size, find_lowest_bit_pos_from_u16, lowest_bit_pos_u16,
+    most_top_bit_pos_u64, range_from_len_u64, rup2, rup2_u64,
+};
 
 use crate::{
     graphics::{
@@ -24,10 +28,6 @@ use crate::{
             TRANSLATE_HANDLE_ICOUNT, TRANSLATE_HANDLE_VCOUNT, gen_rotation_handle_mesh,
             gen_scale_handle_mesh, gen_translate_handle_mesh,
         },
-    },
-    utils::{
-        LogicalUnit, PixelsUnit, SafeF32, Size, find_lowest_bit_pos_from_u16, lowest_bit_pos_u16,
-        most_top_bit_pos_u64, range_from_len_u64, rup2, rup2_u64,
     },
 };
 
@@ -1167,16 +1167,16 @@ pub struct Renderer {
     scratch_staging: ScratchStagingBuffer,
     pending_camera_data_updates: Option<usize>,
     internal_mesh_buffer: br::vk::VkBuffer,
-    origin_axes_vbuf_range: core::ops::Range<br::DeviceSize>,
-    translate_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
-    translate_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
-    rotation_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
-    rotation_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
-    scale_handle_vbuf_range: core::ops::Range<br::DeviceSize>,
-    scale_handle_ibuf_range: core::ops::Range<br::DeviceSize>,
+    origin_axes_vbuf_range: core::range::Range<br::DeviceSize>,
+    translate_handle_vbuf_range: core::range::Range<br::DeviceSize>,
+    translate_handle_ibuf_range: core::range::Range<br::DeviceSize>,
+    rotation_handle_vbuf_range: core::range::Range<br::DeviceSize>,
+    rotation_handle_ibuf_range: core::range::Range<br::DeviceSize>,
+    scale_handle_vbuf_range: core::range::Range<br::DeviceSize>,
+    scale_handle_ibuf_range: core::range::Range<br::DeviceSize>,
     internal_uniform_buffer: br::vk::VkBuffer,
-    camera_data_ubuf_range: core::ops::Range<br::DeviceSize>,
-    handle_data_ubuf_range: core::ops::Range<br::DeviceSize>,
+    camera_data_ubuf_range: core::range::Range<br::DeviceSize>,
+    handle_data_ubuf_range: core::range::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
     dynamic_buffer: DynamicBuffer,
     dynamic_ubuf: DynamicBuffer,
@@ -1376,7 +1376,7 @@ impl Renderer {
         let unlit_colored_shader = device.require_shader("preview/unlit_colored.spv");
         let rotation_handle_shader = device.require_shader("preview/rotation_handle.spv");
 
-        let origin_axes_vbuf_range = 0..size_of_val(VS_ORIGIN_AXES) as br::DeviceSize;
+        let origin_axes_vbuf_range = range_from_len_u64(0, size_of_val(VS_ORIGIN_AXES) as _);
         let translate_handle_vbuf_range = range_from_len_u64(
             rup2_u64(origin_axes_vbuf_range.end, align_of::<HandleVertex>() as _),
             (size_of::<HandleVertex>() * TRANSLATE_HANDLE_VCOUNT) as _,
@@ -1417,7 +1417,7 @@ impl Renderer {
             ),
         )
         .expect("preview.internal_mesh_buffer.create");
-        let camera_data_ubuf_range = 0..size_of::<CameraData>() as br::DeviceSize;
+        let camera_data_ubuf_range = range_from_len_u64(0, size_of::<CameraData>() as _);
         let gizmos_camera_data_ubuf_range =
             range_from_len_u64(camera_data_ubuf_range.end, size_of::<CameraData>() as _);
         let handle_data_ubuf_range = range_from_len_u64(
@@ -1683,12 +1683,12 @@ impl Renderer {
                     .binding_at(0)
                     .write(br::DescriptorContents::uniform_buffer(
                         &internal_uniform_buffer,
-                        camera_data_ubuf_range.clone(),
+                        camera_data_ubuf_range.into(),
                     )),
                 offsettable_object_descriptor_set.binding_at(0).write(
                     br::DescriptorContents::uniform_buffer_dynamic(
                         &internal_uniform_buffer,
-                        handle_data_ubuf_range.clone(),
+                        handle_data_ubuf_range.into(),
                     ),
                 ),
             ],

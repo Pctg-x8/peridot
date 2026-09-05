@@ -1,9 +1,8 @@
 //! Layout System
 
-use crate::{
-    uicore::{MeasureContext, ViewIdentifier, ViewInstanceStore, ViewTreeRelationStore},
-    utils::{LogicalUnit, Point, Rect, Size},
-};
+use shared::{LogicalUnit, Point, Rect, Size};
+
+use crate::uicore::{MeasureContext, ViewIdentifier, ViewInstanceStore, ViewTreeRelationStore};
 
 #[derive(Debug, Clone, Default)]
 pub struct RectEdge {

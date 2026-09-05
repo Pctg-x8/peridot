@@ -1,3 +1,5 @@
+use shared::Size;
+
 use crate::{
     Event, SyncEvent, WindowHandle,
     input::hittest::HitTestTreeManager,
@@ -16,7 +18,6 @@ use crate::{
         SimpleButtonConstantEventHandler, SimpleButtonView, SimpleButtonViewInit,
         StaticTextViewInit,
     },
-    utils::Size,
 };
 
 pub struct AlertDialogPresenter {

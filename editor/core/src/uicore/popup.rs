@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use shared::{LogicalUnit, Point, Rect, Size, range_from_len};
+
 use crate::{
     SyncEvent, WindowHandle,
     input::{
@@ -18,7 +20,6 @@ use crate::{
         render_view_with_base, teardown_view_recursive, view_instance, view_instance_mut,
         view_layout_mut, view_set_visibility,
     },
-    utils::{LogicalUnit, Point, Rect, Size, range_helper::range_from_len},
 };
 
 #[repr(transparent)]

@@ -1,5 +1,7 @@
 use core::{cell::Cell, marker::PhantomData};
 
+use peridot_math::Zero;
+
 pub trait Unit {
     const DBG_NAME: &'static str;
 
@@ -32,19 +34,6 @@ impl Unit for PixelsUnit {
 
     type UnsignedValueType = u32;
     type SignedValueType = i32;
-}
-
-pub trait Zero {
-    const ZERO: Self;
-}
-impl Zero for f32 {
-    const ZERO: f32 = 0.0;
-}
-impl Zero for u32 {
-    const ZERO: u32 = 0;
-}
-impl Zero for i32 {
-    const ZERO: i32 = 0;
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -113,25 +102,6 @@ impl Point<PixelsUnit> {
         Point {
             x: self.x as f32 / pixels_scale,
             y: self.y as f32 / pixels_scale,
-            _marker: PhantomData,
-        }
-    }
-
-    #[cfg(windows)]
-    #[inline(always)]
-    pub const fn to_win32(&self) -> windows::Win32::Foundation::POINT {
-        windows::Win32::Foundation::POINT {
-            x: self.x,
-            y: self.y,
-        }
-    }
-
-    #[cfg(windows)]
-    #[inline(always)]
-    pub const fn from_win32(point: windows::Win32::Foundation::POINT) -> Self {
-        Self {
-            x: point.x,
-            y: point.y,
             _marker: PhantomData,
         }
     }
@@ -226,14 +196,6 @@ impl Size<PixelsUnit> {
             width: self.width as f32 / scale,
             height: self.height as f32 / scale,
             _marker: PhantomData,
-        }
-    }
-
-    #[inline(always)]
-    pub const fn to_vk(&self) -> bedrock::Extent2D {
-        bedrock::Extent2D {
-            width: self.width,
-            height: self.height,
         }
     }
 }

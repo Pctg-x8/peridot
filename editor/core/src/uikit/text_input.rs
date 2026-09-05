@@ -2,6 +2,7 @@ use core::cell::Cell;
 use std::{cell::RefCell, rc::Rc};
 
 use bitflags::bitflags;
+use shared::{LogicalUnit, Point, Rect, SafeF32, Size, next_char_byte, prev_char_byte};
 
 use crate::{
     LogicFiberEventDispatcher, SystemLink,
@@ -27,10 +28,6 @@ use crate::{
     uicore::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
         ViewIdentifier, ViewLayoutStateStore, ViewRenderElements, ViewRenderQueue, ViewRenderer,
-    },
-    utils::{
-        LogicalUnit, Point, Rect, SafeF32, Size,
-        text::{next_char_byte, prev_char_byte},
     },
 };
 
@@ -1327,8 +1324,6 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
         ctx: &mut InputEventContext,
         req: &windows::UI::Text::Core::CoreTextLayoutRequest,
     ) -> windows_core::Result<()> {
-        use crate::utils::Size;
-
         let range = req.Range()?;
         tracing::trace!(
             req.range = ?range,

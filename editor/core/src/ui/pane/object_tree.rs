@@ -5,6 +5,7 @@ use std::{
 };
 
 use model::{ApplicationMutation, ObjectID, ObjectRenderShape};
+use shared::{LogicalUnit, Rect, Size};
 
 use crate::{
     Event,
@@ -28,7 +29,6 @@ use crate::{
         ViewRegisterable, ViewRelationControllable, ViewRenderElements, ViewRenderer, ViewSize,
     },
     uikit::{MenuCommandSelectionHandler, MenuItem},
-    utils::{LogicalUnit, Rect, Size},
 };
 
 pub struct Presenter {
