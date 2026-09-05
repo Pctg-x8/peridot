@@ -5,13 +5,7 @@ use std::{
 };
 
 use crate::{
-    Event, MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE, MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE,
-    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE, MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER,
-    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE, MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN,
-    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE, MENU_COMMAND_ID_OBJECT_CREATE_CUBE,
-    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER, MENU_COMMAND_ID_OBJECT_CREATE_PLANE,
-    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN, MENU_COMMAND_ID_OBJECT_CREATE_SPHERE,
-    MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED, MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED,
+    Event,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -20,7 +14,7 @@ use crate::{
         },
     },
     model::{
-        ApplicationMutation, ObjectID, ViewFeedbackObjectNameChanged,
+        ApplicationMutation, ObjectID, ObjectRenderShape, ViewFeedbackObjectNameChanged,
         ViewFeedbackObjectSelectionChanged, ViewFeedbackObjectTreeChanged,
     },
     rendering::composite::{
@@ -594,7 +588,88 @@ impl ViewFeedbackHandler<ViewFeedbackObjectSelectionChanged> for ObjectRowEventH
     }
 }
 
+const MENU_COMMAND_ID_OBJECT_CREATE_PLANE: u64 = 1;
+const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 2;
+const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 3;
+const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
+const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
+const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
+const MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED: u64 = 20;
+const MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED: u64 = 21;
+const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE: u64 = 31;
+const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE: u64 = 32;
+const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE: u64 = 33;
+const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER: u64 = 34;
+const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE: u64 = 35;
+const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN: u64 = 310;
+
 struct ContextMenuCommandHandler;
 impl MenuCommandSelectionHandler for ContextMenuCommandHandler {
-    fn on_select_command(&mut self, _command_id: u64, _context: &mut ApplicationMutation) {}
+    fn on_select_command(&mut self, command_id: u64, context: &mut ApplicationMutation) {
+        match command_id {
+            MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
+                crate::model::object_create_of_shape(context, ObjectRenderShape::Plane);
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
+                crate::model::object_create_of_shape(context, ObjectRenderShape::Cube);
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
+                crate::model::object_create_of_shape(context, ObjectRenderShape::Sphere);
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
+                crate::model::object_create_of_shape(context, ObjectRenderShape::Cylinder);
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
+                crate::model::object_create_of_shape(context, ObjectRenderShape::Capsule);
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
+                // TODO: terrain support?
+                crate::model::object_create_of_shape(context, ObjectRenderShape::Plane);
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE => {
+                crate::model::object_create_of_shape_children_of_selected(
+                    context,
+                    ObjectRenderShape::Plane,
+                );
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE => {
+                crate::model::object_create_of_shape_children_of_selected(
+                    context,
+                    ObjectRenderShape::Cube,
+                );
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE => {
+                crate::model::object_create_of_shape_children_of_selected(
+                    context,
+                    ObjectRenderShape::Sphere,
+                );
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER => {
+                crate::model::object_create_of_shape_children_of_selected(
+                    context,
+                    ObjectRenderShape::Cylinder,
+                );
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE => {
+                crate::model::object_create_of_shape_children_of_selected(
+                    context,
+                    ObjectRenderShape::Capsule,
+                );
+            }
+            MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN => {
+                // TODO: terrain support?
+                crate::model::object_create_of_shape_children_of_selected(
+                    context,
+                    ObjectRenderShape::Plane,
+                );
+            }
+            MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED => {
+                crate::model::object_destroy_selected(context);
+            }
+            MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED => {
+                crate::model::object_duplicate_selected(context);
+            }
+            _ => {}
+        }
+    }
 }

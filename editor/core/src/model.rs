@@ -37,6 +37,17 @@ pub enum ObjectRenderShape {
     Cylinder,
     Capsule,
 }
+impl ObjectRenderShape {
+    const fn new_object_name(&self) -> &str {
+        match self {
+            ObjectRenderShape::Plane => "New Plane",
+            ObjectRenderShape::Cube => "New Cube",
+            ObjectRenderShape::Sphere => "New Sphere",
+            ObjectRenderShape::Cylinder => "New Cylinder",
+            ObjectRenderShape::Capsule => "New Capsule",
+        }
+    }
+}
 
 pub struct Object {
     pub parent: Option<ObjectID>,
@@ -176,28 +187,6 @@ impl Application {
         self.objects.push(o);
         self.root_objects.push(ObjectID::from_array_index(index));
         ObjectID::from_array_index(index)
-    }
-
-    fn free_object(&mut self, id: ObjectID) {
-        // detach from registry
-        match self.objects[id.into_array_index()].parent.take() {
-            Some(parent) => {
-                self.objects[parent.into_array_index()]
-                    .children
-                    .retain(|&oid| oid != id);
-            }
-            None => {
-                self.root_objects.retain(|&oid| oid != id);
-            }
-        }
-
-        self.free_object_indices.insert(id.into_array_index());
-        self.removed_object_render_ids
-            .extend(self.objects[id.into_array_index()].render_id.take());
-        self.objects[id.into_array_index()].reset();
-
-        // TODO: compactionの頻度を減らすかはあとで検討
-        self.compaction_objects();
     }
 
     fn compaction_objects(&mut self) {
@@ -392,10 +381,11 @@ pub fn selected_object_local_scale_z(env: &(impl ApplicationAccess + ?Sized)) ->
 
 pub fn object_create_of_shape(
     env: &mut (impl ApplicationMutableAccess + ?Sized),
-    name: String,
     shape: ObjectRenderShape,
 ) -> ObjectID {
-    let id = env.application_mut().alloc_object(Object::new(name));
+    let id = env
+        .application_mut()
+        .alloc_object(Object::new(shape.new_object_name().into()));
     env.application_mut().objects[id.into_array_index()].render_shape = shape;
     env.dispatch_view_feedback(ViewFeedbackObjectTreeChanged);
     id
@@ -403,14 +393,13 @@ pub fn object_create_of_shape(
 
 pub fn object_create_of_shape_children_of_selected(
     env: &mut (impl ApplicationMutableAccess + ?Sized),
-    name: String,
     shape: ObjectRenderShape,
 ) -> Option<ObjectID> {
     let Some(&selected) = env.application_mut().selected_objects.iter().next() else {
         return None;
     };
 
-    let id = object_create_of_shape(env, name, shape);
+    let id = object_create_of_shape(env, shape);
     object_set_parent(env, id, selected);
     Some(id)
 }

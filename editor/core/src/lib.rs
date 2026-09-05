@@ -16,7 +16,6 @@ use std::{
     cell::RefCell,
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
-    process::Command,
     rc::Rc,
     sync::Mutex,
 };
@@ -1084,21 +1083,6 @@ impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
         }
     }
 }
-
-pub const MENU_COMMAND_ID_OBJECT_CREATE_PLANE: u64 = 1;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CUBE: u64 = 2;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_SPHERE: u64 = 3;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER: u64 = 4;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE: u64 = 5;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN: u64 = 10;
-pub const MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED: u64 = 20;
-pub const MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED: u64 = 21;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE: u64 = 31;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE: u64 = 32;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE: u64 = 33;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER: u64 = 34;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE: u64 = 35;
-pub const MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN: u64 = 310;
 
 pub struct ColorPickerSharedResources {
     ring_tex_id: TextureID,
@@ -4650,8 +4634,6 @@ async fn run<'sys>(
                 );
             }
             Event::MenuSelectCommand { id } => {
-                tracing::debug!(id, "ContextMenuSelectCommand");
-
                 // コマンド選択したらとじる
                 let ch = if let Some(c) = current_active_menu_session.take() {
                     if let Some(ref a) =
@@ -4691,146 +4673,6 @@ async fn run<'sys>(
                             view_feedbacks: &mut view_feedback_store,
                         },
                     );
-                }
-
-                match id {
-                    MENU_COMMAND_ID_OBJECT_CREATE_PLANE => {
-                        crate::model::object_create_of_shape(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Plane".into(),
-                            ObjectRenderShape::Plane,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CUBE => {
-                        crate::model::object_create_of_shape(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Cube".into(),
-                            ObjectRenderShape::Cube,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_SPHERE => {
-                        crate::model::object_create_of_shape(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Sphere".into(),
-                            ObjectRenderShape::Sphere,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CYLINDER => {
-                        crate::model::object_create_of_shape(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Cylinder".into(),
-                            ObjectRenderShape::Cylinder,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CAPSULE => {
-                        crate::model::object_create_of_shape(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Capsule".into(),
-                            ObjectRenderShape::Capsule,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_SP_TERRAIN => {
-                        crate::model::object_create_of_shape(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Terrain".into(),
-                            // TODO: terrain support
-                            ObjectRenderShape::Plane,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_PLANE => {
-                        crate::model::object_create_of_shape_children_of_selected(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Plane".into(),
-                            ObjectRenderShape::Plane,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CUBE => {
-                        crate::model::object_create_of_shape_children_of_selected(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Cube".into(),
-                            ObjectRenderShape::Cube,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SPHERE => {
-                        crate::model::object_create_of_shape_children_of_selected(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Sphere".into(),
-                            ObjectRenderShape::Sphere,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CYLINDER => {
-                        crate::model::object_create_of_shape_children_of_selected(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Cylinder".into(),
-                            ObjectRenderShape::Cylinder,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_CAPSULE => {
-                        crate::model::object_create_of_shape_children_of_selected(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Capsule".into(),
-                            ObjectRenderShape::Capsule,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_CREATE_CHILD_SP_TERRAIN => {
-                        crate::model::object_create_of_shape_children_of_selected(
-                            &mut ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                            "New Terrain".into(),
-                            // TODO: terrain support
-                            ObjectRenderShape::Plane,
-                        );
-                    }
-                    MENU_COMMAND_ID_OBJECT_DESTROY_SELECTED => {
-                        crate::model::object_destroy_selected(&mut ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        });
-                    }
-                    MENU_COMMAND_ID_OBJECT_DUPLICATE_SELECTED => {
-                        crate::model::object_duplicate_selected(&mut ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        });
-                    }
-                    _ => {
-                        tracing::warn!(id, "unhandled menu command");
-                    }
                 }
             }
             Event::DropdownMenuSelectItem { id, receiver } => {
