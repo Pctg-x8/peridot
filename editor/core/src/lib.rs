@@ -11,7 +11,7 @@ use model::{Application, ApplicationMutation, ObjectID, ObjectRenderShape, Previ
 use peridot_math::{One, Zero};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
-use shared::{Color32, LogicalUnit, NonDropAnyTypeQueue, PixelsUnit, Point, Rect, Size};
+use shared::{Color32, LogicalUnit, NonDropAnyTypeQueue, Point, Rect, Size};
 #[cfg(target_os = "linux")]
 use std::os::fd::AsRawFd;
 #[cfg(not(windows))]
@@ -39,6 +39,7 @@ use crate::{
             PointerButtonActionArgs,
         },
     },
+    persistence::{DockState, PersistStateWindowData, WindowGeometryState, WindowState},
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
         ShaderTexture, TextureID,
@@ -78,6 +79,7 @@ use crate::{
 mod bindgen;
 mod graphics;
 mod input;
+mod persistence;
 mod platform;
 mod proto;
 mod rendering;
@@ -3223,46 +3225,7 @@ async fn run<'sys>(
         view_init_ctx.construct_view_direct(|_| Box::new(ui::window_footer::View::new()));
     view_init_ctx.view_set_parent(window_footer_view, main_window_root_view);
 
-    let initial_dock_state = DockState::Splitted {
-        direction: DockDirection::Bottom(320.0),
-        content: Box::new(DockState::Filled {
-            content_ids: vec![ui::pane::asset_explorer::Presenter::ID.into()],
-            active_index: 0,
-        }),
-        rest: Box::new(DockState::Splitted {
-            direction: DockDirection::Right(256.0),
-            content: Box::new(DockState::Filled {
-                content_ids: vec![
-                    ui::pane::inspector::Presenter::ID.into(),
-                    UIKitPreviewPanePresenter::ID.into(),
-                ],
-                active_index: 0,
-            }),
-            rest: Box::new(DockState::Splitted {
-                direction: DockDirection::Top(120.0),
-                content: Box::new(DockState::Filled {
-                    content_ids: vec![TimelinePanePresenter::ID.into()],
-                    active_index: 0,
-                }),
-                rest: Box::new(DockState::Splitted {
-                    direction: DockDirection::Left(160.0),
-                    content: Box::new(DockState::Filled {
-                        content_ids: vec![ui::pane::object_tree::Presenter::ID.into()],
-                        active_index: 0,
-                    }),
-                    rest: Box::new(DockState::Filled {
-                        content_ids: vec![
-                            PreviewPanePresenter::ID.into(),
-                            ProjectSettingsPanePresenter::ID.into(),
-                            AssetPreviewPanePresenter::ID.into(),
-                        ],
-                        active_index: 0,
-                    }),
-                }),
-            }),
-        }),
-    };
-
+    let initial_dock_state = initial_dock_state();
     let dock_top_offset = ui::window_header::View::THICKNESS
         + if app_menu_view.is_some() {
             ui::app_menu_bar::View::HEIGHT
@@ -3289,11 +3252,11 @@ async fn run<'sys>(
             ),
             &mut dock_store,
             |view_init_ctx, view_render_queue, store| {
-                match last_window_state {
-                    None => &initial_dock_state,
-                    Some(ref x) => &x.main.dock,
-                }
-                .construct(
+                construct_dock_from_state(
+                    match last_window_state {
+                        None => &initial_dock_state,
+                        Some(ref x) => &x.main.dock,
+                    },
                     main_window.keyboard_focus_group(),
                     &mut PaneGroupCreateContext {
                         view_init_context: view_init_ctx,
@@ -3418,7 +3381,8 @@ async fn run<'sys>(
                             ),
                             &mut dock_store,
                             |view_init_ctx, view_render_queue, store| {
-                                sub.dock.construct(
+                                construct_dock_from_state(
+                                    &sub.dock,
                                     w.keyboard_focus_group(),
                                     &mut PaneGroupCreateContext {
                                         view_init_context: view_init_ctx,
@@ -5858,430 +5822,150 @@ impl SyncEventBus {
     }
 }
 
-#[derive(thiserror::Error, Debug)]
-pub enum PersistStateDeserializeError {
-    #[error(transparent)]
-    IO(#[from] std::io::Error),
-    #[error("persist_state_deserialize_error.invalid_format")]
-    InvalidFormat,
-}
-
-#[derive(Debug)]
-pub enum DockDirection {
-    Left(f32),
-    Right(f32),
-    Top(f32),
-    Bottom(f32),
-}
-impl DockDirection {
-    pub fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        match self {
-            &Self::Left(x) => {
-                w.write_all(&[0x01])?;
-                w.write_all(&f32::to_ne_bytes(x))?;
-            }
-            &Self::Right(x) => {
-                w.write_all(&[0x02])?;
-                w.write_all(&f32::to_ne_bytes(x))?;
-            }
-            &Self::Top(x) => {
-                w.write_all(&[0x03])?;
-                w.write_all(&f32::to_ne_bytes(x))?;
-            }
-            &Self::Bottom(x) => {
-                w.write_all(&[0x04])?;
-                w.write_all(&f32::to_ne_bytes(x))?;
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let mut buf = [0u8; 1];
-        r.read_exact(&mut buf)?;
-        match buf[0] {
-            0x01 => {
-                let mut buf = [0u8; size_of::<f32>()];
-                r.read_exact(&mut buf)?;
-                Ok(Self::Left(f32::from_ne_bytes(buf)))
-            }
-            0x02 => {
-                let mut buf = [0u8; size_of::<f32>()];
-                r.read_exact(&mut buf)?;
-                Ok(Self::Right(f32::from_ne_bytes(buf)))
-            }
-            0x03 => {
-                let mut buf = [0u8; size_of::<f32>()];
-                r.read_exact(&mut buf)?;
-                Ok(Self::Top(f32::from_ne_bytes(buf)))
-            }
-            0x04 => {
-                let mut buf = [0u8; size_of::<f32>()];
-                r.read_exact(&mut buf)?;
-                Ok(Self::Bottom(f32::from_ne_bytes(buf)))
-            }
-            _ => Err(PersistStateDeserializeError::InvalidFormat),
-        }
+/// 初期のドッキングレイアウト
+fn initial_dock_state() -> DockState {
+    DockState::Splitted {
+        direction: persistence::DockDirection::Bottom(320.0),
+        content: Box::new(DockState::Filled {
+            content_ids: vec![ui::pane::asset_explorer::Presenter::ID.into()],
+            active_index: 0,
+        }),
+        rest: Box::new(DockState::Splitted {
+            direction: persistence::DockDirection::Right(256.0),
+            content: Box::new(DockState::Filled {
+                content_ids: vec![
+                    ui::pane::inspector::Presenter::ID.into(),
+                    UIKitPreviewPanePresenter::ID.into(),
+                ],
+                active_index: 0,
+            }),
+            rest: Box::new(DockState::Splitted {
+                direction: persistence::DockDirection::Top(120.0),
+                content: Box::new(DockState::Filled {
+                    content_ids: vec![TimelinePanePresenter::ID.into()],
+                    active_index: 0,
+                }),
+                rest: Box::new(DockState::Splitted {
+                    direction: persistence::DockDirection::Left(160.0),
+                    content: Box::new(DockState::Filled {
+                        content_ids: vec![ui::pane::object_tree::Presenter::ID.into()],
+                        active_index: 0,
+                    }),
+                    rest: Box::new(DockState::Filled {
+                        content_ids: vec![
+                            PreviewPanePresenter::ID.into(),
+                            ProjectSettingsPanePresenter::ID.into(),
+                            AssetPreviewPanePresenter::ID.into(),
+                        ],
+                        active_index: 0,
+                    }),
+                }),
+            }),
+        }),
     }
 }
-#[derive(Debug)]
-pub enum DockState {
-    Filled {
-        content_ids: Vec<String>,
-        active_index: usize,
-    },
-    Splitted {
-        direction: DockDirection,
-        content: Box<DockState>,
-        rest: Box<DockState>,
-    },
-}
-impl DockState {
-    pub fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        match self {
-            Self::Filled {
-                content_ids,
-                active_index,
-            } => {
-                w.write_all(&[0x01])?;
-                w.write_all(&usize::to_ne_bytes(content_ids.len()))?;
-                for id in content_ids {
-                    w.write_all(&usize::to_ne_bytes(id.len()))?;
-                    w.write_all(id.as_bytes())?;
-                }
-                w.write_all(&usize::to_ne_bytes(*active_index))?;
-            }
-            Self::Splitted {
-                direction,
-                content,
-                rest,
-            } => {
-                w.write_all(&[0x02])?;
-                direction.serialize(w)?;
-                content.serialize(w)?;
-                rest.serialize(w)?;
-            }
-        }
 
-        Ok(())
-    }
-
-    pub fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let mut buf = [0u8; 1];
-        r.read_exact(&mut buf)?;
-        match buf[0] {
-            0x01 => {
-                let mut content_count = 0usize;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut content_count)
-                })?;
-                let mut content_ids = Vec::with_capacity(content_count);
-                for _ in 0..content_count {
-                    let mut id_length = 0usize;
-                    r.read_exact(unsafe {
-                        core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut id_length)
-                    })?;
-                    let mut id = Vec::with_capacity(id_length);
-                    r.read_exact(unsafe { core::mem::transmute(id.spare_capacity_mut()) })?;
-                    unsafe {
-                        id.set_len(id_length);
-                    }
-                    content_ids.push(unsafe { String::from_utf8_unchecked(id) });
-                }
-                let mut active_index = 0usize;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut active_index)
-                })?;
-
-                Ok(Self::Filled {
-                    content_ids,
-                    active_index,
-                })
-            }
-            0x02 => {
-                let direction = DockDirection::deserialize(r)?;
-                let content = Self::deserialize(r)?;
-                let rest = Self::deserialize(r)?;
-
-                Ok(Self::Splitted {
-                    direction,
-                    content: Box::new(content),
-                    rest: Box::new(rest),
-                })
-            }
-            _ => Err(PersistStateDeserializeError::InvalidFormat),
-        }
-    }
-
-    pub fn construct(
-        &self,
+fn construct_dock_from_state(
+    state: &DockState,
+    root_keyboard_focus_group: KeyboardFocusGroupRef,
+    create_context: &mut PaneGroupCreateContext,
+    store: &mut ui::dock::DockStore,
+    mut pane_constructor: impl FnMut(
+        &str,
+        &mut ViewInitContext,
+    ) -> Box<dyn ui::dock::PaneContentPresenter>,
+) -> ui::dock::DockID {
+    fn rec(
+        this: &DockState,
         root_keyboard_focus_group: KeyboardFocusGroupRef,
         create_context: &mut PaneGroupCreateContext,
         store: &mut ui::dock::DockStore,
-        mut pane_constructor: impl FnMut(
+        parent: ui::dock::DockID,
+        pane_constructor: &mut impl FnMut(
             &str,
             &mut ViewInitContext,
         ) -> Box<dyn ui::dock::PaneContentPresenter>,
     ) -> ui::dock::DockID {
-        fn rec(
-            this: &DockState,
-            root_keyboard_focus_group: KeyboardFocusGroupRef,
-            create_context: &mut PaneGroupCreateContext,
-            store: &mut ui::dock::DockStore,
-            parent: ui::dock::DockID,
-            pane_constructor: &mut impl FnMut(
-                &str,
-                &mut ViewInitContext,
-            ) -> Box<dyn ui::dock::PaneContentPresenter>,
-        ) -> ui::dock::DockID {
-            match this {
-                &DockState::Filled {
-                    ref content_ids,
-                    active_index,
-                } => store.alloc_fill(
-                    parent,
-                    create_context,
-                    |view_init_ctx| {
-                        content_ids
-                            .iter()
-                            .map(|x| pane_constructor(x, view_init_ctx))
-                            .collect()
-                    },
-                    active_index,
-                ),
-                DockState::Splitted {
-                    direction,
-                    content,
-                    rest,
-                } => store.alloc_recurse(|parent1, store| ui::dock::Dock::Splitted {
-                    parent,
-                    direction: match direction {
-                        &DockDirection::Left(w) => ui::dock::DockDirection::ToLeft(Cell::new(w)),
-                        &DockDirection::Right(w) => ui::dock::DockDirection::ToRight(Cell::new(w)),
-                        &DockDirection::Top(w) => ui::dock::DockDirection::ToTop(Cell::new(w)),
-                        &DockDirection::Bottom(w) => {
-                            ui::dock::DockDirection::ToBottom(Cell::new(w))
-                        }
-                    },
-                    splitter: create_context.construct_view_direct(|_| {
-                        Box::new(ui::dock::DockedPaneSplitterView::new(
-                            match direction {
-                                DockDirection::Left(_) | DockDirection::Right(_) => {
-                                    ui::dock::DockedPaneSplitDirection::Horizontal
-                                }
-                                DockDirection::Top(_) | DockDirection::Bottom(_) => {
-                                    ui::dock::DockedPaneSplitDirection::Vertical
-                                }
-                            },
-                            parent1,
-                        ))
-                    }),
-                    docked: rec(
-                        content,
-                        root_keyboard_focus_group,
-                        create_context,
-                        store,
-                        parent1,
-                        pane_constructor,
-                    ),
-                    rest: rec(
-                        rest,
-                        root_keyboard_focus_group,
-                        create_context,
-                        store,
-                        parent1,
-                        pane_constructor,
-                    ),
-                }),
-            }
-        }
-
-        store.alloc_root(|parent, store| {
-            rec(
-                self,
-                root_keyboard_focus_group,
-                create_context,
-                store,
+        match this {
+            &DockState::Filled {
+                ref content_ids,
+                active_index,
+            } => store.alloc_fill(
                 parent,
-                &mut pane_constructor,
-            )
-        })
-    }
-}
-
-trait PersistStateSerializable: Sized {
-    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()>;
-    fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError>;
-}
-impl PersistStateSerializable for Rect<LogicalUnit> {
-    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        w.write_all(&f32::to_ne_bytes(self.left))?;
-        w.write_all(&f32::to_ne_bytes(self.top))?;
-        w.write_all(&f32::to_ne_bytes(self.width))?;
-        w.write_all(&f32::to_ne_bytes(self.height))?;
-        Ok(())
-    }
-
-    fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let mut x = 0f32;
-        let mut y = 0f32;
-        let mut width = 0f32;
-        let mut height = 0f32;
-        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut x) })?;
-        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut y) })?;
-        r.read_exact(unsafe {
-            core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut width)
-        })?;
-        r.read_exact(unsafe {
-            core::mem::transmute::<_, &mut [u8; size_of::<f32>()]>(&mut height)
-        })?;
-
-        Ok(Self::from_lt_size(
-            Point::new_logical(x, y),
-            Size::new_logical(width, height),
-        ))
-    }
-}
-impl PersistStateSerializable for Rect<PixelsUnit> {
-    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        w.write_all(&i32::to_ne_bytes(self.left))?;
-        w.write_all(&i32::to_ne_bytes(self.top))?;
-        w.write_all(&u32::to_ne_bytes(self.width))?;
-        w.write_all(&u32::to_ne_bytes(self.height))?;
-        Ok(())
-    }
-
-    fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let mut left = 0i32;
-        let mut top = 0i32;
-        let mut width = 0u32;
-        let mut height = 0u32;
-        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<i32>()]>(&mut left) })?;
-        r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; size_of::<i32>()]>(&mut top) })?;
-        r.read_exact(unsafe {
-            core::mem::transmute::<_, &mut [u8; size_of::<u32>()]>(&mut width)
-        })?;
-        r.read_exact(unsafe {
-            core::mem::transmute::<_, &mut [u8; size_of::<u32>()]>(&mut height)
-        })?;
-
-        Ok(Self::from_lt_size(
-            Point::new_pixels(left, top),
-            Size::new_pixels(width, height),
-        ))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum WindowGeometryState {
-    Maximized {
-        monitor_index: usize,
-    },
-    Restored {
-        rect: Rect<WindowPersistentStateNativeGeometryUnit>,
-    },
-}
-impl WindowGeometryState {
-    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        match self {
-            Self::Maximized { monitor_index } => {
-                w.write_all(&[0x01])?;
-                w.write_all(&usize::to_ne_bytes(*monitor_index))?;
-            }
-            Self::Restored { rect } => {
-                w.write_all(&[0x02])?;
-                rect.serialize(w)?;
-            }
-        }
-
-        Ok(())
-    }
-
-    fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let mut buf = [0u8; 1];
-        r.read_exact(&mut buf)?;
-        match buf[0] {
-            0x01 => {
-                let mut monitor_index = 0usize;
-                r.read_exact(unsafe {
-                    core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut monitor_index)
-                })?;
-                Ok(Self::Maximized { monitor_index })
-            }
-            0x02 => {
-                let rect = PersistStateSerializable::deserialize(r)?;
-
-                Ok(Self::Restored { rect })
-            }
-            _ => Err(PersistStateDeserializeError::InvalidFormat),
+                create_context,
+                |view_init_ctx| {
+                    content_ids
+                        .iter()
+                        .map(|x| pane_constructor(x, view_init_ctx))
+                        .collect()
+                },
+                active_index,
+            ),
+            DockState::Splitted {
+                direction,
+                content,
+                rest,
+            } => store.alloc_recurse(|parent1, store| ui::dock::Dock::Splitted {
+                parent,
+                direction: match direction {
+                    &persistence::DockDirection::Left(w) => {
+                        ui::dock::DockDirection::ToLeft(Cell::new(w))
+                    }
+                    &persistence::DockDirection::Right(w) => {
+                        ui::dock::DockDirection::ToRight(Cell::new(w))
+                    }
+                    &persistence::DockDirection::Top(w) => {
+                        ui::dock::DockDirection::ToTop(Cell::new(w))
+                    }
+                    &persistence::DockDirection::Bottom(w) => {
+                        ui::dock::DockDirection::ToBottom(Cell::new(w))
+                    }
+                },
+                splitter: create_context.construct_view_direct(|_| {
+                    Box::new(ui::dock::DockedPaneSplitterView::new(
+                        match direction {
+                            persistence::DockDirection::Left(_)
+                            | persistence::DockDirection::Right(_) => {
+                                ui::dock::DockedPaneSplitDirection::Horizontal
+                            }
+                            persistence::DockDirection::Top(_)
+                            | persistence::DockDirection::Bottom(_) => {
+                                ui::dock::DockedPaneSplitDirection::Vertical
+                            }
+                        },
+                        parent1,
+                    ))
+                }),
+                docked: rec(
+                    content,
+                    root_keyboard_focus_group,
+                    create_context,
+                    store,
+                    parent1,
+                    pane_constructor,
+                ),
+                rest: rec(
+                    rest,
+                    root_keyboard_focus_group,
+                    create_context,
+                    store,
+                    parent1,
+                    pane_constructor,
+                ),
+            }),
         }
     }
-}
-#[derive(Debug)]
-pub struct WindowState {
-    geometry: WindowGeometryState,
-    dock: DockState,
-}
-impl WindowState {
-    fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        self.geometry.serialize(w)?;
-        self.dock.serialize(w)?;
 
-        Ok(())
-    }
-
-    fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let geometry = WindowGeometryState::deserialize(r)?;
-        let dock = DockState::deserialize(r)?;
-
-        Ok(Self { geometry, dock })
-    }
-}
-#[derive(Debug)]
-pub struct PersistStateWindowData {
-    main: WindowState,
-    sub: Vec<WindowState>,
-}
-impl PersistStateWindowData {
-    pub fn serialize(&self, w: &mut (impl std::io::Write + ?Sized)) -> std::io::Result<()> {
-        self.main.serialize(w)?;
-        w.write_all(&usize::to_ne_bytes(self.sub.len()))?;
-        for sub in &self.sub {
-            sub.serialize(w)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn deserialize(
-        r: &mut (impl std::io::Read + ?Sized),
-    ) -> Result<Self, PersistStateDeserializeError> {
-        let main = WindowState::deserialize(r)?;
-        let mut sub_len = 0usize;
-        r.read_exact(unsafe {
-            core::mem::transmute::<_, &mut [u8; size_of::<usize>()]>(&mut sub_len)
-        })?;
-        let mut sub = Vec::with_capacity(sub_len);
-        for _ in 0..sub_len {
-            sub.push(WindowState::deserialize(r)?);
-        }
-        Ok(Self { main, sub })
-    }
+    store.alloc_root(|parent, store| {
+        rec(
+            state,
+            root_keyboard_focus_group,
+            create_context,
+            store,
+            parent,
+            &mut pane_constructor,
+        )
+    })
 }
 
 pub struct FileSystem {

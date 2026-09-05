@@ -800,11 +800,17 @@ impl DockingManager {
                     ..
                 } => crate::DockState::Splitted {
                     direction: match direction {
-                        DockDirection::ToLeft(width) => crate::DockDirection::Left(width.get()),
-                        DockDirection::ToRight(width) => crate::DockDirection::Right(width.get()),
-                        DockDirection::ToTop(height) => crate::DockDirection::Top(height.get()),
+                        DockDirection::ToLeft(width) => {
+                            crate::persistence::DockDirection::Left(width.get())
+                        }
+                        DockDirection::ToRight(width) => {
+                            crate::persistence::DockDirection::Right(width.get())
+                        }
+                        DockDirection::ToTop(height) => {
+                            crate::persistence::DockDirection::Top(height.get())
+                        }
                         DockDirection::ToBottom(height) => {
-                            crate::DockDirection::Bottom(height.get())
+                            crate::persistence::DockDirection::Bottom(height.get())
                         }
                     },
                     content: Box::new(rec(docked, store)),

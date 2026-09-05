@@ -89,8 +89,7 @@ use core::cell::Cell;
 use std::{rc::Rc, sync::Mutex};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
-    WindowGeometryState, WindowType,
+    Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{Graphics, VulkanSurface},
     input::{
@@ -101,6 +100,7 @@ use crate::{
             CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
         },
     },
+    persistence::WindowGeometryState,
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderMessageSender,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
