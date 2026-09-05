@@ -1,0 +1,5627 @@
+//! UI Rect Compositioning
+
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::Arc,
+};
+
+use bedrock::{
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, MemoryBound, QueueMut, RenderPass,
+    ShaderModule, TypedVulkanStructure, VkHandle,
+};
+use peridot_math::{Matrix4, Matrix4F32, One, Vector3, Vector4, Zero};
+use shared::{
+    LogicalUnit, PixelsUnit, Rect, SafeF32, Size, is_beyond_of_range, range_from_len, rate_of_range,
+};
+
+use crate::{
+    graphics::{
+        BLEND_STATE_SINGLE_NONE, Graphics, IA_STATE_TRILIST, MS_STATE_EMPTY,
+        RASTER_STATE_DEFAULT_FILL_NOCULL, VI_STATE_EMPTY,
+    },
+    rendering::{
+        ColorTextureAtlasManager, MaskTextureAtlasManager, TextureID,
+        atlas::AtlasRect,
+        text::{FontID, FontSet, GlyphPlacementBox, TextLayout, TextRun},
+        vg::VectorRasterizationState,
+    },
+};
+
+pub const BLUR_SAMPLE_STEPS: usize = 4;
+
+#[repr(C)]
+pub struct CompositeInstanceData {
+    /// scale_x(width), scale_y(height), translate_x(left), translate_y(top)
+    pub pos_st: [f32; 4],
+    pub uv_st: [f32; 4],
+    pub position_modifier_matrix: Matrix4F32,
+    /// left, top, right, bottom (pixels from edge)
+    pub slice_borders: [f32; 4],
+    // float param1: float4 packed
+    pub tex_size_pixels: [f32; 2],
+    pub composite_mode: f32,
+    pub opacity: f32,
+    // float param1 end
+    pub color_tint: [f32; 4],
+    /// lt, rt, lb, rb (in pixels)
+    pub corner_radius_x: [f32; 4],
+    /// lt, rt, lb, rb (in pixels)
+    pub corner_radius_y: [f32; 4],
+    pub border_color: [f32; 4],
+    pub border_thickness: f32,
+    pub softedge: f32,
+    pub gradient_data_index: f32,
+    pub source_texture_index: f32,
+    pub border_break_pattern: [f32; 2],
+    pub texture_mapping_mode: f32,
+    pub _padding: f32,
+}
+
+#[repr(C)]
+pub struct GradientData {
+    pub start_color: [f32; 4],
+    pub end_color: [f32; 4],
+    pub params: [f32; 4],
+}
+
+#[repr(C)]
+struct CompositePushConstants {
+    screen_x_pixels: f32,
+    screen_y_pixels: f32,
+    _padding: [f32; 2],
+    rect_mask: ClipUVRect,
+}
+
+#[repr(C)]
+#[derive(Clone)]
+struct ClipUVRect {
+    left: f32,
+    top: f32,
+    right: f32,
+    bottom: f32,
+    left_softness: f32,
+    top_softness: f32,
+    right_softness: f32,
+    bottom_softness: f32,
+}
+impl ClipUVRect {
+    const CLEAR: Self = Self {
+        left: 0.0,
+        top: 0.0,
+        right: 1.0,
+        bottom: 1.0,
+        left_softness: 0.0,
+        top_softness: 0.0,
+        right_softness: 0.0,
+        bottom_softness: 0.0,
+    };
+}
+
+pub const COMPOSITE_PUSH_CONSTANT_RANGES: &'static [br::PushConstantRange] =
+    &[br::PushConstantRange::for_type::<CompositePushConstants>(
+        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+        0,
+    )];
+
+#[repr(C)]
+pub struct CompositeStreamingData {
+    pub current_sec: f32,
+}
+
+const fn lerp(x: f32, a: f32, b: f32) -> f32 {
+    a + (b - a) * x
+}
+
+const fn lerp4(x: f32, [a, c, e, g]: [f32; 4], [b, d, f, h]: [f32; 4]) -> [f32; 4] {
+    [lerp(x, a, b), lerp(x, c, d), lerp(x, e, f), lerp(x, g, h)]
+}
+
+// TODO: このへんうまくまとめたいが......
+
+pub enum FloatParameter<Event> {
+    Value(f32),
+    Animated {
+        start_sec: f32,
+        end_sec: f32,
+        from_value: f32,
+        to_value: f32,
+        curve: AnimationCurve,
+        event_on_complete: Option<Event>,
+    },
+}
+impl<Event> FloatParameter<Event> {
+    pub fn evaluate(&self, current_sec: f32) -> f32 {
+        match self {
+            &Self::Value(x) => x,
+            &Self::Animated {
+                from_value,
+                to_value,
+                start_sec,
+                end_sec,
+                ref curve,
+                ..
+            } => lerp(
+                curve.interpolate((current_sec - start_sec) / (end_sec - start_sec)),
+                from_value,
+                to_value,
+            ),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct FloatAnimationTemplate {
+    pub from_value: f32,
+    pub to_value: f32,
+    pub curve: AnimationCurve,
+    pub duration: f32,
+}
+impl FloatAnimationTemplate {
+    pub const fn flip(&self, curve: AnimationCurve) -> Self {
+        Self {
+            from_value: self.to_value,
+            to_value: self.from_value,
+            duration: self.duration,
+            curve,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum AnimatableFloat<Event> {
+    Value(f32),
+    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender<Event>) -> f32 + Sync + Send>),
+    Animated {
+        sec_duration: core::range::Range<f32>,
+        from_value: f32,
+        to_value: f32,
+        curve: AnimationCurve,
+        event_on_complete: Option<Event>,
+    },
+}
+impl<Event: PartialEq> core::cmp::PartialEq for AnimatableFloat<Event> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Value(v1), Self::Value(v2)) => v1.eq(v2),
+            (Self::Expression(v1), Self::Expression(v2)) => Arc::ptr_eq(v1, v2),
+            (
+                Self::Animated {
+                    sec_duration: sec_duration1,
+                    from_value: from_value1,
+                    to_value: to_value1,
+                    curve: curve1,
+                    event_on_complete: event_on_complete1,
+                },
+                Self::Animated {
+                    sec_duration: sec_duration2,
+                    from_value: from_value2,
+                    to_value: to_value2,
+                    curve: curve2,
+                    event_on_complete: event_on_complete2,
+                },
+            ) => {
+                from_value1.eq(from_value2)
+                    && to_value1.eq(to_value2)
+                    && curve1.eq(curve2)
+                    && sec_duration1.eq(sec_duration2)
+                    && event_on_complete1.eq(event_on_complete2)
+            }
+            _ => false,
+        }
+    }
+}
+impl<Event> core::fmt::Debug for AnimatableFloat<Event> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Value(x) => f.debug_tuple("AnimatableFloat::Value").field(x).finish(),
+            Self::Expression(_) => f
+                .debug_tuple("AnimatableFloat::Expression")
+                .field(&"<fn>")
+                .finish(),
+            Self::Animated {
+                sec_duration,
+                from_value,
+                to_value,
+                curve,
+                ..
+            } => f
+                .debug_struct("AnimatableFloat::Animated")
+                .field("sec_duration", sec_duration)
+                .field("from_value", from_value)
+                .field("to_value", to_value)
+                .field("curve", curve)
+                .field("event_on_complete", &"<event>")
+                .finish(),
+        }
+    }
+}
+impl<Event> AnimatableFloat<Event> {
+    pub fn from_template(template: &FloatAnimationTemplate, start_sec: f32) -> Self {
+        Self::Animated {
+            sec_duration: range_from_len(start_sec, template.duration),
+            from_value: template.from_value,
+            to_value: template.to_value,
+            curve: template.curve.clone(),
+            event_on_complete: None,
+        }
+    }
+
+    pub fn from_template_with_completion(
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+        on_complete: Event,
+    ) -> Self {
+        Self::Animated {
+            sec_duration: range_from_len(start_sec, template.duration),
+            from_value: template.from_value,
+            to_value: template.to_value,
+            curve: template.curve.clone(),
+            event_on_complete: Some(on_complete),
+        }
+    }
+
+    pub fn evaluate(
+        &self,
+        current_sec: f32,
+        parameter_store: &CompositeTreeParameterStoreRender<Event>,
+    ) -> f32 {
+        match self {
+            &Self::Value(x) => x,
+            &Self::Expression(ref x) => x(parameter_store),
+            &Self::Animated {
+                from_value,
+                to_value,
+                ref sec_duration,
+                ref curve,
+                ..
+            } => lerp(
+                curve.interpolate(rate_of_range(sec_duration, current_sec)),
+                from_value,
+                to_value,
+            ),
+        }
+    }
+
+    fn process_on_complete(&mut self, current_sec: f32, cb: impl FnOnce(Event)) {
+        if let &mut Self::Animated {
+            ref sec_duration,
+            ref mut event_on_complete,
+            ..
+        } = self
+            && is_beyond_of_range(sec_duration, current_sec)
+        {
+            if let Some(e) = event_on_complete.take() {
+                cb(e);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub enum AnimatableColor<Event> {
+    Value([f32; 4]),
+    Expression(Arc<dyn Fn(&CompositeTreeParameterStoreRender<Event>) -> [f32; 4] + Sync + Send>),
+    Animated {
+        sec_duration: core::range::Range<f32>,
+        from_value: [f32; 4],
+        to_value: [f32; 4],
+        curve: AnimationCurve,
+        event_on_complete: Option<Event>,
+    },
+}
+impl<Event> core::fmt::Debug for AnimatableColor<Event> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Value(x) => f.debug_tuple("AnimatableColor::Value").field(x).finish(),
+            Self::Expression(_) => f
+                .debug_tuple("AnimatableColor::Expression")
+                .field(&"<fn>")
+                .finish(),
+            Self::Animated {
+                sec_duration,
+                from_value,
+                to_value,
+                curve,
+                ..
+            } => f
+                .debug_struct("AnimatableColor::Animated")
+                .field("sec_duration", sec_duration)
+                .field("from_value", from_value)
+                .field("to_value", to_value)
+                .field("curve", curve)
+                .field("event_on_complete", &"<event>")
+                .finish(),
+        }
+    }
+}
+impl<Event> AnimatableColor<Event> {
+    pub fn evaluate(
+        &self,
+        current_sec: f32,
+        parameter_store: &CompositeTreeParameterStoreRender<Event>,
+    ) -> [f32; 4] {
+        match self {
+            &Self::Value(x) => x,
+            &Self::Expression(ref f) => f(parameter_store),
+            &Self::Animated {
+                from_value,
+                to_value,
+                ref sec_duration,
+                ref curve,
+                ..
+            } => lerp4(
+                curve.interpolate(rate_of_range(sec_duration, current_sec)),
+                from_value,
+                to_value,
+            ),
+        }
+    }
+
+    fn process_on_complete(&mut self, current_sec: f32, cb: impl FnOnce(Event)) {
+        if let &mut Self::Animated {
+            ref sec_duration,
+            ref mut event_on_complete,
+            ..
+        } = self
+            && is_beyond_of_range(sec_duration, current_sec)
+        {
+            if let Some(e) = event_on_complete.take() {
+                cb(e);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AnimationCurve {
+    Linear,
+    CubicBezier { p1: (f32, f32), p2: (f32, f32) },
+}
+impl AnimationCurve {
+    // predefined curves
+    pub const EASE_OUT: Self = Self::CubicBezier {
+        p1: (0.0, 0.0),
+        p2: (0.5, 1.0),
+    };
+    pub const EASE_OUT_HARD: Self = Self::CubicBezier {
+        p1: (0.0, 0.0),
+        p2: (0.0, 1.0),
+    };
+    pub const EASE_IN: Self = Self::CubicBezier {
+        p1: (0.5, 0.0),
+        p2: (1.0, 1.0),
+    };
+    pub const EASE_IN_HARD: Self = Self::CubicBezier {
+        p1: (1.0, 0.0),
+        p2: (1.0, 1.0),
+    };
+
+    #[inline]
+    fn interpolate(&self, t: f32) -> f32 {
+        match self {
+            &AnimationCurve::Linear => t.clamp(0.0, 1.0),
+            &AnimationCurve::CubicBezier { p1, p2 } => interpolate_cubic_bezier(t, p1, p2),
+        }
+    }
+}
+
+fn interpolate_cubic_bezier(t: f32, p1: (f32, f32), p2: (f32, f32)) -> f32 {
+    // out of range
+    if t <= 0.0 {
+        return 0.0;
+    }
+    if t >= 1.0 {
+        return 1.0;
+    }
+
+    // p01 = mix(vec2(0.0), p1, t) = p1 * t
+    // p12 = mix(p1, p2, t) = p1 * (1.0 - t) + p2 * t
+    // p23 = mix(p2, vec2(1.0), t) = p2 * (1.0 - t) + vec2(t)
+    // p012 = mix(p01, p12, t) = p01 * (1.0 - t) + p12 * t = p1 * t * (1.0 - t) + (p1 * (1.0 -t ) + p2 * t) * t =
+    // p1 * t * (1.0 - t) + p1 * t * (1.0 - t) + p2 * t * t = p1 * 2.0 * t * (1.0 - t) + p2 * t * t =
+    // p1 * (2.0 * t - 2.0 * t * t) + p2 * t * t
+    // p123 = mix(p12, p23, t) = p12 * (1.0 - t) + p23 * t = (p1 * (1.0 - t) + p2 * t) * (1.0 - t) + (p2 * (1.0 - t) + vec2(t)) * t =
+    // p1 * (1.0 - t) * (1.0 - t) + p2 * t * (1.0 - t) + p2 * (1.0 - t) * t  + vec2(t * t) =
+    // p1 * (1.0 - t) * (1.0 - t) + p2 * 2.0 * t * (1.0 - t) + vec2(t * t) =
+    // p1 * (1.0 - t) * (1.0 - t) + p2 * (2.0 * t - 2.0 * t * t) + vec2(t * t)
+    // p = mix(p012, p123, t) = p012 * (1.0 - t) + p123 * t =
+    // (p1 * (2.0 * t - 2.0 * t * t) + p2 * t * t) * (1.0 - t) + (p1 * (1.0 - t) * (1.0 - t) + p2 * (2.0 * t - 2.0 * t * t) + vec2(t * t)) * t =
+    // p1 * (2.0 * t - 2.0 * t * t) * (1.0 - t) + p2 * t * t * (1.0 - t) + p1 * t * (1.0 - t) * (1.0 - t) + p2 * t * (2.0 * t - 2.0 * t * t) + vec2(t * t * t) =
+    // p1 * 2.0 * t * (1.0 - t) * (1.0 - t) + p2 * t * t * (1.0 - t) + p1 * t * (1.0 - t) * (1.0 - t) + p2 * 2.0 * t * t * (1.0 - t) + vec2(t * t * t) =
+    // p1 * 3.0 * t * (1.0 - t) * (1.0 - t) + p2 * 3.0 * t * t * (1.0 - t) + vec2(t * t * t)
+    //
+    // (1.0 - t)^2 = 1.0^2 - 2.0 * t + t^2
+    //
+    // x = (p1.x * 3.0 * t * (1.0 - t) * (1.0 - t) + p2.x * 3.0 * t * t * (1.0 - t) + t * t * t), t = ?
+    // x = p1.x * (3.0 * t - 6.0 * t^2 + 3.0 * t^3) + p2.x * (3.0 * t^2 - 3.0 * t^3) + t^3
+    // x = (p1.x * 3.0 - p2.x * 3.0 + 1.0) * t^3 + (-p1.x * 6.0 + p2.x * 3.0) * t^2 + p1.x * 3.0 * t
+    // 0 = (p1.x * 3.0 - p2.x * 3.0 + 1.0) * t^3 + (-p1.x * 6.0 + p2.x * 3.0) * t^2 + p1.x * 3.0 * t - x
+
+    // x = (p1.x * 3.0 - p2.x * 3.0 + 1.0) * t^3 + (p2.x * 3.0 - p1.x * 6.0) * t^2 + p1.x * 3.0 * t
+    // t = ?
+    let a = p1.0 * 3.0 - p2.0 * 3.0 + 1.0;
+    let b = p2.0 * 3.0 - p1.0 * 6.0;
+    let c = p1.0 * 3.0;
+    let d = -t;
+
+    let t0 = if a == 0.0 {
+        // solve quadratic: (p2.x * 3.0 - p1.x * 6.0) * t^2 + p1.x * 3.0 * t - x = 0
+        let dq = c * c - 4.0 * b * d;
+
+        if dq < 0.0 {
+            // no value
+            return 0.0;
+        } else if dq == 0.0 {
+            // exactly one
+            -c / (2.0 * b)
+        } else {
+            // select correct value
+            let t1 = -c + dq.sqrt() / (2.0 * b);
+            let t2 = -c - dq.sqrt() / (2.0 * b);
+
+            if 0.0 <= t2 && t2 <= 1.0 {
+                t2
+            } else {
+                t1.clamp(0.0, 1.0)
+            }
+        }
+    } else {
+        // solve cubic: https://peter-shepherd.com/personal_development/mathematics/polynomials/cubicAlgebra.htm
+        let a1 = b / a;
+        let b1 = c / a;
+        let c1 = d / a;
+        let p = (3.0 * b1 - a1 * a1) / 3.0;
+        let q = (2.0 * a1 * a1 * a1 - 9.0 * a1 * b1 + 27.0 * c1) / 27.0;
+
+        if p == 0.0 {
+            if q == 0.0 {
+                0.0
+            } else {
+                let t1 = (-q).cbrt() - a1 / 3.0;
+                let t2 = (-q).cbrt() * (-0.5 * 3.0f32.sqrt() / 2.0) - a1 / 3.0;
+                let t3 = (-q).cbrt() * (-0.5 - 3.0f32.sqrt() / 2.0) - a1 / 3.0;
+
+                if 0.0 <= t3 && t3 <= 1.0 {
+                    t3
+                } else if 0.0 <= t2 && t2 <= 1.0 {
+                    t2
+                } else {
+                    t1.clamp(0.0, 1.0)
+                }
+            }
+        } else {
+            if q == 0.0 {
+                let t1 = -a1 / 3.0;
+                let t2 = (-p).sqrt() - a1 / 3.0;
+                let t3 = -(-p).sqrt() - a1 / 3.0;
+
+                if 0.0 <= t3 && t3 <= 1.0 {
+                    t3
+                } else if 0.0 <= t2 && t2 <= 1.0 {
+                    t2
+                } else {
+                    t1.clamp(0.0, 1.0)
+                }
+            } else {
+                let dc = (q * q) / 4.0 + (p * p * p) / 27.0;
+
+                if dc == 0.0 {
+                    // two reals
+                    let t1 = 2.0 * (-q / 2.0).cbrt() - a1 / 3.0;
+                    let t2 = (q / 2.0).cbrt() - a1 / 3.0;
+
+                    if 0.0 <= t2 && t2 <= 1.0 {
+                        t2
+                    } else {
+                        t1.clamp(0.0, 1.0)
+                    }
+                } else if dc > 0.0 {
+                    // one real and two img
+                    let u1 = (-(q / 2.0) + dc.sqrt()).cbrt();
+                    let v1 = (q / 2.0 + dc.sqrt()).cbrt();
+
+                    let t1 = u1 - v1 - a1 / 3.0;
+                    let t2 = -0.5 * (u1 - v1) + (u1 + v1) * 3.0f32.sqrt() / 2.0 - a1 / 3.0;
+                    let t3 = -0.5 * (u1 - v1) - (u1 + v1) * 3.0f32.sqrt() / 2.0 - a1 / 3.0;
+
+                    if 0.0 <= t3 && t3 <= 1.0 {
+                        t3
+                    } else if 0.0 <= t2 && t2 <= 1.0 {
+                        t2
+                    } else {
+                        t1.clamp(0.0, 1.0)
+                    }
+                } else {
+                    // irreducible case
+                    let r = (-p / 3.0).powi(3).sqrt();
+                    let phi = (-q / (2.0 * r)).acos();
+
+                    let t1 = 2.0 * r.cbrt() * (phi / 3.0).cos() - a1 / 3.0;
+                    let t2 =
+                        2.0 * r.cbrt() * ((phi + core::f32::consts::TAU) / 3.0).cos() - a1 / 3.0;
+                    let t3 = 3.0 * r.cbrt() * ((phi + core::f32::consts::TAU * 2.0) / 3.0).cos()
+                        - a1 / 3.0;
+
+                    if 0.0 <= t3 && t3 <= 1.0 {
+                        t3
+                    } else if 0.0 <= t2 && t2 <= 1.0 {
+                        t2
+                    } else {
+                        t1.clamp(0.0, 1.0)
+                    }
+                }
+            }
+        }
+    };
+
+    // y = (p1.y * 3.0 - p2.y * 3.0 + 1.0) * t^3 + (p2.y * 3.0 - p1.y * 6.0) * t^2 + p1.y * 3.0 * t
+    (p1.1 * 3.0 - p2.1 * 3.0 + 1.0) * t0.powi(3)
+        + (p2.1 * 3.0 - p1.1 * 6.0) * t0.powi(2)
+        + p1.1 * 3.0 * t0
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ClipConfig {
+    pub left_softness: SafeF32,
+    pub top_softness: SafeF32,
+    pub right_softness: SafeF32,
+    pub bottom_softness: SafeF32,
+}
+impl ClipConfig {
+    pub const HARD: Self = Self {
+        left_softness: SafeF32::ZERO,
+        top_softness: SafeF32::ZERO,
+        right_softness: SafeF32::ZERO,
+        bottom_softness: SafeF32::ZERO,
+    };
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomRenderToken(pub usize);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CompositeRectTextHorizontalAlignment {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum CompositeRectTextVerticalAlignment {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeRectTextRun<Event> {
+    pub font_id: FontID,
+    pub content: String,
+    pub color: AnimatableColor<Event>,
+    pub spacing_inline_start: f32,
+}
+impl<Event> Default for CompositeRectTextRun<Event> {
+    fn default() -> Self {
+        Self {
+            font_id: Default::default(),
+            content: Default::default(),
+            color: AnimatableColor::Value([0.0, 0.0, 0.0, 1.0]),
+            spacing_inline_start: 0.0,
+        }
+    }
+}
+impl<Event> CompositeRectTextRun<Event> {
+    #[inline(always)]
+    pub fn build(content: String) -> CompositeRectTextRunBuilder<Event> {
+        CompositeRectTextRunBuilder(CompositeRectTextRun {
+            content,
+            ..Default::default()
+        })
+    }
+
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        self.color.process_on_complete(current_sec, on_event);
+    }
+}
+
+#[must_use]
+pub struct CompositeRectTextRunBuilder<Event>(CompositeRectTextRun<Event>);
+impl<Event> From<CompositeRectTextRunBuilder<Event>> for CompositeRectTextRun<Event> {
+    #[inline(always)]
+    fn from(value: CompositeRectTextRunBuilder<Event>) -> Self {
+        value.0
+    }
+}
+impl<Event> CompositeRectTextRunBuilder<Event> {
+    pub fn color_imm(mut self, color: [f32; 4]) -> Self {
+        self.0.color = AnimatableColor::Value(color);
+        self
+    }
+
+    pub fn font(mut self, font: FontID) -> Self {
+        self.0.font_id = font;
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeRectText<Event> {
+    pub runs: Vec<CompositeRectTextRun<Event>>,
+    pub horizontal_alignment: CompositeRectTextHorizontalAlignment,
+    pub vertical_alignment: CompositeRectTextVerticalAlignment,
+    pub offset: [f32; 2],
+    pub allow_wrapping: bool,
+    pub max_lines: Option<usize>,
+}
+impl<Event> Default for CompositeRectText<Event> {
+    fn default() -> Self {
+        Self {
+            runs: Vec::new(),
+            horizontal_alignment: Default::default(),
+            vertical_alignment: Default::default(),
+            offset: [0.0, 0.0],
+            allow_wrapping: false,
+            max_lines: None,
+        }
+    }
+}
+impl<Event> CompositeRectText<Event> {
+    #[inline(always)]
+    pub fn build() -> CompositeRectTextBuilder<Event> {
+        CompositeRectTextBuilder(Default::default())
+    }
+
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        mut on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        for r in self.runs.iter_mut() {
+            r.perform_complete_event(current_sec, &mut on_event);
+        }
+    }
+}
+
+#[must_use]
+pub struct CompositeRectTextBuilder<Event>(CompositeRectText<Event>);
+impl<Event> From<CompositeRectTextBuilder<Event>> for CompositeRectText<Event> {
+    #[inline(always)]
+    fn from(value: CompositeRectTextBuilder<Event>) -> Self {
+        value.0
+    }
+}
+impl<Event> CompositeRectTextBuilder<Event> {
+    pub fn runs(mut self, runs: Vec<CompositeRectTextRun<Event>>) -> Self {
+        self.0.runs = runs;
+        self
+    }
+
+    pub fn run(mut self, run: impl Into<CompositeRectTextRun<Event>>) -> Self {
+        self.0.runs = vec![run.into()];
+        self
+    }
+
+    pub fn vertical_middle(mut self) -> Self {
+        self.0.vertical_alignment = CompositeRectTextVerticalAlignment::Middle;
+        self
+    }
+
+    pub fn horizontal_middle(mut self) -> Self {
+        self.0.horizontal_alignment = CompositeRectTextHorizontalAlignment::Middle;
+        self
+    }
+
+    pub fn shift_left(mut self, amount: f32) -> Self {
+        self.0.offset[0] += amount;
+        self
+    }
+
+    pub const fn allow_wrapping(mut self) -> Self {
+        self.0.allow_wrapping = true;
+        self
+    }
+
+    pub const fn limit_lines(mut self, max_lines: usize) -> Self {
+        self.0.max_lines = Some(max_lines);
+        self
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CornerRadius {
+    pub left_top: [f32; 2],
+    pub right_top: [f32; 2],
+    pub left_bottom: [f32; 2],
+    pub right_bottom: [f32; 2],
+}
+impl Default for CornerRadius {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            left_top: [0.0, 0.0],
+            right_top: [0.0, 0.0],
+            left_bottom: [0.0, 0.0],
+            right_bottom: [0.0, 0.0],
+        }
+    }
+}
+impl CornerRadius {
+    pub const fn all(radius: f32) -> Self {
+        Self {
+            left_top: [radius, radius],
+            right_top: [radius, radius],
+            left_bottom: [radius, radius],
+            right_bottom: [radius, radius],
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Border<Event> {
+    pub thickness: f32,
+    pub color: AnimatableColor<Event>,
+    pub break_pattern: [f32; 2],
+}
+impl<Event> Default for Border<Event> {
+    fn default() -> Self {
+        Self {
+            thickness: 0.0,
+            color: AnimatableColor::Value([0.0, 0.0, 0.0, 0.0]),
+            break_pattern: [0.0, 0.0],
+        }
+    }
+}
+impl<Event> Border<Event> {
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        self.color.process_on_complete(current_sec, on_event);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum CompositeMode<Event> {
+    /// テクスチャの内容を直接描画
+    DirectSourceOver(CompositeTexture),
+    /// マスクテクスチャに色を付けて描画
+    ColorTint(AnimatableColor<Event>, CompositeTexture),
+    /// 矩形を塗りつぶし
+    FillColor(AnimatableColor<Event>),
+    /// マスクテクスチャに色を付けて描画 背景ブラーと合成
+    ColorTintBackdropBlur(
+        AnimatableColor<Event>,
+        AnimatableFloat<Event>,
+        CompositeTexture,
+    ),
+    /// 矩形を塗りつぶし 背景ブラーと合成
+    FillColorBackdropBlur(AnimatableColor<Event>, AnimatableFloat<Event>),
+    /// 直線グラデーションで矩形を塗りつぶし
+    FillLinearGradient(GradientRef),
+    /// 円形グラデーションで矩形を塗りつぶし
+    FillRadialGradient(GradientRef),
+    /// 角グラデーションで矩形を塗りつぶし 引数に指定する色は左上のもの
+    FillCornerGradient(GradientRef, AnimatableColor<Event>),
+    // TODO: このへんの特殊対応はなんか汎用化したい シェーダ指定できるようにするか......？
+    /// 特殊対応: ColorPicker用 内部のグラデーションボックス
+    /// 引数には右上の色（ベースカラー）を入れる
+    ColorPickerGradientBox(AnimatableColor<Event>),
+}
+impl<Event> CompositeMode<Event> {
+    const fn shader_mode_value(&self) -> f32 {
+        match self {
+            Self::DirectSourceOver(_) => 0.0,
+            Self::ColorTint(_, _) => 1.0,
+            Self::FillColor(_) => 2.0,
+            Self::ColorTintBackdropBlur(_, _, _) => 3.0,
+            Self::FillColorBackdropBlur(_, _) => 4.0,
+            Self::FillLinearGradient(_) => 5.0,
+            Self::FillRadialGradient(_) => 6.0,
+            Self::FillCornerGradient(_, _) => 7.0,
+            Self::ColorPickerGradientBox(_) => 8.0,
+        }
+    }
+
+    const fn texture(&self) -> Option<&CompositeTexture> {
+        match self {
+            Self::DirectSourceOver(t)
+            | Self::ColorTint(_, t)
+            | Self::ColorTintBackdropBlur(_, _, t) => Some(t),
+            Self::FillColor(_)
+            | Self::FillColorBackdropBlur(_, _)
+            | Self::FillLinearGradient(_)
+            | Self::FillRadialGradient(_)
+            | Self::FillCornerGradient(_, _)
+            | Self::ColorPickerGradientBox(_) => None,
+        }
+    }
+
+    const fn gradient_data_index(&self) -> u32 {
+        match self {
+            CompositeMode::FillLinearGradient(x)
+            | CompositeMode::FillRadialGradient(x)
+            | CompositeMode::FillCornerGradient(x, _) => x.0,
+            _ => 0,
+        }
+    }
+
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        mut on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        match self {
+            Self::DirectSourceOver(_) => (),
+            Self::ColorTint(t, _) => t.process_on_complete(current_sec, on_event),
+            Self::FillColor(t) => t.process_on_complete(current_sec, on_event),
+            Self::ColorTintBackdropBlur(t, stdev, _) => {
+                t.process_on_complete(current_sec, &mut on_event);
+                stdev.process_on_complete(current_sec, &mut on_event);
+            }
+            Self::FillColorBackdropBlur(t, stdev) => {
+                t.process_on_complete(current_sec, &mut on_event);
+                stdev.process_on_complete(current_sec, &mut on_event);
+            }
+            Self::FillLinearGradient(_) => {}
+            Self::FillRadialGradient(_) => {}
+            Self::FillCornerGradient(_, c) => c.process_on_complete(current_sec, on_event),
+            Self::ColorPickerGradientBox(t) => {
+                t.process_on_complete(current_sec, on_event);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeTexture {
+    pub id: TextureID,
+    pub r#type: TextureType,
+    pub mapping: TextureMappingMode,
+    pub slice_borders: [f32; 4],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TextureType {
+    Mask,
+    Color,
+}
+impl TextureType {
+    #[inline(always)]
+    const fn to_index(&self) -> u32 {
+        match self {
+            Self::Mask => 0,
+            Self::Color => 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TextureMappingMode {
+    Stretch,
+    Repeat,
+}
+impl TextureMappingMode {
+    const fn shader_mode_value(&self) -> f32 {
+        match self {
+            Self::Stretch => 0.0,
+            Self::Repeat => 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CompositeRectScaleFactor {
+    NoScale,
+    UI,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompositeRect<Event> {
+    pub active: bool,
+    // transform
+    pub scale_factor: CompositeRectScaleFactor,
+    pub offset: [AnimatableFloat<Event>; 2],
+    pub size: [AnimatableFloat<Event>; 2],
+    pub relative_offset_adjustment: [f32; 2],
+    pub relative_size_adjustment: [f32; 2],
+    pub pivot: [f32; 2],
+    pub scale_x: AnimatableFloat<Event>,
+    pub scale_y: AnimatableFloat<Event>,
+    pub parent: Option<usize>,
+    pub children: Vec<usize>,
+    // visual
+    pub has_bitmap: bool,
+    pub composite_mode: CompositeMode<Event>,
+    pub custom_render_token: Option<CustomRenderToken>,
+    pub corner_radius: CornerRadius,
+    pub border: Option<Border<Event>>,
+    pub softedge: f32,
+    pub opacity: AnimatableFloat<Event>,
+    // text
+    pub text: Option<CompositeRectText<Event>>,
+    // clip
+    pub clip_child: Option<ClipConfig>,
+}
+impl<Event> Default for CompositeRect<Event> {
+    fn default() -> Self {
+        Self {
+            active: true,
+            has_bitmap: false,
+            scale_factor: CompositeRectScaleFactor::UI,
+            corner_radius: CornerRadius::default(),
+            border: None,
+            softedge: 0.0,
+            offset: [const { AnimatableFloat::Value(0.0) }; 2],
+            size: [const { AnimatableFloat::Value(0.0) }; 2],
+            relative_offset_adjustment: [0.0, 0.0],
+            relative_size_adjustment: [0.0, 0.0],
+            clip_child: None,
+            composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0; 4])),
+            custom_render_token: None,
+            opacity: AnimatableFloat::Value(1.0),
+            pivot: [0.5; 2],
+            scale_x: AnimatableFloat::Value(1.0),
+            scale_y: AnimatableFloat::Value(1.0),
+            text: None,
+            parent: None,
+            children: Vec::new(),
+        }
+    }
+}
+impl<Event> CompositeRect<Event> {
+    #[inline(always)]
+    pub fn build() -> CompositeRectBuilder<Event> {
+        CompositeRectBuilder {
+            temp: CompositeRect::default(),
+        }
+    }
+
+    fn perform_complete_event(
+        &mut self,
+        current_sec: f32,
+        mut on_event: &mut (impl FnMut(Event) + ?Sized),
+    ) {
+        self.offset[0].process_on_complete(current_sec, &mut on_event);
+        self.offset[1].process_on_complete(current_sec, &mut on_event);
+        self.size[0].process_on_complete(current_sec, &mut on_event);
+        self.size[1].process_on_complete(current_sec, &mut on_event);
+        self.opacity.process_on_complete(current_sec, &mut on_event);
+        self.scale_x.process_on_complete(current_sec, &mut on_event);
+        self.scale_y.process_on_complete(current_sec, &mut on_event);
+        self.composite_mode
+            .perform_complete_event(current_sec, &mut on_event);
+        if let Some(ref mut b) = self.border {
+            b.perform_complete_event(current_sec, &mut on_event);
+        }
+        if let Some(ref mut t) = self.text {
+            t.perform_complete_event(current_sec, &mut on_event);
+        }
+    }
+}
+
+#[must_use]
+pub struct CompositeRectBuilder<Event> {
+    temp: CompositeRect<Event>,
+}
+impl<Event> CompositeRectBuilder<Event> {
+    #[inline(always)]
+    pub fn create(self, registry: &mut CompositeTree<Event>) -> CompositeTreeRef {
+        registry.create(self.temp)
+    }
+
+    pub const fn unscaled(mut self) -> Self {
+        self.temp.scale_factor = CompositeRectScaleFactor::NoScale;
+        self
+    }
+
+    pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self {
+        self.temp.offset = [x, y];
+        self
+    }
+
+    #[inline(always)]
+    pub fn offset_imm(self, x: f32, y: f32) -> Self {
+        self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
+    }
+
+    pub fn size_imm(mut self, w: f32, h: f32) -> Self {
+        self.temp.size = [AnimatableFloat::Value(w), AnimatableFloat::Value(h)];
+        self
+    }
+
+    pub fn rect_imm(mut self, r: Rect<LogicalUnit>) -> Self {
+        self.temp.offset = [
+            AnimatableFloat::Value(r.left),
+            AnimatableFloat::Value(r.top),
+        ];
+        self.temp.size = [
+            AnimatableFloat::Value(r.width),
+            AnimatableFloat::Value(r.height),
+        ];
+        self
+    }
+
+    pub const fn relative_offset_adjustment(mut self, x: f32, y: f32) -> Self {
+        self.temp.relative_offset_adjustment = [x, y];
+        self
+    }
+
+    pub const fn relative_size_adjustment(mut self, w: f32, h: f32) -> Self {
+        self.temp.relative_size_adjustment = [w, h];
+        self
+    }
+
+    pub const fn expand_full(mut self) -> Self {
+        self.temp.relative_size_adjustment = [1.0, 1.0];
+        self
+    }
+
+    pub const fn expand_width(mut self) -> Self {
+        self.temp.relative_size_adjustment[0] = 1.0;
+        self
+    }
+
+    pub const fn expand_height(mut self) -> Self {
+        self.temp.relative_size_adjustment[1] = 1.0;
+        self
+    }
+
+    pub const fn anchor_parent_bottom(mut self) -> Self {
+        self.temp.relative_offset_adjustment[1] = 1.0;
+        self
+    }
+
+    pub const fn anchor_parent_right(mut self) -> Self {
+        self.temp.relative_offset_adjustment[0] = 1.0;
+        self
+    }
+
+    #[inline(always)]
+    pub fn centering(mut self) -> Self {
+        let [AnimatableFloat::Value(w), AnimatableFloat::Value(h)] = self.temp.size else {
+            panic!("cannot compute centering for animated size");
+        };
+
+        self.temp.relative_offset_adjustment = [0.5, 0.5];
+        self.temp.offset = [
+            AnimatableFloat::Value(-w * 0.5),
+            AnimatableFloat::Value(-h * 0.5),
+        ];
+        self
+    }
+
+    pub fn composite(mut self, mode: CompositeMode<Event>) -> Self {
+        self.temp.has_bitmap = true;
+        self.temp.composite_mode = mode;
+        self
+    }
+
+    #[inline(always)]
+    pub fn composite_fill_color_imm(self, color: [f32; 4]) -> Self {
+        self.composite(CompositeMode::FillColor(AnimatableColor::Value(color)))
+    }
+
+    pub fn opacity(mut self, opacity: AnimatableFloat<Event>) -> Self {
+        self.temp.opacity = opacity;
+        self
+    }
+
+    #[inline(always)]
+    pub fn opacity_imm(self, opacity: f32) -> Self {
+        self.opacity(AnimatableFloat::Value(opacity))
+    }
+
+    #[inline(always)]
+    pub fn opacity_anim(self, template: &FloatAnimationTemplate, start_sec: f32) -> Self {
+        self.opacity(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn border(mut self, border: Border<Event>) -> Self {
+        self.temp.has_bitmap = true; // Borderはbitmap生成しないと描画されない
+        self.temp.border = Some(border);
+        self
+    }
+
+    pub fn corner_radius(mut self, corner_radius: CornerRadius) -> Self {
+        self.temp.corner_radius = corner_radius;
+        self
+    }
+
+    #[inline(always)]
+    pub fn clip_child_soft_all(mut self, softness: SafeF32) -> Self {
+        self.temp.clip_child = Some(ClipConfig {
+            left_softness: softness,
+            top_softness: softness,
+            right_softness: softness,
+            bottom_softness: softness,
+        });
+
+        self
+    }
+
+    pub fn text(mut self, text: impl Into<CompositeRectText<Event>>) -> Self {
+        // UI Scaleにしないと表示がおかしくなる
+        self.temp.scale_factor = CompositeRectScaleFactor::UI;
+        self.temp.text = Some(text.into());
+        self
+    }
+}
+
+#[must_use]
+pub struct CompositeRectModificationChain<'r, Event> {
+    storage: &'r mut CompositeTree<Event>,
+    target: *mut CompositeRect<Event>,
+    r: CompositeTreeRef,
+    dirty: bool,
+    text_layout_dirty: bool,
+}
+impl<'r, Event> Drop for CompositeRectModificationChain<'r, Event> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        tracing::warn!("CompositeRectModificationChain does not finished correctly!");
+    }
+}
+impl<'r, Event> CompositeRectModificationChain<'r, Event> {
+    pub fn apply(self) {
+        if self.dirty {
+            self.storage.mark_dirty(self.r);
+        }
+        if self.text_layout_dirty {
+            self.storage.mark_text_layout_dirty(self.r);
+        }
+
+        core::mem::forget(self);
+    }
+
+    pub fn set_active(mut self, a: bool) -> Self {
+        self.dirty = core::mem::replace(&mut unsafe { &mut *self.target }.active, a) != a;
+        self
+    }
+
+    pub fn activate(mut self) -> Self {
+        unsafe { &mut *self.target }.active = true;
+        self.dirty = true;
+        self
+    }
+
+    pub fn deactivate(mut self) -> Self {
+        unsafe { &mut *self.target }.active = false;
+        self.dirty = true;
+        self
+    }
+
+    pub fn offset(mut self, x: AnimatableFloat<Event>, y: AnimatableFloat<Event>) -> Self
+    where
+        Event: PartialEq,
+    {
+        let t = unsafe { &mut *self.target };
+        self.dirty = t.offset[0] != x || t.offset[1] != y || self.dirty;
+        t.offset = [x, y];
+        self
+    }
+
+    #[inline(always)]
+    pub fn offset_imm(self, x: f32, y: f32) -> Self
+    where
+        Event: PartialEq,
+    {
+        self.offset(AnimatableFloat::Value(x), AnimatableFloat::Value(y))
+    }
+
+    #[inline(always)]
+    pub fn rect_imm(self, rect: Rect<LogicalUnit>) -> Self
+    where
+        Event: PartialEq,
+    {
+        self.offset_imm(rect.left, rect.top)
+            .size_imm(rect.width, rect.height)
+    }
+
+    pub fn y(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.offset[1] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn y_imm(self, v: f32) -> Self {
+        self.y(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn y_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.y(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn x(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.offset[0] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn x_imm(self, v: f32) -> Self {
+        self.x(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn x_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.x(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn size(mut self, w: AnimatableFloat<Event>, h: AnimatableFloat<Event>) -> Self
+    where
+        Event: PartialEq,
+    {
+        let t = unsafe { &mut *self.target };
+        self.dirty = t.size[0] != w || t.size[1] != h || self.dirty;
+        t.size = [w, h];
+        self
+    }
+
+    #[inline(always)]
+    pub fn size_imm(self, w: f32, h: f32) -> Self
+    where
+        Event: PartialEq,
+    {
+        self.size(AnimatableFloat::Value(w), AnimatableFloat::Value(h))
+    }
+
+    pub fn width(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.size[0] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn width_imm(self, v: f32) -> Self {
+        self.width(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn width_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.width(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn height(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.size[1] = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn height_imm(self, v: f32) -> Self {
+        self.height(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn height_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.height(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn scale_x(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.scale_x = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn scale_x_imm(self, v: f32) -> Self {
+        self.scale_x(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn scale_x_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.scale_x(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn scale_y(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.scale_y = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn scale_y_imm(self, v: f32) -> Self {
+        self.scale_y(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn scale_y_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.scale_y(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn scale(mut self, v: AnimatableFloat<Event>) -> Self
+    where
+        Event: Clone,
+    {
+        unsafe { &mut *self.target }.scale_x = v.clone();
+        unsafe { &mut *self.target }.scale_y = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn scale_imm(self, v: f32) -> Self
+    where
+        Event: Clone,
+    {
+        self.scale(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn scale_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self
+    where
+        Event: Clone,
+    {
+        self.scale(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    pub fn opacity(mut self, v: AnimatableFloat<Event>) -> Self {
+        unsafe { &mut *self.target }.opacity = v;
+        self.dirty = true;
+        self
+    }
+
+    #[inline(always)]
+    pub fn opacity_imm(self, v: f32) -> Self {
+        self.opacity(AnimatableFloat::Value(v))
+    }
+
+    #[inline(always)]
+    pub fn opacity_animated_from_template(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+    ) -> Self {
+        self.opacity(AnimatableFloat::from_template(template, start_sec))
+    }
+
+    #[inline(always)]
+    pub fn opacity_animated_from_template_with_completion(
+        self,
+        template: &FloatAnimationTemplate,
+        start_sec: f32,
+        on_complete: Event,
+    ) -> Self {
+        self.opacity(AnimatableFloat::from_template_with_completion(
+            template,
+            start_sec,
+            on_complete,
+        ))
+    }
+
+    pub fn has_bitmap(mut self, has: bool) -> Self {
+        unsafe { &mut *self.target }.has_bitmap = has;
+        self.dirty = true;
+        self
+    }
+
+    pub fn composite_mode(mut self, v: CompositeMode<Event>) -> Self {
+        unsafe { &mut *self.target }.composite_mode = v;
+        self.dirty = true;
+        self
+    }
+
+    pub fn corner_radius(mut self, v: CornerRadius) -> Self {
+        unsafe { &mut *self.target }.corner_radius = v;
+        self.dirty = true;
+        self
+    }
+
+    pub fn border(mut self, v: Border<Event>) -> Self {
+        unsafe { &mut *self.target }.border = Some(v);
+        self.dirty = true;
+        self
+    }
+
+    pub fn border_color(mut self, v: AnimatableColor<Event>) -> Self {
+        unsafe { &mut *self.target }
+            .border
+            .get_or_insert_default()
+            .color = v;
+        self.dirty = true;
+        self
+    }
+
+    pub fn rm_text(mut self) -> Self {
+        unsafe { &mut *self.target }.text = None;
+        self.dirty = true;
+        self
+    }
+
+    pub fn text(mut self, t: impl Into<CompositeRectText<Event>>) -> Self {
+        unsafe { &mut *self.target }.text = Some(t.into());
+        self.dirty = true;
+        self.text_layout_dirty = true;
+        self
+    }
+
+    pub fn text_runs(mut self, xs: Vec<CompositeRectTextRun<Event>>) -> Self {
+        unsafe { &mut *self.target }
+            .text
+            .get_or_insert_default()
+            .runs = xs;
+        self.dirty = true;
+        self.text_layout_dirty = true;
+        self
+    }
+
+    pub fn text_run(self, xs: impl Into<CompositeRectTextRun<Event>>) -> Self {
+        self.text_runs(vec![xs.into()])
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Gradient {
+    Linear {
+        start_color: [f32; 4],
+        end_color: [f32; 4],
+        start_pos_relative: [f32; 2],
+        end_pos_relative: [f32; 2],
+    },
+    Radial {
+        start_color: [f32; 4],
+        end_color: [f32; 4],
+        center_relative: [f32; 2],
+        radius: [f32; 2],
+    },
+    Corner {
+        right_top: [f32; 4],
+        left_bottom: [f32; 4],
+        right_bottom: [f32; 4],
+    },
+}
+
+pub struct CompositeSharedBuffers {
+    gradient_data_buffer: br::vk::VkBuffer,
+    gradient_data_memory: br::vk::VkDeviceMemory,
+    gradient_data_buffer_stg: br::vk::VkBuffer,
+    gradient_data_memory_stg: br::vk::VkDeviceMemory,
+    stg_mem_requires_flush: bool,
+    capacity_gradient: usize,
+    count_gradient: usize,
+}
+impl CompositeSharedBuffers {
+    pub unsafe fn drop(self, gfx: &Graphics) {
+        unsafe {
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_buffer_stg),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_memory_stg),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.gradient_data_memory),
+                None,
+            );
+        }
+    }
+
+    const INIT_CAP_GRADIENT: usize = 256;
+
+    pub fn new(gfx: &Graphics) -> Self {
+        let mut gradient_data_buffer = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new(
+                (core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT) as _,
+                br::BufferUsage::STORAGE_BUFFER | br::BufferUsage::TRANSFER_DEST,
+            ),
+        )
+        .expect("gradient_data_buffer.create");
+        let req = gradient_data_buffer.requirements();
+        let Some(memory_index) = gfx.find_device_local_memory_index(req.memoryTypeBits) else {
+            tracing::error!(memory_index_mask = req.memoryTypeBits, "no suitable memory");
+            std::process::exit(1);
+        };
+        let gradient_data_memory =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(req.size, memory_index))
+                .expect("gradient_data_memory.create");
+        gradient_data_buffer
+            .bind(&gradient_data_memory, 0)
+            .expect("gradient_data_buffer.bind");
+
+        let mut gradient_data_buffer_stg = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new(
+                (core::mem::size_of::<GradientData>() * Self::INIT_CAP_GRADIENT) as _,
+                br::BufferUsage::TRANSFER_SRC,
+            ),
+        )
+        .expect("gradient_data_buffer_stg.create");
+        let req = gradient_data_buffer_stg.requirements();
+        let memory_index = gfx
+            .find_host_visible_memory_index(req.memoryTypeBits)
+            .expect("no suitable memory");
+        let stg_mem_requires_flush = !gfx.is_coherent_memory(memory_index);
+        let gradient_data_memory_stg =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(req.size, memory_index))
+                .expect("gradient_data_memory_stg.create");
+        gradient_data_buffer_stg
+            .bind(&gradient_data_memory_stg, 0)
+            .expect("gradient_data_memory_stg.bind");
+
+        gfx.dbg_set_name(&gradient_data_buffer, c"Composite.GradientData.Buffer");
+        gfx.dbg_set_name(&gradient_data_memory, c"Composite.GradientData.Memory");
+        gfx.dbg_set_name(
+            &gradient_data_buffer_stg,
+            c"Composite.GradientData.Staging.Buffer",
+        );
+        gfx.dbg_set_name(
+            &gradient_data_memory_stg,
+            c"Composite.GradientData.Staging.Memory",
+        );
+
+        let (gradient_data_buffer, _) = gradient_data_buffer.unmanage();
+        let (gradient_data_memory, _) = gradient_data_memory.unmanage();
+        let (gradient_data_buffer_stg, _) = gradient_data_buffer_stg.unmanage();
+        let (gradient_data_memory_stg, _) = gradient_data_memory_stg.unmanage();
+
+        Self {
+            gradient_data_buffer,
+            gradient_data_memory,
+            gradient_data_buffer_stg,
+            gradient_data_memory_stg,
+            stg_mem_requires_flush,
+            capacity_gradient: Self::INIT_CAP_GRADIENT,
+            count_gradient: 0,
+        }
+    }
+
+    pub fn sync_buffer<'cb>(&self, cr: br::CmdRecord<'cb>) -> br::CmdRecord<'cb> {
+        cr.copy_buffer(
+            &unsafe { br::VkHandleRef::dangling(self.gradient_data_buffer_stg) },
+            &unsafe { br::VkHandleRef::dangling(self.gradient_data_buffer) },
+            &[br::BufferCopy::mirror(
+                0,
+                (core::mem::size_of::<GradientData>() * self.capacity_gradient) as _,
+            )],
+        )
+    }
+
+    const fn range_all(&self) -> core::ops::Range<usize> {
+        0..core::mem::size_of::<GradientData>() * self.count_gradient
+    }
+
+    const fn available_byte_length(&self) -> usize {
+        core::mem::size_of::<GradientData>() * self.capacity_gradient
+    }
+}
+
+struct CompositeInstanceEmitter<'a> {
+    manager: &'a mut CompositeInstanceManager,
+    mapped_ptr: *mut core::ffi::c_void,
+}
+impl CompositeInstanceEmitter<'_> {
+    #[inline(always)]
+    fn write(&mut self, index: usize, x: CompositeInstanceData) {
+        if index >= self.manager.capacity {
+            todo!("allocate new page for instance buffer");
+        }
+
+        unsafe {
+            self.mapped_ptr
+                .cast::<CompositeInstanceData>()
+                .add(index)
+                .write(x);
+        }
+    }
+}
+
+struct CompositeInstanceManager {
+    buffer: br::vk::VkBuffer,
+    memory: br::vk::VkDeviceMemory,
+    streaming_buffer: br::vk::VkBuffer,
+    streaming_memory: br::vk::VkDeviceMemory,
+    streaming_memory_requires_flush: bool,
+    buffer_stg: br::vk::VkBuffer,
+    memory_stg: br::vk::VkDeviceMemory,
+    stg_mem_requires_flush: bool,
+    capacity: usize,
+    count: usize,
+}
+impl CompositeInstanceManager {
+    unsafe fn drop(&mut self, gfx: &Graphics) {
+        unsafe {
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.buffer_stg),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.memory_stg),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_memory),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_buffer(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.memory),
+                None,
+            );
+        }
+    }
+
+    const INIT_CAP: usize = (4 * 1024 * 1024) / size_of::<CompositeInstanceData>();
+
+    fn new(gfx: &Graphics) -> Self {
+        let mut buffer = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new(
+                (core::mem::size_of::<CompositeInstanceData>() * Self::INIT_CAP) as _,
+                br::BufferUsage::STORAGE_BUFFER | br::BufferUsage::TRANSFER_DEST,
+            ),
+        )
+        .expect("Failed to create composite instance buffer");
+        let req = buffer.requirements();
+        let Some(memory_index) = gfx.find_device_local_memory_index(req.memoryTypeBits) else {
+            tracing::error!(memory_index_mask = req.memoryTypeBits, "no suitable memory");
+            std::process::exit(1);
+        };
+        let memory =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(req.size, memory_index))
+                .expect("Failed to allocate composite instance data memory");
+        buffer
+            .bind(&memory, 0)
+            .expect("Failed to bind buffer memory");
+
+        let mut streaming_buffer = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new_for_type::<CompositeStreamingData>(
+                br::BufferUsage::UNIFORM_BUFFER,
+            ),
+        )
+        .unwrap();
+        let mreq = streaming_buffer.requirements();
+        let Some(memory_index) = gfx.find_direct_memory_index(mreq.memoryTypeBits) else {
+            tracing::error!(
+                memory_index_mask = mreq.memoryTypeBits,
+                "no suitable memory for streaming"
+            );
+            std::process::exit(1);
+        };
+        let streaming_memory =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(mreq.size, memory_index))
+                .unwrap();
+        streaming_buffer
+            .bind(&streaming_memory, 0)
+            .expect("Failed to bind streaming buffer memory");
+        let streaming_memory_requires_flush = !gfx.is_coherent_memory(memory_index);
+
+        let mut buffer_stg = br::BufferObject::new(
+            gfx,
+            &br::BufferCreateInfo::new(
+                (core::mem::size_of::<CompositeInstanceData>() * Self::INIT_CAP) as _,
+                br::BufferUsage::TRANSFER_SRC,
+            ),
+        )
+        .expect("Failed to create composite instance staging buffer");
+        let buffer_mreq = buffer.requirements();
+        let memory_index = gfx
+            .find_host_visible_memory_index(buffer_mreq.memoryTypeBits)
+            .expect("no suitable memory");
+        let memory_stg = br::DeviceMemoryObject::new(
+            gfx,
+            &br::MemoryAllocateInfo::new(buffer_mreq.size, memory_index),
+        )
+        .expect("Failed to allocate composite instance data staging memory");
+        buffer_stg
+            .bind(&memory_stg, 0)
+            .expect("Failed to bind staging buffer memory");
+        let stg_mem_requires_flush = !gfx.is_coherent_memory(memory_index);
+
+        gfx.dbg_set_name(&buffer, c"Composite.InstanceData.Buffer");
+        gfx.dbg_set_name(&memory, c"Composite.InstanceData.Memory");
+        gfx.dbg_set_name(&buffer_stg, c"Composite.InstanceData.Staging.Buffer");
+        gfx.dbg_set_name(&memory_stg, c"Composite.InstanceData.Staging.Memory");
+        gfx.dbg_set_name(&streaming_buffer, c"Composite.StreamingData.Buffer");
+        gfx.dbg_set_name(&streaming_memory, c"Composite.StreamingData.Memory");
+
+        let (buffer, _) = buffer.unmanage();
+        let (memory, _) = memory.unmanage();
+        let (streaming_buffer, _) = streaming_buffer.unmanage();
+        let (streaming_memory, _) = streaming_memory.unmanage();
+        let (buffer_stg, _) = buffer_stg.unmanage();
+        let (memory_stg, _) = memory_stg.unmanage();
+
+        Self {
+            buffer,
+            memory,
+            streaming_buffer,
+            streaming_memory,
+            streaming_memory_requires_flush,
+            buffer_stg,
+            memory_stg,
+            stg_mem_requires_flush,
+            capacity: Self::INIT_CAP,
+            count: 0,
+        }
+    }
+
+    fn sync_buffer<'cb>(&self, cr: br::CmdRecord<'cb>) -> br::CmdRecord<'cb> {
+        cr.copy_buffer(
+            &unsafe { br::VkHandleRef::dangling(self.buffer_stg) },
+            &unsafe { br::VkHandleRef::dangling(self.buffer) },
+            &[br::BufferCopy::mirror(
+                0,
+                (core::mem::size_of::<CompositeInstanceData>() * self.capacity) as _,
+            )],
+        )
+    }
+
+    const fn streaming_memory_requires_flush(&self) -> bool {
+        self.streaming_memory_requires_flush
+    }
+
+    const fn memory_stg_requires_explicit_flush(&self) -> bool {
+        self.stg_mem_requires_flush
+    }
+
+    const fn buffer_transparent_ref<'x>(&'x self) -> &'x br::VkHandleRef<'x, br::vk::VkBuffer> {
+        br::VkHandleRef::from_raw_ref(&self.buffer)
+    }
+
+    const fn streaming_buffer_transparent_ref<'x>(
+        &'x self,
+    ) -> &'x br::VkHandleRef<'x, br::vk::VkBuffer> {
+        br::VkHandleRef::from_raw_ref(&self.streaming_buffer)
+    }
+
+    const fn staging_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
+        self.memory_stg
+    }
+
+    const fn range_all(&self) -> core::ops::Range<usize> {
+        0..core::mem::size_of::<CompositeInstanceData>() * self.count
+    }
+
+    const fn available_byte_length(&self) -> usize {
+        core::mem::size_of::<CompositeInstanceData>() * self.capacity
+    }
+
+    const fn streaming_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
+        self.streaming_memory
+    }
+
+    unsafe fn map_streaming<'s, 'g>(
+        &'s mut self,
+        gfx_device: &'g Graphics,
+    ) -> br::Result<CompositeInstanceMappedStreamingMemory<'s, 'g>> {
+        let ptr = unsafe {
+            br::vkfn_wrapper::map_memory(
+                gfx_device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.streaming_memory),
+                0..core::mem::size_of::<CompositeStreamingData>() as _,
+                0,
+            )?
+        };
+
+        Ok(CompositeInstanceMappedStreamingMemory(
+            ptr, self, gfx_device,
+        ))
+    }
+}
+
+pub struct MappedStagingMemory<'g>(
+    *mut core::ffi::c_void,
+    br::vk::VkDeviceMemory,
+    &'g Graphics<'g>,
+);
+impl Drop for MappedStagingMemory<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(
+                self.2.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.1),
+            );
+        }
+    }
+}
+impl MappedStagingMemory<'_> {
+    pub const fn ptr(&self) -> *mut core::ffi::c_void {
+        self.0
+    }
+}
+
+pub struct CompositeInstanceMappedStagingMemory<'m, 'g>(
+    *mut core::ffi::c_void,
+    &'m mut CompositeInstanceManager,
+    &'g Graphics<'g>,
+);
+impl Drop for CompositeInstanceMappedStagingMemory<'_, '_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(
+                self.2.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.1.memory_stg),
+            );
+        }
+    }
+}
+impl CompositeInstanceMappedStagingMemory<'_, '_> {
+    pub const fn ptr(&self) -> *mut core::ffi::c_void {
+        self.0
+    }
+}
+
+pub struct CompositeInstanceMappedStreamingMemory<'m, 'g>(
+    *mut core::ffi::c_void,
+    &'m mut CompositeInstanceManager,
+    &'g Graphics<'g>,
+);
+impl Drop for CompositeInstanceMappedStreamingMemory<'_, '_> {
+    fn drop(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(
+                self.2.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.1.streaming_memory),
+            );
+        }
+    }
+}
+impl CompositeInstanceMappedStreamingMemory<'_, '_> {
+    pub const fn ptr(&self) -> *mut CompositeStreamingData {
+        self.0.cast()
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CompositeTreeRef(usize);
+impl CompositeTreeRef {
+    #[inline(always)]
+    pub fn entity<'c, Event>(&self, mgr: &'c CompositeTree<Event>) -> &'c CompositeRect<Event> {
+        mgr.get(*self)
+    }
+
+    #[inline(always)]
+    pub fn entity_mut<'c, Event>(
+        &self,
+        mgr: &'c mut CompositeTree<Event>,
+    ) -> &'c mut CompositeRect<Event> {
+        mgr.get_mut(*self)
+    }
+
+    #[inline(always)]
+    pub fn entity_mut_dirtified<'c, Event>(
+        &self,
+        mgr: &'c mut CompositeTree<Event>,
+    ) -> &'c mut CompositeRect<Event> {
+        mgr.mark_dirty(*self);
+        mgr.get_mut(*self)
+    }
+
+    #[inline(always)]
+    pub fn mark_dirty<Event>(&self, mgr: &mut CompositeTree<Event>) {
+        mgr.mark_dirty(*self);
+    }
+}
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct GradientRef(u32);
+
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct CompositeTreeFloatParameterRef(usize);
+
+enum DirtyFloatParameter<Event> {
+    Modified(FloatParameter<Event>),
+    Deleted,
+}
+
+pub struct CompositeTreeParameterStoreRender<Event> {
+    float_parameters: Vec<FloatParameter<Event>>,
+    float_values: Vec<f32>,
+}
+impl<Event> CompositeTreeParameterStoreRender<Event> {
+    pub fn evaluate_float(&self, r: CompositeTreeFloatParameterRef, current_sec: f32) -> f32 {
+        self.float_parameters[r.0].evaluate(current_sec)
+    }
+
+    pub fn float_value(&self, r: CompositeTreeFloatParameterRef) -> f32 {
+        self.float_values[r.0]
+    }
+
+    fn evaluate_all(&mut self, current_sec: f32) {
+        for (v, p) in self
+            .float_values
+            .iter_mut()
+            .zip(self.float_parameters.iter())
+        {
+            *v = p.evaluate(current_sec);
+        }
+    }
+}
+
+struct CompositeTreeParameterStoreSyncBuffer<Event> {
+    dirty_float_parameters: Vec<(usize, DirtyFloatParameter<Event>)>,
+    push_float_parameters: Vec<FloatParameter<Event>>,
+}
+impl<Event> CompositeTreeParameterStoreSyncBuffer<Event> {
+    pub fn clean(&mut self, render: &mut CompositeTreeParameterStoreRender<Event>) {
+        for x in self.push_float_parameters.drain(..) {
+            render.float_parameters.push(x);
+            render.float_values.push(0.0);
+        }
+
+        for (n, x) in self.dirty_float_parameters.drain(..) {
+            match x {
+                DirtyFloatParameter::Modified(x) => {
+                    render.float_parameters[n] = x;
+                    render.float_values[n] = 0.0;
+                }
+                DirtyFloatParameter::Deleted => {
+                    // TODO: 削除が明示的に必要になったら書く
+                }
+            }
+        }
+    }
+}
+
+pub struct CompositeTreeParameterStore<Event> {
+    dirty_float_parameters: HashMap<usize, DirtyFloatParameter<Event>>,
+    push_float_parameters: Vec<FloatParameter<Event>>,
+    unused_float_parameters: BTreeSet<usize>,
+    float_parameter_store_size: usize,
+}
+impl<Event> CompositeTreeParameterStore<Event> {
+    pub fn alloc_float(&mut self, init: FloatParameter<Event>) -> CompositeTreeFloatParameterRef {
+        if let Some(x) = self.unused_float_parameters.pop_first() {
+            self.dirty_float_parameters
+                .insert(x, DirtyFloatParameter::Modified(init));
+            return CompositeTreeFloatParameterRef(x);
+        }
+
+        let id = CompositeTreeFloatParameterRef(self.float_parameter_store_size);
+        self.float_parameter_store_size += 1;
+        self.push_float_parameters.push(init);
+        id
+    }
+
+    pub fn free_float(&mut self, r: CompositeTreeFloatParameterRef) {
+        self.unused_float_parameters.insert(r.0);
+        self.dirty_float_parameters
+            .insert(r.0, DirtyFloatParameter::Deleted);
+    }
+
+    pub fn set_float(&mut self, r: CompositeTreeFloatParameterRef, a: FloatParameter<Event>) {
+        self.dirty_float_parameters
+            .insert(r.0, DirtyFloatParameter::Modified(a));
+    }
+
+    fn commit(&mut self, sync: &mut CompositeTreeParameterStoreSyncBuffer<Event>) {
+        sync.push_float_parameters
+            .extend(self.push_float_parameters.drain(..));
+        sync.dirty_float_parameters
+            .extend(self.dirty_float_parameters.drain());
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderPassAfterOperation {
+    None,
+    Grab,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RenderPassRequirements {
+    pub after_operation: RenderPassAfterOperation,
+    pub continued: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CompositeRenderingInstruction {
+    DrawInstanceRange {
+        index_range: core::ops::Range<usize>,
+        backdrop_buffer: usize,
+    },
+    InsertCustomRenderCommands(CustomRenderToken, Size<PixelsUnit>, Matrix4<SafeF32>),
+    SetClip {
+        shader_parameters: [SafeF32; 8],
+    },
+    ClearClip,
+    GrabBackdrop,
+    GenerateBackdropBlur {
+        stdev: SafeF32,
+        dest_backdrop_buffer: usize,
+        rects: Vec<br::Rect2D>,
+    },
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct CompositeRenderingData {
+    pub instructions: Vec<CompositeRenderingInstruction>,
+    pub render_passes: Vec<RenderPassRequirements>,
+    pub required_backdrop_buffer_count: usize,
+}
+impl CompositeRenderingData {
+    pub const EMPTY: Self = Self {
+        instructions: Vec::new(),
+        render_passes: Vec::new(),
+        required_backdrop_buffer_count: 0,
+    };
+}
+
+const fn rect_overlaps(a: &br::Rect2D, b: &br::Rect2D) -> bool {
+    b.offset.x - (a.extent.width as i32) < a.offset.x
+        && a.offset.x < b.offset.x + (b.extent.width as i32)
+        && b.offset.y - (a.extent.height as i32) < a.offset.y
+        && a.offset.y < b.offset.y + (b.extent.height as i32)
+}
+
+struct CompositeRenderingInstructionBuilder {
+    insts: Vec<CompositeRenderingInstruction>,
+    render_passes: Vec<RenderPassRequirements>,
+    last_free_backdrop_buffer: usize,
+    active_backdrop_blur_index_for_stdev: HashMap<SafeF32, usize>,
+    current_backdrop_overlap_rects: Vec<br::Rect2D>,
+    backdrop_active: bool,
+    max_backdrop_buffer_count: usize,
+    screen_rect: br::Rect2D,
+    active_clip_parameters: Option<[SafeF32; 8]>,
+    clip_invalidated: bool,
+}
+impl CompositeRenderingInstructionBuilder {
+    fn new(screen_size: br::Extent2D) -> Self {
+        Self {
+            insts: vec![CompositeRenderingInstruction::ClearClip],
+            render_passes: Vec::new(),
+            last_free_backdrop_buffer: 0,
+            active_backdrop_blur_index_for_stdev: HashMap::new(),
+            current_backdrop_overlap_rects: Vec::new(),
+            backdrop_active: false,
+            max_backdrop_buffer_count: 0,
+            screen_rect: screen_size.into_rect(br::Offset2D::ZERO),
+            active_clip_parameters: None,
+            clip_invalidated: true,
+        }
+    }
+
+    fn build(mut self) -> CompositeRenderingData {
+        // process for last backdrop layer
+        self.max_backdrop_buffer_count = self
+            .max_backdrop_buffer_count
+            .max(self.last_free_backdrop_buffer);
+        let rpr = RenderPassRequirements {
+            after_operation: RenderPassAfterOperation::None,
+            continued: !self.render_passes.is_empty(),
+        };
+        self.render_passes.push(rpr);
+
+        CompositeRenderingData {
+            instructions: self.insts,
+            render_passes: self.render_passes,
+            required_backdrop_buffer_count: self.max_backdrop_buffer_count,
+        }
+    }
+
+    fn draw_instance(&mut self, index: usize, backdrop_buffer_index: usize) {
+        if let Some(&mut CompositeRenderingInstruction::DrawInstanceRange {
+            ref mut index_range,
+            backdrop_buffer,
+        }) = self.insts.last_mut()
+        {
+            if index_range.end == index && backdrop_buffer == backdrop_buffer_index {
+                // optimal pass: fuse
+                index_range.end += 1;
+                return;
+            }
+        }
+
+        self.insts
+            .push(CompositeRenderingInstruction::DrawInstanceRange {
+                index_range: index..index + 1,
+                backdrop_buffer: backdrop_buffer_index,
+            });
+    }
+
+    fn insert_custom_render_commands(
+        &mut self,
+        token: CustomRenderToken,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: Matrix4<SafeF32>,
+    ) {
+        // no dependency check
+        self.insts
+            .push(CompositeRenderingInstruction::InsertCustomRenderCommands(
+                token,
+                size,
+                position_modifier_matrix,
+            ));
+    }
+
+    fn set_clip(&mut self, rect: &[SafeF32; 4], config: &ClipConfig) {
+        let clip_parameters = [
+            rect[0],
+            rect[1],
+            rect[2],
+            rect[3],
+            config.left_softness,
+            config.top_softness,
+            config.right_softness,
+            config.bottom_softness,
+        ];
+        if !self.clip_invalidated
+            && self
+                .active_clip_parameters
+                .as_ref()
+                .is_some_and(|x| x == &clip_parameters)
+        {
+            // same clip already active
+            return;
+        }
+
+        // needs to change clip state...
+        match self.insts.last_mut() {
+            Some(x @ &mut CompositeRenderingInstruction::ClearClip) => {
+                // replace clearclip
+                *x = CompositeRenderingInstruction::SetClip {
+                    shader_parameters: clip_parameters,
+                };
+            }
+            Some(&mut CompositeRenderingInstruction::SetClip {
+                ref shader_parameters,
+            }) if &clip_parameters == shader_parameters => {
+                // same clip, nop
+            }
+            Some(&mut CompositeRenderingInstruction::SetClip {
+                ref mut shader_parameters,
+            }) => {
+                // overtake contiguous setclip
+                *shader_parameters = clip_parameters;
+            }
+            _ => {
+                // insert new setclip instruction
+                self.insts.push(CompositeRenderingInstruction::SetClip {
+                    shader_parameters: clip_parameters,
+                });
+            }
+        }
+
+        self.clip_invalidated = false;
+        self.active_clip_parameters = Some(clip_parameters);
+    }
+
+    fn clear_clip(&mut self) {
+        if self.clip_invalidated && self.active_clip_parameters.is_none() {
+            // nothing clip activated
+            return;
+        }
+
+        match self.insts.last_mut() {
+            Some(&mut CompositeRenderingInstruction::ClearClip) => {
+                // fuse, do nothing
+            }
+            Some(x @ &mut CompositeRenderingInstruction::SetClip { .. }) => {
+                // clip set but no rendering occured, overtake
+                *x = CompositeRenderingInstruction::ClearClip;
+            }
+            _ => {
+                self.insts.push(CompositeRenderingInstruction::ClearClip);
+            }
+        }
+
+        self.clip_invalidated = true;
+        self.active_clip_parameters = None;
+    }
+
+    /// return: backdrop buffer index
+    fn request_backdrop_blur(&mut self, stdev: SafeF32, rect: br::Rect2D) -> usize {
+        if !rect_overlaps(&rect, &self.screen_rect) {
+            // perfectly culled
+            return 0;
+        }
+
+        if !self.backdrop_active {
+            // first time layer
+            self.backdrop_active = true;
+            self.insts.extend([
+                CompositeRenderingInstruction::GrabBackdrop,
+                CompositeRenderingInstruction::GenerateBackdropBlur {
+                    stdev,
+                    dest_backdrop_buffer: 0,
+                    rects: vec![rect],
+                },
+            ]);
+            let rpr = RenderPassRequirements {
+                after_operation: RenderPassAfterOperation::Grab,
+                continued: !self.render_passes.is_empty(),
+            };
+            self.render_passes.push(rpr);
+            self.clip_invalidated = true;
+            self.max_backdrop_buffer_count = self
+                .max_backdrop_buffer_count
+                .max(self.last_free_backdrop_buffer);
+            self.last_free_backdrop_buffer = 1;
+            self.current_backdrop_overlap_rects.clear();
+            self.active_backdrop_blur_index_for_stdev.clear();
+            self.current_backdrop_overlap_rects.push(rect);
+            self.active_backdrop_blur_index_for_stdev
+                .insert(stdev, self.insts.len() - 1);
+
+            return 0;
+        }
+
+        let overlaps = self
+            .current_backdrop_overlap_rects
+            .iter()
+            .any(|x| rect_overlaps(&rect, x));
+
+        if overlaps {
+            // non-optimal pass: split to new layer
+            self.insts.extend([
+                CompositeRenderingInstruction::GrabBackdrop,
+                CompositeRenderingInstruction::GenerateBackdropBlur {
+                    stdev,
+                    dest_backdrop_buffer: 0,
+                    rects: vec![rect],
+                },
+            ]);
+            let rpr = RenderPassRequirements {
+                after_operation: RenderPassAfterOperation::Grab,
+                continued: !self.render_passes.is_empty(),
+            };
+            self.render_passes.push(rpr);
+            self.clip_invalidated = true;
+            self.max_backdrop_buffer_count = self
+                .max_backdrop_buffer_count
+                .max(self.last_free_backdrop_buffer);
+            self.last_free_backdrop_buffer = 1;
+            self.current_backdrop_overlap_rects.clear();
+            self.active_backdrop_blur_index_for_stdev.clear();
+            self.current_backdrop_overlap_rects.push(rect);
+            self.active_backdrop_blur_index_for_stdev
+                .insert(stdev, self.insts.len() - 1);
+
+            return 0;
+        }
+
+        // optimal pass: no overlapping layer: fuse or generate
+        self.current_backdrop_overlap_rects.push(rect);
+
+        if let Some(&ix) = self.active_backdrop_blur_index_for_stdev.get(&stdev) {
+            // fuse
+            let &mut CompositeRenderingInstruction::GenerateBackdropBlur {
+                ref mut rects,
+                dest_backdrop_buffer,
+                ..
+            } = &mut self.insts[ix]
+            else {
+                unreachable!();
+            };
+
+            rects.push(rect);
+            dest_backdrop_buffer
+        } else {
+            // generate
+            self.insts
+                .push(CompositeRenderingInstruction::GenerateBackdropBlur {
+                    rects: vec![rect],
+                    dest_backdrop_buffer: self.last_free_backdrop_buffer,
+                    stdev,
+                });
+            self.last_free_backdrop_buffer += 1;
+            self.current_backdrop_overlap_rects.push(rect);
+            self.active_backdrop_blur_index_for_stdev
+                .insert(stdev, self.insts.len() - 1);
+
+            self.last_free_backdrop_buffer - 1
+        }
+    }
+}
+
+struct CompositeRectCache {
+    text_render_scale: f32,
+    text_rects: Vec<GlyphPlacementBox>,
+    text_width: f32,
+    text_height: f32,
+    text_max_width: Option<f32>,
+}
+impl CompositeRectCache {
+    fn new() -> Self {
+        Self {
+            text_render_scale: 1.0,
+            text_rects: Vec::new(),
+            text_width: 0.0,
+            text_height: 0.0,
+            text_max_width: None,
+        }
+    }
+}
+
+enum DirtyRect {
+    Modified,
+    Deleted,
+}
+
+enum DirtyRectSync<Event> {
+    Modified(CompositeRect<Event>, DirtyFlagSet),
+    Deleted,
+}
+
+pub struct CompositeTreeRender<Event> {
+    rects: Vec<CompositeRect<Event>>,
+    gradients: Vec<Gradient>,
+    dirty_flags: Vec<DirtyFlagSet>,
+    gradient_dirty_flags: Vec<bool>,
+    caches: Vec<CompositeRectCache>,
+    parameter_store: CompositeTreeParameterStoreRender<Event>,
+}
+impl<Event> CompositeTreeRender<Event> {
+    pub fn new() -> Self {
+        Self {
+            rects: Vec::new(),
+            gradients: Vec::new(),
+            dirty_flags: Vec::new(),
+            gradient_dirty_flags: Vec::new(),
+            caches: Vec::new(),
+            parameter_store: CompositeTreeParameterStoreRender {
+                float_parameters: Vec::new(),
+                float_values: Vec::new(),
+            },
+        }
+    }
+
+    pub fn update_shared(&mut self, current_sec: f32) {
+        self.parameter_store.evaluate_all(current_sec);
+    }
+
+    pub fn update_gradients(&mut self, gfx: &Graphics, shared_buffers: &CompositeSharedBuffers) {
+        let flush_required = shared_buffers.stg_mem_requires_flush;
+        let r = shared_buffers.range_all();
+        let gradient_ptr = MappedStagingMemory(
+            unsafe {
+                br::vkfn_wrapper::map_memory(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(shared_buffers.gradient_data_memory_stg),
+                    0..shared_buffers.available_byte_length() as _,
+                    0,
+                )
+                .expect("comopsite.instances.gradient_stg.map")
+            },
+            shared_buffers.gradient_data_memory_stg,
+            gfx,
+        );
+
+        for (n, g) in self.gradients.iter().enumerate() {
+            if !core::mem::replace(&mut self.gradient_dirty_flags[n], false) {
+                // not dirty
+                continue;
+            }
+
+            tracing::debug!(n, ?g, "write gradient");
+            unsafe {
+                core::ptr::write(
+                    gradient_ptr.ptr().cast::<GradientData>().add(n),
+                    match g {
+                        Gradient::Linear {
+                            start_color,
+                            end_color,
+                            start_pos_relative,
+                            end_pos_relative,
+                        } => GradientData {
+                            start_color: start_color.clone(),
+                            end_color: end_color.clone(),
+                            params: [
+                                start_pos_relative[0],
+                                start_pos_relative[1],
+                                end_pos_relative[0],
+                                end_pos_relative[1],
+                            ],
+                        },
+                        Gradient::Radial {
+                            start_color,
+                            end_color,
+                            center_relative,
+                            radius,
+                        } => GradientData {
+                            start_color: start_color.clone(),
+                            end_color: end_color.clone(),
+                            params: [center_relative[0], center_relative[1], radius[0], radius[1]],
+                        },
+                        Gradient::Corner {
+                            right_top,
+                            left_bottom,
+                            right_bottom,
+                        } => GradientData {
+                            start_color: right_top.clone(),
+                            end_color: left_bottom.clone(),
+                            params: right_bottom.clone(),
+                        },
+                    },
+                );
+            }
+        }
+
+        if flush_required {
+            unsafe {
+                gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                    shared_buffers.gradient_data_memory_stg,
+                    r.start as _,
+                    (r.end - r.start) as _,
+                )])
+                .expect("composite.gradient.stg.flush");
+            }
+        }
+    }
+
+    unsafe fn update(
+        &mut self,
+        root: CompositeTreeRef,
+        instance_emitter: &mut CompositeInstanceEmitter,
+        inst_builder: &mut CompositeRenderingInstructionBuilder,
+        size: br::Extent2D,
+        ui_render_scale: f32,
+        current_sec: f32,
+        font_set: &FontSet,
+        mask_atlas: &mut MaskTextureAtlasManager,
+        color_atlas: &ColorTextureAtlasManager,
+        mask_atlas_rects: &[AtlasRect],
+        vector_raster_state: &mut VectorRasterizationState,
+        mut on_event: impl FnMut(Event),
+    ) {
+        struct Process {
+            r: CompositeTreeRef,
+            effective_base_left: f32,
+            effective_base_top: f32,
+            effective_width: f32,
+            effective_height: f32,
+            parent_opacity: f32,
+            parent_matrix: Matrix4F32,
+            active_clip: Option<([SafeF32; 4], ClipConfig)>,
+        }
+
+        let mut instance_slot_index = 0;
+        let mut processes = vec![Process {
+            r: root,
+            effective_base_left: 0.0,
+            effective_base_top: 0.0,
+            effective_width: size.width as f32,
+            effective_height: size.height as f32,
+            parent_opacity: 1.0,
+            parent_matrix: Matrix4::ONE,
+            active_clip: None::<([SafeF32; 4], ClipConfig)>,
+        }];
+        while let Some(p) = processes.pop() {
+            let cache = &mut self.caches[p.r.0];
+            let r = &mut self.rects[p.r.0];
+            self.dirty_flags[p.r.0].dirty = false;
+
+            if !r.active {
+                // skip inactive rects and its children(=hide entire tree)
+                continue;
+            }
+
+            let scale_factor = match r.scale_factor {
+                CompositeRectScaleFactor::NoScale => 1.0,
+                CompositeRectScaleFactor::UI => ui_render_scale,
+            };
+
+            let local_left = (p.effective_width * r.relative_offset_adjustment[0])
+                + r.offset[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_top = (p.effective_height * r.relative_offset_adjustment[1])
+                + r.offset[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_width = (p.effective_width * r.relative_size_adjustment[0])
+                + r.size[0].evaluate(current_sec, &self.parameter_store) * scale_factor;
+            let local_height = (p.effective_height * r.relative_size_adjustment[1])
+                + r.size[1].evaluate(current_sec, &self.parameter_store) * scale_factor;
+
+            let left = p.effective_base_left + local_left;
+            let top = p.effective_base_top + local_top;
+            let w = local_width;
+            let h = local_height;
+
+            let opacity = p.parent_opacity * r.opacity.evaluate(current_sec, &self.parameter_store);
+            let matrix = p.parent_matrix
+                * Matrix4::translation(Vector3(local_left, local_top, 0.0))
+                * Matrix4::translation(Vector3(r.pivot[0] * w, r.pivot[1] * h, 0.0))
+                * Matrix4::scale(Vector4(
+                    r.scale_x.evaluate(current_sec, &self.parameter_store),
+                    r.scale_y.evaluate(current_sec, &self.parameter_store),
+                    1.0,
+                    1.0,
+                ))
+                * Matrix4::translation(Vector3(-r.pivot[0] * w, -r.pivot[1] * h, 0.0));
+
+            let border_color = match r.border {
+                Some(ref b) => b.color.evaluate(current_sec, &self.parameter_store),
+                None => [0.0; 4],
+            };
+
+            r.perform_complete_event(current_sec, &mut on_event);
+
+            if r.custom_render_token.is_some() {
+                // Custom Renderではclipは強制無効化する（clipが必要ならCustomRenderのinject側でやる）
+                inst_builder.clear_clip();
+            } else {
+                if let Some((clip_rect_px, clip_config)) = p.active_clip {
+                    inst_builder.set_clip(&clip_rect_px, &clip_config);
+                } else {
+                    inst_builder.clear_clip();
+                }
+            }
+
+            if let Some(t) = r.custom_render_token {
+                // Custom Renderがある場合はそっちのみ
+                inst_builder.insert_custom_render_commands(
+                    t,
+                    Size::new_pixels(w.ceil() as _, h.ceil() as _),
+                    unsafe { core::mem::transmute(matrix.clone()) },
+                );
+            } else if r.has_bitmap {
+                let (texatlas_rect, tex_type, tex_mapping_mode, slice_borders) = match r
+                    .composite_mode
+                    .texture()
+                {
+                    Some(t) => (
+                        match mask_atlas_rects.get(t.id.rect_index()) {
+                            Some(r) => r,
+                            None => {
+                                tracing::warn!(id = ?t.id, "no mask texture registered at this point");
+                                &AtlasRect::EMPTY
+                            }
+                        },
+                        t.r#type,
+                        t.mapping,
+                        t.slice_borders,
+                    ),
+                    None => (
+                        &AtlasRect::EMPTY,
+                        TextureType::Mask,
+                        TextureMappingMode::Stretch,
+                        [0.0; 4],
+                    ),
+                };
+                let texatlas_size = match tex_type {
+                    TextureType::Mask => mask_atlas.atlas().size(),
+                    TextureType::Color => color_atlas.atlas().size(),
+                };
+
+                instance_emitter.write(
+                    instance_slot_index,
+                    CompositeInstanceData {
+                        pos_st: [w, h, 0.0, 0.0],
+                        uv_st: [
+                            ((texatlas_rect.right as f32 - texatlas_rect.left as f32) - 1.0)
+                                / texatlas_size.width as f32,
+                            ((texatlas_rect.bottom as f32 - texatlas_rect.top as f32) - 1.0)
+                                / texatlas_size.height as f32,
+                            (texatlas_rect.left as f32 + 0.5) / texatlas_size.width as f32,
+                            (texatlas_rect.top as f32 + 0.5) / texatlas_size.height as f32,
+                        ],
+                        position_modifier_matrix: matrix.clone().transpose(),
+                        slice_borders,
+                        tex_size_pixels: [texatlas_size.width as _, texatlas_size.height as _],
+                        composite_mode: r.composite_mode.shader_mode_value(),
+                        opacity,
+                        color_tint: match r.composite_mode {
+                            CompositeMode::ColorTint(ref t, _)
+                            | CompositeMode::FillColor(ref t)
+                            | CompositeMode::ColorTintBackdropBlur(ref t, _, _)
+                            | CompositeMode::FillColorBackdropBlur(ref t, _)
+                            | CompositeMode::FillCornerGradient(_, ref t)
+                            | CompositeMode::ColorPickerGradientBox(ref t) => {
+                                t.evaluate(current_sec, &self.parameter_store)
+                            }
+                            CompositeMode::DirectSourceOver(_)
+                            | CompositeMode::FillLinearGradient(_)
+                            | CompositeMode::FillRadialGradient(_) => [0.0; 4],
+                        },
+                        corner_radius_x: [
+                            r.corner_radius.left_top[0] * scale_factor,
+                            r.corner_radius.right_top[0] * scale_factor,
+                            r.corner_radius.left_bottom[0] * scale_factor,
+                            r.corner_radius.right_bottom[0] * scale_factor,
+                        ],
+                        corner_radius_y: [
+                            r.corner_radius.left_top[1] * scale_factor,
+                            r.corner_radius.right_top[1] * scale_factor,
+                            r.corner_radius.left_bottom[1] * scale_factor,
+                            r.corner_radius.right_bottom[1] * scale_factor,
+                        ],
+                        border_color,
+                        border_thickness: r
+                            .border
+                            .as_ref()
+                            .map_or(0.0, |b| b.thickness * scale_factor),
+                        softedge: r.softedge * scale_factor,
+                        gradient_data_index: r.composite_mode.gradient_data_index() as _,
+                        source_texture_index: tex_type.to_index() as _,
+                        border_break_pattern: r.border.as_ref().map_or([0.0; 2], |b| {
+                            [
+                                b.break_pattern[0] * scale_factor,
+                                b.break_pattern[1] * scale_factor,
+                            ]
+                        }),
+                        texture_mapping_mode: tex_mapping_mode.shader_mode_value(),
+                        _padding: 0.0,
+                    },
+                );
+
+                let backdrop_buffer_index = match r.composite_mode {
+                    CompositeMode::ColorTintBackdropBlur(_, ref stdev, _)
+                    | CompositeMode::FillColorBackdropBlur(_, ref stdev) => {
+                        let stdev = stdev.evaluate(current_sec, &self.parameter_store);
+
+                        if stdev > 0.0 {
+                            inst_builder.request_backdrop_blur(
+                                unsafe { SafeF32::new_unchecked(stdev) },
+                                br::Rect2D {
+                                    offset: br::Offset2D {
+                                        x: left as _,
+                                        y: top as _,
+                                    },
+                                    extent: br::Extent2D {
+                                        width: w as _,
+                                        height: h as _,
+                                    },
+                                },
+                            )
+                        } else {
+                            0
+                        }
+                    }
+                    // とりあえず0
+                    _ => 0,
+                };
+
+                inst_builder.draw_instance(instance_slot_index, backdrop_buffer_index);
+                instance_slot_index += 1;
+            }
+
+            if let Some(ref mut t) = r.text {
+                let wrap_width = t.allow_wrapping.then(|| w / scale_factor);
+                if self.dirty_flags[p.r.0].text_layout_dirty
+                    || cache.text_render_scale != scale_factor
+                    || cache.text_max_width != wrap_width
+                {
+                    tracing::trace!(layout_max_width = ?wrap_width, "relayout text");
+
+                    let text_layout = TextLayout::new(
+                        t.runs.iter().map(|r| TextRun {
+                            content: &r.content,
+                            font: r.font_id,
+                            spacing_inline_start: r.spacing_inline_start,
+                        }),
+                        font_set,
+                        t.horizontal_alignment,
+                        wrap_width,
+                        t.max_lines,
+                    );
+                    cache.text_rects.clear();
+                    cache
+                        .text_rects
+                        .extend(text_layout.rasterize_and_place_glyphs(
+                            font_set,
+                            vector_raster_state,
+                            mask_atlas,
+                            scale_factor,
+                        ));
+                    cache.text_width = text_layout.visual_width(font_set) * scale_factor;
+                    cache.text_height = text_layout.height() * scale_factor;
+                    cache.text_max_width = wrap_width;
+                    cache.text_render_scale = scale_factor;
+                    self.dirty_flags[p.r.0].text_layout_dirty = false;
+                }
+
+                let x_offset = match t.horizontal_alignment {
+                    CompositeRectTextHorizontalAlignment::Start => 0.0,
+                    CompositeRectTextHorizontalAlignment::End => w - cache.text_width,
+                    CompositeRectTextHorizontalAlignment::Middle => (w - cache.text_width) * 0.5,
+                } + t.offset[0] * scale_factor;
+                let y_offset = match t.vertical_alignment {
+                    CompositeRectTextVerticalAlignment::Start => 0.0,
+                    CompositeRectTextVerticalAlignment::End => h - cache.text_height,
+                    CompositeRectTextVerticalAlignment::Middle => (h - cache.text_height) * 0.5,
+                } + t.offset[1] * scale_factor;
+                for b in cache.text_rects.iter() {
+                    instance_emitter.write(
+                        instance_slot_index,
+                        CompositeInstanceData {
+                            pos_st: [
+                                b.width as f32,
+                                b.height as f32,
+                                b.left + x_offset,
+                                b.top + y_offset,
+                            ],
+                            uv_st: [
+                                b.width as f32 / mask_atlas.atlas().size().width as f32,
+                                b.height as f32 / mask_atlas.atlas().size().height as f32,
+                                b.tex_left as f32 / mask_atlas.atlas().size().width as f32,
+                                b.tex_top as f32 / mask_atlas.atlas().size().height as f32,
+                            ],
+                            position_modifier_matrix: matrix.clone().transpose(),
+                            slice_borders: [0.0; 4],
+                            tex_size_pixels: [
+                                mask_atlas.atlas().size().width as _,
+                                mask_atlas.atlas().size().height as _,
+                            ],
+                            composite_mode: 1.0,
+                            opacity,
+                            // TODO: color by run
+                            color_tint: t.runs[0]
+                                .color
+                                .evaluate(current_sec, &self.parameter_store),
+                            corner_radius_x: [0.0; 4],
+                            corner_radius_y: [0.0; 4],
+                            border_thickness: 0.0,
+                            border_color: [0.0; 4],
+                            softedge: 0.0,
+                            gradient_data_index: 0.0,
+                            source_texture_index: 0.0, // force mono
+                            border_break_pattern: [0.0, 0.0],
+                            texture_mapping_mode: TextureMappingMode::Stretch.shader_mode_value(),
+                            _padding: 0.0,
+                        },
+                    );
+
+                    inst_builder.draw_instance(instance_slot_index, 0);
+                    instance_slot_index += 1;
+                }
+            }
+
+            processes.extend(r.children.iter().rev().map(|&x| Process {
+                r: CompositeTreeRef(x),
+                effective_base_left: left,
+                effective_base_top: top,
+                effective_width: w,
+                effective_height: h,
+                parent_opacity: opacity,
+                parent_matrix: matrix.clone(),
+                active_clip: match (r.clip_child.as_ref(), p.active_clip.as_ref()) {
+                    (None, None) => None,
+                    (Some(c), None) => Some((
+                        [
+                            SafeF32::new(left).expect("invalid left"),
+                            SafeF32::new(top).expect("invalid top"),
+                            SafeF32::new(left + w).expect("invalid right"),
+                            SafeF32::new(top + h).expect("invalid bottom"),
+                        ],
+                        c.clone(),
+                    )),
+                    (None, Some(a)) => Some(a.clone()),
+                    (Some(c), Some(a)) => {
+                        // TODO: softedgeの再クリップどうするか......
+                        Some((
+                            [
+                                SafeF32::new(left).expect("invalid left").max(a.0[0]),
+                                SafeF32::new(top).expect("invalid top").max(a.0[1]),
+                                SafeF32::new(left + w).expect("invalid right").min(a.0[2]),
+                                SafeF32::new(top + h).expect("invalid bottom").min(a.0[3]),
+                            ],
+                            c.clone(),
+                        ))
+                    }
+                },
+            }));
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DirtyFlagSet {
+    dirty: bool,
+    text_layout_dirty: bool,
+}
+
+pub struct CompositeTreeSyncBuffer<Event> {
+    pushed_rects: Vec<CompositeRect<Event>>,
+    dirty_rects: Vec<(usize, DirtyRectSync<Event>)>,
+    pushed_gradients: Vec<Gradient>,
+    dirty_gradients: Vec<(u32, Gradient)>,
+    parameter_store: CompositeTreeParameterStoreSyncBuffer<Event>,
+}
+impl<Event> CompositeTreeSyncBuffer<Event> {
+    pub fn new() -> Self {
+        Self {
+            pushed_rects: Vec::new(),
+            dirty_rects: Vec::new(),
+            pushed_gradients: Vec::new(),
+            dirty_gradients: Vec::new(),
+            parameter_store: CompositeTreeParameterStoreSyncBuffer {
+                push_float_parameters: Vec::new(),
+                dirty_float_parameters: Vec::new(),
+            },
+        }
+    }
+
+    pub fn clean(&mut self, render: &mut CompositeTreeRender<Event>) {
+        let _ = render.rects.try_reserve(self.pushed_rects.len());
+        let _ = render.caches.try_reserve(self.pushed_rects.len());
+        let _ = render.dirty_flags.try_reserve(self.pushed_rects.len());
+        for x in self.pushed_rects.drain(..) {
+            render.rects.push(x);
+            render.dirty_flags.push(DirtyFlagSet {
+                dirty: true,
+                text_layout_dirty: true,
+            });
+            render.caches.push(CompositeRectCache::new());
+        }
+
+        for (n, x) in self.dirty_rects.drain(..) {
+            match x {
+                DirtyRectSync::Modified(new, df) => {
+                    render.rects[n] = new;
+                    // Host側でtrueになってるやつだけtrueにする
+                    render.dirty_flags[n].dirty = render.dirty_flags[n].dirty || df.dirty;
+                    render.dirty_flags[n].text_layout_dirty =
+                        render.dirty_flags[n].text_layout_dirty || df.text_layout_dirty;
+                }
+                DirtyRectSync::Deleted => {
+                    render.rects[n].active = false;
+                }
+            }
+        }
+
+        let _ = render.gradients.try_reserve(self.pushed_gradients.len());
+        let _ = render
+            .gradient_dirty_flags
+            .try_reserve(self.pushed_gradients.len());
+        for x in self.pushed_gradients.drain(..) {
+            render.gradients.push(x);
+            render.gradient_dirty_flags.push(true);
+        }
+        for (id, data) in self.dirty_gradients.drain(..) {
+            render.gradients[id as usize] = data;
+            render.gradient_dirty_flags[id as usize] = true;
+        }
+
+        self.parameter_store.clean(&mut render.parameter_store);
+    }
+}
+
+pub struct CompositeTree<Event> {
+    rects: Vec<CompositeRect<Event>>,
+    dirty_flags: Vec<DirtyFlagSet>,
+    pushed_rects: Vec<usize>,
+    dirty_rects: HashMap<usize, DirtyRect>,
+    unused: BTreeSet<usize>,
+    gradients: Vec<Gradient>,
+    pushed_gradients: Vec<u32>,
+    dirty_gradients: HashSet<u32>,
+    unused_gradients: BTreeSet<u32>,
+    dirty: bool,
+    parameter_store: CompositeTreeParameterStore<Event>,
+}
+impl<Event> CompositeTree<Event> {
+    pub fn new() -> Self {
+        Self {
+            rects: Vec::new(),
+            dirty_flags: Vec::new(),
+            pushed_rects: Vec::new(),
+            dirty_rects: HashMap::new(),
+            unused: BTreeSet::new(),
+            gradients: Vec::new(),
+            pushed_gradients: Vec::new(),
+            dirty_gradients: HashSet::new(),
+            unused_gradients: BTreeSet::new(),
+            dirty: false,
+            parameter_store: CompositeTreeParameterStore {
+                push_float_parameters: Vec::new(),
+                dirty_float_parameters: HashMap::new(),
+                unused_float_parameters: BTreeSet::new(),
+                float_parameter_store_size: 0,
+            },
+        }
+    }
+
+    pub fn create(&mut self, data: CompositeRect<Event>) -> CompositeTreeRef {
+        if let Some(x) = self.unused.pop_first() {
+            self.rects[x] = data;
+            self.dirty_flags[x].dirty = true;
+            self.dirty_flags[x].text_layout_dirty = true;
+            self.dirty_rects.insert(x, DirtyRect::Modified);
+            return CompositeTreeRef(x);
+        }
+
+        let id = CompositeTreeRef(self.rects.len());
+        self.rects.push(data);
+        self.dirty_flags.push(DirtyFlagSet {
+            dirty: true,
+            text_layout_dirty: true,
+        });
+        self.pushed_rects.push(id.0);
+        id
+    }
+
+    pub fn free(&mut self, index: CompositeTreeRef) {
+        // unlink relations
+        self.remove_child(index);
+        for x in self.rects[index.0].children.drain(..).collect::<Vec<_>>() {
+            self.rects[x].parent = None;
+        }
+
+        self.unused.insert(index.0);
+        self.dirty_rects.insert(index.0, DirtyRect::Deleted);
+    }
+
+    pub fn create_gradient(&mut self, data: Gradient) -> GradientRef {
+        if let Some(x) = self.unused_gradients.pop_first() {
+            self.gradients[x as usize] = data;
+            self.dirty_gradients.insert(x);
+
+            return GradientRef(x);
+        }
+
+        let id = self.gradients.len().try_into().expect("too many gradients");
+        self.gradients.push(data);
+        self.pushed_gradients.push(id);
+        GradientRef(id)
+    }
+
+    pub fn free_gradient(&mut self, index: GradientRef) {
+        self.unused_gradients.insert(index.0);
+    }
+
+    pub fn free_all(&mut self, index: CompositeTreeRef) {
+        let mut stack = vec![index.0];
+        while let Some(c) = stack.pop() {
+            stack.extend(self.rects[c].children.drain(..));
+            self.free(CompositeTreeRef(c));
+        }
+    }
+
+    #[inline(always)]
+    pub fn get(&self, index: CompositeTreeRef) -> &CompositeRect<Event> {
+        &self.rects[index.0]
+    }
+
+    #[inline(always)]
+    pub fn get_mut(&mut self, index: CompositeTreeRef) -> &mut CompositeRect<Event> {
+        &mut self.rects[index.0]
+    }
+
+    pub fn begin_mod_chain<'r>(
+        &'r mut self,
+        r: CompositeTreeRef,
+    ) -> CompositeRectModificationChain<'r, Event> {
+        CompositeRectModificationChain {
+            target: &mut self.rects[r.0],
+            storage: self,
+            r,
+            dirty: false,
+            text_layout_dirty: false,
+        }
+    }
+
+    pub fn set_gradient(&mut self, r: GradientRef, data: Gradient) {
+        self.gradients[r.0 as usize] = data;
+        self.dirty_gradients.insert(r.0);
+    }
+
+    pub fn mark_dirty(&mut self, index: CompositeTreeRef) {
+        self.dirty_flags[index.0].dirty = true;
+        self.dirty_rects.insert(index.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn mark_text_layout_dirty(&mut self, index: CompositeTreeRef) {
+        self.dirty_flags[index.0].text_layout_dirty = true;
+        self.dirty_rects.insert(index.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn mark_dirty_all(&mut self, index: CompositeTreeRef) {
+        self.dirty_flags[index.0].dirty = true;
+        if self.rects[index.0].text.is_some() {
+            self.dirty_flags[index.0].text_layout_dirty = true;
+        }
+        self.dirty_rects.insert(index.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn commit(&mut self, sync_buffer: &mut CompositeTreeSyncBuffer<Event>)
+    where
+        Event: Clone,
+    {
+        let _ = sync_buffer
+            .pushed_rects
+            .try_reserve(self.pushed_rects.len() + self.dirty_rects.len());
+        for n in self.pushed_rects.drain(..) {
+            sync_buffer.pushed_rects.push(self.rects[n].clone());
+            self.dirty_flags[n].dirty = false;
+            self.dirty_flags[n].text_layout_dirty = false;
+        }
+        for (n, x) in self.dirty_rects.drain() {
+            match x {
+                DirtyRect::Modified => {
+                    sync_buffer.dirty_rects.push((
+                        n,
+                        DirtyRectSync::Modified(self.rects[n].clone(), self.dirty_flags[n].clone()),
+                    ));
+                    self.dirty_flags[n].dirty = false;
+                    self.dirty_flags[n].text_layout_dirty = false;
+                }
+                DirtyRect::Deleted => {
+                    sync_buffer.dirty_rects.push((n, DirtyRectSync::Deleted));
+                }
+            }
+        }
+
+        let _ = sync_buffer
+            .pushed_gradients
+            .try_reserve(self.pushed_gradients.len() + self.dirty_gradients.len());
+        for n in self.pushed_gradients.drain(..) {
+            sync_buffer
+                .pushed_gradients
+                .push(self.gradients[n as usize].clone());
+            self.dirty_gradients.remove(&n);
+        }
+        for n in self.dirty_gradients.drain() {
+            sync_buffer
+                .dirty_gradients
+                .push((n, self.gradients[n as usize].clone()));
+        }
+
+        self.parameter_store
+            .commit(&mut sync_buffer.parameter_store);
+
+        self.dirty = false;
+    }
+
+    pub fn add_child(&mut self, parent: CompositeTreeRef, child: CompositeTreeRef) {
+        if let Some(p) = self.rects[child.0].parent.replace(parent.0) {
+            // unlink from old parent
+            self.rects[p].children.retain(|&x| x != child.0);
+            self.dirty_rects.insert(p, DirtyRect::Modified);
+        }
+
+        self.rects[parent.0].children.push(child.0);
+        self.dirty_rects.insert(parent.0, DirtyRect::Modified);
+        self.dirty = true;
+    }
+
+    pub fn remove_child(&mut self, child: CompositeTreeRef) {
+        if let Some(p) = self.rects[child.0].parent.take() {
+            self.rects[p].children.retain(|&x| x != child.0);
+            self.dirty_rects.insert(p, DirtyRect::Modified);
+            self.dirty = true;
+        }
+    }
+
+    pub const fn parameter_store(&self) -> &CompositeTreeParameterStore<Event> {
+        &self.parameter_store
+    }
+
+    pub const fn parameter_store_mut(&mut self) -> &mut CompositeTreeParameterStore<Event> {
+        &mut self.parameter_store
+    }
+}
+
+struct CompositeDescriptorSet {}
+impl CompositeDescriptorSet {
+    pub const BINDINGS: &[br::DescriptorSetLayoutBinding<'static>] = &[
+        // instance data
+        br::DescriptorType::StorageBuffer
+            .make_binding(0, 1)
+            .for_shader_stage(
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            ),
+        // gradient data
+        br::DescriptorType::StorageBuffer
+            .make_binding(1, 1)
+            .for_shader_stage(
+                br::vk::VK_SHADER_STAGE_VERTEX_BIT | br::vk::VK_SHADER_STAGE_FRAGMENT_BIT,
+            ),
+        // streaming data
+        br::DescriptorType::UniformBuffer
+            .make_binding(2, 1)
+            .only_for_vertex(),
+        // texture atlas(mono/color)
+        br::DescriptorType::CombinedImageSampler
+            .make_binding(3, 2)
+            .only_for_fragment(),
+    ];
+
+    #[inline(always)]
+    pub fn set_instance_buffer<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorBufferInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(0)
+            .write(br::DescriptorContents::StorageBuffer(vec![info]))
+    }
+
+    #[inline(always)]
+    pub fn set_gradient_buffer<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorBufferInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(1)
+            .write(br::DescriptorContents::StorageBuffer(vec![info]))
+    }
+
+    #[inline(always)]
+    pub fn set_streaming_buffer<'s>(
+        set: br::DescriptorSet,
+        info: br::DescriptorBufferInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(2)
+            .write(br::DescriptorContents::UniformBuffer(vec![info]))
+    }
+
+    #[inline(always)]
+    pub fn set_texture_atlas<'s>(
+        set: br::DescriptorSet,
+        info_mono: br::DescriptorImageInfo<'s>,
+        info_color: br::DescriptorImageInfo<'s>,
+    ) -> br::DescriptorSetWriteInfo<'s> {
+        set.binding_at(3)
+            .write(br::DescriptorContents::CombinedImageSampler(vec![
+                info_mono, info_color,
+            ]))
+    }
+}
+
+pub struct CompositeRenderer {
+    rp_grabbed: br::vk::VkRenderPass,
+    rp_final: br::vk::VkRenderPass,
+    rp_continue_grabbed: br::vk::VkRenderPass,
+    rp_continue_final: br::vk::VkRenderPass,
+    fbs_grabbed: Vec<br::vk::VkFramebuffer>,
+    fbs_final: Vec<br::vk::VkFramebuffer>,
+    fbs_continue_grabbed: Vec<br::vk::VkFramebuffer>,
+    fbs_continue_final: Vec<br::vk::VkFramebuffer>,
+    sampler: br::vk::VkSampler,
+    dsl_input: br::vk::VkDescriptorSetLayout,
+    dsl_input_backdrop: br::vk::VkDescriptorSetLayout,
+    pipeline_layout: br::vk::VkPipelineLayout,
+    shader: br::vk::VkShaderModule,
+    pipeline_grabbed: br::vk::VkPipeline,
+    pipeline_final: br::vk::VkPipeline,
+    pipeline_continue_grabbed: br::vk::VkPipeline,
+    pipeline_continue_final: br::vk::VkPipeline,
+    grab_buffer: br::vk::VkImage,
+    grab_buffer_view: br::vk::VkImageView,
+    grab_buffer_memory: br::vk::VkDeviceMemory,
+    backdrop_buffers: Vec<(br::vk::VkImage, br::vk::VkImageView)>,
+    backdrop_buffer_memory: br::vk::VkDeviceMemory,
+    backdrop_blur_destination_fbs: Vec<br::vk::VkFramebuffer>,
+    backdrop_buffers_invalidated: bool,
+    input_backdrop_descriptor_pool: br::vk::VkDescriptorPool,
+    input_backdrop_descriptor_sets: Vec<br::DescriptorSet>,
+    input_backdrop_descriptor_pool_capacity: usize,
+    backdrop_fx_blur_processor: BackdropEffectBlurProcessor,
+    fixed_descriptor_pool: br::vk::VkDescriptorPool,
+    alphamask_group_input_descriptor_set: br::DescriptorSet,
+    blur_fixed_descriptor_sets: Vec<br::DescriptorSet>,
+    instance_manager: CompositeInstanceManager,
+}
+impl CompositeRenderer {
+    unsafe fn drop(&mut self, gfx: &Graphics) {
+        Self::release_all_framebuffers(gfx, &mut self.fbs_grabbed);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_final);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_continue_grabbed);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_continue_final);
+        Self::release_all_framebuffers(gfx, &mut self.backdrop_blur_destination_fbs);
+
+        unsafe {
+            br::vkfn_wrapper::destroy_descriptor_pool(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.fixed_descriptor_pool),
+                None,
+            );
+            br::vkfn_wrapper::destroy_descriptor_pool(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.input_backdrop_descriptor_pool),
+                None,
+            );
+
+            for &(r, v) in self.backdrop_buffers.iter() {
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
+            }
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.backdrop_buffer_memory),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_image_view(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_view),
+                None,
+            );
+            br::vkfn_wrapper::destroy_image(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_memory),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_grabbed),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_grabbed),
+                None,
+            );
+            br::vkfn_wrapper::destroy_shader_module(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.shader),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_layout),
+                None,
+            );
+            br::vkfn_wrapper::destroy_descriptor_set_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.dsl_input_backdrop),
+                None,
+            );
+            br::vkfn_wrapper::destroy_descriptor_set_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.dsl_input),
+                None,
+            );
+            br::vkfn_wrapper::destroy_sampler(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.sampler),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_continue_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_continue_grabbed),
+                None,
+            );
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.rp_grabbed),
+                None,
+            );
+
+            self.backdrop_fx_blur_processor.drop(gfx);
+            self.instance_manager.drop(gfx);
+        }
+    }
+
+    const INITIAL_BACKDROP_BUFFER_COUNT: usize = 16;
+    const PIPELINE_VI_STATE: &'static br::PipelineVertexInputStateCreateInfo<'static> =
+        &br::PipelineVertexInputStateCreateInfo::new(&[], &[]);
+    const PIPELINE_IA_STATE: &'static br::PipelineInputAssemblyStateCreateInfo =
+        &br::PipelineInputAssemblyStateCreateInfo::new(br::PrimitiveTopology::TriangleStrip);
+    const PIPELINE_RASTER_STATE: &'static br::PipelineRasterizationStateCreateInfo<'static> =
+        &br::PipelineRasterizationStateCreateInfo::new(
+            br::PolygonMode::Fill,
+            br::CullModeFlags::NONE,
+            br::FrontFace::CounterClockwise,
+        );
+    const PIPELINE_BLEND_STATE: &'static br::PipelineColorBlendStateCreateInfo<'static> =
+        &br::PipelineColorBlendStateCreateInfo::new(&[
+            br::PipelineColorBlendAttachmentState::PREMULTIPLIED,
+        ]);
+
+    pub fn new<'b>(
+        gfx: &Graphics,
+        shared_buffers: &CompositeSharedBuffers,
+        mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        color_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        rt_format: br::Format,
+        rt_buffers: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
+        rt_size: br::Extent2D,
+    ) -> Self {
+        let rp_grabbed = gfx
+            .create_render_pass(&br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(rt_format)
+                    .with_layout_to(br::ImageLayout::TransferSrcOpt.from_undefined())
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::TRANSFER,
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::TRANSFER.read,
+                )],
+            ))
+            .unwrap();
+        gfx.dbg_set_name(&rp_grabbed, c"CompositeRenderer::rp[grabbed]");
+        let rp_final = gfx
+            .create_render_pass(&br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(rt_format)
+                    .with_layout_to(br::ImageLayout::PresentSrc.from_undefined())
+                    .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags(0),
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::MEMORY.read,
+                )
+                .by_region()],
+            ))
+            .unwrap();
+        gfx.dbg_set_name(&rp_final, c"CompositeRenderer::rp[final]");
+        let rp_continue_grabbed = gfx
+            .create_render_pass(&br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(rt_format)
+                    .with_layout_to(
+                        br::ImageLayout::TransferSrcOpt.from(br::ImageLayout::TransferSrcOpt),
+                    )
+                    .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::TRANSFER,
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::TRANSFER.read,
+                )],
+            ))
+            .unwrap();
+        gfx.dbg_set_name(&rp_continue_grabbed, c"CompositeRenderer::rp[grabbed,cont]");
+        let rp_continue_final = gfx
+            .create_render_pass(&br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(rt_format)
+                    .with_layout_to(
+                        br::ImageLayout::PresentSrc.from(br::ImageLayout::TransferSrcOpt),
+                    )
+                    .color_memory_op(br::LoadOp::Load, br::StoreOp::Store)],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags(0),
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::MEMORY.read,
+                )
+                .by_region()],
+            ))
+            .unwrap();
+        gfx.dbg_set_name(&rp_continue_final, c"CompositeRenderer::rp[final,cont]");
+
+        let buffer_size_hint = rt_buffers.size_hint();
+        let buffer_size_hint = buffer_size_hint.1.unwrap_or(buffer_size_hint.0);
+        let mut fbs_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_final = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_final = Vec::with_capacity(buffer_size_hint);
+        for bb in rt_buffers {
+            fbs_grabbed.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &rp_grabbed,
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            fbs_final.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &rp_final,
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            fbs_continue_grabbed.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &rp_continue_grabbed,
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            fbs_continue_final.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &rp_continue_final,
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+        }
+
+        let sampler = br::SamplerObject::new(gfx, &br::SamplerCreateInfo::new()).unwrap();
+
+        let dsl_input = br::DescriptorSetLayoutObject::new(
+            gfx,
+            &br::DescriptorSetLayoutCreateInfo::new(CompositeDescriptorSet::BINDINGS),
+        )
+        .unwrap();
+        let dsl_input_backdrop = br::DescriptorSetLayoutObject::new(
+            gfx,
+            &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::CombinedImageSampler
+                .make_binding(0, 1)
+                .only_for_fragment()]),
+        )
+        .unwrap();
+        let pipeline_layout = br::PipelineLayoutObject::new(
+            gfx,
+            &br::PipelineLayoutCreateInfo::new(
+                &[
+                    dsl_input.as_transparent_ref(),
+                    dsl_input_backdrop.as_transparent_ref(),
+                ],
+                COMPOSITE_PUSH_CONSTANT_RANGES,
+            ),
+        )
+        .unwrap();
+
+        let shader = gfx.require_shader("composite.spv");
+        let shader_stages = [
+            shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+            shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+        ];
+        let viewports = [rt_size
+            .into_rect(br::Offset2D::ZERO)
+            .make_viewport(0.0..1.0)];
+        let scissors = [rt_size.into_rect(br::Offset2D::ZERO)];
+        let vp_state = br::PipelineViewportStateCreateInfo::new_array(&viewports, &scissors);
+        let [
+            pipeline_grabbed,
+            pipeline_final,
+            pipeline_continue_grabbed,
+            pipeline_continue_final,
+        ] = gfx
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    rp_grabbed.subpass(0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    rp_final.subpass(0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    rp_continue_grabbed.subpass(0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    rp_continue_final.subpass(0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+            ])
+            .unwrap();
+        gfx.dbg_set_name(&pipeline_grabbed, c"Composite Pipeline[grabbed]");
+        gfx.dbg_set_name(&pipeline_final, c"Composite Pipeline[to final]");
+        gfx.dbg_set_name(
+            &pipeline_continue_grabbed,
+            c"Composite Pipeline[grabbed, continue]",
+        );
+        gfx.dbg_set_name(
+            &pipeline_continue_final,
+            c"Composite Pipeline[final, continue]",
+        );
+
+        let backdrop_buffers =
+            Vec::<br::ImageViewObject<br::ImageObject<&Graphics>>>::with_capacity(
+                Self::INITIAL_BACKDROP_BUFFER_COUNT,
+            );
+        let backdrop_buffer_memory = br::DeviceMemoryObject::new(
+            gfx,
+            &br::MemoryAllocateInfo::new(10, gfx.find_device_local_memory_index(!0).unwrap()),
+        )
+        .unwrap();
+        let backdrop_blur_destination_fbs = Vec::with_capacity(Self::INITIAL_BACKDROP_BUFFER_COUNT);
+
+        let mut grab_buffer = br::ImageObject::new(
+            gfx,
+            &br::ImageCreateInfo::new(rt_size, rt_format)
+                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST),
+        )
+        .unwrap();
+        let grab_buffer_memory =
+            gfx.alloc_device_local_memory_for_requirements(&grab_buffer.requirements());
+        grab_buffer.bind(&grab_buffer_memory, 0).unwrap();
+        let grab_buffer = br::ImageViewBuilder::new(
+            grab_buffer,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .unwrap();
+
+        let input_backdrop_descriptor_pool = br::DescriptorPoolObject::new(
+            gfx,
+            &br::DescriptorPoolCreateInfo::new(
+                16,
+                &[br::DescriptorType::CombinedImageSampler
+                    .make_size(Self::INITIAL_BACKDROP_BUFFER_COUNT as _)],
+            ),
+        )
+        .unwrap();
+        let input_backdrop_descriptor_sets =
+            Vec::<br::DescriptorSet>::with_capacity(Self::INITIAL_BACKDROP_BUFFER_COUNT);
+
+        let instance_manager = CompositeInstanceManager::new(gfx);
+        let backdrop_fx_blur_processor = BackdropEffectBlurProcessor::new(gfx, rt_size, rt_format);
+
+        let mut fixed_descriptor_pool = br::DescriptorPoolObject::new(
+            gfx,
+            &br::DescriptorPoolCreateInfo::new(
+                (1 + backdrop_fx_blur_processor.fixed_descriptor_set_count()) as _,
+                &[
+                    br::DescriptorType::CombinedImageSampler.make_size(
+                        (2 + backdrop_fx_blur_processor.fixed_descriptor_set_count()) as _,
+                    ),
+                    br::DescriptorType::UniformBuffer.make_size(1),
+                    br::DescriptorType::StorageBuffer.make_size(2),
+                ],
+            ),
+        )
+        .unwrap();
+        let [alphamask_group_input_descriptor_set] = fixed_descriptor_pool
+            .alloc_array(&[dsl_input.as_transparent_ref()])
+            .unwrap();
+        let blur_fixed_descriptor_sets =
+            backdrop_fx_blur_processor.alloc_fixed_descriptor_sets(&mut fixed_descriptor_pool);
+
+        let mut descriptor_writes = vec![
+            CompositeDescriptorSet::set_instance_buffer(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorBufferInfo::new(
+                    instance_manager.buffer_transparent_ref(),
+                    0..(core::mem::size_of::<CompositeInstanceData>() * instance_manager.capacity)
+                        as _,
+                ),
+            ),
+            CompositeDescriptorSet::set_gradient_buffer(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorBufferInfo::new(
+                    br::VkHandleRef::from_raw_ref(&shared_buffers.gradient_data_buffer),
+                    0..(core::mem::size_of::<GradientData>() * shared_buffers.capacity_gradient)
+                        as _,
+                ),
+            ),
+            CompositeDescriptorSet::set_streaming_buffer(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorBufferInfo::new(
+                    instance_manager.streaming_buffer_transparent_ref(),
+                    0..core::mem::size_of::<CompositeStreamingData>() as _,
+                ),
+            ),
+            CompositeDescriptorSet::set_texture_atlas(
+                alphamask_group_input_descriptor_set,
+                br::DescriptorImageInfo::new(&mask_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                    .with_sampler(&sampler),
+                br::DescriptorImageInfo::new(&color_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                    .with_sampler(&sampler),
+            ),
+        ];
+        backdrop_fx_blur_processor.write_input_descriptor_sets(
+            &mut descriptor_writes,
+            &grab_buffer,
+            &blur_fixed_descriptor_sets,
+        );
+        gfx.update_descriptor_sets(&descriptor_writes, &[]);
+
+        let (grab_buffer_view, grab_buffer) = grab_buffer.unmanage();
+
+        Self {
+            rp_grabbed: rp_grabbed.unmanage().0,
+            rp_final: rp_final.unmanage().0,
+            rp_continue_grabbed: rp_continue_grabbed.unmanage().0,
+            rp_continue_final: rp_continue_final.unmanage().0,
+            fbs_grabbed: fbs_grabbed.into_iter().map(|x| x.unmanage().0).collect(),
+            fbs_final: fbs_final.into_iter().map(|x| x.unmanage().0).collect(),
+            fbs_continue_grabbed: fbs_continue_grabbed
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+            fbs_continue_final: fbs_continue_final
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+            sampler: sampler.unmanage().0,
+            dsl_input: dsl_input.unmanage().0,
+            dsl_input_backdrop: dsl_input_backdrop.unmanage().0,
+            pipeline_layout: pipeline_layout.unmanage().0,
+            shader: shader.unmanage().0,
+            pipeline_grabbed: pipeline_grabbed.unmanage().0,
+            pipeline_final: pipeline_final.unmanage().0,
+            pipeline_continue_grabbed: pipeline_continue_grabbed.unmanage().0,
+            pipeline_continue_final: pipeline_continue_final.unmanage().0,
+            grab_buffer: grab_buffer.unmanage().0,
+            grab_buffer_view,
+            grab_buffer_memory: grab_buffer_memory.unmanage().0,
+            backdrop_buffers: backdrop_buffers
+                .into_iter()
+                .map(|x| {
+                    let (v, r) = x.unmanage();
+                    let r = r.unmanage().0;
+
+                    (r, v)
+                })
+                .collect(),
+            backdrop_buffer_memory: backdrop_buffer_memory.unmanage().0,
+            backdrop_blur_destination_fbs,
+            backdrop_buffers_invalidated: true,
+            input_backdrop_descriptor_pool: input_backdrop_descriptor_pool.unmanage().0,
+            input_backdrop_descriptor_sets,
+            input_backdrop_descriptor_pool_capacity: Self::INITIAL_BACKDROP_BUFFER_COUNT,
+            backdrop_fx_blur_processor,
+            fixed_descriptor_pool: fixed_descriptor_pool.unmanage().0,
+            alphamask_group_input_descriptor_set,
+            blur_fixed_descriptor_sets,
+            instance_manager,
+        }
+    }
+
+    pub fn update<Event>(
+        &mut self,
+        gfx: &Graphics,
+        tree: &mut CompositeTreeRender<Event>,
+        root: CompositeTreeRef,
+        rt_size: br::Extent2D,
+        ui_render_scale: f32,
+        font_set: &FontSet,
+        mask_atlas: &mut MaskTextureAtlasManager,
+        color_atlas: &ColorTextureAtlasManager,
+        mask_atlas_rects: &[AtlasRect],
+        vector_raster_state: &mut VectorRasterizationState,
+        on_event: impl FnMut(Event),
+        current_sec: f32,
+    ) -> CompositeRenderingData {
+        let r = self.instance_manager.range_all();
+        let flush_required = self.instance_manager.memory_stg_requires_explicit_flush();
+        let ptr = MappedStagingMemory(
+            unsafe {
+                br::vkfn_wrapper::map_memory(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(self.instance_manager.memory_stg),
+                    0..self.instance_manager.available_byte_length() as _,
+                    0,
+                )
+                .expect("comopsite.instances.stg.map")
+            },
+            self.instance_manager.memory_stg,
+            gfx,
+        );
+
+        let mut inst_builder = CompositeRenderingInstructionBuilder::new(rt_size);
+        unsafe {
+            tree.update(
+                root,
+                &mut CompositeInstanceEmitter {
+                    manager: &mut self.instance_manager,
+                    mapped_ptr: ptr.ptr(),
+                },
+                &mut inst_builder,
+                rt_size,
+                ui_render_scale,
+                current_sec,
+                font_set,
+                mask_atlas,
+                color_atlas,
+                mask_atlas_rects,
+                vector_raster_state,
+                on_event,
+            )
+        };
+
+        if flush_required {
+            unsafe {
+                gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                    self.instance_manager.memory_stg,
+                    r.start as _,
+                    (r.end - r.start) as _,
+                )])
+                .expect("composite.instance.stg.flush");
+            }
+        }
+
+        inst_builder.build()
+    }
+
+    pub fn update_streaming_data(&mut self, gfx: &Graphics, data: CompositeStreamingData) {
+        let h = self.instance_manager.streaming_memory_raw_handle();
+        let flush_required = self.instance_manager.streaming_memory_requires_flush();
+        let ptr = unsafe {
+            self.instance_manager
+                .map_streaming(gfx)
+                .expect("composite.streaming,map")
+        };
+        unsafe {
+            core::ptr::write(ptr.ptr().cast::<CompositeStreamingData>(), data);
+        }
+        if flush_required {
+            unsafe {
+                gfx.flush_mapped_memory_ranges(&[br::MappedMemoryRange::new_raw(
+                    h,
+                    0,
+                    core::mem::size_of::<CompositeStreamingData>() as _,
+                )])
+                .expect("composite.streaming.flush");
+            }
+        }
+        drop(ptr);
+    }
+
+    pub fn sync_buffer<'r>(&self, r: br::CmdRecord<'r>) -> br::CmdRecord<'r> {
+        self.instance_manager.sync_buffer(r)
+    }
+
+    #[inline]
+    fn release_all_framebuffers(
+        gfx_device: &(impl br::VkHandle<Handle = br::vk::VkDevice> + ?Sized),
+        fbs: &mut Vec<br::vk::VkFramebuffer>,
+    ) {
+        for x in fbs.drain(..) {
+            unsafe {
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx_device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+        }
+    }
+
+    pub fn recreate_rt_resources<'s, 'b>(
+        &'s mut self,
+        gfx: &Graphics,
+        rt_format: br::Format,
+        rt_buffers: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
+        rt_size: br::Extent2D,
+        descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+    ) {
+        let buffer_size_hint = rt_buffers.size_hint();
+        let buffer_size_hint = buffer_size_hint.1.unwrap_or(buffer_size_hint.0);
+
+        Self::release_all_framebuffers(gfx, &mut self.fbs_grabbed);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_final);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_continue_grabbed);
+        Self::release_all_framebuffers(gfx, &mut self.fbs_continue_final);
+        let mut fbs_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_final = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_grabbed = Vec::with_capacity(buffer_size_hint);
+        let mut fbs_continue_final = Vec::with_capacity(buffer_size_hint);
+        for bb in rt_buffers {
+            fbs_grabbed.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &unsafe { br::VkHandleRef::dangling(self.rp_grabbed) },
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            fbs_final.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &unsafe { br::VkHandleRef::dangling(self.rp_final) },
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            fbs_continue_grabbed.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &unsafe { br::VkHandleRef::dangling(self.rp_continue_grabbed) },
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            fbs_continue_final.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &unsafe { br::VkHandleRef::dangling(self.rp_continue_final) },
+                        &[bb.as_transparent_ref()],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap(),
+            );
+        }
+
+        self.backdrop_buffers_invalidated = true;
+
+        unsafe {
+            // release first
+            br::vkfn_wrapper::destroy_image_view(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_view),
+                None,
+            );
+            br::vkfn_wrapper::destroy_image(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer),
+                None,
+            );
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.grab_buffer_memory),
+                None,
+            );
+        }
+        let mut grab_buffer = br::ImageObject::new(
+            gfx,
+            &br::ImageCreateInfo::new(rt_size, rt_format)
+                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST),
+        )
+        .unwrap();
+        let grab_buffer_memory =
+            gfx.alloc_device_local_memory_for_requirements(&grab_buffer.requirements());
+        grab_buffer.bind(&grab_buffer_memory, 0).unwrap();
+        let grab_buffer = br::ImageViewBuilder::new(
+            grab_buffer,
+            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+        )
+        .create()
+        .unwrap();
+        let (v, r) = grab_buffer.unmanage();
+        self.grab_buffer_view = v;
+        self.grab_buffer = r.unmanage().0;
+        self.grab_buffer_memory = grab_buffer_memory.unmanage().0;
+
+        unsafe {
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_grabbed),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_final),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_grabbed),
+                None,
+            );
+            br::vkfn_wrapper::destroy_pipeline(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_continue_final),
+                None,
+            );
+        }
+        let shader_stages = [
+            br::PipelineShaderStage::new(
+                br::ShaderStage::Vertex,
+                br::VkHandleRef::from_raw_ref(&self.shader),
+                c"vertMain",
+            ),
+            br::PipelineShaderStage::new(
+                br::ShaderStage::Fragment,
+                br::VkHandleRef::from_raw_ref(&self.shader),
+                c"fragMain",
+            ),
+        ];
+        let viewports = [rt_size
+            .into_rect(br::Offset2D::ZERO)
+            .make_viewport(0.0..1.0)];
+        let scissors = [rt_size.into_rect(br::Offset2D::ZERO)];
+        let vp_state = br::PipelineViewportStateCreateInfo::new_array(&viewports, &scissors);
+        let [
+            pipeline_grabbed,
+            pipeline_final,
+            pipeline_continue_grabbed,
+            pipeline_continue_final,
+        ] = gfx
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_grabbed), 0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_final), 0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_grabbed), 0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+                br::GraphicsPipelineCreateInfo::new(
+                    &unsafe { br::VkHandleRef::dangling(self.pipeline_layout) },
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0),
+                    &shader_stages,
+                    Self::PIPELINE_VI_STATE,
+                    Self::PIPELINE_IA_STATE,
+                    &vp_state,
+                    Self::PIPELINE_RASTER_STATE,
+                    Self::PIPELINE_BLEND_STATE,
+                )
+                .set_multisample_state(MS_STATE_EMPTY),
+            ])
+            .unwrap();
+        gfx.dbg_set_name(&pipeline_grabbed, c"Composite Pipeline[grabbed]");
+        gfx.dbg_set_name(&pipeline_final, c"Composite Pipeline[to final]");
+        gfx.dbg_set_name(
+            &pipeline_continue_grabbed,
+            c"Composite Pipeline[grabbed, continue]",
+        );
+        gfx.dbg_set_name(
+            &pipeline_continue_final,
+            c"Composite Pipeline[final, continue]",
+        );
+        self.pipeline_grabbed = pipeline_grabbed.unmanage().0;
+        self.pipeline_final = pipeline_final.unmanage().0;
+        self.pipeline_continue_grabbed = pipeline_continue_grabbed.unmanage().0;
+        self.pipeline_continue_final = pipeline_continue_final.unmanage().0;
+
+        self.backdrop_fx_blur_processor
+            .recreate_rt_resources(gfx, rt_size, rt_format);
+        self.backdrop_fx_blur_processor.write_input_descriptor_sets(
+            descriptor_writes,
+            br::VkHandleRef::from_raw_ref(&self.grab_buffer_view),
+            &self.blur_fixed_descriptor_sets,
+        );
+
+        self.fbs_grabbed
+            .extend(fbs_grabbed.into_iter().map(|x| x.unmanage().0));
+        self.fbs_final
+            .extend(fbs_final.into_iter().map(|x| x.unmanage().0));
+        self.fbs_continue_grabbed
+            .extend(fbs_continue_grabbed.into_iter().map(|x| x.unmanage().0));
+        self.fbs_continue_final
+            .extend(fbs_continue_final.into_iter().map(|x| x.unmanage().0));
+    }
+
+    pub fn prepare_input_backdrop_descriptor_sets(
+        &mut self,
+        gfx: &Graphics,
+        required_count: usize,
+    ) {
+        let object_count = required_count.max(1);
+
+        if object_count == self.input_backdrop_descriptor_sets.len() {
+            // no changes
+            return;
+        }
+
+        if object_count > self.input_backdrop_descriptor_pool_capacity {
+            // resize pool
+
+            self.input_backdrop_descriptor_pool = br::DescriptorPoolObject::new(
+                gfx,
+                &br::DescriptorPoolCreateInfo::new(
+                    object_count as _,
+                    &[br::DescriptorType::CombinedImageSampler.make_size(object_count as _)],
+                ),
+            )
+            .unwrap()
+            .unmanage()
+            .0;
+            self.input_backdrop_descriptor_pool_capacity = object_count;
+        } else {
+            // just reset
+            unsafe {
+                br::vkfn_wrapper::reset_descriptor_pool(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(self.input_backdrop_descriptor_pool),
+                    0,
+                )
+                .unwrap();
+            }
+        }
+
+        let mut input_backdrop_descriptor_sets =
+            Vec::<br::DescriptorSet>::with_capacity(object_count);
+        unsafe {
+            br::vkfn_wrapper::allocate_descriptor_sets(
+                gfx.as_transparent_ref(),
+                &br::vk::VkDescriptorSetAllocateInfo {
+                    sType: br::vk::VkDescriptorSetAllocateInfo::TYPE,
+                    pNext: core::ptr::null(),
+                    descriptorPool: self.input_backdrop_descriptor_pool,
+                    descriptorSetCount: object_count as _,
+                    pSetLayouts: core::iter::repeat_n(self.dsl_input_backdrop, object_count)
+                        .collect::<Vec<_>>()
+                        .as_ptr(),
+                },
+                input_backdrop_descriptor_sets.spare_capacity_mut(),
+            )
+            .expect("input_backdrop_descriptor_sets.realloc");
+            input_backdrop_descriptor_sets.set_len(object_count);
+        }
+
+        self.input_backdrop_descriptor_sets.clear();
+        self.input_backdrop_descriptor_sets
+            .extend(input_backdrop_descriptor_sets);
+        self.backdrop_buffers_invalidated = true;
+    }
+
+    pub fn update_backdrop_resources(
+        &mut self,
+        gfx: &Graphics,
+        rt_format: br::Format,
+        rt_size: br::Extent2D,
+        unused: bool,
+    ) -> bool {
+        if !self.backdrop_buffers_invalidated {
+            // no changes
+            return false;
+        }
+
+        Self::release_all_framebuffers(gfx, &mut self.backdrop_blur_destination_fbs);
+        unsafe {
+            for (r, v) in self.backdrop_buffers.drain(..) {
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
+            }
+
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.backdrop_buffer_memory),
+                None,
+            );
+        }
+
+        let backdrop_count = self.input_backdrop_descriptor_sets.len();
+        let mut image_objects = Vec::with_capacity(backdrop_count);
+        let mut offsets = Vec::with_capacity(backdrop_count);
+        let mut top = 0u64;
+        let mut memory_index_mask = !0u32;
+        for _ in 0..backdrop_count {
+            let image = br::ImageObject::new(
+                gfx,
+                &br::ImageCreateInfo::new(rt_size, rt_format).with_usage(
+                    br::ImageUsageFlags::SAMPLED
+                        | br::ImageUsageFlags::COLOR_ATTACHMENT
+                        | br::ImageUsageFlags::TRANSFER_DEST,
+                ),
+            )
+            .unwrap();
+            let req = image.requirements();
+            assert!(req.alignment.is_power_of_two());
+            let offset = (top + req.alignment - 1) & !(req.alignment - 1);
+            top = offset + req.size;
+            memory_index_mask &= req.memoryTypeBits;
+
+            offsets.push(offset);
+            image_objects.push(image);
+        }
+        let Some(memindex) = gfx.find_device_local_memory_index(memory_index_mask) else {
+            tracing::error!(
+                memory_index_mask,
+                "no suitable memory for composition backdrop buffers"
+            );
+            std::process::exit(1);
+        };
+        let backdrop_buffer_memory =
+            br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(top.max(64), memindex))
+                .unwrap();
+        for (n, (mut r, o)) in image_objects
+            .into_iter()
+            .zip(offsets.into_iter())
+            .enumerate()
+        {
+            r.bind(&backdrop_buffer_memory, o as _).unwrap();
+            gfx.dbg_set_name(&r, &unsafe {
+                std::ffi::CString::from_vec_unchecked(format!("backdrop buffer #{n}").into_bytes())
+            });
+            let o = br::ImageViewBuilder::new(
+                r,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+            )
+            .create()
+            .unwrap();
+
+            let (v, r) = o.unmanage();
+            self.backdrop_buffers.push((r.unmanage().0, v));
+        }
+        unsafe {
+            core::ptr::write(
+                &mut self.backdrop_buffer_memory,
+                backdrop_buffer_memory.unmanage().0,
+            );
+        }
+
+        self.backdrop_blur_destination_fbs
+            .extend(self.backdrop_buffers.iter().map(|b| {
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        &self.backdrop_fx_blur_processor.final_render_pass(),
+                        &[unsafe { br::VkHandleRef::dangling(b.1) }],
+                        rt_size.width,
+                        rt_size.height,
+                    ),
+                )
+                .unwrap()
+                .unmanage()
+                .0
+            }));
+
+        gfx.update_descriptor_sets(
+            &self
+                .backdrop_buffers
+                .iter()
+                .zip(self.input_backdrop_descriptor_sets.iter())
+                .map(|(v, d)| {
+                    d.binding_at(0)
+                        .write(br::DescriptorContents::CombinedImageSampler(vec![
+                            br::DescriptorImageInfo::new(
+                                br::VkHandleRef::from_raw_ref(&v.1),
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            )
+                            .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
+                        ]))
+                })
+                .collect::<Vec<_>>(),
+            &[],
+        );
+
+        if unused {
+            // backdrop bufferを結局つかわない場合は0番目のImageLayoutだけ変えておく(Warning対策)
+            let mut cp = br::CommandPoolObject::new(
+                gfx,
+                &br::CommandPoolCreateInfo::new(gfx.present_queue_family_index()).transient(),
+            )
+            .expect("cp.create");
+            let mut cb = br::CommandBufferObject::alloc(
+                gfx,
+                &br::CommandBufferAllocateInfo::new(&mut cp, 1, br::CommandBufferLevel::Primary),
+            )
+            .expect("cb.create");
+            unsafe {
+                cb[0]
+                    .begin(&br::CommandBufferBeginInfo::new())
+                    .expect("cb.begin")
+            }
+            .inject(|r| {
+                gfx.cmd_pipeline_barrier(
+                    r,
+                    &br::DependencyInfo::new(
+                        &[],
+                        &[],
+                        &[br::ImageMemoryBarrier2::new(
+                            br::VkHandleRef::from_raw_ref(&self.backdrop_buffers[0].0),
+                            br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                        )
+                        .transit_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())],
+                    ),
+                )
+            })
+            .end()
+            .expect("cb.end");
+            let mut q = gfx.queue(gfx.present_queue_family_index(), 0);
+            q.submit(
+                &[br::SubmitInfo::new(
+                    &[],
+                    &[],
+                    &[cb[0].as_transparent_ref()],
+                    &[],
+                )],
+                None,
+            )
+            .expect("cb.submit");
+            q.wait().expect("cb.submit.wait");
+        }
+
+        self.backdrop_buffers_invalidated = false;
+        true
+    }
+
+    pub fn rebind_glyph_atlas<'r>(
+        &'r self,
+        new_atlas: &'r (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        new_color_atlas: &'r (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
+    ) {
+        descriptor_writes.push(CompositeDescriptorSet::set_texture_atlas(
+            self.alphamask_group_input_descriptor_set,
+            br::DescriptorImageInfo::new(new_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
+            br::DescriptorImageInfo::new(new_color_atlas, br::ImageLayout::ShaderReadOnlyOpt)
+                .with_sampler(br::VkHandleRef::from_raw_ref(&self.sampler)),
+        ));
+    }
+
+    #[inline]
+    pub fn default_backdrop_buffer(
+        &self,
+    ) -> &(impl br::VkHandle<Handle = br::vk::VkImage> + ?Sized) {
+        br::VkHandleRef::from_raw_ref(&self.backdrop_buffers[0].0)
+    }
+
+    pub fn select_subpass<'r>(
+        &'r self,
+        requirements: &RenderPassRequirements,
+    ) -> br::SubpassRef<'r, impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized> {
+        match requirements {
+            RenderPassRequirements {
+                after_operation: RenderPassAfterOperation::None,
+                continued: false,
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_final), 0),
+            RenderPassRequirements {
+                after_operation: RenderPassAfterOperation::None,
+                continued: true,
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0),
+            RenderPassRequirements {
+                after_operation: RenderPassAfterOperation::Grab,
+                continued: false,
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_grabbed), 0),
+            RenderPassRequirements {
+                after_operation: RenderPassAfterOperation::Grab,
+                continued: true,
+            } => br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_grabbed), 0),
+        }
+    }
+
+    #[inline]
+    pub fn subpass_final<'r>(
+        &'r self,
+    ) -> br::SubpassRef<'r, impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized> {
+        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_final), 0)
+    }
+
+    #[inline]
+    pub fn subpass_continue_final<'r>(
+        &'r self,
+    ) -> br::SubpassRef<'r, impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized> {
+        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.rp_continue_final), 0)
+    }
+
+    pub fn prepare_custom_render(
+        &self,
+        render_data: &CompositeRenderingData,
+        rt_size: br::Extent2D,
+        mut callback: impl FnMut(CustomRenderToken, CustomRenderContext),
+    ) {
+        let mut rpt_pointer = 0;
+
+        for x in render_data.instructions.iter() {
+            match x {
+                &CompositeRenderingInstruction::DrawInstanceRange { .. } => {}
+                &CompositeRenderingInstruction::InsertCustomRenderCommands(token, _, _) => {
+                    let active_pass = self.select_subpass(&render_data.render_passes[rpt_pointer]);
+                    callback(
+                        token,
+                        CustomRenderContext {
+                            rt_size,
+                            active_render_pass: active_pass.0.native_ptr(),
+                            active_subpass_index: active_pass.1,
+                        },
+                    );
+                }
+                &CompositeRenderingInstruction::SetClip { .. } => {}
+                &CompositeRenderingInstruction::ClearClip => {}
+                CompositeRenderingInstruction::GrabBackdrop => {
+                    rpt_pointer += 1;
+                }
+                &CompositeRenderingInstruction::GenerateBackdropBlur { .. } => {}
+            };
+        }
+    }
+
+    pub fn populate_commands<'x>(
+        &self,
+        mut rec: br::CmdRecord<'x>,
+        gfx: &Graphics,
+        render_data: &CompositeRenderingData,
+        rt_size: br::Extent2D,
+        rt_image: &(impl br::VkHandle<Handle = br::vk::VkImage> + ?Sized),
+        backbuffer_index: usize,
+        custom_render: &mut (impl CustomRenderHandler + ?Sized),
+    ) -> br::CmdRecord<'x> {
+        let render_region = rt_size.into_rect(br::Offset2D::ZERO);
+
+        let mut in_render_pass = false;
+        let mut rpt_pointer = 0;
+        let mut pipeline_bound = false;
+        let mut active_clip = ClipUVRect::CLEAR;
+
+        #[inline]
+        fn ensure_in_render_pass<'r>(
+            this: &CompositeRenderer,
+            gfx: &Graphics,
+            in_render_pass: &mut bool,
+            render_data: &CompositeRenderingData,
+            rpt_pointer: usize,
+            backbuffer_index: usize,
+            render_region: br::Rect2D,
+            rec: br::CmdRecord<'r>,
+        ) -> br::CmdRecord<'r> {
+            if *in_render_pass {
+                return rec;
+            }
+
+            *in_render_pass = true;
+
+            let (rp, fb);
+            match &render_data.render_passes[rpt_pointer] {
+                RenderPassRequirements {
+                    continued: false,
+                    after_operation: RenderPassAfterOperation::Grab,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_grabbed);
+                    fb = this.fbs_grabbed[backbuffer_index];
+                }
+                RenderPassRequirements {
+                    continued: false,
+                    after_operation: RenderPassAfterOperation::None,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_final);
+                    fb = this.fbs_final[backbuffer_index];
+                }
+                RenderPassRequirements {
+                    continued: true,
+                    after_operation: RenderPassAfterOperation::Grab,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_continue_grabbed);
+                    fb = this.fbs_continue_grabbed[backbuffer_index];
+                }
+                RenderPassRequirements {
+                    continued: true,
+                    after_operation: RenderPassAfterOperation::None,
+                } => {
+                    rp = br::VkHandleRef::from_raw_ref(&this.rp_continue_final);
+                    fb = this.fbs_continue_final[backbuffer_index];
+                }
+            };
+
+            rec.inject(|r| {
+                gfx.cmd_begin_render_pass(
+                    r,
+                    &br::RenderPassBeginInfo::new(
+                        rp,
+                        br::VkHandleRef::from_raw_ref(&fb),
+                        render_region,
+                        &[br::ClearValue::color_f32([0.0; 4])],
+                    ),
+                )
+            })
+        }
+
+        #[inline]
+        fn ensure_pipeline_bound<'r>(
+            this: &CompositeRenderer,
+            pipeline_bound: &mut bool,
+            render_data: &CompositeRenderingData,
+            rpt_pointer: usize,
+            rt_size: br::Extent2D,
+            active_clip: &ClipUVRect,
+            rec: br::CmdRecord<'r>,
+        ) -> br::CmdRecord<'r> {
+            if *pipeline_bound {
+                return rec;
+            }
+
+            *pipeline_bound = true;
+
+            rec.bind_pipeline(
+                br::PipelineBindPoint::Graphics,
+                match &render_data.render_passes[rpt_pointer] {
+                    RenderPassRequirements {
+                        continued: false,
+                        after_operation: RenderPassAfterOperation::Grab,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_grabbed),
+                    RenderPassRequirements {
+                        continued: false,
+                        after_operation: RenderPassAfterOperation::None,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_final),
+                    RenderPassRequirements {
+                        continued: true,
+                        after_operation: RenderPassAfterOperation::Grab,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_continue_grabbed),
+                    RenderPassRequirements {
+                        continued: true,
+                        after_operation: RenderPassAfterOperation::None,
+                    } => br::VkHandleRef::from_raw_ref(&this.pipeline_continue_final),
+                },
+            )
+            .push_constant(
+                br::VkHandleRef::from_raw_ref(&this.pipeline_layout),
+                br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                0,
+                &CompositePushConstants {
+                    screen_x_pixels: rt_size.width as _,
+                    screen_y_pixels: rt_size.height as _,
+                    _padding: [0.0; 2],
+                    rect_mask: active_clip.clone(),
+                },
+            )
+            .bind_descriptor_sets(
+                br::PipelineBindPoint::Graphics,
+                br::VkHandleRef::from_raw_ref(&this.pipeline_layout),
+                0,
+                &[this.alphamask_group_input_descriptor_set],
+                &[],
+            )
+        }
+
+        for x in render_data.instructions.iter() {
+            match x {
+                &CompositeRenderingInstruction::DrawInstanceRange {
+                    ref index_range,
+                    backdrop_buffer,
+                } => {
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    )
+                    .inject(|rec| {
+                        ensure_pipeline_bound(
+                            self,
+                            &mut pipeline_bound,
+                            render_data,
+                            rpt_pointer,
+                            rt_size,
+                            &active_clip,
+                            rec,
+                        )
+                    })
+                    .bind_descriptor_sets(
+                        br::PipelineBindPoint::Graphics,
+                        br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                        1,
+                        &[self.input_backdrop_descriptor_sets[backdrop_buffer]],
+                        &[],
+                    )
+                    .draw(4, index_range.len() as _, 0, index_range.start as _)
+                }
+                &CompositeRenderingInstruction::InsertCustomRenderCommands(
+                    token,
+                    size,
+                    ref position_modifier_matrix,
+                ) => {
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    );
+
+                    let active_pass = self.select_subpass(&render_data.render_passes[rpt_pointer]);
+                    rec = custom_render.inject(
+                        token,
+                        size,
+                        position_modifier_matrix,
+                        CustomRenderContext {
+                            rt_size,
+                            active_render_pass: active_pass.0.native_ptr(),
+                            active_subpass_index: active_pass.1,
+                        },
+                        rec,
+                    );
+
+                    // 別のパイプラインをつかっている可能性があるのでいったん紐づいているのを無効化する
+                    pipeline_bound = false;
+                }
+                &CompositeRenderingInstruction::SetClip {
+                    ref shader_parameters,
+                } => {
+                    active_clip.left = shader_parameters[0].value() / rt_size.width as f32;
+                    active_clip.top = shader_parameters[1].value() / rt_size.height as f32;
+                    active_clip.right = shader_parameters[2].value() / rt_size.width as f32;
+                    active_clip.bottom = shader_parameters[3].value() / rt_size.height as f32;
+                    active_clip.left_softness = shader_parameters[4].value() / rt_size.width as f32;
+                    active_clip.top_softness = shader_parameters[5].value() / rt_size.height as f32;
+                    active_clip.right_softness =
+                        shader_parameters[6].value() / rt_size.width as f32;
+                    active_clip.bottom_softness =
+                        shader_parameters[7].value() / rt_size.height as f32;
+
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    )
+                    .inject(|rec| {
+                        ensure_pipeline_bound(
+                            self,
+                            &mut pipeline_bound,
+                            render_data,
+                            rpt_pointer,
+                            rt_size,
+                            &active_clip,
+                            rec,
+                        )
+                    })
+                    .push_constant(
+                        br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                        core::mem::offset_of!(CompositePushConstants, rect_mask) as _,
+                        &active_clip,
+                    );
+                }
+                &CompositeRenderingInstruction::ClearClip => {
+                    active_clip = ClipUVRect::CLEAR;
+
+                    rec = ensure_in_render_pass(
+                        self,
+                        gfx,
+                        &mut in_render_pass,
+                        render_data,
+                        rpt_pointer,
+                        backbuffer_index,
+                        render_region,
+                        rec,
+                    )
+                    .inject(|rec| {
+                        ensure_pipeline_bound(
+                            self,
+                            &mut pipeline_bound,
+                            render_data,
+                            rpt_pointer,
+                            rt_size,
+                            &active_clip,
+                            rec,
+                        )
+                    })
+                    .push_constant(
+                        br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                        br::vk::VK_SHADER_STAGE_ALL_GRAPHICS,
+                        core::mem::offset_of!(CompositePushConstants, rect_mask) as _,
+                        &active_clip,
+                    );
+                }
+                CompositeRenderingInstruction::GrabBackdrop => {
+                    rec = rec
+                        .inject(|r| gfx.cmd_end_render_pass(r))
+                        .inject(|r| {
+                            gfx.cmd_pipeline_barrier(
+                                r,
+                                &br::DependencyInfo::new(
+                                    &[],
+                                    &[],
+                                    &[br::ImageMemoryBarrier2::new(
+                                        br::VkHandleRef::from_raw_ref(&self.grab_buffer),
+                                        br::ImageSubresourceRange::new(
+                                            br::AspectMask::COLOR,
+                                            0..1,
+                                            0..1,
+                                        ),
+                                    )
+                                    .transit_to(br::ImageLayout::TransferDestOpt.from_undefined())],
+                                ),
+                            )
+                        })
+                        .copy_image(
+                            rt_image,
+                            br::ImageLayout::TransferSrcOpt,
+                            br::VkHandleRef::from_raw_ref(&self.grab_buffer),
+                            br::ImageLayout::TransferDestOpt,
+                            &[br::ImageCopy(br::vk::VkImageCopy {
+                                srcSubresource: br::ImageSubresourceLayers::new(
+                                    br::AspectMask::COLOR,
+                                    0,
+                                    0..1,
+                                )
+                                .0,
+                                dstSubresource: br::ImageSubresourceLayers::new(
+                                    br::AspectMask::COLOR,
+                                    0,
+                                    0..1,
+                                )
+                                .0,
+                                srcOffset: br::Offset3D::ZERO,
+                                dstOffset: br::Offset3D::ZERO,
+                                extent: rt_size.with_depth(1),
+                            })],
+                        )
+                        .inject(|r| {
+                            gfx.cmd_pipeline_barrier(
+                                r,
+                                &br::DependencyInfo::new(
+                                    &[],
+                                    &[],
+                                    &[br::ImageMemoryBarrier2::new(
+                                        br::VkHandleRef::from_raw_ref(&self.grab_buffer),
+                                        br::ImageSubresourceRange::new(
+                                            br::AspectMask::COLOR,
+                                            0..1,
+                                            0..1,
+                                        ),
+                                    )
+                                    .transit_from(
+                                        br::ImageLayout::TransferDestOpt
+                                            .to(br::ImageLayout::ShaderReadOnlyOpt),
+                                    )
+                                    .from(
+                                        br::PipelineStageFlags2::COPY,
+                                        br::AccessFlags2::TRANSFER.write,
+                                    )
+                                    .to(
+                                        br::PipelineStageFlags2::FRAGMENT_SHADER,
+                                        br::AccessFlags2::SHADER.read,
+                                    )],
+                                ),
+                            )
+                        });
+                    rpt_pointer += 1;
+                    in_render_pass = false;
+                    pipeline_bound = false;
+                }
+                &CompositeRenderingInstruction::GenerateBackdropBlur {
+                    stdev,
+                    dest_backdrop_buffer,
+                    // 本来は必要な範囲だけ処理できれば効率いいんだけど面倒なので全面処理しちゃう
+                    ..
+                } => {
+                    rec = self.backdrop_fx_blur_processor.populate_commands(
+                        rec,
+                        stdev,
+                        br::VkHandleRef::from_raw_ref(
+                            &self.backdrop_blur_destination_fbs[dest_backdrop_buffer],
+                        ),
+                        gfx,
+                        rt_size,
+                        &self.blur_fixed_descriptor_sets,
+                    );
+                }
+            };
+        }
+
+        rec
+    }
+}
+
+pub struct BoundCompositeRenderer<'d> {
+    core: CompositeRenderer,
+    device: &'d Graphics<'d>,
+}
+impl Drop for BoundCompositeRenderer<'_> {
+    fn drop(&mut self) {
+        unsafe {
+            self.core.drop(self.device);
+        }
+    }
+}
+impl core::ops::Deref for BoundCompositeRenderer<'_> {
+    type Target = CompositeRenderer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.core
+    }
+}
+impl core::ops::DerefMut for BoundCompositeRenderer<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.core
+    }
+}
+impl<'d> BoundCompositeRenderer<'d> {
+    pub fn new<'b>(
+        device: &'d Graphics,
+        shared_buffers: &CompositeSharedBuffers,
+        mask_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        color_atlas: br::VkHandleRef<br::vk::VkImageView>,
+        rt_format: br::Format,
+        rt_size: br::Extent2D,
+        back_buffer_views: impl Iterator<Item = br::VkHandleRef<'b, br::vk::VkImageView>>,
+    ) -> Self {
+        Self {
+            core: CompositeRenderer::new(
+                device,
+                shared_buffers,
+                mask_atlas,
+                color_atlas,
+                rt_format,
+                back_buffer_views,
+                rt_size,
+            ),
+            device,
+        }
+    }
+}
+
+struct BackdropEffectBlurProcessor {
+    render_pass: br::vk::VkRenderPass,
+    temporal_buffers: Vec<(br::vk::VkImage, br::vk::VkImageView)>,
+    temporal_buffer_memory: br::vk::VkDeviceMemory,
+    downsample_pass_fbs: Vec<br::vk::VkFramebuffer>,
+    upsample_pass_fixed_fbs: Vec<br::vk::VkFramebuffer>,
+    sampler: br::vk::VkSampler,
+    input_dsl: br::vk::VkDescriptorSetLayout,
+    pipeline_layout: br::vk::VkPipelineLayout,
+    downsample_pipelines: Vec<br::vk::VkPipeline>,
+    upsample_pipelines: Vec<br::vk::VkPipeline>,
+}
+impl BackdropEffectBlurProcessor {
+    unsafe fn drop(&mut self, gfx: &Graphics) {
+        unsafe {
+            self.destroy_framebuffers(gfx);
+
+            for x in self.upsample_pipelines.drain(..) {
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+            for x in self.downsample_pipelines.drain(..) {
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+            br::vkfn_wrapper::destroy_pipeline_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.pipeline_layout),
+                None,
+            );
+            br::vkfn_wrapper::destroy_descriptor_set_layout(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.input_dsl),
+                None,
+            );
+            br::vkfn_wrapper::destroy_sampler(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.sampler),
+                None,
+            );
+
+            for (r, v) in self.temporal_buffers.drain(..) {
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
+            }
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.temporal_buffer_memory),
+                None,
+            );
+
+            br::vkfn_wrapper::destroy_render_pass(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.render_pass),
+                None,
+            );
+        }
+    }
+
+    #[tracing::instrument(name = "BackdropEffectBlurProcessor::new", skip(gfx))]
+    fn new(gfx: &Graphics, rt_size: br::Extent2D, rt_format: br::Format) -> Self {
+        let render_pass = gfx
+            .create_render_pass(&br::RenderPassCreateInfo2::new(
+                &[br::AttachmentDescription2::new(rt_format)
+                    .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined())
+                    .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)],
+                &[br::SubpassDescription2::new()
+                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                &[br::SubpassDependency2::new(
+                    br::SubpassIndex::Internal(0),
+                    br::SubpassIndex::External,
+                )
+                .of_memory(
+                    br::AccessFlags::COLOR_ATTACHMENT.write,
+                    br::AccessFlags::SHADER.read,
+                )
+                .of_execution(
+                    br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                    br::PipelineStageFlags::FRAGMENT_SHADER,
+                )],
+            ))
+            .unwrap();
+        gfx.dbg_set_name(
+            &render_pass,
+            c"Composite BackdropFx(Blur) ProcessRenderPass",
+        );
+
+        let mut temporal_buffers = Vec::with_capacity(BLUR_SAMPLE_STEPS);
+        let temporal_buffer_memory =
+            Self::create_temporal_buffers(gfx, rt_size, rt_format, &mut temporal_buffers);
+
+        let (downsample_pass_fbs, upsample_pass_fixed_fbs) =
+            Self::create_framebuffers(gfx, &temporal_buffers, &render_pass, rt_size);
+
+        let sampler = match br::SamplerObject::new(
+            gfx,
+            &br::SamplerCreateInfo::new()
+                .filter(br::FilterMode::Linear, br::FilterMode::Linear)
+                .addressing(
+                    br::AddressingMode::MirroredRepeat,
+                    br::AddressingMode::MirroredRepeat,
+                    br::AddressingMode::MirroredRepeat,
+                ),
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "blur sampler creation failed");
+                std::process::abort();
+            }
+        };
+        let input_dsl = match br::DescriptorSetLayoutObject::new(
+            gfx,
+            &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::CombinedImageSampler
+                .make_binding(0, 1)
+                .only_for_fragment()
+                .with_immutable_samplers(&[sampler.as_transparent_ref()])]),
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "blur input dsl creation failed");
+                std::process::abort();
+            }
+        };
+
+        let pipeline_layout = match br::PipelineLayoutObject::new(
+            gfx,
+            &br::PipelineLayoutCreateInfo::new(
+                &[input_dsl.as_transparent_ref()],
+                &[br::PushConstantRange::for_type::<[f32; 3]>(
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                )],
+            ),
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "pipeline layout creation failed");
+                std::process::abort();
+            }
+        };
+
+        let (downsample_pipelines, upsample_pipelines) =
+            Self::create_pipelines(gfx, rt_size, &pipeline_layout, &render_pass);
+
+        Self {
+            downsample_pass_fbs: downsample_pass_fbs
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+            upsample_pass_fixed_fbs: upsample_pass_fixed_fbs
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+            render_pass: render_pass.unmanage().0,
+            temporal_buffers: temporal_buffers
+                .into_iter()
+                .map(|x| {
+                    let (v, r) = x.unmanage();
+                    (r.unmanage().0, v)
+                })
+                .collect(),
+            temporal_buffer_memory: temporal_buffer_memory.unmanage().0,
+            sampler: sampler.unmanage().0,
+            input_dsl: input_dsl.unmanage().0,
+            pipeline_layout: pipeline_layout.unmanage().0,
+            downsample_pipelines: downsample_pipelines
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+            upsample_pipelines: upsample_pipelines
+                .into_iter()
+                .map(|x| x.unmanage().0)
+                .collect(),
+        }
+    }
+
+    fn create_pipelines<'x>(
+        gfx: &'x Graphics<'x>,
+        rt_size: br::Extent2D,
+        pipeline_layout: &(impl br::VkHandle<Handle = br::vk::VkPipelineLayout> + ?Sized),
+        render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
+    ) -> (
+        Vec<br::PipelineObject<&'x Graphics<'x>>>,
+        Vec<br::PipelineObject<&'x Graphics<'x>>>,
+    ) {
+        let downsample_shader = gfx.require_shader("dual_kawase_filter/downsample.spv");
+        let upsample_shader = gfx.require_shader("dual_kawase_filter/upsample.spv");
+        let downsample_stages = [
+            downsample_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+            downsample_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+        ];
+        let upsample_stages = [
+            upsample_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+            upsample_shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+        ];
+
+        let viewport_scissors = (0..=BLUR_SAMPLE_STEPS)
+            .map(|lv| {
+                let size = br::Extent2D {
+                    width: rt_size.width >> lv,
+                    height: rt_size.height >> lv,
+                };
+
+                (
+                    [size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                    [size.into_rect(br::Offset2D::ZERO)],
+                )
+            })
+            .collect::<Vec<_>>();
+        let viewport_states = viewport_scissors
+            .iter()
+            .map(|(vp, sc)| br::PipelineViewportStateCreateInfo::new(vp, sc))
+            .collect::<Vec<_>>();
+        let downsample_pipelines = gfx
+            .create_graphics_pipelines(
+                &viewport_states[1..]
+                    .iter()
+                    .map(|vp_state| {
+                        br::GraphicsPipelineCreateInfo::new(
+                            &pipeline_layout,
+                            br::SubpassRef(render_pass, 0),
+                            &downsample_stages,
+                            VI_STATE_EMPTY,
+                            IA_STATE_TRILIST,
+                            vp_state,
+                            RASTER_STATE_DEFAULT_FILL_NOCULL,
+                            BLEND_STATE_SINGLE_NONE,
+                        )
+                        .set_multisample_state(MS_STATE_EMPTY)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        let upsample_pipelines = gfx
+            .create_graphics_pipelines(
+                &viewport_states[..viewport_states.len() - 1]
+                    .iter()
+                    .map(|vp_state| {
+                        br::GraphicsPipelineCreateInfo::new(
+                            &pipeline_layout,
+                            br::SubpassRef(render_pass, 0),
+                            &upsample_stages,
+                            VI_STATE_EMPTY,
+                            IA_STATE_TRILIST,
+                            vp_state,
+                            RASTER_STATE_DEFAULT_FILL_NOCULL,
+                            BLEND_STATE_SINGLE_NONE,
+                        )
+                        .set_multisample_state(MS_STATE_EMPTY)
+                    })
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+
+        (downsample_pipelines, upsample_pipelines)
+    }
+
+    fn create_temporal_buffers<'x>(
+        gfx: &'x Graphics<'x>,
+        rt_size: br::Extent2D,
+        rt_format: br::Format,
+        object_sink: &mut Vec<br::ImageViewObject<br::ImageObject<&'x Graphics<'x>>>>,
+    ) -> br::DeviceMemoryObject<&'x Graphics<'x>> {
+        let mut resources_offsets = Vec::with_capacity(BLUR_SAMPLE_STEPS);
+        let mut top = 0;
+        let mut memory_index_mask = !0u32;
+        for lv in 1..=BLUR_SAMPLE_STEPS {
+            let r = br::ImageObject::new(
+                gfx,
+                &br::ImageCreateInfo::new(
+                    br::Extent2D {
+                        width: rt_size.width >> lv,
+                        height: rt_size.height >> lv,
+                    },
+                    rt_format,
+                )
+                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::COLOR_ATTACHMENT),
+            )
+            .unwrap();
+            let req = r.requirements();
+            assert!(req.alignment.is_power_of_two());
+            let offset = (top + req.alignment - 1) & !(req.alignment - 1);
+
+            top = offset + req.size;
+            memory_index_mask &= req.memoryTypeBits;
+            resources_offsets.push((r, offset));
+        }
+        let memory_object = gfx.alloc_device_local_memory(top, memory_index_mask);
+        for (mut r, o) in resources_offsets {
+            r.bind(&memory_object, o as _).unwrap();
+
+            object_sink.push(
+                br::ImageViewBuilder::new(
+                    r,
+                    br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+                )
+                .create()
+                .unwrap(),
+            );
+        }
+
+        memory_object
+    }
+
+    /// returns: (downsample, upsample_fixed(only for temporal buffers))
+    fn create_framebuffers<'r, 'x>(
+        gfx: &'x Graphics<'x>,
+        temporal_buffers: &'r [br::ImageViewObject<br::ImageObject<&'x Graphics<'x>>>],
+        render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
+        rt_size: br::Extent2D,
+    ) -> (
+        Vec<br::FramebufferObject<'r, &'x Graphics<'x>>>,
+        Vec<br::FramebufferObject<'r, &'x Graphics<'x>>>,
+    ) {
+        let mut downsample_pass_fbs = Vec::with_capacity(temporal_buffers.len());
+        let mut upsample_pass_fixed_fbs = Vec::with_capacity(temporal_buffers.len() - 1);
+        for (n, b) in temporal_buffers.iter().enumerate() {
+            let lv = n + 1;
+            let bufsize = br::Extent2D {
+                width: rt_size.width >> lv,
+                height: rt_size.height >> lv,
+            };
+
+            downsample_pass_fbs.push(
+                br::FramebufferObject::new(
+                    gfx,
+                    &br::FramebufferCreateInfo::new(
+                        render_pass,
+                        &[b.as_transparent_ref()],
+                        bufsize.width,
+                        bufsize.height,
+                    ),
+                )
+                .unwrap(),
+            );
+            if lv != temporal_buffers.len() {
+                upsample_pass_fixed_fbs.push(
+                    br::FramebufferObject::new(
+                        gfx,
+                        &br::FramebufferCreateInfo::new(
+                            render_pass,
+                            &[b.as_transparent_ref()],
+                            bufsize.width,
+                            bufsize.height,
+                        ),
+                    )
+                    .unwrap(),
+                );
+            }
+        }
+
+        (downsample_pass_fbs, upsample_pass_fixed_fbs)
+    }
+
+    unsafe fn destroy_framebuffers(&self, gfx: &Graphics) {
+        for &x in self.downsample_pass_fbs.iter() {
+            unsafe {
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+        }
+        for &x in self.upsample_pass_fixed_fbs.iter() {
+            unsafe {
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+        }
+    }
+
+    pub const fn fixed_descriptor_set_count(&self) -> usize {
+        BLUR_SAMPLE_STEPS + 1
+    }
+
+    pub fn alloc_fixed_descriptor_sets(
+        &self,
+        dp: &mut (impl br::DescriptorPoolMut + ?Sized),
+    ) -> Vec<br::DescriptorSet> {
+        dp.alloc(
+            &core::iter::repeat_n(
+                unsafe { br::VkHandleRef::dangling(self.input_dsl) },
+                self.fixed_descriptor_set_count(),
+            )
+            .collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+
+    pub fn write_input_descriptor_sets<'s>(
+        &'s self,
+        writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        first_input: &'s (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        descriptor_sets: &[br::DescriptorSet],
+    ) {
+        writes.reserve(1 + BLUR_SAMPLE_STEPS);
+        self.write_first_input_descriptor_set(writes, first_input, descriptor_sets[0]);
+        writes.extend((0..BLUR_SAMPLE_STEPS).map(|n| {
+            descriptor_sets[n + 1].binding_at(0).write(
+                br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.temporal_buffers[n].1),
+                    br::ImageLayout::ShaderReadOnlyOpt,
+                )]),
+            )
+        }));
+    }
+
+    pub fn write_first_input_descriptor_set<'s>(
+        &'s self,
+        writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
+        first_input: &'s (impl br::VkHandle<Handle = br::vk::VkImageView> + ?Sized),
+        descriptor_set: br::DescriptorSet,
+    ) {
+        writes.push(descriptor_set.binding_at(0).write(
+            br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
+                first_input,
+                br::ImageLayout::ShaderReadOnlyOpt,
+            )]),
+        ));
+    }
+
+    pub const fn final_render_pass<'a>(&'a self) -> br::VkHandleRef<'a, br::vk::VkRenderPass> {
+        unsafe { br::VkHandleRef::dangling(self.render_pass) }
+    }
+
+    pub fn populate_commands<'x>(
+        &self,
+        mut rec: br::CmdRecord<'x>,
+        mut stdev: SafeF32,
+        dest_fb: &(impl br::VkHandle<Handle = br::vk::VkFramebuffer> + ?Sized),
+        gfx: &Graphics,
+        rt_size: br::Extent2D,
+        input_descriptor_sets: &[br::DescriptorSet],
+    ) -> br::CmdRecord<'x> {
+        let mut step_count = 0;
+        // downsample
+        for lv in 1..=BLUR_SAMPLE_STEPS {
+            rec = rec
+                .inject(|r| {
+                    gfx.cmd_begin_render_pass(
+                        r,
+                        &br::RenderPassBeginInfo::new(
+                            br::VkHandleRef::from_raw_ref(&self.render_pass),
+                            &unsafe { br::VkHandleRef::dangling(self.downsample_pass_fbs[lv - 1]) },
+                            br::Extent2D {
+                                width: rt_size.width >> lv,
+                                height: rt_size.height >> lv,
+                            }
+                            .into_rect(br::Offset2D::ZERO),
+                            &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 0.0])],
+                        ),
+                    )
+                })
+                .bind_pipeline(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.downsample_pipelines[lv - 1]),
+                )
+                .push_constant(
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    &[
+                        ((rt_size.width >> (lv - 1)) as f32).recip(),
+                        ((rt_size.height >> (lv - 1)) as f32).recip(),
+                        stdev.value(),
+                    ],
+                )
+                .bind_descriptor_sets(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    0,
+                    &[input_descriptor_sets[lv - 1]],
+                    &[],
+                )
+                .draw(3, 1, 0, 0)
+                .inject(|r| gfx.cmd_end_render_pass(r));
+
+            step_count += 1;
+            stdev = unsafe { SafeF32::new_unchecked(stdev.value() / 2.0) };
+            if stdev.value() < 0.5 {
+                break;
+            }
+        }
+        // upsample
+        for lv in (0..step_count).rev() {
+            rec = rec
+                .inject(|r| {
+                    gfx.cmd_begin_render_pass(
+                        r,
+                        &br::RenderPassBeginInfo::new(
+                            br::VkHandleRef::from_raw_ref(&self.render_pass),
+                            &if lv == 0 {
+                                // final upsample
+                                dest_fb.as_transparent_ref()
+                            } else {
+                                unsafe {
+                                    br::VkHandleRef::dangling(self.upsample_pass_fixed_fbs[lv - 1])
+                                }
+                            },
+                            br::Extent2D {
+                                width: rt_size.width >> lv,
+                                height: rt_size.height >> lv,
+                            }
+                            .into_rect(br::Offset2D::ZERO),
+                            &[br::ClearValue::color_f32([0.0, 0.0, 0.0, 0.0])],
+                        ),
+                    )
+                })
+                .bind_pipeline(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.upsample_pipelines[lv]),
+                )
+                .push_constant(
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::vk::VK_SHADER_STAGE_VERTEX_BIT,
+                    0,
+                    &[
+                        ((rt_size.width >> (lv + 1)) as f32).recip(),
+                        ((rt_size.height >> (lv + 1)) as f32).recip(),
+                        stdev.value(),
+                    ],
+                )
+                .bind_descriptor_sets(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    0,
+                    &[input_descriptor_sets[lv + 1]],
+                    &[],
+                )
+                .draw(3, 1, 0, 0)
+                .inject(|r| gfx.cmd_end_render_pass(r));
+
+            stdev = unsafe { SafeF32::new_unchecked(stdev.value() * 2.0) };
+        }
+
+        rec
+    }
+
+    #[tracing::instrument(
+        name = "BackdropEffectBlurProcessor::recreate_rt_resources",
+        skip(self, gfx)
+    )]
+    pub fn recreate_rt_resources(
+        &mut self,
+        gfx: &Graphics,
+        rt_size: br::Extent2D,
+        rt_format: br::Format,
+    ) {
+        unsafe {
+            for x in self.downsample_pipelines.drain(..) {
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+            for x in self.upsample_pipelines.drain(..) {
+                br::vkfn_wrapper::destroy_pipeline(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+        }
+        let (downsample_pipelines, upsample_pipelines) = Self::create_pipelines(
+            gfx,
+            rt_size,
+            br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+            br::VkHandleRef::from_raw_ref(&self.render_pass),
+        );
+
+        unsafe {
+            for x in self.downsample_pass_fbs.drain(..) {
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+            for x in self.upsample_pass_fixed_fbs.drain(..) {
+                br::vkfn_wrapper::destroy_framebuffer(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(x),
+                    None,
+                );
+            }
+
+            for (r, v) in self.temporal_buffers.drain(..) {
+                br::vkfn_wrapper::destroy_image_view(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(v),
+                    None,
+                );
+                br::vkfn_wrapper::destroy_image(
+                    gfx.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(r),
+                    None,
+                );
+            }
+            br::vkfn_wrapper::free_memory(
+                gfx.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.temporal_buffer_memory),
+                None,
+            );
+        }
+        let mut temporal_buffers = Vec::with_capacity(self.temporal_buffers.capacity());
+        let temporal_buffer_memory =
+            Self::create_temporal_buffers(gfx, rt_size, rt_format, &mut temporal_buffers);
+        let (downsample_pass_fbs, upsample_pass_fixed_fbs) = Self::create_framebuffers(
+            gfx,
+            &temporal_buffers,
+            br::VkHandleRef::from_raw_ref(&self.render_pass),
+            rt_size,
+        );
+
+        self.downsample_pass_fbs
+            .extend(downsample_pass_fbs.into_iter().map(|x| x.unmanage().0));
+        self.upsample_pass_fixed_fbs
+            .extend(upsample_pass_fixed_fbs.into_iter().map(|x| x.unmanage().0));
+        self.downsample_pipelines
+            .extend(downsample_pipelines.into_iter().map(|x| x.unmanage().0));
+        self.upsample_pipelines
+            .extend(upsample_pipelines.into_iter().map(|x| x.unmanage().0));
+        self.temporal_buffer_memory = temporal_buffer_memory.unmanage().0;
+        self.temporal_buffers
+            .extend(temporal_buffers.into_iter().map(|x| {
+                let (v, r) = x.unmanage();
+                (r.unmanage().0, v)
+            }));
+    }
+}
+
+pub struct CustomRenderContext {
+    pub rt_size: br::Extent2D,
+    pub active_render_pass: br::vk::VkRenderPass,
+    pub active_subpass_index: u32,
+}
+pub trait CustomRenderHandler {
+    fn inject<'r>(
+        &mut self,
+        token: CustomRenderToken,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: &Matrix4<SafeF32>,
+        ctx: CustomRenderContext,
+        rec: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r>;
+}
+#[repr(transparent)]
+pub struct CustomRenderHandlerFn<F>(pub F)
+where
+    F: for<'x> FnMut(
+        CustomRenderToken,
+        Size<PixelsUnit>,
+        &Matrix4<SafeF32>,
+        CustomRenderContext,
+        br::CmdRecord<'x>,
+    ) -> br::CmdRecord<'x>;
+impl<F> CustomRenderHandler for CustomRenderHandlerFn<F>
+where
+    F: for<'x> FnMut(
+        CustomRenderToken,
+        Size<PixelsUnit>,
+        &Matrix4<SafeF32>,
+        CustomRenderContext,
+        br::CmdRecord<'x>,
+    ) -> br::CmdRecord<'x>,
+{
+    #[inline(always)]
+    fn inject<'r>(
+        &mut self,
+        token: CustomRenderToken,
+        size: Size<PixelsUnit>,
+        position_modifier_matrix: &Matrix4<SafeF32>,
+        ctx: CustomRenderContext,
+        rec: br::CmdRecord<'r>,
+    ) -> br::CmdRecord<'r> {
+        self.0(token, size, position_modifier_matrix, ctx, rec)
+    }
+}
+pub struct EmptyCustomRenderHandler;
+impl CustomRenderHandler for EmptyCustomRenderHandler {
+    #[inline(always)]
+    fn inject<'r>(
+        &mut self,
+        _token: CustomRenderToken,
+        _size: Size<PixelsUnit>,
+        _position_modifier_matrix: &Matrix4<SafeF32>,
+        _ctx: CustomRenderContext,
+        rec: bedrock::CmdRecord<'r>,
+    ) -> bedrock::CmdRecord<'r> {
+        rec
+    }
+}

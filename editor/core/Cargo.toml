@@ -1,0 +1,123 @@
+[package]
+name = "peridot-marble-editor-core"
+version = "0.0.1"
+edition = "2024"
+
+[features]
+default = []
+win32 = ["bedrock/VK_KHR_win32_surface", "bedrock/VK_KHR_external_memory_win32"]
+mac = ["bedrock/VK_EXT_metal_surface", "bedrock/VK_KHR_portability_enumeration"]
+linux-default = ["wayland", "freetype", "fontconfig", "harfbuzz"]
+wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
+freetype = ["dep:peridot-tp-freetype"]
+fontconfig = ["dep:peridot-tp-fontconfig"]
+harfbuzz = ["dep:peridot-tp-harfbuzz"]
+enable-profiling = ["profiler/active", "windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
+
+[dependencies]
+profiler.path = "./profiler"
+peridot-marble-editor-shared.path = "./app/shared"
+peridot-marble-editor-model.path = "./app/model"
+
+bedrock = { workspace = true, features = [
+  "Implements",
+  "DynamicLoaded",
+  "VK_KHR_surface",
+  "VK_KHR_swapchain",
+  "VK_EXT_debug_utils",
+  "Allow1_4APIs",
+] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+lyon_geom = "1.0"
+peridot-math = { path = "../../modules/math" }
+peridot-tp-freetype = { path = "../../thirdparty/freetype", optional = true }
+peridot-tp-fontconfig = { path = "../../thirdparty/fontconfig", optional = true }
+peridot-tp-harfbuzz = { path = "../../thirdparty/harfbuzz", optional = true }
+peridot-tp-budoux = { path = "../../thirdparty/budoux", features = ["embedded-ja_knbc"] }
+bitflags = "2.10.0"
+uuid = { version = "1.22.0", features = ["v4"] }
+unicode-segmentation = "1"
+time = { version = "0.3", features = ["formatting", "std", "macros"] }
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.62"
+features = [
+  "Win32_Devices_HumanInterfaceDevice",
+  "Win32_UI_Controls",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_HiDpi",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_Storage_Packaging_Appx",
+  "Win32_System_Diagnostics_Debug",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Threading",
+  "Win32_System_Com",
+  "Win32_System_Ole",
+  "Win32_System_WinRT",
+  "Win32_System_WinRT_Composition",
+  "Win32_System_SystemServices",
+  "Win32_System_Performance",
+  "Win32_Graphics_DirectWrite",
+  "Win32_Graphics_Direct2D_Common",
+  "Win32_Graphics_Direct3D",
+  "Win32_Graphics_Direct3D12",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_Globalization",
+  "Data_Text",
+  "System",
+  "System_UserProfile",
+  "Globalization",
+  "Graphics_Effects",
+  "UI_Composition",
+  "UI_Composition_Desktop",
+  "UI_Text_Core",
+  "UI_ViewManagement",
+]
+
+[target.'cfg(windows)'.dependencies]
+windows-core = "0.62"
+windows-numerics = "*"
+windows-result = "*"
+
+[dependencies.peridot-tp-wayland]
+path = "../../thirdparty/wayland"
+optional = true
+features = [
+  "tracing",
+  "xdg-shell",
+  "wlr-layer-shell-unstable-v1",
+  "single-pixel-buffer-v1",
+  "viewporter",
+  "kde-blur",
+  "kde-appmenu",
+  "xdg-decoration-unstable-v1",
+  "text-input-unstable-v3",
+  "cursor-shape-v1",
+  "fractional-scale-v1",
+  "alpha-modifier-v1",
+  "pointer-constraints-unstable-v1",
+  "relative-pointer-unstable-v1",
+  "kde-plasma-shell",
+]
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+linux-eventfd = { path = "../../platform/linux/eventfd" }
+linux-epoll = { path = "../../platform/linux/epoll" }
+linux-input = { path = "../../platform/linux/input" }
+peridot-tp-dbus = { path = "../../thirdparty/dbus" }
+peridot-tp-xkbcommon = { path = "../../thirdparty/xkbcommon" }
+peridot-tp-icu = { path = "../../thirdparty/icu" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
+
+[lints]
+workspace = true
