@@ -59,8 +59,8 @@ use crate::{
         RenderContext, ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler,
         SimpleButtonViewInit, StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO,
         TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackQueue, ViewFeedbackRegisterable, ViewFeedbackRegistry,
-        ViewGroupID, ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
+        ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID,
+        ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
         ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
@@ -68,7 +68,7 @@ use crate::{
         ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
     utils::{
-        Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
+        Color32, DummyDebug, LogicalUnit, NonCloneable, NonDropAnyTypeQueue, Point, Rect, Size,
         UnsafeMainThreadOnlyOnceCell,
     },
 };
@@ -3017,7 +3017,7 @@ async fn run<'sys>(
     profiler::begin!(perf = INITIALIZE);
 
     let mut application = Application::new();
-    let mut view_feedback_store = ViewFeedbackQueue::new();
+    let mut view_feedback_store = NonDropAnyTypeQueue::new();
     let mut view_feedback_registry_delayed_ops = VecDeque::new();
 
     let mut composite_tree = CompositeTree::new();

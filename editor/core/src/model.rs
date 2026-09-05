@@ -5,7 +5,7 @@ use std::{
 
 use peridot_math::{Matrix4, Matrix4F32, One, Quaternion, Ray3, Sphere3, Vector3F32};
 
-use crate::uikit::ViewFeedbackQueue;
+use crate::utils::NonDropAnyTypeQueue;
 
 pub mod asset_explorer;
 pub mod project;
@@ -170,7 +170,7 @@ impl Application {
         }
     }
 
-    pub fn sync(&self, feedback_queue: &mut ViewFeedbackQueue) {
+    pub fn sync(&self, feedback_queue: &mut NonDropAnyTypeQueue) {
         feedback_queue.push(ViewFeedbackObjectTreeChanged);
         feedback_queue.push(ViewFeedbackObjectSelectionChanged);
         feedback_queue.push(ViewFeedbackPreviewEditToolTypeChanged);
@@ -831,7 +831,7 @@ pub fn set_preview_edit_tool_type(
 
 pub struct ApplicationMutation<'a> {
     pub state: &'a mut Application,
-    pub view_feedbacks: &'a mut ViewFeedbackQueue,
+    pub view_feedbacks: &'a mut NonDropAnyTypeQueue,
 }
 impl core::ops::Deref for ApplicationMutation<'_> {
     type Target = Application;
