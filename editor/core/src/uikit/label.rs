@@ -39,7 +39,15 @@ impl ViewConstructor for StaticTextViewInit {
 
     #[inline(always)]
     fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
-        StaticTextView::new(self)
+        StaticTextView {
+            content: self.content,
+            font: self.font,
+            allow_wrapping: self.allow_wrapping,
+            horizontal_alignment: self.horizontal_alignment,
+            vertical_alignment: self.vertical_alignment,
+            ct: None,
+            content_changed: false,
+        }
     }
 }
 
@@ -60,18 +68,6 @@ impl Drop for StaticTextView {
     }
 }
 impl StaticTextView {
-    pub fn new(init: StaticTextViewInit) -> Self {
-        Self {
-            content: init.content,
-            font: init.font,
-            allow_wrapping: init.allow_wrapping,
-            horizontal_alignment: init.horizontal_alignment,
-            vertical_alignment: init.vertical_alignment,
-            ct: None,
-            content_changed: false,
-        }
-    }
-
     pub fn set_text(&mut self, content: String) {
         self.content = content;
         self.content_changed = true;

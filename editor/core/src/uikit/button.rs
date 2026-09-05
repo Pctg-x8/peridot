@@ -56,7 +56,12 @@ impl ViewConstructor for SimpleButtonViewInit {
 
     #[inline(always)]
     fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
-        SimpleButtonView::new(self)
+        SimpleButtonView {
+            entity: None,
+            label: self.label,
+            event_handler: self.event_handler,
+            interactive_changes: None,
+        }
     }
 }
 
@@ -68,15 +73,6 @@ pub struct SimpleButtonView {
 }
 impl SimpleButtonView {
     const ROUNDING: f32 = 8.0;
-
-    pub fn new(init: SimpleButtonViewInit) -> Self {
-        Self {
-            entity: None,
-            label: init.label,
-            event_handler: init.event_handler,
-            interactive_changes: None,
-        }
-    }
 
     pub fn set_interactive(&mut self, interactive: bool) {
         self.interactive_changes = Some(interactive);
