@@ -21,9 +21,10 @@ use crate::{
         },
         text::FontID,
     },
-    uikit::{
-        RenderContext, TypedViewIdentifier, ViewIdentifier, ViewInstanceQueryableMut,
-        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderer,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, ViewIdentifier,
+        ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable,
+        ViewRenderElements, ViewRenderer,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -120,13 +121,13 @@ impl View {
         }
     }
 }
-impl crate::uikit::View for View {
+impl crate::uicore::View for View {
     fn render(
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> crate::uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,
             None => {
@@ -186,14 +187,14 @@ impl crate::uikit::View for View {
             }
         };
 
-        crate::uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            ..crate::uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
-    fn teardown(&mut self, ctx: &mut crate::uikit::TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(entity) = self.entity.take() else {
             // not rendered
             return;
@@ -203,10 +204,7 @@ impl crate::uikit::View for View {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, Self::THICKNESS)
     }
 
@@ -240,13 +238,13 @@ impl SystemCommandButtonView {
         self.cmd = cmd;
     }
 }
-impl crate::uikit::View for SystemCommandButtonView {
+impl crate::uicore::View for SystemCommandButtonView {
     fn render(
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> crate::uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
                 if e.cmd.replace(self.cmd) != self.cmd {
@@ -273,45 +271,24 @@ impl crate::uikit::View for SystemCommandButtonView {
             }
             None => {
                 // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    relative_offset_adjustment: [1.0, 0.0],
-                    offset: [
-                        AnimatableFloat::Value(-self.right_offset - Self::WIDTH),
-                        AnimatableFloat::Value(0.0),
-                    ],
-                    relative_size_adjustment: [0.0, 1.0],
-                    size: [
-                        AnimatableFloat::Value(Self::WIDTH),
-                        AnimatableFloat::Value(0.0),
-                    ],
-                    ..Default::default()
-                });
-                let ct_hover = ctx.composite_tree.create(CompositeRect {
-                    relative_size_adjustment: [1.0, 1.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value(
-                        match self.cmd {
-                            SystemCommand::Close => [1.0, 0.0, 0.0, 1.0],
-                            _ => [1.0, 1.0, 1.0, 0.5],
-                        },
-                    )),
-                    opacity: AnimatableFloat::Value(0.0),
-                    ..Default::default()
-                });
-                let ct_icon = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(-ICON_SIZE * 0.5),
-                        AnimatableFloat::Value(-ICON_SIZE * 0.5),
-                    ],
-                    relative_offset_adjustment: [0.5, 0.5],
-                    size: [
-                        AnimatableFloat::Value(ICON_SIZE),
-                        AnimatableFloat::Value(ICON_SIZE),
-                    ],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::ColorTint(
+                let ct_root = CompositeRect::build()
+                    .anchor_parent_right()
+                    .offset_imm(-self.right_offset - Self::WIDTH, 0.0)
+                    .expand_height()
+                    .size_imm(Self::WIDTH, 0.0)
+                    .create(ctx.composite_tree);
+                let ct_hover = CompositeRect::build()
+                    .expand_full()
+                    .composite_fill_color_imm(match self.cmd {
+                        SystemCommand::Close => [1.0, 0.0, 0.0, 1.0],
+                        _ => [1.0, 1.0, 1.0, 0.5],
+                    })
+                    .opacity_imm(0.0)
+                    .create(ctx.composite_tree);
+                let ct_icon = CompositeRect::build()
+                    .size_imm(ICON_SIZE, ICON_SIZE)
+                    .centering()
+                    .composite(CompositeMode::ColorTint(
                         AnimatableColor::Value([0.9, 0.9, 0.9, 1.0]),
                         CompositeTexture {
                             id: self.cmd.texture_id(
@@ -322,21 +299,19 @@ impl crate::uikit::View for SystemCommandButtonView {
                             mapping: TextureMappingMode::Stretch,
                             slice_borders: [0.0; 4],
                         },
-                    ),
-                    ..Default::default()
-                });
+                    ))
+                    .create(ctx.composite_tree);
 
                 ctx.composite_tree.add_child(ct_root, ct_hover);
                 ctx.composite_tree.add_child(ct_root, ct_icon);
 
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: -self.right_offset - Self::WIDTH,
-                    left_adjustment_factor: 1.0,
-                    width: Self::WIDTH,
-                    height_adjustment_factor: 1.0,
-                    role: self.cmd.role(),
-                    ..Default::default()
-                });
+                let ht_root = HitTestTreeData::build()
+                    .parent_anchor_right()
+                    .left(-self.right_offset - Self::WIDTH)
+                    .expand_height()
+                    .width(Self::WIDTH)
+                    .maybe_role(self.cmd.role())
+                    .create(ctx.ht_manager);
 
                 let entity = Rc::new(SystemCommandButtonViewEntity {
                     ct_root,
@@ -354,14 +329,14 @@ impl crate::uikit::View for SystemCommandButtonView {
             }
         };
 
-        crate::uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            ..crate::uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
-    fn teardown(&mut self, ctx: &mut crate::uikit::TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(entity) = self.entity.take() else {
             // not rendered
             return;
@@ -371,10 +346,7 @@ impl crate::uikit::View for SystemCommandButtonView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(Self::WIDTH, View::THICKNESS)
     }
 }

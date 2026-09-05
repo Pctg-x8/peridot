@@ -29,7 +29,7 @@ use crate::{
         text::{FontSet, RootFontSet},
         vg::VectorRasterizationState,
     },
-    uikit::MountTarget,
+    uicore::MountTarget,
     utils::{SafeF32, UnsafeMainThreadOnlyOnceCell},
 };
 

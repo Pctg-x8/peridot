@@ -19,9 +19,9 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{
-        RenderContext, TeardownContext, View, ViewConstructor, ViewLayoutStateStore,
-        ViewRenderElements,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ViewLayoutStateStore, ViewRenderElements,
     },
     utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
@@ -54,7 +54,7 @@ impl ViewConstructor for SimpleButtonViewInit {
     type ConcreteView = SimpleButtonView;
 
     #[inline(always)]
-    fn construct(self, _id: super::TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
         SimpleButtonView::new(self)
     }
 }
@@ -212,7 +212,7 @@ impl View for SimpleButtonView {
         }
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         let label_size = TextLayout::new_single(
             &self.label,
             FontID::UIDefault,

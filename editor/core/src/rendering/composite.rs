@@ -1080,6 +1080,11 @@ impl<Event> CompositeRectBuilder<Event> {
         self
     }
 
+    pub const fn anchor_parent_right(mut self) -> Self {
+        self.temp.relative_offset_adjustment[0] = 1.0;
+        self
+    }
+
     #[inline(always)]
     pub fn centering(mut self) -> Self {
         let [AnimatableFloat::Value(w), AnimatableFloat::Value(h)] = self.temp.size else {

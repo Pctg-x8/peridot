@@ -19,16 +19,19 @@ use crate::{
         text::FontID,
     },
     ui::dock::PaneContentResizeContext,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
+        ViewFeedbackRegisterable, ViewIdentifier, ViewImmediateTeardownable, ViewInitContext,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowBasis, ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow,
+        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderElements,
+        ViewRenderer, ViewSize,
+    },
     uikit::{
-        ContainerView, ContainerViewInit, NumericInputView, NumericInputViewIO,
+        CheckmarkVisual, ContainerView, ContainerViewInit, NumericInputView, NumericInputViewIO,
         NumericInputViewInit, ScrollContainer, ScrollContainerInit, StaticTextView,
-        StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO, TextInputViewInit,
-        TypedViewIdentifier, View, ViewFeedbackContext, ViewFeedbackHandler,
-        ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
-        ViewRelationControllable, ViewRenderer, ViewSize, checkbox::CheckmarkVisual,
+        StaticTextViewInit, TextInputView, TextInputViewIO, TextInputViewInit,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -351,9 +354,9 @@ impl View for SectionHeaderView {
     fn render(
         &mut self,
         layout_rect: Rect<LogicalUnit>,
-        ctx: &mut crate::uikit::RenderContext,
-        _layout_state: &crate::uikit::ViewLayoutStateStore,
-    ) -> crate::uikit::ViewRenderElements {
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> ViewRenderElements {
         let entity = match self.entity {
             Some(ref e) => {
                 if core::mem::replace(&mut self.next_checked_with_transition, true) {
@@ -446,10 +449,10 @@ impl View for SectionHeaderView {
             }
         };
 
-        crate::uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(entity.ct_root),
             hit_tree: Some(entity.ht_root),
-            ..crate::uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -463,10 +466,7 @@ impl View for SectionHeaderView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 24.0)
     }
 }

@@ -20,13 +20,14 @@ use crate::{
         CompositeRectTextRun, CompositeTreeRef,
     },
     ui::dock::PaneContentResizeContext,
-    uikit::{
-        MenuCommandSelectionHandler, MenuItem, TeardownContext, TypedViewIdentifier,
-        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackPerformAtomic,
-        ViewFeedbackRegisterable, ViewIdentifier, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowDirection,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, ViewFeedbackContext,
+        ViewFeedbackHandler, ViewFeedbackPerformAtomic, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowDirection, ViewLayoutStateStore,
         ViewRegisterable, ViewRelationControllable, ViewRenderElements, ViewRenderer, ViewSize,
     },
+    uikit::{MenuCommandSelectionHandler, MenuItem},
     utils::{LogicalUnit, Rect, Size},
 };
 
@@ -99,12 +100,12 @@ impl View {
         Self { entity: None }
     }
 }
-impl crate::uikit::View for View {
+impl crate::uicore::View for View {
     fn render(
         &mut self,
         _layout_rect: Rect<LogicalUnit>,
-        ctx: &mut crate::uikit::RenderContext,
-        _layout_state: &crate::uikit::ViewLayoutStateStore,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,
@@ -142,10 +143,7 @@ impl crate::uikit::View for View {
         ctx.ht_manager.free(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 
@@ -325,12 +323,12 @@ impl ObjectRowView {
         self.label_changed = true;
     }
 }
-impl crate::uikit::View for ObjectRowView {
+impl crate::uicore::View for ObjectRowView {
     fn render(
         &mut self,
         layout_rect: Rect<LogicalUnit>,
-        ctx: &mut crate::uikit::RenderContext,
-        _layout_state: &crate::uikit::ViewLayoutStateStore,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let selected = model::object_is_selected(ctx, self.assigned_object);
 
@@ -449,10 +447,7 @@ impl crate::uikit::View for ObjectRowView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, Self::ITEM_HEIGHT)
     }
 }

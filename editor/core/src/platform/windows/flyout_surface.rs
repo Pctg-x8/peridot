@@ -51,7 +51,7 @@ use crate::{
         NewContextMenuData, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{MenuItemSubMenuView, MountTarget},
+    uikit::MenuItemSubMenuView,
     utils::{
         LogicalUnit, PixelsUnit, Point, Size,
         platform::windows::{WaitableTimer, WindowByClassIter, register_class},
@@ -69,7 +69,7 @@ impl core::hash::Hash for Handle {
 }
 unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}
-impl MountTarget for Handle {
+impl crate::uicore::MountTarget for Handle {
     #[inline(always)]
     fn ct_root(&self) -> CompositeTreeRef {
         state(self.0).composite_root

@@ -13,9 +13,9 @@ use crate::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
     },
-    uikit::{
-        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewInstanceQueryableMut,
-        ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View,
+        ViewInstanceQueryableMut, ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -149,10 +149,7 @@ impl View for RadioButtonView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut super::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(16.0, 16.0)
     }
 }

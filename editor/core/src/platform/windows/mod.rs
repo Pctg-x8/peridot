@@ -105,7 +105,6 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
         text::FontSet,
     },
-    uikit::MountTarget,
     utils::{
         LogicalUnit, PixelsUnit, Point, Rect, Size,
         platform::windows::{
@@ -395,7 +394,7 @@ impl ShellPointerActions for WindowHandle {
         }
     }
 }
-impl crate::uikit::MountTarget for WindowHandle {
+impl crate::uicore::MountTarget for WindowHandle {
     #[inline(always)]
     fn ct_root(&self) -> CompositeTreeRef {
         self.state().composite_root
@@ -1975,8 +1974,8 @@ impl<'sys> SystemLink<'sys> {
             .recv()
             .expect("done_event_receiver.recv");
 
-        composite_tree.free_all(window_handle.ct_root());
-        hit_tree.free_all(window_handle.ht_root());
+        composite_tree.free_all(window_handle.state().composite_root);
+        hit_tree.free_all(window_handle.state().ht_root);
         keyboard_focus_registry
             .release_group(window_handle.state().keyboard_focus_state.root_group());
         window_handle.destroy();

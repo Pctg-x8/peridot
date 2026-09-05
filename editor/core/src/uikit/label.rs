@@ -7,9 +7,9 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{
-        RenderContext, TeardownContext, View, ViewConstructor, ViewLayoutStateStore,
-        ViewRenderElements,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ViewLayoutStateStore, ViewRenderElements,
     },
     utils::{LogicalUnit, Rect, Size},
 };
@@ -37,7 +37,7 @@ impl ViewConstructor for StaticTextViewInit {
     type ConcreteView = StaticTextView;
 
     #[inline(always)]
-    fn construct(self, _id: super::TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
         StaticTextView::new(self)
     }
 }
@@ -155,7 +155,7 @@ impl View for StaticTextView {
         }
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         TextLayout::new_single(
             &self.content,
             self.font,

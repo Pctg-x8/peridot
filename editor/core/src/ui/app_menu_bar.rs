@@ -20,7 +20,10 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{MenuCommandSelectionHandler, MenuItem, ViewRenderElements},
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, ViewLayoutStateStore, ViewRenderElements,
+    },
+    uikit::{MenuCommandSelectionHandler, MenuItem},
     utils::{Point, Size},
 };
 
@@ -56,13 +59,13 @@ impl View {
         // }
     }
 }
-impl crate::uikit::View for View {
+impl crate::uicore::View for View {
     fn render(
         &mut self,
         _layout_rect: crate::utils::Rect<crate::utils::LogicalUnit>,
-        ctx: &mut crate::uikit::RenderContext,
-        _layout_state: &crate::uikit::ViewLayoutStateStore,
-    ) -> crate::uikit::ViewRenderElements {
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> ViewRenderElements {
         let e = match self.eh {
             Some(ref e) => e,
             None => {
@@ -119,7 +122,7 @@ impl crate::uikit::View for View {
         }
     }
 
-    fn teardown(&mut self, ctx: &mut crate::uikit::TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(e) = self.eh.take() else {
             // not rendered
             return;
@@ -131,7 +134,7 @@ impl crate::uikit::View for View {
 
     fn measure_preferred_content_size(
         &self,
-        _ctx: &mut crate::uikit::MeasureContext,
+        _ctx: &mut MeasureContext,
     ) -> Size<crate::utils::LogicalUnit> {
         Size::new_logical(0.0, ItemSubView::ITEM_HEIGHT)
     }

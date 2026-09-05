@@ -24,9 +24,9 @@ use crate::{
         },
         text::{FontID, FontSet, TextLayout},
     },
-    uikit::{
-        RenderContext, TypedViewIdentifier, View, ViewConstructor, ViewIdentifier,
-        ViewLayoutStateStore, ViewRenderElements, ViewRenderQueue, ViewRenderer,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ViewIdentifier, ViewLayoutStateStore, ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::{
         LogicalUnit, Point, Rect, SafeF32, Size,
@@ -1841,7 +1841,7 @@ impl View for TextInputView {
         }
     }
 
-    fn teardown(&mut self, ctx: &mut super::TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(entity) = self.eh.take() else {
             // not rendered
             return;
@@ -1850,10 +1850,7 @@ impl View for TextInputView {
         ctx.keyboard_focus_registry.release_token(entity.token);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut super::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(32.0, 16.0)
     }
 }
@@ -2123,7 +2120,7 @@ impl View for NumericInputView {
         }
     }
 
-    fn teardown(&mut self, ctx: &mut super::TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(entity) = self.eh.take() else {
             // not rendered
             return;
@@ -2132,10 +2129,7 @@ impl View for NumericInputView {
         ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut super::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(32.0, 16.0)
     }
 }
@@ -2650,7 +2644,7 @@ impl View for MultilineTextInputView {
         }
     }
 
-    fn teardown(&mut self, ctx: &mut super::TeardownContext) {
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
         let Some(entity) = self.eh.take() else {
             // not rendered
             return;
@@ -2659,7 +2653,7 @@ impl View for MultilineTextInputView {
         ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(128.0, 96.0)
     }
 }

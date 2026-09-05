@@ -21,10 +21,10 @@ use crate::{
         },
         text::{FontID, FontSet, TextLayout},
     },
-    uikit::{
-        MountContext, MountTarget, RenderContext, TeardownContext, TypedViewIdentifier,
-        ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutStateStore,
-        ViewRenderer,
+    uicore::{
+        MeasureContext, MountContext, MountTarget, RenderContext, TeardownContext,
+        TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -82,13 +82,13 @@ impl View {
         self.should_revalidate_next_render = true;
     }
 }
-impl super::View for View {
+impl crate::uicore::View for View {
     fn render(
         &mut self,
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> super::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
                 ctx.composite_tree
@@ -237,10 +237,10 @@ impl super::View for View {
             }
         };
 
-        super::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            ..super::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -254,7 +254,7 @@ impl super::View for View {
         ctx.ht_manager.free_all(e.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         let content_size = self
             .items
             .iter()

@@ -15,9 +15,9 @@ use crate::{
     model::{Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation},
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
-    uikit::{
+    uicore::{
         View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewRenderQueue, ViewRenderer,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRenderQueue, ViewRenderer,
         view_iter_self_group_participants,
     },
     utils::{LogicalUnit, Point, Rect, Size},
@@ -54,26 +54,23 @@ impl InputEventContext<'_, '_, '_> {
 impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        crate::uikit::view_instance(id, self.view_instance_store)
+        crate::uicore::view_instance(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        crate::uikit::view_instance_mut(id, self.view_instance_store)
+        crate::uicore::view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
+        crate::uicore::view_set_visibility(id, visible, self.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut_untyped(
-        &mut self,
-        id: ViewIdentifier,
-    ) -> Option<&mut crate::uikit::ViewLayout> {
-        crate::uikit::view_layout_mut(id, self.view_instance_store)
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+        crate::uicore::view_layout_mut(id, self.view_instance_store)
     }
 }
 impl ViewRenderer for InputEventContext<'_, '_, '_> {

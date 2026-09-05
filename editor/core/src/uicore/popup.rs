@@ -11,7 +11,7 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
         FloatAnimationTemplate,
     },
-    uikit::{
+    uicore::{
         RenderContext, TeardownContext, View, ViewIdentifier, ViewImmediateRenderable,
         ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
         ViewLayoutStateStore, ViewRenderElements, ViewRenderStateStore, ViewTreeRelationStore,
@@ -272,7 +272,7 @@ impl OverlayPopupBasicMaskView {
 impl View for OverlayPopupBasicMaskView {
     fn render(
         &mut self,
-        layout_rect: Rect<LogicalUnit>,
+        _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
@@ -280,24 +280,20 @@ impl View for OverlayPopupBasicMaskView {
             Some(ref e) => e,
             None => {
                 // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    relative_size_adjustment: [1.0, 1.0],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColorBackdropBlur(
+                let ct_root = CompositeRect::build()
+                    .expand_full()
+                    .composite(CompositeMode::FillColorBackdropBlur(
                         AnimatableColor::Value([0.0, 0.0, 0.0, 0.25]),
                         AnimatableFloat::Value(3.0),
-                    ),
-                    ..Default::default()
-                });
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    width_adjustment_factor: 1.0,
-                    height_adjustment_factor: 1.0,
+                    ))
+                    .create(ctx.composite_tree);
+                let ht_root = HitTestTreeData::build()
+                    .expand_full()
                     // WindowHeaderのぶん開ける(ドラッグ判定がこない)
-                    // TODO: ここだけ参照関係が逆になる（uikit -> ui） どうするか......
-                    height: -crate::ui::window_header::View::THICKNESS,
-                    top: crate::ui::window_header::View::THICKNESS,
-                    ..Default::default()
-                });
+                    // TODO: ここだけ参照関係が逆になる（uicore -> ui） どうするか......
+                    .height(-crate::ui::window_header::View::THICKNESS)
+                    .top(crate::ui::window_header::View::THICKNESS)
+                    .create(ctx.ht_manager);
 
                 // play open animation at first render
                 Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
@@ -325,7 +321,10 @@ impl View for OverlayPopupBasicMaskView {
         ctx.ht_manager.free(e.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 
@@ -445,19 +444,10 @@ impl View for OverlayPopupBasicFrameView {
             }
             None => {
                 // first render
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    relative_offset_adjustment: [0.5, 0.5],
-                    size: [
-                        AnimatableFloat::Value(layout_rect.width),
-                        AnimatableFloat::Value(layout_rect.height),
-                    ],
-                    offset: [
-                        AnimatableFloat::Value(-layout_rect.width * 0.5),
-                        AnimatableFloat::Value(-layout_rect.height * 0.5),
-                    ],
-                    ..Default::default()
-                });
+                let ct_root = CompositeRect::build()
+                    .size_imm(layout_rect.width, layout_rect.height)
+                    .centering()
+                    .create(ctx.composite_tree);
                 let ct_shadow = ctx.composite_tree.create(CompositeRect {
                     scale_factor: CompositeRectScaleFactor::UI,
                     relative_size_adjustment: [1.0, 1.0],
@@ -529,7 +519,10 @@ impl View for OverlayPopupBasicFrameView {
         ctx.ht_manager.free(e.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(
+        &self,
+        _ctx: &mut super::MeasureContext,
+    ) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 

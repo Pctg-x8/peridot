@@ -15,7 +15,7 @@ use crate::{
         },
         text::{FontID, FontSet, TextLayout},
     },
-    uikit::{MountTarget, ViewInitContext},
+    uicore::{MountTarget, ViewInitContext},
     utils::{LogicalUnit, SafeF32, Size},
 };
 

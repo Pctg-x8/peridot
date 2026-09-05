@@ -5,13 +5,16 @@ use crate::{
         composite::{CompositeRectTextHorizontalAlignment, CompositeTree},
         text::{FontID, TextLayout},
     },
-    uikit::{
-        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupID,
-        SimpleButtonConstantEventHandler, SimpleButtonView, StaticTextViewInit, TeardownContext,
-        TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+    uicore::{
+        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupCloseContext, PopupID,
+        TeardownContext, TypedViewIdentifier, ViewIdentifier, ViewInitContext,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
-        ViewRelationControllable, ViewSize, button::SimpleButtonViewInit, popup::PopupCloseContext,
+        ViewRelationControllable, ViewSize,
+    },
+    uikit::{
+        SimpleButtonConstantEventHandler, SimpleButtonView, SimpleButtonViewInit,
+        StaticTextViewInit,
     },
     utils::Size,
 };

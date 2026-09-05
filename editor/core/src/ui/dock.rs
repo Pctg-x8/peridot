@@ -20,12 +20,13 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{
-        DeriveTeardownContext, MountContext, RenderContext, SystemLinkAccess, TeardownContext,
-        TypedViewIdentifier, View, ViewDestructionContext, ViewIdentifier, ViewImmediateRenderable,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore, ViewRegisterable,
-        ViewRelationControllable, ViewRenderElements, ViewRenderQueue, ViewRenderer,
+    uicore::{
+        DeriveTeardownContext, MeasureContext, MountContext, RenderContext, SystemLinkAccess,
+        TeardownContext, TypedViewIdentifier, View, ViewDestructionContext, ViewIdentifier,
+        ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewLayoutStateStore,
+        ViewRegisterable, ViewRelationControllable, ViewRenderElements, ViewRenderQueue,
+        ViewRenderer,
     },
     utils::{LogicalUnit, Point, Rect, Size, UnsafeMainThreadOnlyOnceCell},
 };
@@ -88,26 +89,23 @@ pub struct PaneContentResizeContext<'env, 'h> {
 impl ViewInstanceQueryable for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        crate::uikit::view_instance(id, self.view_instance_store)
+        crate::uicore::view_instance(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        crate::uikit::view_instance_mut(id, self.view_instance_store)
+        crate::uicore::view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
+        crate::uicore::view_set_visibility(id, visible, self.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut_untyped(
-        &mut self,
-        id: ViewIdentifier,
-    ) -> Option<&mut crate::uikit::ViewLayout> {
-        crate::uikit::view_layout_mut(id, self.view_instance_store)
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+        crate::uicore::view_layout_mut(id, self.view_instance_store)
     }
 }
 impl ViewRenderer for PaneContentResizeContext<'_, '_> {
@@ -518,12 +516,12 @@ impl ViewRegisterable for RedockingContext<'_, '_> {
 impl ViewRelationControllable for RedockingContext<'_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
-        crate::uikit::view_set_parent(id, parent, self.view_init_ctx.view_tree_relation_store)
+        crate::uicore::view_set_parent(id, parent, self.view_init_ctx.view_tree_relation_store)
     }
 
     #[inline(always)]
     fn view_detach_parent_untyped(&mut self, id: ViewIdentifier) {
-        crate::uikit::view_detach_parent(id, self.view_init_ctx.view_tree_relation_store)
+        crate::uicore::view_detach_parent(id, self.view_init_ctx.view_tree_relation_store)
     }
 }
 impl ViewRenderer for RedockingContext<'_, '_> {
@@ -535,7 +533,7 @@ impl ViewRenderer for RedockingContext<'_, '_> {
 impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
     #[inline(always)]
     fn teardown_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-        crate::uikit::teardown_view_recursive(
+        crate::uicore::teardown_view_recursive(
             target,
             &mut TeardownContext {
                 composite_tree: self.view_init_ctx.mount_context.composite_tree,
@@ -555,7 +553,7 @@ impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
 impl ViewDestructionContext for RedockingContext<'_, '_> {
     #[inline(always)]
     fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-        crate::uikit::destruct_view_recursive(
+        crate::uicore::destruct_view_recursive(
             target,
             &mut TeardownContext {
                 composite_tree: self.view_init_ctx.mount_context.composite_tree,
@@ -578,26 +576,23 @@ impl ViewDestructionContext for RedockingContext<'_, '_> {
 impl ViewInstanceQueryable for RedockingContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        crate::uikit::view_instance(id, self.view_init_ctx.view_instance_store)
+        crate::uicore::view_instance(id, self.view_init_ctx.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for RedockingContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        crate::uikit::view_instance_mut(id, self.view_init_ctx.view_instance_store)
+        crate::uicore::view_instance_mut(id, self.view_init_ctx.view_instance_store)
     }
 
     #[inline(always)]
     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uikit::view_set_visibility(id, visible, self.view_init_ctx.view_instance_store);
+        crate::uicore::view_set_visibility(id, visible, self.view_init_ctx.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut_untyped(
-        &mut self,
-        id: ViewIdentifier,
-    ) -> Option<&mut crate::uikit::ViewLayout> {
-        crate::uikit::view_layout_mut(id, self.view_init_ctx.view_instance_store)
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+        crate::uicore::view_layout_mut(id, self.view_init_ctx.view_instance_store)
     }
 }
 impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h> {
@@ -661,10 +656,7 @@ impl View for WindowDockRootView {
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 }
@@ -1705,10 +1697,7 @@ impl View for DockedPaneSplitterView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(
             DESIGN_METRICS.splitter_thickness,
             DESIGN_METRICS.splitter_thickness,
@@ -1830,12 +1819,12 @@ impl ViewRegisterable for PaneGroupCreateContext<'_, '_, '_> {
 impl ViewRelationControllable for PaneGroupCreateContext<'_, '_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
-        crate::uikit::view_set_parent(id, parent, self.view_init_context.view_tree_relation_store);
+        crate::uicore::view_set_parent(id, parent, self.view_init_context.view_tree_relation_store);
     }
 
     #[inline(always)]
     fn view_detach_parent_untyped(&mut self, id: ViewIdentifier) {
-        crate::uikit::view_detach_parent(id, self.view_init_context.view_tree_relation_store);
+        crate::uicore::view_detach_parent(id, self.view_init_context.view_tree_relation_store);
     }
 }
 impl ViewRenderer for PaneGroupCreateContext<'_, '_, '_> {
@@ -1858,15 +1847,12 @@ impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_> {
 
     #[inline(always)]
     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uikit::view_set_visibility(id, visible, self.view_init_context.view_instance_store);
+        crate::uicore::view_set_visibility(id, visible, self.view_init_context.view_instance_store);
     }
 
     #[inline(always)]
-    fn view_layout_mut_untyped(
-        &mut self,
-        id: ViewIdentifier,
-    ) -> Option<&mut crate::uikit::ViewLayout> {
-        crate::uikit::view_layout_mut(id, self.view_init_context.view_instance_store)
+    fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
+        crate::uicore::view_layout_mut(id, self.view_init_context.view_instance_store)
     }
 }
 impl<'a, 'h> core::ops::Deref for PaneGroupCreateContext<'_, 'a, 'h> {
@@ -1993,10 +1979,7 @@ impl View for PaneGroupContainerView {
         ctx.ht_manager.free(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 
@@ -2109,10 +2092,7 @@ impl View for PaneGroupTabStripView {
         ctx.ht_manager.free(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, DESIGN_METRICS.tab_height())
     }
 
@@ -2693,10 +2673,7 @@ impl View for PaneGroupTabView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        ctx: &mut crate::uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(
             Self::compute_width(&self.label, ctx.system_link),
             DESIGN_METRICS.tab_height(),
@@ -2791,20 +2768,20 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
                     &mut self,
                     id: ViewIdentifier,
                 ) -> Option<&mut T> {
-                    crate::uikit::view_instance_mut(id, self.view_instance_store)
+                    crate::uicore::view_instance_mut(id, self.view_instance_store)
                 }
 
                 #[inline(always)]
                 fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-                    crate::uikit::view_set_visibility(id, visible, self.view_instance_store);
+                    crate::uicore::view_set_visibility(id, visible, self.view_instance_store);
                 }
 
                 #[inline(always)]
                 fn view_layout_mut_untyped(
                     &mut self,
                     id: ViewIdentifier,
-                ) -> Option<&mut crate::uikit::ViewLayout> {
-                    crate::uikit::view_layout_mut(id, self.view_instance_store)
+                ) -> Option<&mut ViewLayout> {
+                    crate::uicore::view_layout_mut(id, self.view_instance_store)
                 }
             }
             impl ViewRenderer for LocalContext<'_> {

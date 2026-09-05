@@ -107,8 +107,39 @@ impl<'h> HitTestTreeBuilder<'h> {
         self
     }
 
+    pub const fn parent_anchor_right(mut self) -> Self {
+        self.0.left_adjustment_factor = 1.0;
+        self
+    }
+
     pub const fn expand_height(mut self) -> Self {
         self.0.height_adjustment_factor = 1.0;
+        self
+    }
+
+    pub const fn expand_full(mut self) -> Self {
+        self.0.width_adjustment_factor = 1.0;
+        self.0.height_adjustment_factor = 1.0;
+        self
+    }
+
+    pub const fn left(mut self, x: f32) -> Self {
+        self.0.left = x;
+        self
+    }
+
+    pub const fn top(mut self, y: f32) -> Self {
+        self.0.top = y;
+        self
+    }
+
+    pub const fn width(mut self, w: f32) -> Self {
+        self.0.width = w;
+        self
+    }
+
+    pub const fn height(mut self, h: f32) -> Self {
+        self.0.height = h;
         self
     }
 
@@ -127,6 +158,11 @@ impl<'h> HitTestTreeBuilder<'h> {
 
     pub const fn keyboard_focus(mut self, token: FocusTargetToken) -> Self {
         self.0.keyboard_focus = Some(token);
+        self
+    }
+
+    pub const fn maybe_role(mut self, role: Option<Role>) -> Self {
+        self.0.role = role;
         self
     }
 

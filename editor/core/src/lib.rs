@@ -53,20 +53,23 @@ use crate::{
         text::{FontID, FontSet, RootFontSet},
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
-    uikit::{
-        ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuEventHandler, MenuItem,
-        MenuItemCommonResources, MenuItemInteractableElement, MountContext, MountTarget,
-        NumericInputViewIO, NumericInputViewInit, PopupID, PopupManager, RadioButtonView,
-        RenderContext, ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler,
-        SimpleButtonViewInit, StaticTextViewInit, TeardownContext, TextInputView, TextInputViewIO,
-        TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
+    uicore::{
+        MeasureContext, MountContext, MountTarget, PopupID, PopupManager, RenderContext,
+        TeardownContext, TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
         ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID,
         ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
         ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
-        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
+        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderElements,
+        ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
+    },
+    uikit::{
+        ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuEventHandler, MenuItem,
+        MenuItemCommonResources, MenuItemInteractableElement, NumericInputViewIO,
+        NumericInputViewInit, RadioButtonView, ScrollContainer, ScrollContainerInit,
+        SimpleButtonEventHandler, SimpleButtonViewInit, StaticTextViewInit, TextInputView,
+        TextInputViewIO,
     },
     utils::{
         Color32, DummyDebug, LogicalUnit, NonCloneable, Point, Rect, Size,
@@ -82,6 +85,7 @@ mod platform;
 mod proto;
 mod rendering;
 mod ui;
+mod uicore;
 mod uikit;
 mod utils;
 
@@ -1161,7 +1165,7 @@ impl View for ColorPickerView {
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.eh {
             Some(ref e) => {
                 ctx.composite_tree
@@ -1414,10 +1418,10 @@ impl View for ColorPickerView {
         //     kf_group,
         // );
 
-        uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            ..uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -1433,10 +1437,7 @@ impl View for ColorPickerView {
             .free_gradient(e.alpha_slider_content_gradient);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(128.0, 128.0 + 32.0 + 16.0 + 20.0)
     }
 }
@@ -1915,7 +1916,7 @@ impl View for ColorPickerHexTextInputView {
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.eh {
             Some(ref e) => {
                 // TODO: reflect changes
@@ -1954,11 +1955,11 @@ impl View for ColorPickerHexTextInputView {
             }
         };
 
-        uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.core.entity().ct_root()),
             hit_tree: Some(e.core.entity().ht_root()),
             keyboard_focus: Some(e.token),
-            ..uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -1972,7 +1973,7 @@ impl View for ColorPickerHexTextInputView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 }
@@ -2162,7 +2163,7 @@ impl View for EditableColorButtonView {
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.eh {
             Some(ref e) => {
                 ctx.composite_tree
@@ -2276,10 +2277,10 @@ impl View for EditableColorButtonView {
             }
         };
 
-        uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            ..uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -2293,7 +2294,7 @@ impl View for EditableColorButtonView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(48.0, 20.0)
     }
 }
@@ -2979,13 +2980,13 @@ impl View for WindowRootView {
         _layout_rect: Rect<LogicalUnit>,
         _ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> uikit::ViewRenderElements {
-        uikit::ViewRenderElements::EMPTY
+    ) -> ViewRenderElements {
+        ViewRenderElements::EMPTY
     }
 
     fn teardown(&mut self, _ctx: &mut TeardownContext) {}
 
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 }
@@ -3537,7 +3538,7 @@ async fn run<'sys>(
                 struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
                 impl ViewDestructionContext for LocalContext<'_, '_> {
                     fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-                        crate::uikit::destruct_view_recursive(
+                        uicore::destruct_view_recursive(
                             target,
                             &mut TeardownContext {
                                 composite_tree: &mut self.0.mount_context.composite_tree,
@@ -3638,7 +3639,7 @@ async fn run<'sys>(
                 if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
                     if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                        uicore::view_instance::<ui::app_menu_bar::View>(
                             a.into_untyped(),
                             &view_instance_store,
                         )
@@ -3699,29 +3700,29 @@ async fn run<'sys>(
                     view_render_queue: &'a mut ViewRenderQueue,
                     view_instance_store: &'a mut ViewInstanceStore,
                 }
-                impl crate::uikit::ViewInstanceQueryableMut for LocalContext<'_> {
+                impl uicore::ViewInstanceQueryableMut for LocalContext<'_> {
                     #[inline(always)]
                     fn view_instance_mut_of<T: View + 'static>(
                         &mut self,
                         id: ViewIdentifier,
                     ) -> Option<&mut T> {
-                        crate::uikit::view_instance_mut(id, self.view_instance_store)
+                        uicore::view_instance_mut(id, self.view_instance_store)
                     }
 
                     #[inline(always)]
                     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-                        crate::uikit::view_set_visibility(id, visible, self.view_instance_store)
+                        uicore::view_set_visibility(id, visible, self.view_instance_store)
                     }
 
                     #[inline(always)]
                     fn view_layout_mut_untyped(
                         &mut self,
                         id: ViewIdentifier,
-                    ) -> Option<&mut crate::uikit::ViewLayout> {
-                        crate::uikit::view_layout_mut(id, self.view_instance_store)
+                    ) -> Option<&mut uicore::ViewLayout> {
+                        uicore::view_layout_mut(id, self.view_instance_store)
                     }
                 }
-                impl crate::uikit::ViewRenderer for LocalContext<'_> {
+                impl uicore::ViewRenderer for LocalContext<'_> {
                     #[inline(always)]
                     fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
                         self.view_render_queue.schedule(target)
@@ -3770,7 +3771,7 @@ async fn run<'sys>(
                     // フォーカスロストした時もコンテキストメニューを閉じる
                     if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                        uicore::view_instance::<ui::app_menu_bar::View>(
                             a.into_untyped(),
                             &view_instance_store,
                         )
@@ -3795,7 +3796,7 @@ async fn run<'sys>(
                         if let Some(ref a) =
                             unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
                         {
-                            crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                            uicore::view_instance::<ui::app_menu_bar::View>(
                                 a.into_untyped(),
                                 &view_instance_store,
                             )
@@ -3825,7 +3826,7 @@ async fn run<'sys>(
                 // drag_preview_popover.bind_position_base_window_link(window);
 
                 if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu {
-                    crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                    uicore::view_instance::<ui::app_menu_bar::View>(
                         a.into_untyped(),
                         &view_instance_store,
                     )
@@ -3840,7 +3841,7 @@ async fn run<'sys>(
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                        uicore::view_instance::<ui::app_menu_bar::View>(
                             a.into_untyped(),
                             &view_instance_store,
                         )
@@ -4421,7 +4422,7 @@ async fn run<'sys>(
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                        uicore::view_instance::<ui::app_menu_bar::View>(
                             a.into_untyped(),
                             &view_instance_store,
                         )
@@ -4639,7 +4640,7 @@ async fn run<'sys>(
                     if let Some(ref a) =
                         unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
                     {
-                        crate::uikit::view_instance::<ui::app_menu_bar::View>(
+                        uicore::view_instance::<ui::app_menu_bar::View>(
                             a.into_untyped(),
                             &view_instance_store,
                         )
@@ -4687,7 +4688,7 @@ async fn run<'sys>(
                             &mut self,
                             id: ViewIdentifier,
                         ) -> Option<&mut T> {
-                            uikit::view_instance_mut(id, self.view_instance_store)
+                            uicore::view_instance_mut(id, self.view_instance_store)
                         }
 
                         #[inline(always)]
@@ -4696,15 +4697,15 @@ async fn run<'sys>(
                             id: ViewIdentifier,
                             visible: bool,
                         ) {
-                            uikit::view_set_visibility(id, visible, self.view_instance_store)
+                            uicore::view_set_visibility(id, visible, self.view_instance_store)
                         }
 
                         #[inline(always)]
                         fn view_layout_mut_untyped(
                             &mut self,
                             id: ViewIdentifier,
-                        ) -> Option<&mut uikit::ViewLayout> {
-                            uikit::view_layout_mut(id, self.view_instance_store)
+                        ) -> Option<&mut uicore::ViewLayout> {
+                            uicore::view_layout_mut(id, self.view_instance_store)
                         }
                     }
                     impl ViewRenderer for LocalContext<'_> {
@@ -5251,7 +5252,7 @@ pub struct FlyoutSurfaceSessionTerminateContext<'a, 'h> {
 impl ViewDestructionContext for FlyoutSurfaceSessionTerminateContext<'_, '_> {
     #[inline(always)]
     fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-        crate::uikit::destruct_view_recursive(
+        uicore::destruct_view_recursive(
             target,
             &mut self.teardown_context,
             self.view_allocator,
@@ -7730,7 +7731,7 @@ impl View for PreviewToolSelectorButtonView {
         layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
                 if self.selecting != e.selecting.replace(self.selecting) {
@@ -7853,10 +7854,10 @@ impl View for PreviewToolSelectorButtonView {
             }
         };
 
-        uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
-            ..uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -7870,7 +7871,7 @@ impl View for PreviewToolSelectorButtonView {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut uikit::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(Self::SIZE, Self::SIZE)
     }
 }
@@ -8103,7 +8104,7 @@ impl View for PreviewView {
         _layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
-    ) -> uikit::ViewRenderElements {
+    ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => e,
             None => {
@@ -8136,11 +8137,11 @@ impl View for PreviewView {
             }
         };
 
-        uikit::ViewRenderElements {
+        ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
             keyboard_focus: Some(e.kf_token),
-            ..uikit::ViewRenderElements::EMPTY
+            ..ViewRenderElements::EMPTY
         }
     }
 
@@ -8155,10 +8156,7 @@ impl View for PreviewView {
         ctx.keyboard_focus_registry.release_token(entity.kf_token);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut uikit::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 

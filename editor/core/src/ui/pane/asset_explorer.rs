@@ -22,14 +22,17 @@ use crate::{
         text::{FontID, TextLayout},
     },
     ui::dock::PaneContentPresenter,
-    uikit::{
-        ContainerView, ContainerViewInit, MeasureContext, MenuCommandSelectionHandler, MenuItem,
-        RenderContext, ScrollContainer, ScrollContainerInit, TeardownContext, TypedViewIdentifier,
-        View, ViewConstructor, ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable,
-        ViewIdentifier, ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut,
-        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewIdentifier,
+        ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild,
+        ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
         ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
         ViewRenderElements, ViewRenderer, ViewSize,
+    },
+    uikit::{
+        ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuItem, ScrollContainer,
+        ScrollContainerInit,
     },
     utils::{LogicalUnit, Point, Rect, Size},
 };

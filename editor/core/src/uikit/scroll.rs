@@ -14,9 +14,9 @@ use crate::{
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,
         FloatAnimationTemplate,
     },
-    uikit::{
-        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor, ViewIdentifier,
-        ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
+        ViewIdentifier, ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
     },
     utils::{InteriorMutableLogicalUnit, LogicalUnit, Point, Rect, SafeF32, Size},
 };
@@ -100,7 +100,7 @@ impl View for ScrollContainer {
         ctx: &mut RenderContext,
         layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
-        let content_size = layout_state.get(self.content_view).layout_rect.size();
+        let content_size = layout_state.get(self.content_view).size();
         let viewport_size = layout_rect.size();
 
         let e = match self.eh {
@@ -391,10 +391,7 @@ impl View for ScrollContainer {
         ctx.ht_manager.free_all(entity.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut super::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(0.0, 0.0)
     }
 

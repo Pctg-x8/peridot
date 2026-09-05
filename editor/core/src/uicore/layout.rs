@@ -1,7 +1,7 @@
 //! Layout System
 
 use crate::{
-    uikit::{MeasureContext, ViewIdentifier, ViewInstanceStore, ViewTreeRelationStore},
+    uicore::{MeasureContext, ViewIdentifier, ViewInstanceStore, ViewTreeRelationStore},
     utils::{LogicalUnit, Point, Rect, Size},
 };
 
@@ -116,7 +116,7 @@ impl Default for ViewLayoutGridCell {
     }
 }
 
-pub(super) struct ViewLayoutState {
+pub struct ViewLayoutState {
     pub(super) layout_rect: Rect<LogicalUnit>,
 }
 impl ViewLayoutState {
@@ -127,6 +127,11 @@ impl ViewLayoutState {
                 Size::new_logical(0.0, 0.0),
             ),
         }
+    }
+
+    #[inline(always)]
+    pub fn size(&self) -> Size<LogicalUnit> {
+        self.layout_rect.size()
     }
 }
 
@@ -148,7 +153,8 @@ impl ViewLayoutStateStore {
         self.0[id.into_array_index()] = ViewLayoutState::init();
     }
 
-    pub(super) fn get(&self, id: ViewIdentifier) -> &ViewLayoutState {
+    #[inline(always)]
+    pub fn get(&self, id: ViewIdentifier) -> &ViewLayoutState {
         &self.0[id.into_array_index()]
     }
 }

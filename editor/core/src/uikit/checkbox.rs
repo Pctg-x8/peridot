@@ -21,7 +21,10 @@ use crate::{
         },
         text::{FontID, TextLayout},
     },
-    uikit::{RenderContext, TeardownContext, View, ViewLayoutStateStore, ViewRenderElements},
+    uicore::{
+        MeasureContext, RenderContext, TeardownContext, View, ViewLayoutStateStore,
+        ViewRenderElements,
+    },
     utils::{LogicalUnit, Rect, Size, range_helper::range_from_len},
 };
 
@@ -271,7 +274,7 @@ impl View for ToggleButtonView {
         ctx.ht_manager.free_all(e.ht_root);
     }
 
-    fn measure_preferred_content_size(&self, ctx: &mut super::MeasureContext) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         let label_size = TextLayout::new_single(
             &self.label,
             FontID::UIDefault,
@@ -462,10 +465,7 @@ impl View for CheckboxView {
         ctx.ht_manager.free_all(e.ht_root);
     }
 
-    fn measure_preferred_content_size(
-        &self,
-        _ctx: &mut super::MeasureContext,
-    ) -> Size<LogicalUnit> {
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
         Size::new_logical(16.0, 16.0)
     }
 }
