@@ -18,7 +18,10 @@ use windows::{
     },
     Win32::{
         Devices::HumanInterfaceDevice::KEYBOARD_OVERRUN_MAKE_CODE,
-        Foundation::{HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, WPARAM},
+        Foundation::{
+            DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
+            HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, S_OK, WPARAM,
+        },
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
             Direct3D12::{
@@ -32,16 +35,23 @@ use windows::{
             Dxgi::{CreateDXGIFactory2, DXGI_CREATE_FACTORY_DEBUG, IDXGIFactory2},
             Gdi::{
                 GetMonitorInfoW, HBRUSH, MONITOR_DEFAULTTONEAREST, MONITORINFO, MapWindowPoints,
-                MonitorFromWindow,
+                MonitorFromRect, MonitorFromWindow,
             },
         },
         System::{
-            Com::IDataObject,
-            Ole::{
-                DROPEFFECT, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl, OleInitialize,
-                OleUninitialize, RegisterDragDrop, RevokeDragDrop,
+            Com::{
+                FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC,
+                IEnumSTATDATA, STGMEDIUM,
             },
-            SystemServices::{MK_CONTROL, MK_SHIFT, MODIFIERKEYS_FLAGS},
+            Ole::{
+                DROPEFFECT, DROPEFFECT_MOVE, DROPEFFECT_NONE, DoDragDrop, IDropSource,
+                IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize, OleUninitialize,
+                RegisterDragDrop, RevokeDragDrop,
+            },
+            SystemServices::{
+                MK_CONTROL, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_SHIFT, MK_XBUTTON1, MK_XBUTTON2,
+                MODIFIERKEYS_FLAGS,
+            },
             WinRT::{
                 Composition::{ICompositorDesktopInterop, ICompositorInterop},
                 CreateDispatcherQueueController, DQTAT_COM_ASTA, DQTYPE_THREAD_CURRENT,
@@ -50,7 +60,7 @@ use windows::{
         },
         UI::{
             Controls::{MARGINS, WM_MOUSELEAVE},
-            HiDpi::GetDpiForWindow,
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::{
                 GetRawInputData, HRAWINPUT,
                 KeyboardAndMouse::{
@@ -87,7 +97,7 @@ use windows::{
         },
     },
 };
-use windows_core::{HSTRING, IInspectable, Interface, PCWSTR, h, implement, w};
+use windows_core::{BOOL, HRESULT, HSTRING, IInspectable, Interface, PCWSTR, h, implement, w};
 use windows_numerics::{Vector2, Vector3};
 
 use core::cell::Cell;
@@ -523,6 +533,18 @@ impl NativeWindow {
                 .addr()
                 .cast_signed(),
             );
+        }
+
+        // register as drop target
+        unsafe {
+            RegisterDragDrop(
+                w,
+                &IDropTarget::from(DropTarget {
+                    hwnd: w,
+                    app_context,
+                }),
+            )
+            .expect("win32.register_drag_drop");
         }
 
         Self {
@@ -1061,12 +1083,6 @@ impl WindowEventHandler {
                 .expect("create.swp.framechange");
             }
 
-            // register as drop target
-            unsafe {
-                RegisterDragDrop(hwnd, &IDropTarget::from(DropTarget))
-                    .expect("win32.register_drag_drop");
-            }
-
             return LRESULT(0);
         }
 
@@ -1601,6 +1617,26 @@ impl DragPreviewPopover {
         }
     }
 
+    fn show_screen_coord(&self, rect: &Rect<PixelsUnit>) {
+        unsafe {
+            // 影のぶんだけ余分に設定する
+            SetWindowPos(
+                self.w,
+                None,
+                rect.left - 32,
+                rect.top - 32,
+                (rect.width + 64) as _,
+                (rect.height + 64) as _,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .expect("setwindowpos");
+            self.root_visual
+                .SetSize(Vector2::new(rect.width as _, rect.height as _))
+                .expect("drag.visual.set_size");
+            let _ = ShowWindow(self.w, SW_SHOWNOACTIVATE);
+        }
+    }
+
     fn show(&self, base: HWND, rect: &Rect<LogicalUnit>) {
         unsafe {
             // デスクトップ座標で指定になるので置き換え
@@ -1611,22 +1647,27 @@ impl DragPreviewPopover {
             MapWindowPoints(Some(base), None, &mut p);
             let [POINT { x, y }] = p;
 
-            // 影のぶんだけ余分に設定する
+            self.show_screen_coord(&Rect::from_lt_size(Point::new_pixels(x, y), size));
+        }
+    }
+
+    fn set_rect_screen_coord(&self, rect: &Rect<PixelsUnit>) {
+        // 影のぶんだけずらして設定する
+        unsafe {
             SetWindowPos(
                 self.w,
                 None,
-                x - 32,
-                y - 32,
-                (size.width + 64) as _,
-                (size.height + 64) as _,
+                rect.left - 32,
+                rect.top - 32,
+                (rect.width + 32 * 2) as _,
+                (rect.height + 32 * 2) as _,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             )
             .expect("setwindowpos");
-            self.root_visual
-                .SetSize(Vector2::new(size.width as _, size.height as _))
-                .expect("drag.visual.set_size");
-            let _ = ShowWindow(self.w, SW_SHOWNOACTIVATE);
         }
+        self.root_visual
+            .SetSize(Vector2::new(rect.width as _, rect.height as _))
+            .expect("drag.visual.set_size");
     }
 
     fn set_rect(&self, base: HWND, rect: &Rect<PointerInputUnit>) {
@@ -1640,22 +1681,7 @@ impl DragPreviewPopover {
         }
         let [POINT { x, y }] = p;
 
-        // 影のぶんだけずらして設定する
-        unsafe {
-            SetWindowPos(
-                self.w,
-                None,
-                x - 32,
-                y - 32,
-                (size.width + 32 * 2) as _,
-                (size.height + 32 * 2) as _,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            )
-            .expect("setwindowpos");
-        }
-        self.root_visual
-            .SetSize(Vector2::new(size.width as _, size.height as _))
-            .expect("drag.visual.set_size");
+        self.set_rect_screen_coord(&Rect::from_lt_size(Point::new_pixels(x, y), size));
     }
 
     fn hide(&self) {
@@ -2047,17 +2073,37 @@ impl<'sys> SystemLink<'sys> {
         &self,
         initiator_surface: WindowHandle,
         _pointer: &PointerID,
-        _offset: Point<LogicalUnit>,
+        offset: Point<LogicalUnit>,
         rect: &Rect<LogicalUnit>,
     ) {
-        unsafe {
+        /*unsafe {
             SetCapture(initiator_surface.0);
         }
 
         self.app_context
             .drag_preview_popover
             .show(initiator_surface.0, rect);
-        self.app_context.pane_dragging.set(true);
+        self.app_context.pane_dragging.set(true);*/
+        self.app_context
+            .drag_preview_popover
+            .show(initiator_surface.0, rect);
+        let mut effect = core::mem::MaybeUninit::uninit();
+        unsafe {
+            DoDragDrop(
+                &IDataObject::from(DockPaneDataObject {}),
+                &IDropSource::from(DockPaneDropSource {
+                    event_dispatcher: self.event_dispatcher,
+                    app_context: self.app_context,
+                    source_rect: Rect::from_lt_size(offset, rect.size()),
+                    active_dpi_scale: Cell::new(initiator_surface.ui_scale_factor()),
+                }),
+                DROPEFFECT_MOVE,
+                effect.as_mut_ptr(),
+            )
+            .ok()
+            .expect("win32.do_drag_drop");
+        }
+        self.app_context.drag_preview_popover.hide();
     }
 
     pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
@@ -2378,7 +2424,10 @@ impl NativeTextInputContext {
 }
 
 #[implement(IDropTarget)]
-struct DropTarget;
+struct DropTarget {
+    hwnd: HWND,
+    app_context: *const ApplicationContext,
+}
 impl IDropTarget_Impl for DropTarget_Impl {
     fn DragEnter(
         &self,
@@ -2391,6 +2440,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         unsafe {
             pdweffect.write(DROPEFFECT_NONE);
         }
+
         Ok(())
     }
 
@@ -2404,11 +2454,11 @@ impl IDropTarget_Impl for DropTarget_Impl {
         unsafe {
             pdweffect.write(DROPEFFECT_NONE);
         }
+
         Ok(())
     }
 
     fn DragLeave(&self) -> windows_core::Result<()> {
-        tracing::debug!("drag leave");
         Ok(())
     }
 
@@ -2424,5 +2474,177 @@ impl IDropTarget_Impl for DropTarget_Impl {
             pdweffect.write(DROPEFFECT_NONE);
         }
         Ok(())
+    }
+}
+
+#[implement(IDataObject)]
+struct DockPaneDataObject {}
+impl IDataObject_Impl for DockPaneDataObject_Impl {
+    fn DAdvise(
+        &self,
+        pformatetc: *const FORMATETC,
+        advf: u32,
+        padvsink: windows_core::Ref<IAdviseSink>,
+    ) -> windows_core::Result<u32> {
+        tracing::debug!(advf, "DockPaneDataObject::DAdvise");
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn DUnadvise(&self, dwconnection: u32) -> windows_core::Result<()> {
+        tracing::debug!(dwconnection, "DockPaneDataObject::DUnadvise");
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn EnumDAdvise(&self) -> windows_core::Result<IEnumSTATDATA> {
+        tracing::debug!("DockPaneDataObject::EnumDAdvise");
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn EnumFormatEtc(&self, dwdirection: u32) -> windows_core::Result<IEnumFORMATETC> {
+        tracing::debug!(dwdirection, "DockPaneDataObject::EnumFormatEtc");
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+
+    fn GetCanonicalFormatEtc(
+        &self,
+        pformatectin: *const FORMATETC,
+        pformatetcout: *mut FORMATETC,
+    ) -> HRESULT {
+        tracing::debug!("DockPaneDataObject::GetCanonicalFormatEtc");
+        windows::Win32::Foundation::E_NOTIMPL
+    }
+
+    fn GetData(&self, pformatetcin: *const FORMATETC) -> windows_core::Result<STGMEDIUM> {
+        let format = unsafe { &*pformatetcin };
+        tracing::debug!(?format, "DockPaneDataObject::GetData");
+        Err(DV_E_FORMATETC.into())
+    }
+
+    fn GetDataHere(
+        &self,
+        pformatetc: *const FORMATETC,
+        pmedium: *mut STGMEDIUM,
+    ) -> windows_core::Result<()> {
+        let format = unsafe { &*pformatetc };
+        tracing::debug!(?format, "DockPaneDataObject::GetDataHere");
+        Err(DV_E_FORMATETC.into())
+    }
+
+    fn QueryGetData(&self, pformatetc: *const FORMATETC) -> HRESULT {
+        let format = unsafe { &*pformatetc };
+        tracing::debug!(?format, "DockPaneDataObject::QueryGetData");
+        DV_E_FORMATETC
+    }
+
+    fn SetData(
+        &self,
+        pformatetc: *const FORMATETC,
+        pmedium: *const STGMEDIUM,
+        frelease: BOOL,
+    ) -> windows_core::Result<()> {
+        tracing::debug!(?frelease, "DockPaneDataObject::SetData");
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+}
+
+#[implement(IDropSource)]
+struct DockPaneDropSource {
+    event_dispatcher: *mut LogicFiberEventDispatcher,
+    app_context: *const ApplicationContext,
+    source_rect: Rect<LogicalUnit>,
+    active_dpi_scale: Cell<f32>,
+}
+impl IDropSource_Impl for DockPaneDropSource_Impl {
+    fn GiveFeedback(&self, dweffect: DROPEFFECT) -> HRESULT {
+        tracing::debug!(?dweffect, "DockPaneDropSource::GiveFeedback");
+
+        let mut cursor_pos = core::mem::MaybeUninit::uninit();
+        if let Err(e) = unsafe { GetCursorPos(cursor_pos.as_mut_ptr()) } {
+            tracing::error!(reason = %e, "win32.get_cursor_pos");
+            return DRAGDROP_S_USEDEFAULTCURSORS;
+        }
+        let cursor_pos = unsafe { cursor_pos.assume_init() };
+
+        let dest_window = unsafe { WindowFromPoint(cursor_pos) };
+        if !dest_window.is_invalid() {
+            tracing::debug!("give feedback via event");
+            // どれかのEditorWindowに入ってる場合はそっちで計算する
+            let mut ps = [cursor_pos];
+            unsafe {
+                MapWindowPoints(None, Some(dest_window), &mut ps);
+            }
+            let [client_pos] = ps;
+
+            // TODO: DoDragDropでループに入ってしまうのでdispatchしても終わるまで反応がない これはどうするか......
+            unsafe { &mut *self.event_dispatcher }.dispatch(Event::DockMovePreview {
+                dest_window: WindowHandle(dest_window),
+                client_pos_in_dest: point_from_win32(client_pos)
+                    .to_logical(WindowHandle(dest_window).ui_scale_factor()),
+            });
+
+            return S_OK;
+        }
+
+        // 入ってなければカーソルに追従
+        let o = self
+            .source_rect
+            .left_top()
+            .to_pixels_round(self.active_dpi_scale.get());
+        let s = self
+            .source_rect
+            .size()
+            .to_pixels_ceil(self.active_dpi_scale.get());
+        let mut new_dpi = core::mem::MaybeUninit::uninit();
+        let mut new_dpi_y = core::mem::MaybeUninit::uninit();
+        unsafe {
+            GetDpiForMonitor(
+                MonitorFromRect(
+                    &RECT {
+                        left: cursor_pos.x + o.x,
+                        top: cursor_pos.y + o.y,
+                        right: cursor_pos.x + o.x + s.width.cast_signed(),
+                        bottom: cursor_pos.y + o.y + s.height.cast_signed(),
+                    },
+                    MONITOR_DEFAULTTONEAREST,
+                ),
+                MDT_EFFECTIVE_DPI,
+                new_dpi.as_mut_ptr(),
+                new_dpi_y.as_mut_ptr(),
+            )
+            .expect("win32.get_dpi_for_window")
+        };
+        self.active_dpi_scale
+            .set(unsafe { new_dpi.assume_init() } as f32 / 96.0f32);
+
+        unsafe { &*self.app_context }
+            .drag_preview_popover
+            .set_rect_screen_coord(&Rect::from_lt_size(
+                Point::new_pixels(cursor_pos.x, cursor_pos.y).with_offset(
+                    self.source_rect
+                        .left_top()
+                        .to_pixels_round(self.active_dpi_scale.get()),
+                ),
+                self.source_rect
+                    .size()
+                    .to_pixels_ceil(self.active_dpi_scale.get()),
+            ));
+
+        DRAGDROP_S_USEDEFAULTCURSORS
+    }
+
+    fn QueryContinueDrag(&self, fescapepressed: BOOL, grfkeystate: MODIFIERKEYS_FLAGS) -> HRESULT {
+        if fescapepressed.as_bool() {
+            return DRAGDROP_S_CANCEL;
+        }
+
+        // Note: containsだとすべてのビットフラグを持ってるかのチェックになってしまう（!= 0での比較だといずれかにできる）
+        if grfkeystate & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON | MK_XBUTTON1 | MK_XBUTTON2)
+            != MODIFIERKEYS_FLAGS(0)
+        {
+            // continue while pressing mouse button
+            return S_OK;
+        }
+
+        return DRAGDROP_S_DROP;
     }
 }
