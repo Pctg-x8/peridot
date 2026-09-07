@@ -8,9 +8,9 @@ use bitflags::bitflags;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
+    DragData, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
-        CursorShape, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
+        CursorShape, DragDropFlags, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     model::{Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation},
@@ -1375,6 +1375,83 @@ impl PointerInputManager {
                 }
             }
             PointerFocusState::None => (),
+        }
+    }
+
+    pub fn offer_accepting_drop(
+        &self,
+        data: &DragData,
+        client_pos: Point<PointerInputUnit>,
+        ht_root: HitTestTreeRef,
+        root_ref_size: Size<PointerInputUnit>,
+        ht_manager: &HitTestTreeManager,
+    ) -> DragDropFlags {
+        match self.pointer_focus {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => ht_manager
+                .get_data(ht_ref)
+                .action_handler()
+                .and_then(|x| x.offer_accepting_drop(ht_ref, data))
+                .unwrap_or(DragDropFlags::empty()),
+            PointerFocusState::Entering(_) | PointerFocusState::None => {
+                // DragDrop中にポインタ位置が変わる可能性がある(Win32)ので都度ヒットテストして判定する
+                let ht_target = ht_manager.test(
+                    ht_root,
+                    &client_pos,
+                    &Rect::from_lt_size(Point::new_logical(0.0, 0.0), root_ref_size),
+                );
+
+                if let Some(ht_target) = ht_target {
+                    for ht in ht_manager.iter_ascending_from(ht_target) {
+                        if let Some(x) = ht_manager.get_data(ht).action_handler()
+                            && let Some(r) = x.offer_accepting_drop(ht, data)
+                        {
+                            return r;
+                        }
+                    }
+                }
+
+                DragDropFlags::empty()
+            }
+        }
+    }
+
+    pub fn perform_drop(
+        &self,
+        data: DragData,
+        client_pos: Point<PointerInputUnit>,
+        ht_root: HitTestTreeRef,
+        root_ref_size: Size<PointerInputUnit>,
+        ht_manager: &HitTestTreeManager,
+    ) {
+        match self.pointer_focus {
+            PointerFocusState::Capturing(ht_ref)
+            | PointerFocusState::Grabbing { target: ht_ref, .. } => {
+                if let Some(x) = ht_manager.get_data(ht_ref).action_handler()
+                    && let Some(r) = x.offer_accepting_drop(ht_ref, &data)
+                {
+                    x.perform_drop(ht_ref, data, r);
+                }
+            }
+            PointerFocusState::Entering(_) | PointerFocusState::None => {
+                // DragDrop中にポインタ位置が変わる可能性がある(Win32)ので都度ヒットテストして判定する
+                let ht_target = ht_manager.test(
+                    ht_root,
+                    &client_pos,
+                    &Rect::from_lt_size(Point::new_logical(0.0, 0.0), root_ref_size),
+                );
+
+                if let Some(ht_target) = ht_target {
+                    for ht in ht_manager.iter_ascending_from(ht_target) {
+                        if let Some(x) = ht_manager.get_data(ht).action_handler()
+                            && let Some(r) = x.offer_accepting_drop(ht, &data)
+                        {
+                            x.perform_drop(ht, data, r);
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
 

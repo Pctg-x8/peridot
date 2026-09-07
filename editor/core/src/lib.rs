@@ -932,6 +932,11 @@ pub enum Event {
         destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     },
+    PerformDrop {
+        data: NonCloneable<DummyDebug<DragData>>,
+        target_window: WindowHandle,
+        client_pos: Point<LogicalUnit>,
+    },
     // TODO: これあんまりいい設計じゃないので使わない形にしたい（macOSでのIME入力によるView更新のためだけに必要）
     ScheduleViewRenderExt {
         id: ViewIdentifier,
@@ -956,6 +961,7 @@ pub enum Event {
     },
 }
 impl Event {
+    /// Profilerに表示するEvent名
     #[cfg(feature = "enable-profiling")]
     pub const fn p_name(&self) -> &'static str {
         match self {
@@ -1001,6 +1007,7 @@ impl Event {
             Self::DockBeginPreview { .. } => "DockBeginPreview",
             Self::DockMovePreview { .. } => "DockMovePreview",
             Self::DockConfirm { .. } => "DockConfirm",
+            Self::PerformDrop { .. } => "PerformDrop",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
             #[cfg(not(target_os = "macos"))]
             #[cfg(windows)]
@@ -2947,7 +2954,7 @@ struct PerWindowData {
     header: ui::window_header::Component,
     appmenu: Option<TypedViewIdentifier<ui::app_menu_bar::View>>,
     footer: Option<TypedViewIdentifier<ui::window_footer::View>>,
-    docking_manager: ui::dock::DockingManager,
+    docking_manager: ui::dock::WindowDockingManager,
 }
 impl PerWindowData {
     fn compute_content_area(&self, surface_size: Size<LogicalUnit>) -> Rect<LogicalUnit> {
@@ -3239,7 +3246,7 @@ async fn run<'sys>(
         header: window_header,
         appmenu: app_menu_view,
         footer: Some(window_footer_view),
-        docking_manager: ui::dock::DockingManager::new(
+        docking_manager: ui::dock::WindowDockingManager::new(
             main_window,
             &mut view_init_ctx,
             &mut view_render_queue,
@@ -3371,7 +3378,7 @@ async fn run<'sys>(
                         header: window_header_view,
                         appmenu: None,
                         footer: None,
-                        docking_manager: ui::dock::DockingManager::new(
+                        docking_manager: ui::dock::WindowDockingManager::new(
                             w,
                             &mut view_init_ctx,
                             &mut view_render_queue,
@@ -4898,7 +4905,7 @@ async fn run<'sys>(
                                     header: window_header_view,
                                     appmenu: None,
                                     footer: None,
-                                    docking_manager: ui::dock::DockingManager::new(
+                                    docking_manager: ui::dock::WindowDockingManager::new(
                                         w,
                                         &mut view_init_ctx,
                                         &mut view_render_queue,
@@ -4943,6 +4950,19 @@ async fn run<'sys>(
                         state: &mut application,
                         view_feedbacks: &mut view_feedback_store,
                     },
+                );
+            }
+            Event::PerformDrop {
+                data,
+                target_window,
+                client_pos,
+            } => {
+                pointer_input_manager.perform_drop(
+                    data.0.0,
+                    client_pos,
+                    target_window.ht_root(),
+                    target_window.client_size(),
+                    &ht_manager,
                 );
             }
             Event::ScheduleViewRenderExt { id } => {
@@ -5742,7 +5762,7 @@ pub use platform::unix::wayland::{
 };
 #[cfg(windows)]
 pub use platform::windows::{
-    PointerID, SystemLink, WindowHandle, WindowPersistentStateNativeGeometryUnit,
+    DragData, PointerID, SystemLink, WindowHandle, WindowPersistentStateNativeGeometryUnit,
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 

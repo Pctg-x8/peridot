@@ -40,13 +40,14 @@ use windows::{
         },
         System::{
             Com::{
-                FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC,
-                IEnumSTATDATA, STGMEDIUM,
+                DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject,
+                IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, STGMEDIUM, TYMED_HGLOBAL,
             },
+            Memory::{GlobalLock, GlobalUnlock},
             Ole::{
-                DROPEFFECT, DROPEFFECT_MOVE, DROPEFFECT_NONE, DoDragDrop, IDropSource,
-                IDropSource_Impl, IDropTarget, IDropTarget_Impl, OleInitialize, OleUninitialize,
-                RegisterDragDrop, RevokeDragDrop,
+                CF_HDROP, CF_TEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE,
+                DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl,
+                OleInitialize, OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
             },
             SystemServices::{
                 MK_CONTROL, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_SHIFT, MK_XBUTTON1, MK_XBUTTON2,
@@ -73,6 +74,7 @@ use windows::{
                 RAWINPUT, RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RAWINPUTHEADER, RID_INPUT,
                 RIM_TYPEKEYBOARD, RegisterRawInputDevices,
             },
+            Shell::DROPFILES,
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GCW_ATOM,
                 GetClassLongPtrW, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
@@ -100,8 +102,12 @@ use windows::{
 use windows_core::{BOOL, HRESULT, HSTRING, IInspectable, Interface, PCWSTR, h, implement, w};
 use windows_numerics::{Vector2, Vector3};
 
-use core::cell::Cell;
-use std::{rc::Rc, sync::Mutex};
+use core::cell::{Cell, UnsafeCell};
+use std::{
+    cell::{OnceCell, RefCell},
+    rc::Rc,
+    sync::Mutex,
+};
 
 use crate::{
     Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent, WindowType,
@@ -112,7 +118,8 @@ use crate::{
         ModifierKey, PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit,
         ShellPointerActions,
         hittest::{
-            CursorShape, HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton,
+            CursorShape, DragDropFlags, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+            PointerButton,
         },
     },
     persistence::WindowGeometryState,
@@ -195,6 +202,15 @@ impl WindowHandle {
         }
 
         data
+    }
+
+    #[inline(always)]
+    fn event_handler<'a>(&'a self) -> &'a WindowEventHandler {
+        unsafe {
+            &*core::ptr::with_exposed_provenance(
+                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
+            )
+        }
     }
 
     #[inline(always)]
@@ -541,7 +557,7 @@ impl NativeWindow {
                 w,
                 &IDropTarget::from(DropTarget {
                     hwnd: w,
-                    app_context,
+                    active_data: UnsafeCell::new(None),
                 }),
             )
             .expect("win32.register_drag_drop");
@@ -2423,10 +2439,125 @@ impl NativeTextInputContext {
     }
 }
 
+pub struct DragData {
+    obj: IDataObject,
+    is_file_drop: OnceCell<bool>,
+}
+impl DragData {
+    pub fn is_file_drop(&self) -> bool {
+        *self.is_file_drop.get_or_init(|| {
+            let enumformatetc = unsafe {
+                self.obj
+                    .EnumFormatEtc(DATADIR_GET.0 as _)
+                    .expect("pdataobj.enum_format_etc")
+            };
+            let mut elements = Vec::<FORMATETC>::with_capacity(8);
+            let mut fetched_elements = core::mem::MaybeUninit::uninit();
+            match unsafe {
+                enumformatetc.Next(
+                    core::mem::transmute(elements.spare_capacity_mut()),
+                    Some(fetched_elements.as_mut_ptr()),
+                )
+            } {
+                S_OK => {
+                    let fetched = unsafe { fetched_elements.assume_init() };
+                    unsafe {
+                        elements.set_len(fetched as usize);
+                    }
+                }
+                _ => {
+                    elements = Vec::with_capacity(unsafe { fetched_elements.assume_init() } as _);
+                    unsafe {
+                        enumformatetc
+                            .Next(
+                                core::mem::transmute(elements.spare_capacity_mut()),
+                                Some(fetched_elements.as_mut_ptr()),
+                            )
+                            .ok()
+                            .expect("enumformatetc.next");
+                    }
+                    unsafe {
+                        elements.set_len(fetched_elements.assume_init() as _);
+                    }
+                }
+            }
+            for e in elements {
+                tracing::trace!(?e, is_file_drop = e.cfFormat == CF_HDROP.0, "enumformatetc");
+
+                if e.cfFormat == CF_HDROP.0 {
+                    return true;
+                }
+            }
+
+            false
+        })
+    }
+
+    pub fn query_file_list(&self) -> std::io::Result<Vec<String>> {
+        let mut data = unsafe {
+            self.obj.GetData(&FORMATETC {
+                cfFormat: CF_HDROP.0,
+                ptd: core::ptr::null_mut(),
+                dwAspect: DVASPECT_CONTENT.0,
+                lindex: -1,
+                tymed: TYMED_HGLOBAL.0.cast_unsigned(),
+            })?
+        };
+        let ptr = unsafe { GlobalLock(data.u.hGlobal) };
+        let DROPFILES { pFiles, fWide, .. } = unsafe { ptr.cast::<DROPFILES>().read() };
+
+        let mut files = Vec::new();
+        if fWide.as_bool() {
+            let mut o = 0;
+            let words = unsafe { ptr.byte_add(pFiles as _).cast::<u16>() };
+            'a: loop {
+                let r0 = o;
+                while unsafe { words.add(o).read() } != 0 {
+                    o += 1;
+                }
+                if o == r0 {
+                    break 'a;
+                }
+                files.push(
+                    String::from_utf16(unsafe {
+                        core::slice::from_raw_parts(words.add(r0), o - r0)
+                    })
+                    .expect("invalid utf16"),
+                );
+                o += 1;
+            }
+        } else {
+            let mut o = 0;
+            let bytes = unsafe { ptr.byte_add(pFiles as _).cast::<u8>() };
+            'a: loop {
+                let r0 = o;
+                while unsafe { bytes.add(o).read() } != 0 {
+                    o += 1;
+                }
+                if o == r0 {
+                    break 'a;
+                }
+                files.push(unsafe {
+                    str::from_utf8_unchecked(core::slice::from_raw_parts(bytes.add(r0), o - r0))
+                        .to_string()
+                });
+                o += 1;
+            }
+        }
+
+        unsafe {
+            let _ = GlobalUnlock(data.u.hGlobal);
+            ReleaseStgMedium(&mut data);
+        }
+
+        Ok(files)
+    }
+}
+
 #[implement(IDropTarget)]
 struct DropTarget {
     hwnd: HWND,
-    app_context: *const ApplicationContext,
+    active_data: UnsafeCell<Option<IDataObject>>,
 }
 impl IDropTarget_Impl for DropTarget_Impl {
     fn DragEnter(
@@ -2437,8 +2568,31 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
         tracing::debug!(?pt, ?grfkeystate, "drag enter");
+        let dataobj = pdataobj.as_ref().expect("no dataobj");
         unsafe {
-            pdweffect.write(DROPEFFECT_NONE);
+            *self.active_data.get() = Some(dataobj.clone());
+        }
+
+        let mut client_pos = [POINT { x: pt.x, y: pt.y }];
+        unsafe { MapWindowPoints(None, Some(self.hwnd), &mut client_pos) };
+        let [client_pos] = client_pos;
+
+        let offerred_flags = unsafe { &*POINTER_INPUT_MANAGER_PTR }.offer_accepting_drop(
+            &DragData {
+                obj: dataobj.clone(),
+                is_file_drop: OnceCell::new(),
+            },
+            point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
+            WindowHandle(self.hwnd).state().ht_root,
+            WindowHandle(self.hwnd).client_size(),
+            unsafe { &*HIT_TEST_TREE_MANAGER_PTR },
+        );
+        let mut effects = DROPEFFECT_NONE;
+        if offerred_flags.contains(DragDropFlags::COPY) {
+            effects |= DROPEFFECT_COPY;
+        }
+        unsafe {
+            pdweffect.write(effects);
         }
 
         Ok(())
@@ -2451,14 +2605,42 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
         tracing::debug!(?pt, ?grfkeystate, "drag over");
+        let Some(dataobj) = (unsafe { &*self.active_data.get() }) else {
+            unsafe {
+                pdweffect.write(DROPEFFECT_NONE);
+            }
+            return Ok(());
+        };
+
+        let mut client_pos = [POINT { x: pt.x, y: pt.y }];
+        unsafe { MapWindowPoints(None, Some(self.hwnd), &mut client_pos) };
+        let [client_pos] = client_pos;
+
+        let offerred_flags = unsafe { &*POINTER_INPUT_MANAGER_PTR }.offer_accepting_drop(
+            &DragData {
+                obj: dataobj.clone(),
+                is_file_drop: OnceCell::new(),
+            },
+            point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
+            WindowHandle(self.hwnd).state().ht_root,
+            WindowHandle(self.hwnd).client_size(),
+            unsafe { &*HIT_TEST_TREE_MANAGER_PTR },
+        );
+        let mut effects = DROPEFFECT_NONE;
+        if offerred_flags.contains(DragDropFlags::COPY) {
+            effects |= DROPEFFECT_COPY;
+        }
         unsafe {
-            pdweffect.write(DROPEFFECT_NONE);
+            pdweffect.write(effects);
         }
 
         Ok(())
     }
 
     fn DragLeave(&self) -> windows_core::Result<()> {
+        unsafe {
+            *self.active_data.get() = None;
+        }
         Ok(())
     }
 
@@ -2470,9 +2652,26 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
         tracing::debug!(?pt, ?grfkeystate, "drop");
-        unsafe {
-            pdweffect.write(DROPEFFECT_NONE);
-        }
+        let dataobj = pdataobj.as_ref().expect("no dataobj");
+
+        let mut client_pos = [POINT { x: pt.x, y: pt.y }];
+        unsafe { MapWindowPoints(None, Some(self.hwnd), &mut client_pos) };
+        let [client_pos] = client_pos;
+
+        WindowHandle(self.hwnd)
+            .event_handler()
+            .event_dispatcher
+            .dispatch(Event::PerformDrop {
+                data: DragData {
+                    obj: dataobj.clone(),
+                    is_file_drop: OnceCell::new(),
+                }
+                .into(),
+                target_window: WindowHandle(self.hwnd),
+                client_pos: point_from_win32(client_pos)
+                    .to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
+            });
+
         Ok(())
     }
 }

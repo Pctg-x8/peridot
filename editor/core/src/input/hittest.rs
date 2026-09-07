@@ -1,11 +1,12 @@
 use std::collections::BTreeSet;
 
+use bitflags::bitflags;
 #[cfg(windows)]
 use shared::PixelsUnit;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    PointerID, WindowHandle,
+    DragData, PointerID, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, ModifierKey, PointerInputUnit,
     },
@@ -946,6 +947,26 @@ pub trait HitTestTreeActionHandler {
         args: &GrabDeltaMoveActionArgs,
     ) -> EventContinueControl {
         EventContinueControl::empty()
+    }
+
+    /// return `None` to fallback
+    #[allow(unused_variables)]
+    fn offer_accepting_drop(
+        &self,
+        sender: HitTestTreeRef,
+        data: &DragData,
+    ) -> Option<DragDropFlags> {
+        None
+    }
+
+    #[allow(unused_variables)]
+    fn perform_drop(&self, sender: HitTestTreeRef, data: DragData, offer_flags: DragDropFlags) {}
+}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct DragDropFlags : u8 {
+        const COPY = 0x01;
     }
 }
 

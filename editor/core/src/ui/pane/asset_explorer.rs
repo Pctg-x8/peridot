@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use shared::{LogicalUnit, Point, Rect, Size};
 
@@ -30,7 +33,7 @@ use crate::{
         ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild,
         ViewLayoutFlowAlignment, ViewLayoutFlowBasis, ViewLayoutFlowDirection,
         ViewLayoutFlowJustify, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
-        ViewRenderElements, ViewRenderer, ViewSize,
+        ViewRelationControllable, ViewRenderElements, ViewRenderer, ViewSize,
     },
     uikit::{
         ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuItem, ScrollContainer,
@@ -47,6 +50,9 @@ impl Presenter {
 
     pub fn new(ctx: &mut ViewInitContext) -> Self {
         let eh = Rc::new_cyclic(|eh| {
+            let fill_container_view =
+                ctx.construct_view(FillContainerViewInit { eh: eh.clone() }, |_| []);
+
             let path_navigator_view = ctx.construct_view(PathNavigatorViewInit, |_| []);
             let file_list_view = ctx.construct_view(FileListViewInit, |_| []);
 
@@ -72,9 +78,11 @@ impl Presenter {
             l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
 
             EventHandler {
+                fill_container_view,
                 path_navigator_view,
                 file_list_view,
                 file_list_container_view,
+                fill_container_view_ht_root: Cell::new(None),
             }
         });
         ctx.subscribe_view_feedback::<model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>(
@@ -98,6 +106,8 @@ impl Presenter {
             };
         }
 
+        ctx.view_set_parent(root_view, eh.fill_container_view);
+
         Self { root_view, eh }
     }
 }
@@ -111,7 +121,7 @@ impl PaneContentPresenter for Presenter {
     }
 
     fn root_view_id(&self) -> ViewIdentifier {
-        self.root_view.into_untyped()
+        self.eh.fill_container_view.into_untyped()
     }
 
     fn resize(
@@ -144,9 +154,11 @@ impl PaneContentPresenter for Presenter {
 }
 
 struct EventHandler {
+    fill_container_view: TypedViewIdentifier<FillContainerView>,
     path_navigator_view: TypedViewIdentifier<PathNavigatorView>,
     file_list_view: TypedViewIdentifier<FileListView>,
     file_list_container_view: TypedViewIdentifier<ScrollContainer>,
+    fill_container_view_ht_root: Cell<Option<HitTestTreeRef>>,
 }
 impl ViewFeedbackHandler<model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
     for EventHandler
@@ -185,6 +197,110 @@ impl ViewFeedbackHandler<model::asset_explorer::ViewFeedbackCurrentDirectoryChan
 
         // スクロール範囲の再計算が必要なのでScrollContainerから再レンダリングする
         context.schedule_view_render(self.file_list_container_view);
+    }
+}
+impl HitTestTreeActionHandler for EventHandler {
+    fn offer_accepting_drop(
+        &self,
+        sender: HitTestTreeRef,
+        data: &crate::DragData,
+    ) -> Option<crate::input::hittest::DragDropFlags> {
+        if self
+            .fill_container_view_ht_root
+            .get()
+            .is_some_and(|x| x == sender)
+        {
+            if data.is_file_drop() {
+                return Some(crate::input::hittest::DragDropFlags::COPY);
+            }
+        }
+
+        None
+    }
+
+    fn perform_drop(
+        &self,
+        sender: HitTestTreeRef,
+        data: crate::DragData,
+        offer_flags: crate::input::hittest::DragDropFlags,
+    ) {
+        if self
+            .fill_container_view_ht_root
+            .get()
+            .is_some_and(|x| x == sender)
+        {
+            let files = data.query_file_list().expect("query failed");
+            tracing::debug!(?files, "perform drop");
+        }
+    }
+}
+
+struct FillContainerViewInit {
+    eh: std::rc::Weak<EventHandler>,
+}
+impl ViewConstructor for FillContainerViewInit {
+    type ConcreteView = FillContainerView;
+
+    #[inline(always)]
+    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        FillContainerView {
+            eh: self.eh,
+            entity: None,
+        }
+    }
+}
+
+struct FillContainerView {
+    eh: std::rc::Weak<EventHandler>,
+    entity: Option<(CompositeTreeRef, HitTestTreeRef)>,
+}
+impl View for FillContainerView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> ViewRenderElements {
+        let (ct_root, ht_root) = match self.entity {
+            Some((ct_root, ht_root)) => (ct_root, ht_root),
+            None => {
+                let ct_root = CompositeRect::build()
+                    .expand_full()
+                    .create(ctx.composite_tree);
+                let ht_root = HitTestTreeData::build()
+                    .expand_full()
+                    .create(ctx.ht_manager);
+
+                self.eh
+                    .upgrade()
+                    .expect("pane already defunct")
+                    .fill_container_view_ht_root
+                    .set(Some(ht_root));
+                ctx.ht_manager
+                    .set_action_handler_weak(ht_root, self.eh.clone());
+
+                (ct_root, ht_root)
+            }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(ct_root),
+            hit_tree: Some(ht_root),
+            ..ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some((ct_root, ht_root)) = self.entity.take() else {
+            return;
+        };
+
+        ctx.composite_tree.free_all(ct_root);
+        ctx.ht_manager.free_all(ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
     }
 }
 
@@ -472,7 +588,7 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
                     model::asset_explorer::breadcumb_next_directory_list(context, n)
                         .collect::<Vec<_>>();
                 tracing::debug!(?next_dir_names);
-                let (x, y, w, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
+                let (x, y, _, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
                 context.system_link.dispatch_event(Event::MenuOpen {
                     parent: context
                         .ht_manager

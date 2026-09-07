@@ -663,11 +663,11 @@ impl View for WindowDockRootView {
     }
 }
 
-pub struct DockingManager {
+pub struct WindowDockingManager {
     root_id: DockID,
     root_view_id: TypedViewIdentifier<WindowDockRootView>,
 }
-impl DockingManager {
+impl WindowDockingManager {
     #[tracing::instrument(skip(bound_window, ctx, view_render_queue, store, dock_ctor))]
     pub fn new(
         bound_window: WindowHandle,
@@ -826,7 +826,7 @@ impl DockingManager {
 /// Dockを新規に分割する
 fn split_new(
     store: &mut DockStore,
-    manager: &DockingManager,
+    manager: &WindowDockingManager,
     view_init_ctx: &mut ViewInitContext,
     view_render_queue: &mut ViewRenderQueue,
     new_rest: DockID,
@@ -970,7 +970,7 @@ fn undock<'h>(
 fn redock(
     dbg_dump_root: DockID,
     store: &mut DockStore,
-    manager: &DockingManager,
+    manager: &WindowDockingManager,
     source: DockID,
     index: usize,
     op: DockingOperation,
@@ -1239,7 +1239,7 @@ pub fn begin_preview(
 
 /// Previewを移動する
 pub fn move_preview(
-    root_manager: &DockingManager,
+    root_manager: &WindowDockingManager,
     store: &DockStore,
     client_pos: &Point<LogicalUnit>,
     state: &mut DockingPreviewState,
@@ -1257,7 +1257,7 @@ pub fn move_preview(
 
 /// Previewを終了し、確定したRedocking操作を返す
 pub fn end_preview(
-    root_manager: &DockingManager,
+    root_manager: &WindowDockingManager,
     store: &DockStore,
     client_pos: &Point<LogicalUnit>,
     state: DockingPreviewState,
