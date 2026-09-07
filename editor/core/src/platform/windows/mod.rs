@@ -2076,15 +2076,15 @@ impl<'sys> SystemLink<'sys> {
         offset: Point<LogicalUnit>,
         rect: &Rect<LogicalUnit>,
     ) {
-        /*unsafe {
+        unsafe {
             SetCapture(initiator_surface.0);
         }
 
         self.app_context
             .drag_preview_popover
             .show(initiator_surface.0, rect);
-        self.app_context.pane_dragging.set(true);*/
-        self.app_context
+        self.app_context.pane_dragging.set(true);
+        /*self.app_context
             .drag_preview_popover
             .show(initiator_surface.0, rect);
         let mut effect = core::mem::MaybeUninit::uninit();
@@ -2103,7 +2103,7 @@ impl<'sys> SystemLink<'sys> {
             .ok()
             .expect("win32.do_drag_drop");
         }
-        self.app_context.drag_preview_popover.hide();
+        self.app_context.drag_preview_popover.hide();*/
     }
 
     pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
