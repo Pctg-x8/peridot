@@ -932,6 +932,8 @@ pub enum Event {
         destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     },
+    #[cfg(feature = "wayland")]
+    OfferAcceptingDrop,
     PerformDrop {
         data: NonCloneable<DummyDebug<DragData>>,
         target_window: WindowHandle,
@@ -1007,6 +1009,8 @@ impl Event {
             Self::DockBeginPreview { .. } => "DockBeginPreview",
             Self::DockMovePreview { .. } => "DockMovePreview",
             Self::DockConfirm { .. } => "DockConfirm",
+            #[cfg(feature = "wayland")]
+            Self::OfferAcceptingDrop => "OfferAcceptingDrop",
             Self::PerformDrop { .. } => "PerformDrop",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
             #[cfg(not(target_os = "macos"))]
@@ -4951,6 +4955,11 @@ async fn run<'sys>(
                         view_feedbacks: &mut view_feedback_store,
                     },
                 );
+            }
+            #[cfg(feature = "wayland")]
+            Event::OfferAcceptingDrop => {
+                unsafe { &mut *system_link.display_server.global_messaging_ptr }
+                    .offer_accepting_drop(&pointer_input_manager, &mut ht_manager);
             }
             Event::PerformDrop {
                 data,

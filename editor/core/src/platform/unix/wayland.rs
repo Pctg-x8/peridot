@@ -14,10 +14,11 @@ use crate::{
     WindowGeometryState, WindowType,
     graphics::Graphics,
     input::{
-        KeyInputCode, KeyboardFocusTokenRegistry, ModifierKey,
-        hittest::{CursorShape, HitTestTreeManager, PointerButton},
+        KeyInputCode, KeyboardFocusTokenRegistry, ModifierKey, PointerInputManager,
+        hittest::{CursorShape, DragDropFlags, HitTestTreeManager, PointerButton},
     },
     rendering::{RenderMessage, composite::CompositeTree},
+    uicore::MountTarget,
     utils::platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
 };
 
@@ -794,7 +795,16 @@ struct IMEPendingState {
 
 pub struct DragData {
     obj: wl::Owned<wl::DataOffer>,
+    dp: *mut wl::Display,
+    finished: bool,
     mime_types: HashSet<std::ffi::CString>,
+}
+impl Drop for DragData {
+    fn drop(&mut self) {
+        if self.finished {
+            self.obj.finish().expect("data_offer.finish");
+        }
+    }
 }
 impl DragData {
     pub fn is_file_drop(&self) -> bool {
@@ -802,15 +812,55 @@ impl DragData {
     }
 
     pub fn query_file_list(&self) -> Option<Vec<String>> {
-        todo!("query_file_list");
+        let mut pipe_fds = [0; 2];
+        let r = unsafe { libc::pipe(pipe_fds.as_mut_ptr()) };
+        if r < 0 {
+            panic!("libc.pipe: {}", std::io::Error::last_os_error());
+        }
+        self.obj
+            .receive(c"text/uri-list", &pipe_fds[1])
+            .expect("active_offer.receive");
+        unsafe {
+            libc::close(pipe_fds[1]);
+        }
+        unsafe { &*self.dp }.flush().expect("display.flush");
+
+        let mut received = Vec::<u8>::new();
+        let mut readbuf = vec![0u8; 8192];
+        loop {
+            let b = unsafe { libc::read(pipe_fds[0], readbuf.as_mut_ptr().cast(), readbuf.len()) };
+            if b == 0 {
+                break;
+            }
+
+            received.extend(&readbuf[..b as usize]);
+        }
+        unsafe {
+            libc::close(pipe_fds[0]);
+        }
+
+        Some(
+            unsafe { str::from_utf8_unchecked(&received) }
+                .split("\r\n")
+                .filter(|x| !x.starts_with("#") && !x.is_empty())
+                .map(|x| {
+                    std::ffi::CString::new(x)
+                        .expect("invalid cstr")
+                        .into_string()
+                        .expect("invalid str")
+                })
+                .collect(),
+        )
     }
 }
 
 struct DataDeviceActiveOfferState {
     object: DragData,
+    is_dock_content: bool,
     entering_surface: Option<NonNull<wl::Surface>>,
     client_pos: Point<LogicalUnit>,
     source_actions: wl::DataDeviceManagerDndAction,
+    accept_serial: u32,
 }
 
 struct PaneDragState {
@@ -825,6 +875,7 @@ struct DataDeviceState {
 }
 
 pub struct GlobalMessaging {
+    dp: *mut wl::Display,
     global_interfaces: *const GlobalInterfaces,
     text_input_manager: NonNull<wl::ZwpTextInputManagerV3>,
     data_device_manager: NonNull<wl::DataDeviceManager>,
@@ -847,6 +898,7 @@ impl GlobalMessaging {
         event_dispatcher: LogicFiberEventDispatcher,
     ) -> Self {
         Self {
+            dp: &mut ctx.dp,
             global_interfaces: &ctx.global_interfaces,
             text_input_manager: unsafe { ctx.global_interfaces.text_input_manager.copy_ptr() },
             data_device_manager: unsafe { ctx.global_interfaces.data_device_manager.copy_ptr() },
@@ -887,6 +939,61 @@ impl GlobalMessaging {
         unsafe {
             self.get_unchecked_mut().event_dispatcher = event_dispatcher;
         }
+    }
+
+    pub fn offer_accepting_drop(
+        &mut self,
+        pointer_input_manager: &PointerInputManager,
+        ht_manager: &mut HitTestTreeManager,
+    ) {
+        let Some(active_offer) = self
+            .data_device
+            .as_mut()
+            .and_then(|d| d.active_offer.as_mut())
+        else {
+            // no active offer
+            return;
+        };
+        let Some(entering_surface) = active_offer.entering_surface else {
+            // offer not entered
+            return;
+        };
+
+        let result = pointer_input_manager.offer_accepting_drop(
+            &active_offer.object,
+            active_offer.client_pos,
+            toplevel::Handle(entering_surface).ht_root(),
+            toplevel::Handle(entering_surface).client_size(),
+            ht_manager,
+        );
+        if !result.is_empty() {
+            let mut actions = wl::DataDeviceManagerDndAction::empty();
+            let mut preferred_action = wl::DataDeviceManagerDndAction::empty();
+            if result.contains(DragDropFlags::COPY) {
+                actions |= wl::DataDeviceManagerDndAction::COPY;
+                preferred_action = wl::DataDeviceManagerDndAction::COPY;
+            }
+
+            // TODO: どの種類のコンテンツをacceptしたかをviewから返してもらう必要がある
+            active_offer
+                .object
+                .obj
+                .accept(active_offer.accept_serial, Some(c"text/uri-list"))
+                .expect("active_offer.accept");
+            active_offer
+                .object
+                .obj
+                .set_actions(actions, preferred_action)
+                .expect("active_offer.set_actions");
+        } else {
+            active_offer
+                .object
+                .obj
+                .accept(active_offer.accept_serial, None)
+                .expect("active_offer.accept");
+        }
+
+        active_offer.accept_serial += 1;
     }
 }
 impl wl::XdgWmBaseEventListener for GlobalMessaging {
@@ -1336,8 +1443,12 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
             .active_offer = Some(DataDeviceActiveOfferState {
             object: DragData {
                 obj: id,
+                dp: self.dp,
+                finished: false,
                 mime_types: HashSet::new(),
             },
+            accept_serial: 0,
+            is_dock_content: false,
             entering_surface: None,
             client_pos: Point::new_logical(0.0, 0.0),
             source_actions: wl::DataDeviceManagerDndAction::empty(),
@@ -1399,33 +1510,35 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
             return;
         };
 
-        let accepting_mime_type;
+        active_offer.entering_surface = Some(NonNull::from_ref(surface));
+        active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
         if active_offer
             .object
             .mime_types
             .contains(c"application/x-pme-dock-content")
         {
+            // special handling for redock
             tracing::debug!("offered(accepting): dock content");
-            accepting_mime_type = Some(c"application/x-pme-dock-content");
-        } else {
-            // TODO: query to views accepting this drag data...
-            accepting_mime_type = None;
+            active_offer.is_dock_content = true;
+            active_offer
+                .object
+                .obj
+                .accept(0, Some(c"application/x-pme-dock-content"))
+                .expect("data_offer.accept");
+            active_offer
+                .object
+                .obj
+                .set_actions(
+                    wl::DataDeviceManagerDndAction::MOVE,
+                    wl::DataDeviceManagerDndAction::MOVE,
+                )
+                .expect("data_offer.set_actions");
+            return;
         }
-        active_offer
-            .object
-            .obj
-            .accept(0, accepting_mime_type)
-            .expect("data_offer.accept");
-        active_offer
-            .object
-            .obj
-            .set_actions(
-                wl::DataDeviceManagerDndAction::MOVE,
-                wl::DataDeviceManagerDndAction::MOVE,
-            )
-            .expect("data_offset.set_actions");
-        active_offer.entering_surface = Some(NonNull::from_ref(surface));
-        active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
+
+        // query to views
+        active_offer.is_dock_content = false;
+        self.event_dispatcher.dispatch(Event::OfferAcceptingDrop);
     }
 
     #[tracing::instrument(name = "data_device::leave", skip(self, _sender))]
@@ -1455,20 +1568,23 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
             return;
         };
         active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
-        self.event_dispatcher.dispatch(Event::DockMovePreview {
-            dest_window: toplevel::Handle(
-                active_offer.entering_surface.expect("no entering surface?"),
-            ),
-            client_pos_in_dest: Point::new_logical(x.to_f32(), y.to_f32()),
-        });
+        if active_offer.is_dock_content {
+            self.event_dispatcher.dispatch(Event::DockMovePreview {
+                dest_window: toplevel::Handle(
+                    active_offer.entering_surface.expect("no entering surface?"),
+                ),
+                client_pos_in_dest: Point::new_logical(x.to_f32(), y.to_f32()),
+            });
+        } else {
+            self.event_dispatcher.dispatch(Event::OfferAcceptingDrop);
+        }
     }
 
     #[tracing::instrument(name = "data_device::drop", skip(self, _sender))]
     fn drop(&mut self, _sender: &mut wl::DataDevice) {
         event_trace!();
 
-        // TODO: perform drop on the view
-        let Some(active_offer) = self
+        let Some(mut active_offer) = self
             .data_device
             .as_mut()
             .expect("no data device")
@@ -1478,35 +1594,49 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
             // no active offers
             return;
         };
-        let mut pipe_fds = [0; 2];
-        let r = unsafe { libc::pipe(pipe_fds.as_mut_ptr()) };
-        if r < 0 {
-            panic!("libc.pipe: {}", std::io::Error::last_os_error());
-        }
-        active_offer
-            .object
-            .obj
-            .receive(c"application/x-pme-dock-content", &pipe_fds[1])
-            .expect("active_offer.receive");
-        active_offer
-            .object
-            .obj
-            .finish()
-            .expect("active_offer.finish");
+        active_offer.object.finished = true;
 
-        self.event_dispatcher.dispatch(Event::DockConfirm {
-            pointer: PointerID(
-                self.pointer
-                    .as_ref()
-                    .expect("no pointer")
-                    ._wl_object
-                    .as_ptr(),
+        if active_offer.is_dock_content {
+            let mut pipe_fds = [0; 2];
+            let r = unsafe { libc::pipe(pipe_fds.as_mut_ptr()) };
+            if r < 0 {
+                panic!("libc.pipe: {}", std::io::Error::last_os_error());
+            }
+            active_offer
+                .object
+                .obj
+                .receive(c"application/x-pme-dock-content", &pipe_fds[1])
+                .expect("active_offer.receive");
+            unsafe {
+                libc::close(pipe_fds[1]);
+                libc::close(pipe_fds[0]);
+            }
+
+            self.event_dispatcher.dispatch(Event::DockConfirm {
+                pointer: PointerID(
+                    self.pointer
+                        .as_ref()
+                        .expect("no pointer")
+                        ._wl_object
+                        .as_ptr(),
+                ),
+                destination_window: toplevel::Handle(
+                    active_offer.entering_surface.expect("no entering surface?"),
+                ),
+                client_pos_in_dest: active_offer.client_pos,
+            });
+            return;
+        }
+
+        self.event_dispatcher.dispatch(Event::PerformDrop {
+            data: active_offer.object.into(),
+            target_window: toplevel::Handle(
+                active_offer
+                    .entering_surface
+                    .expect("dropped but entering no window?"),
             ),
-            destination_window: toplevel::Handle(
-                active_offer.entering_surface.expect("no entering surface?"),
-            ),
-            client_pos_in_dest: active_offer.client_pos,
-        })
+            client_pos: active_offer.client_pos,
+        });
     }
 
     #[tracing::instrument(name = "data_device::selection", skip(self, _sender, _id))]
