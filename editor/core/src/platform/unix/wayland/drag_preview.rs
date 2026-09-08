@@ -1,9 +1,8 @@
 use peridot_tp_wayland as wl;
 
-use crate::{
-    platform::unix::wayland::event_trace,
-    utils::{LogicalUnit, Point, Rect, Size},
-};
+use shared::{LogicalUnit, Point, Rect, Size};
+
+use crate::platform::unix::wayland::event_trace;
 
 pub struct Controller {
     buf: Buffer,

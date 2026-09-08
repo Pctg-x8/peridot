@@ -16,17 +16,19 @@ use peridot_tp_harfbuzz::ffi::{
     hb_shape,
 };
 use peridot_tp_icu as icu;
+use shared::{LogicalUnit, Point, Rect, Size, prev_char_byte};
 
 use crate::{
     rendering::{
         MaskTextureAtlasManager,
         composite::CompositeRectTextHorizontalAlignment,
         text::{FontID, GlyphPlacementBox, TextRun},
-        vg::{VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer},
+        vg::{
+            VectorRasterizationState, VectorTextureUnit, VectorVertexRenderer,
+            point_new_vector_texture,
+        },
     },
-    utils::{
-        LogicalUnit, Point, Rect, Size, platform::unix::ReadonlyMappedFile, text::prev_char_byte,
-    },
+    utils::platform::unix::ReadonlyMappedFile,
 };
 
 struct FontContentReference {
@@ -1427,7 +1429,7 @@ struct OutlineReceiver<'r> {
 impl OutlineReceiver<'_> {
     #[inline(always)]
     const fn make_point(&self, v: &Vector) -> Point<VectorTextureUnit> {
-        Point::new_vector_texture(
+        point_new_vector_texture(
             self.scale * v.x as f32 / 64.0 + self.offset_x,
             self.scale * v.y as f32 / 64.0 + self.offset_y,
         )

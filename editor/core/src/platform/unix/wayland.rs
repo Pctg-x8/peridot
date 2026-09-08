@@ -7,6 +7,7 @@ use std::{
 use linux_input::Key;
 use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
+use shared::{LogicalUnit, Point, Rect, rup2};
 
 use crate::{
     Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
@@ -17,11 +18,7 @@ use crate::{
         hittest::{CursorShape, HitTestTreeManager, PointerButton},
     },
     rendering::{RenderMessage, composite::CompositeTree},
-    utils::{
-        LogicalUnit, Point, Rect,
-        platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
-        rup2,
-    },
+    utils::platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
 };
 
 mod drag_preview;
@@ -795,11 +792,24 @@ struct IMEPendingState {
     preedit_text: Option<String>,
 }
 
+pub struct DragData {
+    obj: wl::Owned<wl::DataOffer>,
+    mime_types: HashSet<std::ffi::CString>,
+}
+impl DragData {
+    pub fn is_file_drop(&self) -> bool {
+        self.mime_types.contains(c"text/uri-list")
+    }
+
+    pub fn query_file_list(&self) -> Option<Vec<String>> {
+        todo!("query_file_list");
+    }
+}
+
 struct DataDeviceActiveOfferState {
-    object: wl::Owned<wl::DataOffer>,
+    object: DragData,
     entering_surface: Option<NonNull<wl::Surface>>,
     client_pos: Point<LogicalUnit>,
-    mime_types: HashSet<std::ffi::CString>,
     source_actions: wl::DataDeviceManagerDndAction,
 }
 
@@ -1324,10 +1334,12 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
             .as_mut()
             .expect("no data device")
             .active_offer = Some(DataDeviceActiveOfferState {
-            object: id,
+            object: DragData {
+                obj: id,
+                mime_types: HashSet::new(),
+            },
             entering_surface: None,
             client_pos: Point::new_logical(0.0, 0.0),
-            mime_types: HashSet::new(),
             source_actions: wl::DataDeviceManagerDndAction::empty(),
         });
     }
@@ -1389,20 +1401,24 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
 
         let accepting_mime_type;
         if active_offer
+            .object
             .mime_types
             .contains(c"application/x-pme-dock-content")
         {
             tracing::debug!("offered(accepting): dock content");
             accepting_mime_type = Some(c"application/x-pme-dock-content");
         } else {
+            // TODO: query to views accepting this drag data...
             accepting_mime_type = None;
         }
         active_offer
             .object
+            .obj
             .accept(0, accepting_mime_type)
             .expect("data_offer.accept");
         active_offer
             .object
+            .obj
             .set_actions(
                 wl::DataDeviceManagerDndAction::MOVE,
                 wl::DataDeviceManagerDndAction::MOVE,
@@ -1451,6 +1467,7 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
     fn drop(&mut self, _sender: &mut wl::DataDevice) {
         event_trace!();
 
+        // TODO: perform drop on the view
         let Some(active_offer) = self
             .data_device
             .as_mut()
@@ -1468,9 +1485,14 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         }
         active_offer
             .object
+            .obj
             .receive(c"application/x-pme-dock-content", &pipe_fds[1])
             .expect("active_offer.receive");
-        active_offer.object.finish().expect("active_offer.finish");
+        active_offer
+            .object
+            .obj
+            .finish()
+            .expect("active_offer.finish");
 
         self.event_dispatcher.dispatch(Event::DockConfirm {
             pointer: PointerID(
@@ -1573,8 +1595,11 @@ impl wl::DataOfferEventListener for GlobalMessaging {
             .active_offer
             .as_mut()
             .expect("no offer active");
-        assert!(active_offer.object.ref_eq(sender), "another offer request");
-        active_offer.mime_types.insert(mime_type.to_owned());
+        assert!(
+            active_offer.object.obj.ref_eq(sender),
+            "another offer request"
+        );
+        active_offer.object.mime_types.insert(mime_type.to_owned());
     }
 
     #[tracing::instrument(name = "data_offer::source_actions", skip(self, sender))]
@@ -1592,7 +1617,10 @@ impl wl::DataOfferEventListener for GlobalMessaging {
             .active_offer
             .as_mut()
             .expect("no offer active");
-        assert!(active_offer.object.ref_eq(sender), "another offer request");
+        assert!(
+            active_offer.object.obj.ref_eq(sender),
+            "another offer request"
+        );
         active_offer.source_actions |= source_actions;
     }
 

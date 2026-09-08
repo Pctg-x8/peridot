@@ -5,6 +5,7 @@ use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use bitflags::bitflags;
 use peridot_tp_dbus as dbus;
 use peridot_tp_wayland::{self as wl, ProxyObject};
+use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
 
 use crate::{
     Event, LogicFiberEventDispatcher, WindowType,
@@ -23,7 +24,6 @@ use crate::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    utils::{LogicalUnit, PixelsUnit, Point, Rect, Size},
 };
 
 #[repr(transparent)]
@@ -301,7 +301,7 @@ impl crate::input::ShellPointerActions for Handle {
         // Waylandはなし(勝手にキャプチャ状態になってるらしい)
     }
 }
-impl crate::uikit::MountTarget for Handle {
+impl crate::uicore::MountTarget for Handle {
     #[inline(always)]
     fn ct_root(&self) -> CompositeTreeRef {
         self.event_listener().state.data.composite_root

@@ -1270,9 +1270,9 @@ impl TextInputViewCoreEventHandler {
             2.0,
         );
         #[cfg(feature = "wayland")]
-        system_link.set_ime_cursor_rect(crate::utils::Rect::from_lt_size(
+        system_link.set_ime_cursor_rect(Rect::from_lt_size(
             Point::new_logical(sx, sy),
-            crate::utils::Size::new_logical(2.0, 16.0),
+            Size::new_logical(2.0, 16.0),
         ));
         #[cfg(feature = "wayland")]
         system_link.ime_set_surrounding_text(
@@ -3324,9 +3324,9 @@ impl MultilineTextInputEventHandler {
             2.0 + cursor_display_y,
         );
         #[cfg(feature = "wayland")]
-        system_link.set_ime_cursor_rect(crate::utils::Rect::from_lt_size(
+        system_link.set_ime_cursor_rect(Rect::from_lt_size(
             Point::new_logical(sx, sy),
-            crate::utils::Size::new_logical(2.0, 16.0),
+            Size::new_logical(2.0, 16.0),
         ));
         #[cfg(feature = "wayland")]
         system_link.ime_set_surrounding_text(

@@ -5757,7 +5757,7 @@ pub use platform::mac::{
 };
 #[cfg(feature = "wayland")]
 pub use platform::unix::wayland::{
-    FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle,
+    DragData, FlyoutSurfaceHandle, PointerID, ToplevelHandle as WindowHandle,
     WindowPersistentStateNativeGeometryUnit,
 };
 #[cfg(windows)]

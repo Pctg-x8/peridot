@@ -3,6 +3,7 @@ use std::sync::{Mutex, atomic::AtomicBool};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use peridot_tp_wayland as wl;
+use shared::{LogicalUnit, PixelsUnit, Point, Size};
 
 use crate::{
     Event, LogicFiberEventDispatcher, SystemLink,
@@ -19,8 +20,9 @@ use crate::{
             AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
         },
     },
-    uikit::{MenuItemSubMenuView, MountTarget},
-    utils::{LogicalUnit, PixelsUnit, Point, Size, platform::linux::TimerFD},
+    uicore::MountTarget,
+    uikit::MenuItemSubMenuView,
+    utils::platform::linux::TimerFD,
 };
 
 #[repr(transparent)]
