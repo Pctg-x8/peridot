@@ -53,13 +53,14 @@ use crate::{
         preview::HandlePointing,
         text::{FontID, FontSet, RootFontSet},
     },
-    ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
+    ui::dock::{DockingPreviewState, PaneContentResizeContext, PaneGroupCreateContext},
     uicore::{
         MeasureContext, MountContext, MountTarget, PopupID, PopupManager, RenderContext,
         TeardownContext, TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry, ViewGroupID,
-        ViewGroupRegisterable, ViewGroupRelationControllable, ViewGroupRelationStore,
-        ViewIdentifier, ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
+        ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry,
+        ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
+        ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
+        ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
         ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderElements,
@@ -3013,6 +3014,2124 @@ profiler::section!(INITIALIZE = "LogicFiber.Initialize");
 profiler::section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
 profiler::section!(LOCK_WAIT = "Mutex.LockWait");
 
+pub struct CoreLoop<'h, 'sys> {
+    syslink: SystemLink<'sys>,
+    fs: &'sys FileSystem,
+    global_time_base: &'sys std::time::Instant,
+    renderer_sync: &'sys Mutex<RendererSync>,
+    committed_preview_state: &'sys Mutex<rendering::preview::CommittedState>,
+    // base model
+    application: Application,
+    // base functionalities
+    composite_tree: CompositeTree<SyncEvent>,
+    ht_manager: core::pin::Pin<Box<HitTestTreeManager<'h>>>,
+    keyboard_focus_registry: KeyboardFocusTokenRegistry,
+    pointer_input_manager: core::pin::Pin<Box<PointerInputManager>>,
+    texture_id_issuer: MainThreadTextureIDIssuer,
+    delayed_render_messages: Vec<RenderMessage>,
+    // view management
+    view_allocator: ViewIdentifierAllocator,
+    view_instance_store: ViewInstanceStore,
+    view_tree_relation_store: ViewTreeRelationStore,
+    view_group_relation_store: ViewGroupRelationStore,
+    view_layout_state_store: ViewLayoutStateStore,
+    view_render_state_store: ViewRenderStateStore,
+    view_render_queue: ViewRenderQueue,
+    view_feedback_registry: ViewFeedbackRegistry,
+    view_feedback_registry_delayed_ops: VecDeque<ViewFeedbackRegistryDelayedOps>,
+    view_feedback_store: NonDropAnyTypeQueue,
+    // view common res
+    window_bg_gradient: GradientRef,
+    context_menu_common_resources: MenuItemCommonResources,
+    // window management
+    main_window: WindowHandle,
+    sub_windows: HashSet<WindowHandle>,
+    // high-level functionalities
+    popup_manager: PopupManager,
+    dock_store: ui::dock::DockStore,
+    current_active_menu_session: Option<MenuSession>,
+    current_active_dropdown_menu_session: Option<DropdownMenuSession>,
+    custom_view_flyout_session: Option<CustomViewFlyoutSession>,
+    docking_preview_state: Option<ui::dock::DockingPreviewState>,
+    // preview
+    preview_input_state: core::pin::Pin<Box<PreviewInputState>>,
+    preview_state: PreviewMainThreadState,
+}
+impl<'h, 'sys> CoreLoop<'h, 'sys> {
+    #[profiler::instrument("CoreLoop.Initialize")]
+    pub fn new(
+        syslink: SystemLink<'sys>,
+        fs: &'sys FileSystem,
+        global_time_base: &'sys std::time::Instant,
+        renderer_sync: &'sys Mutex<RendererSync>,
+        committed_preview_state: &'sys Mutex<rendering::preview::CommittedState>,
+    ) -> Self {
+        let application = Application::new();
+        let mut composite_tree = CompositeTree::new();
+        let mut ht_manager = Box::pin(HitTestTreeManager::new());
+        let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
+        let pointer_input_manager = Box::pin(PointerInputManager::new());
+        let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
+        let mut view_allocator = ViewIdentifierAllocator::new();
+        let mut view_instance_store = ViewInstanceStore::new();
+        let mut view_tree_relation_store = ViewTreeRelationStore::new();
+        let mut view_group_relation_store = ViewGroupRelationStore::new();
+        let mut view_layout_state_store = ViewLayoutStateStore::new();
+        let mut view_render_state_store = ViewRenderStateStore::new();
+        let mut view_render_queue = ViewRenderQueue::new();
+        let mut view_feedback_registry = ViewFeedbackRegistry::new();
+        let mut view_feedback_registry_delayed_ops = VecDeque::new();
+        let mut view_feedback_store = NonDropAnyTypeQueue::new();
+        let popup_manager = PopupManager::new();
+        let mut dock_store = ui::dock::DockStore::new();
+        let mut delayed_render_messages = Vec::new();
+        let mut preview_input_state = Box::pin(PreviewInputState::new());
+
+        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
+        #[cfg(windows)]
+        unsafe {
+            platform::windows::locate_non_client_hittest_managers(
+                &pointer_input_manager,
+                &ht_manager,
+            );
+        }
+
+        let context_menu_common_resources = MenuItemCommonResources::new(
+            &mut composite_tree,
+            &mut texture_id_issuer,
+            syslink.rt_sender(),
+        );
+
+        let last_window_state = 'try_restore_last_window_state: {
+            let fp = match std::fs::File::open(fs.window_state_save_path()) {
+                Ok(fp) => fp,
+                Err(e) => {
+                    tracing::warn!(reason = %e, "persist.open.window_state");
+                    break 'try_restore_last_window_state None;
+                }
+            };
+            match PersistStateWindowData::deserialize(&mut std::io::BufReader::new(fp)) {
+                Ok(state) => Some(state),
+                Err(e) => {
+                    tracing::warn!(reason = %e, "persist.restore.window_state");
+                    break 'try_restore_last_window_state None;
+                }
+            }
+        };
+
+        let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
+            right_top: [0.1, 0.1, 0.1, 1.0],
+            left_bottom: [0.1, 0.1, 0.1, 1.0],
+            right_bottom: [0.05, 0.025, 0.0, 1.0],
+        });
+
+        let mut sub_windows = HashSet::new();
+        let mut main_window = syslink.create_main_window(
+            match last_window_state {
+                None => MainWindowOpenMode::New,
+                Some(ref x) => MainWindowOpenMode::Restore(x.main.geometry.clone()),
+            },
+            &mut composite_tree,
+            &mut ht_manager,
+            &mut keyboard_focus_registry,
+            &mut delayed_render_messages,
+        );
+
+        let mut view_init_ctx = ViewInitContext {
+            mount_context: MountContext {
+                composite_tree: &mut composite_tree,
+                ht_manager: &mut ht_manager,
+                current_sec: global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut keyboard_focus_registry,
+            },
+            view_allocator: &mut view_allocator,
+            view_instance_store: &mut view_instance_store,
+            view_tree_relation_store: &mut view_tree_relation_store,
+            view_group_relation_store: &mut view_group_relation_store,
+            view_layout_state_store: &mut view_layout_state_store,
+            view_render_state_store: &mut view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+            system_link: &syslink,
+            main_thread_texture_id_issuer: &mut texture_id_issuer,
+            application: &application,
+        };
+
+        view_init_ctx
+            .composite_tree
+            .begin_mod_chain(main_window.ct_root())
+            .has_bitmap(true)
+            .composite_mode(CompositeMode::FillCornerGradient(
+                window_bg_gradient,
+                AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
+            ))
+            .apply();
+        let main_window_root_view =
+            view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
+        let window_header = ui::window_header::Component::new(
+            ui::window_header::Caption::Main,
+            ui::window_header::ComponentInit {
+                with_system_command_buttons: main_window.needs_system_command_buttons(),
+            },
+            &mut view_init_ctx,
+        );
+        view_init_ctx.view_set_parent_untyped(
+            window_header.root_view(),
+            main_window_root_view.into_untyped(),
+        );
+
+        let app_menu_view = if syslink.needs_app_menu_in_surface() {
+            let app_menu_view = view_init_ctx.construct_view_direct(|_| {
+                Box::new(ui::app_menu_bar::View::new(
+                    ui::window_header::View::THICKNESS,
+                    vec![
+                        (
+                            "ファイル(F)".into(),
+                            vec![
+                                MenuItem::Command {
+                                    label: "新規プロジェクト...".into(),
+                                    command_id: 0,
+                                },
+                                MenuItem::Command {
+                                    label: "新規ファイル...".into(),
+                                    command_id: 0,
+                                },
+                                MenuItem::Separator,
+                                MenuItem::Command {
+                                    label: "プロジェクトを開く...".into(),
+                                    command_id: 0,
+                                },
+                                MenuItem::Command {
+                                    label: "保存".into(),
+                                    command_id: 0,
+                                },
+                                MenuItem::Command {
+                                    label: "名前をつけて保存...".into(),
+                                    command_id: 0,
+                                },
+                                MenuItem::Separator,
+                                MenuItem::Command {
+                                    label: "Peridot Marble Editor を終了".into(),
+                                    command_id: 1000,
+                                },
+                            ],
+                        ),
+                        (
+                            "編集(E)".into(),
+                            vec![MenuItem::Command {
+                                label: "項目2".into(),
+                                command_id: 1,
+                            }],
+                        ),
+                        (
+                            "ウィンドウ(W)".into(),
+                            vec![
+                                MenuItem::Command {
+                                    label: "項目3".into(),
+                                    command_id: 2,
+                                },
+                                MenuItem::SubMenu {
+                                    label: "その他".into(),
+                                    items: vec![
+                                        MenuItem::Command {
+                                            label: "ウィンドウ1".into(),
+                                            command_id: 201,
+                                        },
+                                        MenuItem::Command {
+                                            label: "ウィンドウ2".into(),
+                                            command_id: 202,
+                                        },
+                                    ],
+                                },
+                            ],
+                        ),
+                        (
+                            "ヘルプ(H)".into(),
+                            vec![
+                                MenuItem::Command {
+                                    label: "項目4".into(),
+                                    command_id: 3,
+                                },
+                                MenuItem::Command {
+                                    label: "バージョン情報".into(),
+                                    command_id: 100,
+                                },
+                            ],
+                        ),
+                    ],
+                ))
+            });
+            view_init_ctx.view_set_parent(app_menu_view, main_window_root_view);
+            Some(app_menu_view)
+        } else {
+            None
+        };
+
+        let window_footer_view =
+            view_init_ctx.construct_view_direct(|_| Box::new(ui::window_footer::View::new()));
+        view_init_ctx.view_set_parent(window_footer_view, main_window_root_view);
+
+        let initial_dock_state = initial_dock_state();
+        let dock_top_offset = ui::window_header::View::THICKNESS
+            + if app_menu_view.is_some() {
+                ui::app_menu_bar::View::HEIGHT
+            } else {
+                0.0
+            };
+        let main_window_size = main_window.client_size();
+        main_window.associate_extra_data(Box::new(PerWindowData {
+            screen_reposition_interests: HashSet::new(),
+            root_view: main_window_root_view,
+            header: window_header,
+            appmenu: app_menu_view,
+            footer: Some(window_footer_view),
+            docking_manager: ui::dock::WindowDockingManager::new(
+                main_window,
+                &mut view_init_ctx,
+                &mut view_render_queue,
+                Rect::from_lt_size(
+                    Point::new_logical(0.0, dock_top_offset),
+                    Size::new_logical(
+                        main_window_size.width,
+                        main_window_size.height
+                            - dock_top_offset
+                            - ui::window_footer::View::THICKNESS,
+                    ),
+                ),
+                &mut dock_store,
+                |view_init_ctx, view_render_queue, store| {
+                    construct_dock_from_state(
+                        match last_window_state {
+                            None => &initial_dock_state,
+                            Some(ref x) => &x.main.dock,
+                        },
+                        main_window.keyboard_focus_group(),
+                        &mut PaneGroupCreateContext {
+                            view_init_context: view_init_ctx,
+                            view_render_queue,
+                        },
+                        store,
+                        |id, view_init_ctx| match id {
+                            // TODO: このへんうまい具合にRegistryつくりたい
+                            UIKitPreviewPanePresenter::ID => {
+                                Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
+                            }
+                            ui::pane::object_tree::Presenter::ID => {
+                                Box::new(ui::pane::object_tree::Presenter::new(view_init_ctx))
+                            }
+                            ui::pane::inspector::Presenter::ID => {
+                                Box::new(ui::pane::inspector::Presenter::new(view_init_ctx))
+                            }
+                            ui::pane::asset_explorer::Presenter::ID => {
+                                Box::new(ui::pane::asset_explorer::Presenter::new(view_init_ctx))
+                            }
+                            ProjectSettingsPanePresenter::ID => {
+                                Box::new(ProjectSettingsPanePresenter::new(view_init_ctx))
+                            }
+                            TimelinePanePresenter::ID => {
+                                Box::new(TimelinePanePresenter::new(view_init_ctx))
+                            }
+                            AssetPreviewPanePresenter::ID => {
+                                Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
+                            }
+                            PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
+                                view_init_ctx,
+                                preview_input_state.as_mut().get_mut(),
+                            )),
+                            id => todo!("generic pane id handling: {id:?}"),
+                        },
+                    )
+                },
+            ),
+        }));
+
+        view_init_ctx.render_view_with_base(
+            main_window_root_view.into_untyped(),
+            &main_window,
+            main_window.keyboard_focus_group(),
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), main_window.client_size()),
+        );
+
+        if let Some(ref last_window_state) = last_window_state {
+            for sub in last_window_state.sub.iter() {
+                let new_window = syslink.open_window(
+                    SubWindowOpenMode::Restore(sub.geometry.clone()),
+                    &mut composite_tree,
+                    &mut ht_manager,
+                    &mut keyboard_focus_registry,
+                    &mut delayed_render_messages,
+                    |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
+                        ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
+
+                        composite_tree
+                            .begin_mod_chain(w.ct_root())
+                            .has_bitmap(true)
+                            .composite_mode(CompositeMode::FillCornerGradient(
+                                window_bg_gradient,
+                                AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
+                            ))
+                            .apply();
+
+                        let mut view_feedback_registry_delayed_ops = VecDeque::new();
+                        let mut view_init_ctx = ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree,
+                                ht_manager,
+                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry,
+                            },
+                            view_allocator: &mut view_allocator,
+                            view_instance_store: &mut view_instance_store,
+                            view_tree_relation_store: &mut view_tree_relation_store,
+                            view_group_relation_store: &mut view_group_relation_store,
+                            view_layout_state_store: &mut view_layout_state_store,
+                            view_render_state_store: &mut view_render_state_store,
+                            view_feedback_subscription_delayed_ops:
+                                &mut view_feedback_registry_delayed_ops,
+                            system_link,
+                            main_thread_texture_id_issuer: &mut texture_id_issuer,
+                            application: &application,
+                        };
+                        let root_view =
+                            view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
+                        let window_header_view = ui::window_header::Component::new(
+                            ui::window_header::Caption::Sub,
+                            ui::window_header::ComponentInit {
+                                with_system_command_buttons: w.needs_system_command_buttons(),
+                            },
+                            &mut view_init_ctx,
+                        );
+                        view_init_ctx.view_set_parent_untyped(
+                            window_header_view.root_view(),
+                            root_view.into_untyped(),
+                        );
+
+                        view_init_ctx.render_view_with_base(
+                            root_view.into_untyped(),
+                            &w,
+                            w.keyboard_focus_group(),
+                            Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                        );
+
+                        w.associate_extra_data(Box::new(PerWindowData {
+                            root_view: root_view,
+                            screen_reposition_interests: HashSet::new(),
+                            header: window_header_view,
+                            appmenu: None,
+                            footer: None,
+                            docking_manager: ui::dock::WindowDockingManager::new(
+                                w,
+                                &mut view_init_ctx,
+                                &mut view_render_queue,
+                                Rect::from_lt_size(
+                                    Point::new_logical(0.0, ui::window_header::View::THICKNESS),
+                                    Size::new_logical(320.0, 240.0),
+                                ),
+                                &mut dock_store,
+                                |view_init_ctx, view_render_queue, store| {
+                                    construct_dock_from_state(
+                                        &sub.dock,
+                                        w.keyboard_focus_group(),
+                                        &mut PaneGroupCreateContext {
+                                            view_init_context: view_init_ctx,
+                                            view_render_queue,
+                                        },
+                                        store,
+                                        |id, view_init_ctx| match id {
+                                            // TODO: このへんうまい具合にRegistryつくりたい
+                                            UIKitPreviewPanePresenter::ID => Box::new(
+                                                UIKitPreviewPanePresenter::new(view_init_ctx),
+                                            ),
+                                            ui::pane::object_tree::Presenter::ID => {
+                                                Box::new(ui::pane::object_tree::Presenter::new(
+                                                    view_init_ctx,
+                                                ))
+                                            }
+                                            ui::pane::inspector::Presenter::ID => Box::new(
+                                                ui::pane::inspector::Presenter::new(view_init_ctx),
+                                            ),
+                                            ui::pane::asset_explorer::Presenter::ID => {
+                                                Box::new(ui::pane::asset_explorer::Presenter::new(
+                                                    view_init_ctx,
+                                                ))
+                                            }
+                                            ProjectSettingsPanePresenter::ID => Box::new(
+                                                ProjectSettingsPanePresenter::new(view_init_ctx),
+                                            ),
+                                            TimelinePanePresenter::ID => {
+                                                Box::new(TimelinePanePresenter::new(view_init_ctx))
+                                            }
+                                            AssetPreviewPanePresenter::ID => Box::new(
+                                                AssetPreviewPanePresenter::new(view_init_ctx),
+                                            ),
+                                            PreviewPanePresenter::ID => {
+                                                Box::new(PreviewPanePresenter::new(
+                                                    view_init_ctx,
+                                                    preview_input_state.as_mut().get_mut(),
+                                                ))
+                                            }
+                                            id => todo!("generic pane id handling: {id:?}"),
+                                        },
+                                    )
+                                },
+                            ),
+                        }));
+                    },
+                );
+                sub_windows.insert(new_window);
+            }
+        }
+
+        view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
+
+        // initial sync model with view
+        application.sync(&mut view_feedback_store);
+        let mut fb_context = ViewFeedbackContext {
+            application: &application,
+            composite_tree: &mut composite_tree,
+            ht_manager: &mut ht_manager,
+            current_sec: global_time_base.elapsed().as_secs_f32(),
+            keyboard_focus_registry: &mut keyboard_focus_registry,
+            view_allocator: &mut view_allocator,
+            view_instance_store: &mut view_instance_store,
+            view_tree_relation_store: &mut view_tree_relation_store,
+            view_group_relation_store: &mut view_group_relation_store,
+            view_layout_state_store: &mut view_layout_state_store,
+            view_render_state_store: &mut view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+            system_link: &syslink,
+            main_thread_texture_id_issuer: &mut texture_id_issuer,
+
+            view_render_queue: &mut view_render_queue,
+        };
+
+        for (t, p) in view_feedback_store.iter() {
+            unsafe {
+                view_feedback_registry.dispatch_dynamic_unchecked(p, t, &mut fb_context);
+            }
+        }
+        view_feedback_store.clear();
+        view_feedback_registry.perform_atomic(&mut fb_context);
+
+        view_render_queue.perform(
+            &mut RenderContext {
+                composite_tree: &mut composite_tree,
+                ht_manager: &mut ht_manager,
+                keyboard_focus_registry: &mut keyboard_focus_registry,
+                current_sec: global_time_base.elapsed().as_secs_f32(),
+                system_link: &syslink,
+                main_thread_texture_id_issuer: &mut texture_id_issuer,
+                application: &application,
+                view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
+            },
+            &mut view_instance_store,
+            &view_tree_relation_store,
+            &mut view_layout_state_store,
+            &mut view_render_state_store,
+        );
+
+        composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
+        ht_manager.dump(main_window.ht_root());
+        for msg in delayed_render_messages.drain(..) {
+            syslink.rt_sender().send(msg).expect("rt_sender.send");
+        }
+        view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
+
+        syslink.prelaunch(main_window);
+
+        Self {
+            syslink,
+            fs,
+            global_time_base,
+            renderer_sync,
+            committed_preview_state,
+            application,
+            composite_tree,
+            ht_manager,
+            keyboard_focus_registry,
+            pointer_input_manager,
+            texture_id_issuer,
+            delayed_render_messages,
+            view_allocator,
+            view_instance_store,
+            view_tree_relation_store,
+            view_group_relation_store,
+            view_layout_state_store,
+            view_render_state_store,
+            view_render_queue,
+            view_feedback_registry,
+            view_feedback_registry_delayed_ops,
+            view_feedback_store,
+            window_bg_gradient,
+            context_menu_common_resources,
+            main_window,
+            sub_windows,
+            popup_manager,
+            dock_store,
+            current_active_menu_session: None,
+            current_active_dropdown_menu_session: None,
+            custom_view_flyout_session: None,
+            docking_preview_state: None,
+            preview_input_state,
+            preview_state: PreviewMainThreadState::new(),
+        }
+    }
+
+    fn close_sub_window(&mut self, mut target: WindowHandle) {
+        let wd = unsafe { target.take_extra_data::<PerWindowData>() };
+        struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
+        impl ViewDestructionContext for LocalContext<'_, '_> {
+            fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
+                uicore::destruct_view_recursive(
+                    target,
+                    &mut TeardownContext {
+                        composite_tree: &mut self.0.mount_context.composite_tree,
+                        ht_manager: &mut self.0.mount_context.ht_manager,
+                        keyboard_focus_registry: &mut self.0.mount_context.keyboard_focus_registry,
+                        current_sec: self.0.mount_context.current_sec,
+                        view_feedback_subscription_delayed_ops: &mut self
+                            .0
+                            .view_feedback_subscription_delayed_ops,
+                    },
+                    self.0.view_allocator,
+                    self.0.view_instance_store,
+                    self.0.view_tree_relation_store,
+                    self.0.view_group_relation_store,
+                    self.0.view_layout_state_store,
+                    self.0.view_render_state_store,
+                );
+            }
+        }
+        wd.docking_manager.teardown(
+            &mut self.dock_store,
+            &mut LocalContext(ViewInitContext {
+                mount_context: MountContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                },
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+            }),
+        );
+        self.sub_windows.remove(&target);
+        self.syslink.close_window(
+            target,
+            &mut self.composite_tree,
+            &mut self.ht_manager,
+            &mut self.keyboard_focus_registry,
+        );
+    }
+
+    fn resize_window(&mut self, target: WindowHandle, size: Size<LogicalUnit>) {
+        let wd = unsafe { target.extra_data_ref::<PerWindowData>() };
+        wd.docking_manager.resize(
+            wd.compute_content_area(size),
+            &mut self.dock_store,
+            &mut PaneContentResizeContext {
+                view_instance_store: &mut self.view_instance_store,
+                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut self.composite_tree,
+                ht_manager: &mut self.ht_manager,
+            },
+        );
+    }
+
+    fn handle_window_move(&mut self, mut target: WindowHandle, pos: Point<LogicalUnit>) {
+        let wd = unsafe { target.extra_data_mut::<PerWindowData>() };
+        let mut input_context = InputEventContext {
+            composite_tree: &mut self.composite_tree,
+            current_sec: self.global_time_base.elapsed().as_secs_f32(),
+            system_link: &mut self.syslink,
+            ht_manager: &self.ht_manager,
+            dock_store: &mut self.dock_store,
+            view_instance_store: &mut self.view_instance_store,
+            view_group_relation_store: &self.view_group_relation_store,
+            view_render_queue: &mut self.view_render_queue,
+            application: ApplicationMutation {
+                state: &mut self.application,
+                view_feedbacks: &mut self.view_feedback_store,
+            },
+        };
+
+        for &ht in wd.screen_reposition_interests.iter() {
+            if let Some(e) = self.ht_manager.get_data(ht).screen_reposition_handler() {
+                e.on_screen_reposition_required(ht, &mut input_context, pos);
+            }
+        }
+
+        // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
+        if let Some(c) = self
+            .current_active_menu_session
+            .take_if(|x| x.parent == target)
+        {
+            if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+                uicore::view_instance::<ui::app_menu_bar::View>(
+                    a.into_untyped(),
+                    &self.view_instance_store,
+                )
+                .expect("query failed")
+                .on_close_all(
+                    &mut self.composite_tree,
+                    self.global_time_base.elapsed().as_secs_f32(),
+                );
+            }
+
+            c.terminate(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+
+        if let Some(mut c) = self
+            .current_active_dropdown_menu_session
+            .take_if(|x| x.parent == target)
+        {
+            c.close_all(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+
+        if let Some(c) = self
+            .custom_view_flyout_session
+            .take_if(|x| x.parent == target)
+        {
+            c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+                syslink: &self.syslink,
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                teardown_context: TeardownContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    view_feedback_subscription_delayed_ops: &mut self
+                        .view_feedback_registry_delayed_ops,
+                },
+            });
+        }
+    }
+
+    fn rescale_popup_of_window(&mut self, target: WindowHandle, new_scale: f32) {
+        self.popup_manager
+            .rescale(target, new_scale, &mut self.composite_tree);
+    }
+
+    fn handle_window_maximize_state_changes(&mut self, target: WindowHandle, is_maximized: bool) {
+        struct LocalContext<'a> {
+            view_render_queue: &'a mut ViewRenderQueue,
+            view_instance_store: &'a mut ViewInstanceStore,
+        }
+        impl uicore::ViewInstanceQueryableMut for LocalContext<'_> {
+            #[inline(always)]
+            fn view_instance_mut_of<T: View + 'static>(
+                &mut self,
+                id: ViewIdentifier,
+            ) -> Option<&mut T> {
+                uicore::view_instance_mut(id, self.view_instance_store)
+            }
+
+            #[inline(always)]
+            fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
+                uicore::view_set_visibility(id, visible, self.view_instance_store)
+            }
+
+            #[inline(always)]
+            fn view_layout_mut_untyped(
+                &mut self,
+                id: ViewIdentifier,
+            ) -> Option<&mut uicore::ViewLayout> {
+                uicore::view_layout_mut(id, self.view_instance_store)
+            }
+        }
+        impl uicore::ViewRenderer for LocalContext<'_> {
+            #[inline(always)]
+            fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
+                self.view_render_queue.schedule(target)
+            }
+        }
+
+        unsafe { target.extra_data_ref::<PerWindowData>() }
+            .header
+            .set_maximize_state(
+                is_maximized,
+                &mut LocalContext {
+                    view_render_queue: &mut self.view_render_queue,
+                    view_instance_store: &mut self.view_instance_store,
+                },
+            );
+    }
+
+    fn handle_window_focus_changed(&mut self, mut target: WindowHandle, focused: bool) {
+        let mut input_context = InputEventContext {
+            composite_tree: &mut self.composite_tree,
+            current_sec: self.global_time_base.elapsed().as_secs_f32(),
+            system_link: &mut self.syslink,
+            ht_manager: &self.ht_manager,
+            dock_store: &mut self.dock_store,
+            view_instance_store: &mut self.view_instance_store,
+            view_group_relation_store: &self.view_group_relation_store,
+            view_render_queue: &mut self.view_render_queue,
+            application: ApplicationMutation {
+                state: &mut self.application,
+                view_feedbacks: &mut self.view_feedback_store,
+            },
+        };
+        let mgr = target.keyboard_focus_state_mut();
+
+        if focused {
+            mgr.notify_window_focus(&mut input_context, &self.keyboard_focus_registry);
+        } else {
+            mgr.notify_window_lost_focus(&mut input_context, &self.keyboard_focus_registry);
+        }
+
+        if !focused
+            && let Some(c) = self
+                .current_active_menu_session
+                .take_if(|x| x.parent == target)
+        {
+            // フォーカスロストした時もコンテキストメニューを閉じる
+            if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+                uicore::view_instance::<ui::app_menu_bar::View>(
+                    a.into_untyped(),
+                    &self.view_instance_store,
+                )
+                .expect("query failed")
+                .on_close_all(
+                    &mut self.composite_tree,
+                    self.global_time_base.elapsed().as_secs_f32(),
+                );
+            }
+
+            c.terminate(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+    }
+
+    fn handle_window_activation_state_changed(&mut self, target: WindowHandle, activated: bool) {
+        if !activated {
+            if let Some(c) = self
+                .current_active_menu_session
+                .take_if(|x| x.parent == target)
+            {
+                if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+                    uicore::view_instance::<ui::app_menu_bar::View>(
+                        a.into_untyped(),
+                        &self.view_instance_store,
+                    )
+                    .expect("query failed")
+                    .on_close_all(
+                        &mut self.composite_tree,
+                        self.global_time_base.elapsed().as_secs_f32(),
+                    );
+                }
+
+                c.terminate(
+                    &self.syslink,
+                    &mut self.composite_tree,
+                    &mut self.ht_manager,
+                    &mut self.keyboard_focus_registry,
+                );
+            }
+        }
+    }
+
+    fn handle_pointer_down(
+        &mut self,
+        target: WindowHandle,
+        pointer_id: PointerID,
+        button: PointerButton,
+        key_modifier: ModifierKey,
+    ) {
+        // #[cfg(target_os = "macos")]
+        // drag_preview_popover.bind_position_base_window_link(window);
+
+        if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+            uicore::view_instance::<ui::app_menu_bar::View>(
+                a.into_untyped(),
+                &self.view_instance_store,
+            )
+            .expect("query failed")
+            .on_close_all(
+                &mut self.composite_tree,
+                self.global_time_base.elapsed().as_secs_f32(),
+            );
+        }
+
+        if let Some(c) = self.current_active_menu_session.take() {
+            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
+                uicore::view_instance::<ui::app_menu_bar::View>(
+                    a.into_untyped(),
+                    &self.view_instance_store,
+                )
+                .expect("query failed")
+                .on_close_all(
+                    &mut self.composite_tree,
+                    self.global_time_base.elapsed().as_secs_f32(),
+                );
+            }
+
+            c.terminate(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+
+        if let Some(mut c) = self.current_active_dropdown_menu_session.take() {
+            c.close_all(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+
+        if let Some(c) = self.custom_view_flyout_session.take() {
+            c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+                syslink: &self.syslink,
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                teardown_context: TeardownContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    view_feedback_subscription_delayed_ops: &mut self
+                        .view_feedback_registry_delayed_ops,
+                },
+            });
+        }
+
+        self.pointer_input_manager.handle_mouse_down(
+            pointer_id,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            button,
+            key_modifier,
+            target.ht_root(),
+            &mut self.keyboard_focus_registry,
+        );
+    }
+
+    fn handle_pointer_move(
+        &mut self,
+        target: WindowHandle,
+        pointer_id: PointerID,
+        client_pos: Point<LogicalUnit>,
+        key_modifier: ModifierKey,
+    ) {
+        self.pointer_input_manager.handle_mouse_move(
+            NativeDesktopSurface::Window(target),
+            pointer_id,
+            client_pos,
+            key_modifier,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            target.ht_root(),
+        );
+
+        let cursor_shape = self.pointer_input_manager.cursor_shape(&self.ht_manager);
+        self.syslink.set_cursor(&pointer_id, cursor_shape);
+    }
+
+    fn handle_pointer_move_relative(
+        &mut self,
+        pointer_id: PointerID,
+        relative: Point<LogicalUnit>,
+    ) {
+        self.pointer_input_manager.handle_mouse_move_relative(
+            pointer_id,
+            relative,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+        );
+    }
+
+    fn handle_pointer_up(
+        &mut self,
+        target: WindowHandle,
+        pointer_id: PointerID,
+        button: PointerButton,
+        key_modifier: ModifierKey,
+    ) {
+        self.pointer_input_manager.handle_mouse_up(
+            pointer_id,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            button,
+            key_modifier,
+            target.ht_root(),
+        );
+    }
+
+    fn handle_pointer_leave_window(&mut self, pointer_id: PointerID) {
+        self.pointer_input_manager.handle_mouse_leave(
+            pointer_id,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+        );
+    }
+
+    fn handle_pointer_hover_timeout(&mut self) {
+        self.syslink.kill_pointer_hovering_timeout();
+        self.pointer_input_manager
+            .handle_pointer_hover(&mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            });
+    }
+
+    fn dispatch_scroll_wheel(&mut self, amount: f32, key_modifier: ModifierKey) {
+        self.pointer_input_manager.handle_scroll_wheel(
+            amount,
+            key_modifier,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+        );
+    }
+
+    fn switch_focus_by_key(&mut self, mut target: WindowHandle, key_modifier: ModifierKey) {
+        let Some(next_focus) = (if key_modifier.contains(ModifierKey::SHIFT) {
+            target
+                .keyboard_focus_state()
+                .prev_focus(&self.keyboard_focus_registry)
+        } else {
+            target
+                .keyboard_focus_state()
+                .next_focus(&self.keyboard_focus_registry)
+        }) else {
+            return;
+        };
+
+        target.keyboard_focus_state_mut().update_focus_with_event(
+            next_focus,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            &self.keyboard_focus_registry,
+        );
+    }
+
+    fn dispatch_key_down(
+        &mut self,
+        target: WindowHandle,
+        code: KeyInputCode,
+        modifier: ModifierKey,
+    ) {
+        target.keyboard_focus_state().handle_keydown(
+            code,
+            modifier,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            &self.keyboard_focus_registry,
+        );
+    }
+
+    fn dispatch_key_up(&mut self, target: WindowHandle, code: KeyInputCode, modifier: ModifierKey) {
+        target.keyboard_focus_state().handle_keyup(
+            code,
+            modifier,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            &self.keyboard_focus_registry,
+        );
+    }
+
+    fn dispatch_key_char(&mut self, target: WindowHandle, ch: char, modifier: ModifierKey) {
+        target.keyboard_focus_state().handle_char(
+            ch,
+            modifier,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            &self.keyboard_focus_registry,
+        );
+    }
+
+    #[cfg(feature = "wayland")]
+    fn dispatch_ime_state_changes(
+        &mut self,
+        target: WindowHandle,
+        preedit_string: Option<String>,
+        committed_string: Option<String>,
+    ) {
+        target.keyboard_focus_state().handle_ime_state_changes(
+            committed_string.as_deref(),
+            preedit_string.as_deref(),
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            &self.keyboard_focus_registry,
+        );
+    }
+
+    fn close_popup(&mut self, id: PopupID) {
+        self.popup_manager.close(
+            id,
+            &mut RenderContext {
+                composite_tree: &mut self.composite_tree,
+                ht_manager: &mut self.ht_manager,
+                keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+            },
+            &mut self.view_instance_store,
+            &self.view_tree_relation_store,
+            &mut self.view_layout_state_store,
+            &mut self.view_render_state_store,
+        );
+    }
+
+    fn destroy_popup(&mut self, id: PopupID) {
+        self.popup_manager.teardown(
+            id,
+            &mut self.view_instance_store,
+            &mut self.view_tree_relation_store,
+            &mut self.view_render_state_store,
+            &mut TeardownContext {
+                composite_tree: &mut self.composite_tree,
+                ht_manager: &mut self.ht_manager,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+            },
+        );
+    }
+
+    fn open_alert_dialog(&mut self, target_window: WindowHandle, message: String) {
+        let opened_id = self.popup_manager.open(
+            &mut ViewInitContext {
+                mount_context: MountContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                },
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+            },
+            target_window,
+            |id, ctx| uikit::AlertDialogPresenter::new(ctx, id, message, target_window),
+        );
+        self.popup_manager.post_open_action(
+            opened_id,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            &self.keyboard_focus_registry,
+        );
+    }
+
+    fn open_custom_flyout(
+        &mut self,
+        parent: WindowHandle,
+        surface_pos: Point<LogicalUnit>,
+        view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
+    ) {
+        self.custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
+            parent,
+            surface_pos,
+            view_constructor,
+            &mut ViewInitContext {
+                mount_context: MountContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                },
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+            },
+            &mut self.delayed_render_messages,
+        ));
+    }
+
+    fn open_menu(
+        &mut self,
+        parent: WindowHandle,
+        surface_pos: Point<LogicalUnit>,
+        items: Vec<MenuItem>,
+        command_handler: Box<dyn MenuCommandSelectionHandler>,
+    ) {
+        self.current_active_menu_session = Some(MenuSession::new(
+            parent,
+            items,
+            command_handler,
+            surface_pos,
+            &mut ViewInitContext {
+                mount_context: MountContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                },
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+            },
+            &mut self.delayed_render_messages,
+            &self.context_menu_common_resources,
+        ));
+    }
+
+    fn reopen_menu(
+        &mut self,
+        parent: WindowHandle,
+        surface_pos: Point<LogicalUnit>,
+        items: Vec<MenuItem>,
+        command_handler: Box<dyn MenuCommandSelectionHandler>,
+    ) {
+        if let Some(c) = self.current_active_menu_session.take() {
+            c.terminate(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+
+        self.open_menu(parent, surface_pos, items, command_handler);
+    }
+
+    fn open_dropdown_menu(
+        &mut self,
+        parent: WindowHandle,
+        surface_pos: Point<LogicalUnit>,
+        min_width: f32,
+        items: Vec<uikit::dropdown_box::MenuItem>,
+        selection_receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
+    ) {
+        self.current_active_dropdown_menu_session = Some(DropdownMenuSession::new(
+            selection_receiver,
+            parent,
+            &self.syslink,
+            &mut ViewInitContext {
+                mount_context: MountContext {
+                    composite_tree: &mut self.composite_tree,
+                    ht_manager: &mut self.ht_manager,
+                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                },
+                view_allocator: &mut self.view_allocator,
+                view_instance_store: &mut self.view_instance_store,
+                view_tree_relation_store: &mut self.view_tree_relation_store,
+                view_group_relation_store: &mut self.view_group_relation_store,
+                view_layout_state_store: &mut self.view_layout_state_store,
+                view_render_state_store: &mut self.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+            },
+            &mut self.delayed_render_messages,
+            surface_pos,
+            min_width,
+            items,
+        ));
+    }
+
+    fn close_all_menus(&mut self) {
+        if let Some(c) = self.current_active_menu_session.take() {
+            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
+                uicore::view_instance::<ui::app_menu_bar::View>(
+                    a.into_untyped(),
+                    &self.view_instance_store,
+                )
+                .expect("query failed")
+                .on_close_all(
+                    &mut self.composite_tree,
+                    self.global_time_base.elapsed().as_secs_f32(),
+                );
+            }
+
+            c.terminate(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+    }
+
+    fn rescale_menu(&mut self, new_scale: f32) {
+        if let Some(ref c) = self.custom_view_flyout_session {
+            c.rescale(
+                new_scale,
+                &mut self.composite_tree,
+                &self.ht_manager,
+                &self.syslink,
+            );
+        }
+    }
+
+    fn handle_menu_item_selection(&mut self, depth: usize, index: usize) {
+        if let Some(c) = self.current_active_menu_session.as_mut() {
+            c.select_item(
+                depth,
+                index,
+                &mut self.composite_tree,
+                self.global_time_base.elapsed().as_secs_f32(),
+            );
+
+            self.syslink.flyout_surface_context.reserve_delayed_action();
+        }
+    }
+
+    fn handle_menu_item_deselection(&mut self, depth: usize) {
+        if let Some(c) = self.current_active_menu_session.as_mut() {
+            c.deselect_item(
+                depth,
+                &mut self.composite_tree,
+                self.global_time_base.elapsed().as_secs_f32(),
+            );
+
+            self.syslink.flyout_surface_context.reserve_delayed_action();
+        }
+    }
+
+    fn perform_menu_delayed_action(&mut self) {
+        self.syslink
+            .flyout_surface_context
+            .unreserve_delayed_action();
+
+        if let Some(c) = self.current_active_menu_session.as_mut() {
+            c.perform_delayed_action(
+                &self.syslink,
+                &mut ViewInitContext {
+                    mount_context: MountContext {
+                        composite_tree: &mut self.composite_tree,
+                        ht_manager: &mut self.ht_manager,
+                        current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    },
+                    view_allocator: &mut self.view_allocator,
+                    view_instance_store: &mut self.view_instance_store,
+                    view_tree_relation_store: &mut self.view_tree_relation_store,
+                    view_group_relation_store: &mut self.view_group_relation_store,
+                    view_layout_state_store: &mut self.view_layout_state_store,
+                    view_render_state_store: &mut self.view_render_state_store,
+                    view_feedback_subscription_delayed_ops: &mut self
+                        .view_feedback_registry_delayed_ops,
+                    system_link: &self.syslink,
+                    main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                    application: &self.application,
+                },
+                &mut self.delayed_render_messages,
+                &self.context_menu_common_resources,
+            );
+        }
+    }
+
+    fn dispatch_menu_pointer_down(
+        &mut self,
+        target: FlyoutSurfaceHandle,
+        pointer_id: PointerID,
+        button: PointerButton,
+        key_modifier: ModifierKey,
+    ) {
+        self.pointer_input_manager.handle_mouse_down(
+            pointer_id,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            button,
+            key_modifier,
+            target.ht_root(),
+            &mut self.keyboard_focus_registry,
+        );
+    }
+
+    fn handle_menu_pointer_move(
+        &mut self,
+        target: FlyoutSurfaceHandle,
+        pointer_id: PointerID,
+        client_pos: Point<PointerInputUnit>,
+        key_modifier: ModifierKey,
+    ) {
+        self.pointer_input_manager.handle_mouse_move(
+            NativeDesktopSurface::ContextMenu(target),
+            pointer_id,
+            client_pos,
+            key_modifier,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            target.ht_root(),
+        );
+
+        let cursor_shape = self.pointer_input_manager.cursor_shape(&self.ht_manager);
+        self.syslink.set_cursor(&pointer_id, cursor_shape);
+    }
+
+    fn dispatch_menu_pointer_up(
+        &mut self,
+        target: FlyoutSurfaceHandle,
+        pointer_id: PointerID,
+        button: PointerButton,
+        key_modifier: ModifierKey,
+    ) {
+        self.pointer_input_manager.handle_mouse_up(
+            pointer_id,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+            button,
+            key_modifier,
+            target.ht_root(),
+        );
+    }
+
+    fn dispatch_menu_pointer_leave(&mut self, pointer_id: PointerID) {
+        self.pointer_input_manager.handle_mouse_leave(
+            pointer_id,
+            &self.ht_manager,
+            &mut InputEventContext {
+                composite_tree: &mut self.composite_tree,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut self.syslink,
+                ht_manager: &self.ht_manager,
+                dock_store: &mut self.dock_store,
+                view_instance_store: &mut self.view_instance_store,
+                view_group_relation_store: &self.view_group_relation_store,
+                view_render_queue: &mut self.view_render_queue,
+                application: ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            },
+        );
+    }
+
+    fn perform_select_menu_command(&mut self, id: u64) {
+        // コマンド選択したらとじる
+        let ch = if let Some(c) = self.current_active_menu_session.take() {
+            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
+                uicore::view_instance::<ui::app_menu_bar::View>(
+                    a.into_untyped(),
+                    &self.view_instance_store,
+                )
+                .expect("query failed")
+                .on_close_all(
+                    &mut self.composite_tree,
+                    self.global_time_base.elapsed().as_secs_f32(),
+                );
+            }
+
+            let ch = c.terminate(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+
+            self.composite_tree.commit(
+                &mut self
+                    .renderer_sync
+                    .lock()
+                    .expect("poisoned")
+                    .composite_buffer,
+            );
+
+            Some(ch)
+        } else {
+            None
+        };
+
+        if let Some(mut ch) = ch {
+            ch.on_select_command(
+                id,
+                &mut ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+            );
+        }
+    }
+
+    fn perform_dropdown_menu_select_item(
+        &mut self,
+        id: usize,
+        receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
+    ) {
+        if let Some(r) = receiver.upgrade() {
+            struct LocalContext<'env> {
+                view_instance_store: &'env mut ViewInstanceStore,
+                view_render_queue: &'env mut ViewRenderQueue,
+            }
+            impl ViewInstanceQueryableMut for LocalContext<'_> {
+                #[inline(always)]
+                fn view_instance_mut_of<T: View + 'static>(
+                    &mut self,
+                    id: ViewIdentifier,
+                ) -> Option<&mut T> {
+                    uicore::view_instance_mut(id, self.view_instance_store)
+                }
+
+                #[inline(always)]
+                fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
+                    uicore::view_set_visibility(id, visible, self.view_instance_store)
+                }
+
+                #[inline(always)]
+                fn view_layout_mut_untyped(
+                    &mut self,
+                    id: ViewIdentifier,
+                ) -> Option<&mut uicore::ViewLayout> {
+                    uicore::view_layout_mut(id, self.view_instance_store)
+                }
+            }
+            impl ViewRenderer for LocalContext<'_> {
+                #[inline(always)]
+                fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
+                    self.view_render_queue.schedule(target);
+                }
+            }
+            r.set_selection_id(
+                id,
+                &mut ApplicationMutation {
+                    state: &mut self.application,
+                    view_feedbacks: &mut self.view_feedback_store,
+                },
+                &mut LocalContext {
+                    view_instance_store: &mut self.view_instance_store,
+                    view_render_queue: &mut self.view_render_queue,
+                },
+            );
+        }
+
+        // 選択したら閉じる
+        if let Some(mut c) = self.current_active_dropdown_menu_session.take() {
+            c.close_all(
+                &self.syslink,
+                &mut self.composite_tree,
+                &mut self.ht_manager,
+                &mut self.keyboard_focus_registry,
+            );
+        }
+    }
+
+    fn move_dock_splitter(&mut self, target: ui::dock::DockID, pos_client: f32) {
+        ui::dock::move_splitter(
+            target,
+            &mut self.dock_store,
+            pos_client,
+            &mut PaneContentResizeContext {
+                view_instance_store: &mut self.view_instance_store,
+                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut self.composite_tree,
+                ht_manager: &mut self.ht_manager,
+            },
+        );
+    }
+
+    fn begin_redock_preview(
+        &mut self,
+        initiator: WindowHandle,
+        pointer: PointerID,
+        source_dock: ui::dock::DockID,
+        tab_index: usize,
+        pane_rect: Rect<LogicalUnit>,
+        tab_size: Size<LogicalUnit>,
+        client_pos: Point<LogicalUnit>,
+    ) {
+        let (state, popover_rect) = ui::dock::begin_preview(
+            pane_rect,
+            tab_size,
+            &client_pos,
+            initiator,
+            source_dock,
+            tab_index,
+        );
+
+        self.syslink
+            .begin_pane_drag(initiator, &pointer, state.offset, &popover_rect);
+        self.docking_preview_state = Some(state);
+    }
+
+    fn move_redock_preview(
+        &mut self,
+        dest_window: WindowHandle,
+        client_pos_in_dest: Point<LogicalUnit>,
+    ) {
+        if let Some(ref mut state) = self.docking_preview_state {
+            let popover_rect = ui::dock::move_preview(
+                &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
+                &self.dock_store,
+                &client_pos_in_dest,
+                state,
+            );
+            self.syslink.update_pane_drag(dest_window, &popover_rect);
+        }
+    }
+
+    fn confirm_redock(
+        &mut self,
+        mut destination_window: WindowHandle,
+        client_pos_in_dest: Point<LogicalUnit>,
+    ) {
+        if let Some(state) = self.docking_preview_state.take() {
+            let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
+                .docking_manager;
+
+            tracing::debug!(?client_pos_in_dest, "dock confirm");
+
+            let mut source_window = state.source_window;
+            let source_dock = state.source_dock;
+            let tab_index = state.tab_index;
+            self.syslink.end_pane_drag();
+            let (op, suggested_rect) =
+                ui::dock::end_preview(dm, &mut self.dock_store, &client_pos_in_dest, state);
+            let (diverged_content, undock_result) = dm.redock(
+                source_dock,
+                &mut self.dock_store,
+                tab_index,
+                op,
+                &suggested_rect,
+                &mut ui::dock::RedockingContext {
+                    view_init_ctx: ViewInitContext {
+                        mount_context: MountContext {
+                            composite_tree: &mut self.composite_tree,
+                            ht_manager: &mut self.ht_manager,
+                            current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                        },
+                        view_allocator: &mut self.view_allocator,
+                        view_instance_store: &mut self.view_instance_store,
+                        view_tree_relation_store: &mut self.view_tree_relation_store,
+                        view_group_relation_store: &mut self.view_group_relation_store,
+                        view_layout_state_store: &mut self.view_layout_state_store,
+                        view_render_state_store: &mut self.view_render_state_store,
+                        view_feedback_subscription_delayed_ops: &mut self
+                            .view_feedback_registry_delayed_ops,
+                        system_link: &self.syslink,
+                        main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                        application: &self.application,
+                    },
+                    view_render_queue: &mut self.view_render_queue,
+                },
+            );
+
+            match undock_result {
+                ui::dock::UndockResult::Success => {}
+                ui::dock::UndockResult::ToBeEmpty => {
+                    unsafe {
+                        drop(source_window.take_extra_data::<PerWindowData>());
+                    }
+                    self.sub_windows.remove(&source_window);
+                    self.syslink.close_window(
+                        source_window,
+                        &mut self.composite_tree,
+                        &mut self.ht_manager,
+                        &mut self.keyboard_focus_registry,
+                    );
+                }
+            }
+
+            if let Some(content) = diverged_content {
+                let new_window = self.syslink.open_window(
+                    SubWindowOpenMode::DockDiverge {
+                        rect: Rect::from_lt_size(
+                            Point::new_logical(
+                                suggested_rect.left,
+                                suggested_rect.top - ui::window_header::View::THICKNESS,
+                            ),
+                            Size::new_logical(
+                                suggested_rect.width,
+                                suggested_rect.height + ui::window_header::View::THICKNESS,
+                            ),
+                        ),
+                        position_ref_window: destination_window,
+                    },
+                    &mut self.composite_tree,
+                    &mut self.ht_manager,
+                    &mut self.keyboard_focus_registry,
+                    &mut self.delayed_render_messages,
+                    |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
+                        ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
+
+                        composite_tree
+                            .begin_mod_chain(w.ct_root())
+                            .has_bitmap(true)
+                            .composite_mode(CompositeMode::FillCornerGradient(
+                                self.window_bg_gradient,
+                                AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
+                            ))
+                            .apply();
+
+                        let mut view_init_ctx = ViewInitContext {
+                            mount_context: MountContext {
+                                composite_tree,
+                                ht_manager,
+                                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                                keyboard_focus_registry,
+                            },
+                            view_allocator: &mut self.view_allocator,
+                            view_instance_store: &mut self.view_instance_store,
+                            view_tree_relation_store: &mut self.view_tree_relation_store,
+                            view_group_relation_store: &mut self.view_group_relation_store,
+                            view_layout_state_store: &mut self.view_layout_state_store,
+                            view_render_state_store: &mut self.view_render_state_store,
+                            view_feedback_subscription_delayed_ops: &mut self
+                                .view_feedback_registry_delayed_ops,
+                            system_link,
+                            main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                            application: &self.application,
+                        };
+                        let root_view =
+                            view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
+                        let window_header_view = ui::window_header::Component::new(
+                            ui::window_header::Caption::Sub,
+                            ui::window_header::ComponentInit {
+                                with_system_command_buttons: w.needs_system_command_buttons(),
+                            },
+                            &mut view_init_ctx,
+                        );
+                        view_init_ctx.view_set_parent_untyped(
+                            window_header_view.root_view(),
+                            root_view.into_untyped(),
+                        );
+
+                        view_init_ctx.render_view_with_base(
+                            root_view.into_untyped(),
+                            &w,
+                            w.keyboard_focus_group(),
+                            Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                        );
+
+                        w.associate_extra_data(Box::new(PerWindowData {
+                            root_view,
+                            screen_reposition_interests: HashSet::new(),
+                            header: window_header_view,
+                            appmenu: None,
+                            footer: None,
+                            docking_manager: ui::dock::WindowDockingManager::new(
+                                w,
+                                &mut view_init_ctx,
+                                &mut self.view_render_queue,
+                                Rect::from_lt_size(
+                                    Point::new_logical(0.0, ui::window_header::View::THICKNESS),
+                                    suggested_rect.size(),
+                                ),
+                                &mut self.dock_store,
+                                |view_init_ctx, view_render_queue, store| {
+                                    store.alloc_root(|root_id, store| {
+                                        store.alloc_fill(
+                                            root_id,
+                                            &mut PaneGroupCreateContext {
+                                                view_init_context: view_init_ctx,
+                                                view_render_queue,
+                                            },
+                                            |_| vec![content],
+                                            0,
+                                        )
+                                    })
+                                },
+                            ),
+                        }));
+                    },
+                );
+                self.sub_windows.insert(new_window);
+            }
+        }
+    }
+
+    fn update_preview(&mut self) {
+        // vsync update period
+        self.preview_state.update(
+            &mut *profiler::wrap!(
+                LOCK_WAIT,
+                self.committed_preview_state.lock().expect("poisoned")
+            ),
+            &mut self.preview_input_state,
+            &mut ApplicationMutation {
+                state: &mut self.application,
+                view_feedbacks: &mut self.view_feedback_store,
+            },
+        );
+    }
+
+    #[cfg(feature = "wayland")]
+    fn offer_accepting_drop(&mut self) {
+        unsafe { &mut *self.syslink.display_server.global_messaging_ptr }
+            .offer_accepting_drop(&self.pointer_input_manager, &mut self.ht_manager);
+    }
+
+    fn perform_drop(
+        &mut self,
+        data: DragData,
+        target_window: WindowHandle,
+        client_pos: Point<LogicalUnit>,
+    ) {
+        self.pointer_input_manager.perform_drop(
+            data,
+            client_pos,
+            target_window.ht_root(),
+            target_window.client_size(),
+            &self.ht_manager,
+        );
+    }
+
+    fn schedule_view_render(&mut self, id: ViewIdentifier) {
+        self.view_render_queue.schedule(id);
+    }
+
+    fn dispatch_view_feedback(&mut self) {
+        if self.view_feedback_store.is_empty() {
+            // no view feedbacks
+            return;
+        }
+
+        let mut fb_context = ViewFeedbackContext {
+            application: &self.application,
+            composite_tree: &mut self.composite_tree,
+            ht_manager: &mut self.ht_manager,
+            current_sec: self.global_time_base.elapsed().as_secs_f32(),
+            keyboard_focus_registry: &mut self.keyboard_focus_registry,
+            view_allocator: &mut self.view_allocator,
+            view_instance_store: &mut self.view_instance_store,
+            view_tree_relation_store: &mut self.view_tree_relation_store,
+            view_group_relation_store: &mut self.view_group_relation_store,
+            view_layout_state_store: &mut self.view_layout_state_store,
+            view_render_state_store: &mut self.view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut self.view_feedback_registry_delayed_ops,
+            system_link: &self.syslink,
+            main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+            view_render_queue: &mut self.view_render_queue,
+        };
+
+        for (t, p) in self.view_feedback_store.iter() {
+            unsafe {
+                self.view_feedback_registry
+                    .dispatch_dynamic_unchecked(p, t, &mut fb_context);
+            }
+        }
+        self.view_feedback_store.clear();
+        self.view_feedback_registry.perform_atomic(&mut fb_context);
+    }
+
+    fn update_view(&mut self) {
+        self.view_render_queue.perform(
+            &mut RenderContext {
+                composite_tree: &mut self.composite_tree,
+                ht_manager: &mut self.ht_manager,
+                keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                system_link: &self.syslink,
+                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
+                application: &self.application,
+                view_feedback_subscription_delayed_ops: &mut self
+                    .view_feedback_registry_delayed_ops,
+            },
+            &mut self.view_instance_store,
+            &self.view_tree_relation_store,
+            &mut self.view_layout_state_store,
+            &mut self.view_render_state_store,
+        );
+    }
+
+    fn process_delayed_view_feedback_registry_ops(&mut self) {
+        self.view_feedback_registry
+            .perform_delayed(&mut self.view_feedback_registry_delayed_ops);
+    }
+
+    fn sync_threads(&mut self) {
+        self.composite_tree.commit(
+            &mut self
+                .renderer_sync
+                .lock()
+                .expect("poisoned")
+                .composite_buffer,
+        );
+        for msg in self.delayed_render_messages.drain(..) {
+            self.syslink.rt_sender().send(msg).expect("rt_sender.send");
+        }
+    }
+
+    fn save_window_state(&self) {
+        tracing::info!("saving window state");
+        let window_state_persist = PersistStateWindowData {
+            main: WindowState {
+                geometry: self.main_window.geometry_state_snapshot(&self.syslink),
+                dock: unsafe { self.main_window.extra_data_ref::<PerWindowData>() }
+                    .docking_manager
+                    .state_snapshot(&self.dock_store),
+            },
+            sub: self
+                .sub_windows
+                .iter()
+                .map(|w| WindowState {
+                    geometry: w.geometry_state_snapshot(&self.syslink),
+                    dock: unsafe { w.extra_data_ref::<PerWindowData>() }
+                        .docking_manager
+                        .state_snapshot(&self.dock_store),
+                })
+                .collect(),
+        };
+
+        let fp = match std::fs::File::create(self.fs.window_state_save_path()) {
+            Ok(fp) => fp,
+            Err(e) => {
+                tracing::warn!(reason = %e, "persist.create.window_state");
+                return;
+            }
+        };
+        if let Err(e) = window_state_persist.serialize(&mut std::io::BufWriter::new(fp)) {
+            tracing::warn!(reason = %e, "persist.save.window_state");
+        }
+    }
+}
+
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(
     LaunchArgs {
@@ -3022,482 +5141,16 @@ async fn run<'sys>(
         file_system,
         committed_preview_state,
     }: LaunchArgs<'sys>,
-    mut system_link: SystemLink<'sys>,
+    system_link: SystemLink<'sys>,
 ) {
     tracing::info!("app start");
-    profiler::begin!(perf = INITIALIZE);
-
-    let mut application = Application::new();
-    let mut view_feedback_store = NonDropAnyTypeQueue::new();
-    let mut view_feedback_registry_delayed_ops = VecDeque::new();
-
-    let mut composite_tree = CompositeTree::new();
-    let mut ht_manager = HitTestTreeManager::new();
-    let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
-    let mut pointer_input_manager = PointerInputManager::new();
-    let mut view_allocator = ViewIdentifierAllocator::new();
-    let mut view_instance_store = ViewInstanceStore::new();
-    let mut view_tree_relation_store = ViewTreeRelationStore::new();
-    let mut view_group_relation_store = ViewGroupRelationStore::new();
-    let mut view_layout_state_store = ViewLayoutStateStore::new();
-    let mut view_render_state_store = ViewRenderStateStore::new();
-    let mut view_feedback_registry = ViewFeedbackRegistry::new();
-    let mut view_render_queue = ViewRenderQueue::new();
-    let mut dock_store = ui::dock::DockStore::new();
-    let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
-    let mut popup_manager = PopupManager::new();
-
-    // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
-    #[cfg(windows)]
-    unsafe {
-        platform::windows::locate_non_client_hittest_managers(&pointer_input_manager, &ht_manager);
-    }
-
-    let context_menu_common_resources = MenuItemCommonResources::new(
-        &mut composite_tree,
-        &mut texture_id_issuer,
-        system_link.rt_sender(),
+    let mut inst = CoreLoop::new(
+        system_link,
+        file_system,
+        global_time_base,
+        renderer_sync,
+        committed_preview_state,
     );
-    let mut current_active_menu_session = None::<MenuSession>;
-    let mut current_active_dropdown_menu_session = None::<DropdownMenuSession>;
-    let mut custom_view_flyout_session = None::<CustomViewFlyoutSession>;
-
-    let mut delayed_render_messages = Vec::new();
-    let mut docking_preview_state = None;
-
-    let mut preview_input_state = PreviewInputState::new();
-    let mut preview_state = PreviewMainThreadState::new();
-
-    let last_window_state = 'try_restore_last_window_state: {
-        let fp = match std::fs::File::open(file_system.window_state_save_path()) {
-            Ok(fp) => fp,
-            Err(e) => {
-                tracing::warn!(reason = %e, "persist.open.window_state");
-                break 'try_restore_last_window_state None;
-            }
-        };
-        match PersistStateWindowData::deserialize(&mut std::io::BufReader::new(fp)) {
-            Ok(state) => Some(state),
-            Err(e) => {
-                tracing::warn!(reason = %e, "persist.restore.window_state");
-                break 'try_restore_last_window_state None;
-            }
-        }
-    };
-
-    let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
-        right_top: [0.1, 0.1, 0.1, 1.0],
-        left_bottom: [0.1, 0.1, 0.1, 1.0],
-        right_bottom: [0.05, 0.025, 0.0, 1.0],
-    });
-
-    let mut sub_windows = HashSet::new();
-    let mut main_window = system_link.create_main_window(
-        match last_window_state {
-            None => MainWindowOpenMode::New,
-            Some(ref x) => MainWindowOpenMode::Restore(x.main.geometry.clone()),
-        },
-        &mut composite_tree,
-        &mut ht_manager,
-        &mut keyboard_focus_registry,
-        &mut delayed_render_messages,
-    );
-
-    let mut view_init_ctx = ViewInitContext {
-        mount_context: MountContext {
-            composite_tree: &mut composite_tree,
-            ht_manager: &mut ht_manager,
-            current_sec: global_time_base.elapsed().as_secs_f32(),
-            keyboard_focus_registry: &mut keyboard_focus_registry,
-        },
-        view_allocator: &mut view_allocator,
-        view_instance_store: &mut view_instance_store,
-        view_tree_relation_store: &mut view_tree_relation_store,
-        view_group_relation_store: &mut view_group_relation_store,
-        view_layout_state_store: &mut view_layout_state_store,
-        view_render_state_store: &mut view_render_state_store,
-        view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-        system_link: &system_link,
-        main_thread_texture_id_issuer: &mut texture_id_issuer,
-        application: &application,
-    };
-
-    view_init_ctx
-        .composite_tree
-        .begin_mod_chain(main_window.ct_root())
-        .has_bitmap(true)
-        .composite_mode(CompositeMode::FillCornerGradient(
-            window_bg_gradient,
-            AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
-        ))
-        .apply();
-    let main_window_root_view =
-        view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
-    let window_header = ui::window_header::Component::new(
-        ui::window_header::Caption::Main,
-        ui::window_header::ComponentInit {
-            with_system_command_buttons: main_window.needs_system_command_buttons(),
-        },
-        &mut view_init_ctx,
-    );
-    view_init_ctx.view_set_parent_untyped(
-        window_header.root_view(),
-        main_window_root_view.into_untyped(),
-    );
-
-    let app_menu_view = if system_link.needs_app_menu_in_surface() {
-        let app_menu_view = view_init_ctx.construct_view_direct(|_| {
-            Box::new(ui::app_menu_bar::View::new(
-                ui::window_header::View::THICKNESS,
-                vec![
-                    (
-                        "ファイル(F)".into(),
-                        vec![
-                            MenuItem::Command {
-                                label: "新規プロジェクト...".into(),
-                                command_id: 0,
-                            },
-                            MenuItem::Command {
-                                label: "新規ファイル...".into(),
-                                command_id: 0,
-                            },
-                            MenuItem::Separator,
-                            MenuItem::Command {
-                                label: "プロジェクトを開く...".into(),
-                                command_id: 0,
-                            },
-                            MenuItem::Command {
-                                label: "保存".into(),
-                                command_id: 0,
-                            },
-                            MenuItem::Command {
-                                label: "名前をつけて保存...".into(),
-                                command_id: 0,
-                            },
-                            MenuItem::Separator,
-                            MenuItem::Command {
-                                label: "Peridot Marble Editor を終了".into(),
-                                command_id: 1000,
-                            },
-                        ],
-                    ),
-                    (
-                        "編集(E)".into(),
-                        vec![MenuItem::Command {
-                            label: "項目2".into(),
-                            command_id: 1,
-                        }],
-                    ),
-                    (
-                        "ウィンドウ(W)".into(),
-                        vec![
-                            MenuItem::Command {
-                                label: "項目3".into(),
-                                command_id: 2,
-                            },
-                            MenuItem::SubMenu {
-                                label: "その他".into(),
-                                items: vec![
-                                    MenuItem::Command {
-                                        label: "ウィンドウ1".into(),
-                                        command_id: 201,
-                                    },
-                                    MenuItem::Command {
-                                        label: "ウィンドウ2".into(),
-                                        command_id: 202,
-                                    },
-                                ],
-                            },
-                        ],
-                    ),
-                    (
-                        "ヘルプ(H)".into(),
-                        vec![
-                            MenuItem::Command {
-                                label: "項目4".into(),
-                                command_id: 3,
-                            },
-                            MenuItem::Command {
-                                label: "バージョン情報".into(),
-                                command_id: 100,
-                            },
-                        ],
-                    ),
-                ],
-            ))
-        });
-        view_init_ctx.view_set_parent(app_menu_view, main_window_root_view);
-        Some(app_menu_view)
-    } else {
-        None
-    };
-
-    let window_footer_view =
-        view_init_ctx.construct_view_direct(|_| Box::new(ui::window_footer::View::new()));
-    view_init_ctx.view_set_parent(window_footer_view, main_window_root_view);
-
-    let initial_dock_state = initial_dock_state();
-    let dock_top_offset = ui::window_header::View::THICKNESS
-        + if app_menu_view.is_some() {
-            ui::app_menu_bar::View::HEIGHT
-        } else {
-            0.0
-        };
-    let main_window_size = main_window.client_size();
-    main_window.associate_extra_data(Box::new(PerWindowData {
-        screen_reposition_interests: HashSet::new(),
-        root_view: main_window_root_view,
-        header: window_header,
-        appmenu: app_menu_view,
-        footer: Some(window_footer_view),
-        docking_manager: ui::dock::WindowDockingManager::new(
-            main_window,
-            &mut view_init_ctx,
-            &mut view_render_queue,
-            Rect::from_lt_size(
-                Point::new_logical(0.0, dock_top_offset),
-                Size::new_logical(
-                    main_window_size.width,
-                    main_window_size.height - dock_top_offset - ui::window_footer::View::THICKNESS,
-                ),
-            ),
-            &mut dock_store,
-            |view_init_ctx, view_render_queue, store| {
-                construct_dock_from_state(
-                    match last_window_state {
-                        None => &initial_dock_state,
-                        Some(ref x) => &x.main.dock,
-                    },
-                    main_window.keyboard_focus_group(),
-                    &mut PaneGroupCreateContext {
-                        view_init_context: view_init_ctx,
-                        view_render_queue,
-                    },
-                    store,
-                    |id, view_init_ctx| match id {
-                        // TODO: このへんうまい具合にRegistryつくりたい
-                        UIKitPreviewPanePresenter::ID => {
-                            Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
-                        }
-                        ui::pane::object_tree::Presenter::ID => {
-                            Box::new(ui::pane::object_tree::Presenter::new(view_init_ctx))
-                        }
-                        ui::pane::inspector::Presenter::ID => {
-                            Box::new(ui::pane::inspector::Presenter::new(view_init_ctx))
-                        }
-                        ui::pane::asset_explorer::Presenter::ID => {
-                            Box::new(ui::pane::asset_explorer::Presenter::new(view_init_ctx))
-                        }
-                        ProjectSettingsPanePresenter::ID => {
-                            Box::new(ProjectSettingsPanePresenter::new(view_init_ctx))
-                        }
-                        TimelinePanePresenter::ID => {
-                            Box::new(TimelinePanePresenter::new(view_init_ctx))
-                        }
-                        AssetPreviewPanePresenter::ID => {
-                            Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
-                        }
-                        PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
-                            view_init_ctx,
-                            &mut preview_input_state,
-                        )),
-                        id => todo!("generic pane id handling: {id:?}"),
-                    },
-                )
-            },
-        ),
-    }));
-
-    view_init_ctx.render_view_with_base(
-        main_window_root_view.into_untyped(),
-        &main_window,
-        main_window.keyboard_focus_group(),
-        Rect::from_lt_size(Point::new_logical(0.0, 0.0), main_window.client_size()),
-    );
-
-    if let Some(ref last_window_state) = last_window_state {
-        for sub in last_window_state.sub.iter() {
-            let new_window = system_link.open_window(
-                SubWindowOpenMode::Restore(sub.geometry.clone()),
-                &mut composite_tree,
-                &mut ht_manager,
-                &mut keyboard_focus_registry,
-                &mut delayed_render_messages,
-                |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
-                    ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
-
-                    composite_tree
-                        .begin_mod_chain(w.ct_root())
-                        .has_bitmap(true)
-                        .composite_mode(CompositeMode::FillCornerGradient(
-                            window_bg_gradient,
-                            AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
-                        ))
-                        .apply();
-
-                    let mut view_feedback_registry_delayed_ops = VecDeque::new();
-                    let mut view_init_ctx = ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree,
-                            ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    };
-                    let root_view =
-                        view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
-                    let window_header_view = ui::window_header::Component::new(
-                        ui::window_header::Caption::Sub,
-                        ui::window_header::ComponentInit {
-                            with_system_command_buttons: w.needs_system_command_buttons(),
-                        },
-                        &mut view_init_ctx,
-                    );
-                    view_init_ctx.view_set_parent_untyped(
-                        window_header_view.root_view(),
-                        root_view.into_untyped(),
-                    );
-
-                    view_init_ctx.render_view_with_base(
-                        root_view.into_untyped(),
-                        &w,
-                        w.keyboard_focus_group(),
-                        Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
-                    );
-
-                    w.associate_extra_data(Box::new(PerWindowData {
-                        root_view: root_view,
-                        screen_reposition_interests: HashSet::new(),
-                        header: window_header_view,
-                        appmenu: None,
-                        footer: None,
-                        docking_manager: ui::dock::WindowDockingManager::new(
-                            w,
-                            &mut view_init_ctx,
-                            &mut view_render_queue,
-                            Rect::from_lt_size(
-                                Point::new_logical(0.0, ui::window_header::View::THICKNESS),
-                                Size::new_logical(320.0, 240.0),
-                            ),
-                            &mut dock_store,
-                            |view_init_ctx, view_render_queue, store| {
-                                construct_dock_from_state(
-                                    &sub.dock,
-                                    w.keyboard_focus_group(),
-                                    &mut PaneGroupCreateContext {
-                                        view_init_context: view_init_ctx,
-                                        view_render_queue,
-                                    },
-                                    store,
-                                    |id, view_init_ctx| match id {
-                                        // TODO: このへんうまい具合にRegistryつくりたい
-                                        UIKitPreviewPanePresenter::ID => {
-                                            Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
-                                        }
-                                        ui::pane::object_tree::Presenter::ID => Box::new(
-                                            ui::pane::object_tree::Presenter::new(view_init_ctx),
-                                        ),
-                                        ui::pane::inspector::Presenter::ID => Box::new(
-                                            ui::pane::inspector::Presenter::new(view_init_ctx),
-                                        ),
-                                        ui::pane::asset_explorer::Presenter::ID => Box::new(
-                                            ui::pane::asset_explorer::Presenter::new(view_init_ctx),
-                                        ),
-                                        ProjectSettingsPanePresenter::ID => Box::new(
-                                            ProjectSettingsPanePresenter::new(view_init_ctx),
-                                        ),
-                                        TimelinePanePresenter::ID => {
-                                            Box::new(TimelinePanePresenter::new(view_init_ctx))
-                                        }
-                                        AssetPreviewPanePresenter::ID => {
-                                            Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
-                                        }
-                                        PreviewPanePresenter::ID => {
-                                            Box::new(PreviewPanePresenter::new(
-                                                view_init_ctx,
-                                                &mut preview_input_state,
-                                            ))
-                                        }
-                                        id => todo!("generic pane id handling: {id:?}"),
-                                    },
-                                )
-                            },
-                        ),
-                    }));
-                },
-            );
-            sub_windows.insert(new_window);
-        }
-    }
-
-    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
-
-    // initial sync model with view
-    application.sync(&mut view_feedback_store);
-    let mut fb_context = ViewFeedbackContext {
-        application: &application,
-        composite_tree: &mut composite_tree,
-        ht_manager: &mut ht_manager,
-        current_sec: global_time_base.elapsed().as_secs_f32(),
-        keyboard_focus_registry: &mut keyboard_focus_registry,
-        view_allocator: &mut view_allocator,
-        view_instance_store: &mut view_instance_store,
-        view_tree_relation_store: &mut view_tree_relation_store,
-        view_group_relation_store: &mut view_group_relation_store,
-        view_layout_state_store: &mut view_layout_state_store,
-        view_render_state_store: &mut view_render_state_store,
-        view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-        system_link: &system_link,
-        main_thread_texture_id_issuer: &mut texture_id_issuer,
-
-        view_render_queue: &mut view_render_queue,
-    };
-
-    for (t, p) in view_feedback_store.iter() {
-        unsafe {
-            view_feedback_registry.dispatch_dynamic_unchecked(p, t, &mut fb_context);
-        }
-    }
-    view_feedback_store.clear();
-    view_feedback_registry.perform_atomic(&mut fb_context);
-
-    view_render_queue.perform(
-        &mut RenderContext {
-            composite_tree: &mut composite_tree,
-            ht_manager: &mut ht_manager,
-            keyboard_focus_registry: &mut keyboard_focus_registry,
-            current_sec: global_time_base.elapsed().as_secs_f32(),
-            system_link: &system_link,
-            main_thread_texture_id_issuer: &mut texture_id_issuer,
-            application: &application,
-            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-        },
-        &mut view_instance_store,
-        &view_tree_relation_store,
-        &mut view_layout_state_store,
-        &mut view_render_state_store,
-    );
-
-    composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-    ht_manager.dump(main_window.ht_root());
-    for msg in delayed_render_messages.drain(..) {
-        system_link.rt_sender().send(msg).expect("rt_sender.send");
-    }
-    view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
-
-    system_link.prelaunch(main_window);
-    profiler::end!(perf);
 
     loop {
         let e = event_queue.next_event().await;
@@ -3505,77 +5158,8 @@ async fn run<'sys>(
         profiler::scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
-            Event::SubWindowClose { mut window } => {
-                let wd = unsafe { window.take_extra_data::<PerWindowData>() };
-                struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
-                impl ViewDestructionContext for LocalContext<'_, '_> {
-                    fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-                        uicore::destruct_view_recursive(
-                            target,
-                            &mut TeardownContext {
-                                composite_tree: &mut self.0.mount_context.composite_tree,
-                                ht_manager: &mut self.0.mount_context.ht_manager,
-                                keyboard_focus_registry: &mut self
-                                    .0
-                                    .mount_context
-                                    .keyboard_focus_registry,
-                                current_sec: self.0.mount_context.current_sec,
-                                view_feedback_subscription_delayed_ops: &mut self
-                                    .0
-                                    .view_feedback_subscription_delayed_ops,
-                            },
-                            self.0.view_allocator,
-                            self.0.view_instance_store,
-                            self.0.view_tree_relation_store,
-                            self.0.view_group_relation_store,
-                            self.0.view_layout_state_store,
-                            self.0.view_render_state_store,
-                        );
-                    }
-                }
-                wd.docking_manager.teardown(
-                    &mut dock_store,
-                    &mut LocalContext(ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    }),
-                );
-                sub_windows.remove(&window);
-                system_link.close_window(
-                    window,
-                    &mut composite_tree,
-                    &mut ht_manager,
-                    &mut keyboard_focus_registry,
-                );
-            }
-            Event::WindowResize { window, size } => {
-                let wd = unsafe { window.extra_data_ref::<PerWindowData>() };
-                wd.docking_manager.resize(
-                    wd.compute_content_area(size),
-                    &mut dock_store,
-                    &mut PaneContentResizeContext {
-                        view_instance_store: &mut view_instance_store,
-                        view_render_queue: &mut view_render_queue,
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                    },
-                );
-            }
+            Event::SubWindowClose { window } => inst.close_sub_window(window),
+            Event::WindowResize { window, size } => inst.resize_window(window, size),
             Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
@@ -3584,863 +5168,112 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 target.update_manual_scaling();
             }
-            Event::WindowMove { mut window, pos } => {
-                let wd = unsafe { window.extra_data_mut::<PerWindowData>() };
-                let mut input_context = InputEventContext {
-                    composite_tree: &mut composite_tree,
-                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                    system_link: &mut system_link,
-                    ht_manager: &ht_manager,
-                    dock_store: &mut dock_store,
-                    view_instance_store: &mut view_instance_store,
-                    view_group_relation_store: &view_group_relation_store,
-                    view_render_queue: &mut view_render_queue,
-                    application: ApplicationMutation {
-                        state: &mut application,
-                        view_feedbacks: &mut view_feedback_store,
-                    },
-                };
-
-                for &ht in wd.screen_reposition_interests.iter() {
-                    if let Some(e) = ht_manager.get_data(ht).screen_reposition_handler() {
-                        e.on_screen_reposition_required(ht, &mut input_context, pos);
-                    }
-                }
-
-                // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
-                if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
-                    if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
-                    {
-                        uicore::view_instance::<ui::app_menu_bar::View>(
-                            a.into_untyped(),
-                            &view_instance_store,
-                        )
-                        .expect("query failed")
-                        .on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
-                    }
-
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
-
-                if let Some(mut c) =
-                    current_active_dropdown_menu_session.take_if(|x| x.parent == window)
-                {
-                    c.close_all(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
-
-                if let Some(c) = custom_view_flyout_session.take_if(|x| x.parent == window) {
-                    c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
-                        syslink: &system_link,
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        teardown_context: TeardownContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                        },
-                    });
-                }
-            }
+            Event::WindowMove { window, pos } => inst.handle_window_move(window, pos),
             Event::WindowRescaleUI { window, new_scale } => {
-                popup_manager.rescale(window, new_scale, &mut composite_tree);
+                inst.rescale_popup_of_window(window, new_scale)
             }
             Event::WindowMaximizeStateChanged {
                 window,
                 is_maximized,
-            } => unsafe {
-                struct LocalContext<'a> {
-                    view_render_queue: &'a mut ViewRenderQueue,
-                    view_instance_store: &'a mut ViewInstanceStore,
-                }
-                impl uicore::ViewInstanceQueryableMut for LocalContext<'_> {
-                    #[inline(always)]
-                    fn view_instance_mut_of<T: View + 'static>(
-                        &mut self,
-                        id: ViewIdentifier,
-                    ) -> Option<&mut T> {
-                        uicore::view_instance_mut(id, self.view_instance_store)
-                    }
-
-                    #[inline(always)]
-                    fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-                        uicore::view_set_visibility(id, visible, self.view_instance_store)
-                    }
-
-                    #[inline(always)]
-                    fn view_layout_mut_untyped(
-                        &mut self,
-                        id: ViewIdentifier,
-                    ) -> Option<&mut uicore::ViewLayout> {
-                        uicore::view_layout_mut(id, self.view_instance_store)
-                    }
-                }
-                impl uicore::ViewRenderer for LocalContext<'_> {
-                    #[inline(always)]
-                    fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
-                        self.view_render_queue.schedule(target)
-                    }
-                }
-                window
-                    .extra_data_ref::<PerWindowData>()
-                    .header
-                    .set_maximize_state(
-                        is_maximized,
-                        &mut LocalContext {
-                            view_render_queue: &mut view_render_queue,
-                            view_instance_store: &mut view_instance_store,
-                        },
-                    );
-            },
-            Event::WindowFocusChanged {
-                mut window,
-                focused,
-            } => {
-                let mut input_context = InputEventContext {
-                    composite_tree: &mut composite_tree,
-                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                    system_link: &mut system_link,
-                    ht_manager: &ht_manager,
-                    dock_store: &mut dock_store,
-                    view_instance_store: &mut view_instance_store,
-                    view_group_relation_store: &view_group_relation_store,
-                    view_render_queue: &mut view_render_queue,
-                    application: ApplicationMutation {
-                        state: &mut application,
-                        view_feedbacks: &mut view_feedback_store,
-                    },
-                };
-                let mgr = window.keyboard_focus_state_mut();
-
-                if focused {
-                    mgr.notify_window_focus(&mut input_context, &keyboard_focus_registry);
-                } else {
-                    mgr.notify_window_lost_focus(&mut input_context, &keyboard_focus_registry);
-                }
-
-                if !focused
-                    && let Some(c) = current_active_menu_session.take_if(|x| x.parent == window)
-                {
-                    // フォーカスロストした時もコンテキストメニューを閉じる
-                    if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
-                    {
-                        uicore::view_instance::<ui::app_menu_bar::View>(
-                            a.into_untyped(),
-                            &view_instance_store,
-                        )
-                        .expect("query failed")
-                        .on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
-                    }
-
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
+            } => inst.handle_window_maximize_state_changes(window, is_maximized),
+            Event::WindowFocusChanged { window, focused } => {
+                inst.handle_window_focus_changed(window, focused)
             }
             Event::WindowActivatingStateChanged { window, activated } => {
-                if !activated {
-                    if let Some(c) = current_active_menu_session.take_if(|x| x.parent == window) {
-                        if let Some(ref a) =
-                            unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu
-                        {
-                            uicore::view_instance::<ui::app_menu_bar::View>(
-                                a.into_untyped(),
-                                &view_instance_store,
-                            )
-                            .expect("query failed")
-                            .on_close_all(
-                                &mut composite_tree,
-                                global_time_base.elapsed().as_secs_f32(),
-                            );
-                        }
-
-                        c.terminate(
-                            &system_link,
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                        );
-                    }
-                }
+                inst.handle_window_activation_state_changed(window, activated)
             }
             Event::PointerDown {
                 window,
                 pointer_id,
                 button,
                 key_modifier,
-            } => {
-                // #[cfg(target_os = "macos")]
-                // drag_preview_popover.bind_position_base_window_link(window);
-
-                if let Some(ref a) = unsafe { window.extra_data_ref::<PerWindowData>() }.appmenu {
-                    uicore::view_instance::<ui::app_menu_bar::View>(
-                        a.into_untyped(),
-                        &view_instance_store,
-                    )
-                    .expect("query failed")
-                    .on_close_all(
-                        &mut composite_tree,
-                        global_time_base.elapsed().as_secs_f32(),
-                    );
-                }
-
-                if let Some(c) = current_active_menu_session.take() {
-                    if let Some(ref a) =
-                        unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
-                    {
-                        uicore::view_instance::<ui::app_menu_bar::View>(
-                            a.into_untyped(),
-                            &view_instance_store,
-                        )
-                        .expect("query failed")
-                        .on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
-                    }
-
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
-
-                if let Some(mut c) = current_active_dropdown_menu_session.take() {
-                    c.close_all(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
-
-                if let Some(c) = custom_view_flyout_session.take() {
-                    c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
-                        syslink: &system_link,
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        teardown_context: TeardownContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                        },
-                    });
-                }
-
-                pointer_input_manager.handle_mouse_down(
-                    pointer_id,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    button,
-                    key_modifier,
-                    window.ht_root(),
-                    &mut keyboard_focus_registry,
-                );
-            }
+            } => inst.handle_pointer_down(window, pointer_id, button, key_modifier),
             Event::PointerMove {
                 pointer_id,
                 window,
                 client_pos,
                 key_modifier,
-            } => {
-                pointer_input_manager.handle_mouse_move(
-                    NativeDesktopSurface::Window(window),
-                    pointer_id,
-                    client_pos,
-                    key_modifier,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    window.ht_root(),
-                );
-
-                let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
-                system_link.set_cursor(&pointer_id, cursor_shape);
-            }
+            } => inst.handle_pointer_move(window, pointer_id, client_pos, key_modifier),
             Event::PointerMoveRelative {
                 pointer_id,
                 window,
                 relative,
-            } => {
-                pointer_input_manager.handle_mouse_move_relative(
-                    pointer_id,
-                    relative,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                );
-            }
+            } => inst.handle_pointer_move_relative(pointer_id, relative),
             Event::PointerUp {
                 window,
                 pointer_id,
                 button,
                 key_modifier,
-            } => {
-                pointer_input_manager.handle_mouse_up(
-                    pointer_id,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    button,
-                    key_modifier,
-                    window.ht_root(),
-                );
-            }
+            } => inst.handle_pointer_up(window, pointer_id, button, key_modifier),
             Event::PointerLeaveWindow { window, pointer_id } => {
-                pointer_input_manager.handle_mouse_leave(
-                    pointer_id,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                );
+                inst.handle_pointer_leave_window(pointer_id)
             }
-            Event::PointerHover => {
-                system_link.kill_pointer_hovering_timeout();
-                pointer_input_manager.handle_pointer_hover(&mut InputEventContext {
-                    composite_tree: &mut composite_tree,
-                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                    system_link: &mut system_link,
-                    ht_manager: &ht_manager,
-                    dock_store: &mut dock_store,
-                    view_instance_store: &mut view_instance_store,
-                    view_group_relation_store: &view_group_relation_store,
-                    view_render_queue: &mut view_render_queue,
-                    application: ApplicationMutation {
-                        state: &mut application,
-                        view_feedbacks: &mut view_feedback_store,
-                    },
-                });
-            }
+            Event::PointerHover => inst.handle_pointer_hover_timeout(),
             Event::ScrollWheel {
                 amount,
                 key_modifier,
-            } => {
-                pointer_input_manager.handle_scroll_wheel(
-                    amount,
-                    key_modifier,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                );
-            }
+            } => inst.dispatch_scroll_wheel(amount, key_modifier),
             Event::KeyDown {
-                mut window,
+                window,
                 code,
                 modifier,
             } if code == KeyInputCode::Character('\t') || code == KeyInputCode::Tab => {
-                if let Some(next_focus) = if modifier.contains(ModifierKey::SHIFT) {
-                    window
-                        .keyboard_focus_state()
-                        .prev_focus(&keyboard_focus_registry)
-                } else {
-                    window
-                        .keyboard_focus_state()
-                        .next_focus(&keyboard_focus_registry)
-                } {
-                    window.keyboard_focus_state_mut().update_focus_with_event(
-                        next_focus,
-                        &mut InputEventContext {
-                            composite_tree: &mut composite_tree,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            system_link: &mut system_link,
-                            ht_manager: &ht_manager,
-                            dock_store: &mut dock_store,
-                            view_instance_store: &mut view_instance_store,
-                            view_group_relation_store: &view_group_relation_store,
-                            view_render_queue: &mut view_render_queue,
-                            application: ApplicationMutation {
-                                state: &mut application,
-                                view_feedbacks: &mut view_feedback_store,
-                            },
-                        },
-                        &keyboard_focus_registry,
-                    );
-                }
+                inst.switch_focus_by_key(window, modifier)
             }
             Event::KeyDown {
                 window,
                 code,
                 modifier,
-            } => {
-                window.keyboard_focus_state().handle_keydown(
-                    code,
-                    modifier,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    &keyboard_focus_registry,
-                );
-            }
+            } => inst.dispatch_key_down(window, code, modifier),
             Event::KeyUp {
                 window,
                 code,
                 modifier,
-            } => {
-                window.keyboard_focus_state().handle_keyup(
-                    code,
-                    modifier,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    &keyboard_focus_registry,
-                );
-            }
+            } => inst.dispatch_key_up(window, code, modifier),
             Event::KeyChar {
                 window,
                 ch,
                 modifier,
-            } => {
-                window.keyboard_focus_state().handle_char(
-                    ch,
-                    modifier,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    &keyboard_focus_registry,
-                );
-            }
+            } => inst.dispatch_key_char(window, ch, modifier),
             Event::IMEStateChanges {
                 window,
                 committed_string,
                 preedit_string,
-            } => {
-                window.keyboard_focus_state().handle_ime_state_changes(
-                    committed_string.as_deref(),
-                    preedit_string.as_deref(),
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    &keyboard_focus_registry,
-                );
-            }
+            } => inst.dispatch_ime_state_changes(window, preedit_string, committed_string),
             Event::OpenAlertDialog {
                 target_window,
                 message,
-            } => {
-                let opened_id = popup_manager.open(
-                    &mut ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    },
-                    target_window,
-                    |id, ctx| uikit::AlertDialogPresenter::new(ctx, id, message, target_window),
-                );
-                popup_manager.post_open_action(
-                    opened_id,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    &keyboard_focus_registry,
-                );
-            }
-            Event::PopupClose { id } => {
-                popup_manager.close(
-                    id,
-                    &mut RenderContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                    &mut view_instance_store,
-                    &view_tree_relation_store,
-                    &mut view_layout_state_store,
-                    &mut view_render_state_store,
-                );
-            }
-            Event::Sync(SyncEvent::PopupUnmount { id }) => {
-                popup_manager.teardown(
-                    id,
-                    &mut view_instance_store,
-                    &mut view_tree_relation_store,
-                    &mut view_render_state_store,
-                    &mut TeardownContext {
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        keyboard_focus_registry: &mut keyboard_focus_registry,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                    },
-                );
-            }
+            } => inst.open_alert_dialog(target_window, message),
+            Event::PopupClose { id } => inst.close_popup(id),
+            Event::Sync(SyncEvent::PopupUnmount { id }) => inst.destroy_popup(id),
             Event::OpenCustomViewFlyout {
                 parent,
                 surface_pos,
                 view_constructor,
-            } => {
-                custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
-                    parent,
-                    surface_pos,
-                    view_constructor.0.0,
-                    &mut ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    },
-                    &mut delayed_render_messages,
-                ));
-            }
+            } => inst.open_custom_flyout(parent, surface_pos, view_constructor.0.0),
             Event::MenuOpen {
                 parent,
                 items,
                 surface_pos,
                 command_handler,
-            } => {
-                current_active_menu_session = Some(MenuSession::new(
-                    parent,
-                    items,
-                    command_handler.0.0,
-                    surface_pos,
-                    &mut ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    },
-                    &mut delayed_render_messages,
-                    &context_menu_common_resources,
-                ));
-            }
+            } => inst.open_menu(parent, surface_pos, items, command_handler.0.0),
             Event::MenuReopen {
                 parent,
                 items,
                 surface_pos,
                 command_handler,
-            } => {
-                if let Some(c) = current_active_menu_session.take() {
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
-
-                current_active_menu_session = Some(MenuSession::new(
-                    parent,
-                    items,
-                    command_handler.0.0,
-                    surface_pos,
-                    &mut ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    },
-                    &mut delayed_render_messages,
-                    &context_menu_common_resources,
-                ));
-            }
+            } => inst.reopen_menu(parent, surface_pos, items, command_handler.0.0),
             Event::DropdownMenuOpen {
                 parent,
                 surface_pos,
                 min_width,
                 items,
                 selection_receiver,
-            } => {
-                current_active_dropdown_menu_session = Some(DropdownMenuSession::new(
-                    selection_receiver,
-                    parent,
-                    &system_link,
-                    &mut ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut composite_tree,
-                            ht_manager: &mut ht_manager,
-                            current_sec: global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                        },
-                        view_allocator: &mut view_allocator,
-                        view_instance_store: &mut view_instance_store,
-                        view_tree_relation_store: &mut view_tree_relation_store,
-                        view_group_relation_store: &mut view_group_relation_store,
-                        view_layout_state_store: &mut view_layout_state_store,
-                        view_render_state_store: &mut view_render_state_store,
-                        view_feedback_subscription_delayed_ops:
-                            &mut view_feedback_registry_delayed_ops,
-                        system_link: &system_link,
-                        main_thread_texture_id_issuer: &mut texture_id_issuer,
-                        application: &application,
-                    },
-                    &mut delayed_render_messages,
-                    surface_pos,
-                    min_width,
-                    items,
-                ));
-            }
-            Event::MenuCloseAll => {
-                if let Some(c) = current_active_menu_session.take() {
-                    if let Some(ref a) =
-                        unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
-                    {
-                        uicore::view_instance::<ui::app_menu_bar::View>(
-                            a.into_untyped(),
-                            &view_instance_store,
-                        )
-                        .expect("query failed")
-                        .on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
-                    }
-
-                    c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
-            }
-            Event::MenuRescale { scale } => {
-                if let Some(ref c) = custom_view_flyout_session {
-                    c.rescale(scale, &mut composite_tree, &ht_manager, &system_link);
-                }
-            }
-            Event::MenuSelectItem { depth, index } => {
-                if let Some(c) = current_active_menu_session.as_mut() {
-                    c.select_item(
-                        depth,
-                        index,
-                        &mut composite_tree,
-                        global_time_base.elapsed().as_secs_f32(),
-                    );
-
-                    system_link.flyout_surface_context.reserve_delayed_action();
-                }
-            }
-            Event::MenuDeselectItem { depth } => {
-                if let Some(c) = current_active_menu_session.as_mut() {
-                    c.deselect_item(
-                        depth,
-                        &mut composite_tree,
-                        global_time_base.elapsed().as_secs_f32(),
-                    );
-
-                    system_link.flyout_surface_context.reserve_delayed_action();
-                }
-            }
+            } => inst.open_dropdown_menu(parent, surface_pos, min_width, items, selection_receiver),
+            Event::MenuCloseAll => inst.close_all_menus(),
+            Event::MenuRescale { scale } => inst.rescale_menu(scale),
+            Event::MenuSelectItem { depth, index } => inst.handle_menu_item_selection(depth, index),
+            Event::MenuDeselectItem { depth } => inst.handle_menu_item_deselection(depth),
             Event::MenuOpenSubmenu { depth, index } => {
                 /* if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.open_submenu(
@@ -4465,266 +5298,36 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }*/
             }
-            Event::MenuPerformDelayedAction => {
-                system_link
-                    .flyout_surface_context
-                    .unreserve_delayed_action();
-
-                if let Some(c) = current_active_menu_session.as_mut() {
-                    c.perform_delayed_action(
-                        &system_link,
-                        &mut ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut keyboard_focus_registry,
-                            },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
-                            system_link: &system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
-                        },
-                        &mut delayed_render_messages,
-                        &context_menu_common_resources,
-                    );
-                }
-            }
+            Event::MenuPerformDelayedAction => inst.perform_menu_delayed_action(),
             Event::MenuPointerDown {
                 pointer_id,
                 target,
                 button,
                 key_modifier,
-            } => {
-                pointer_input_manager.handle_mouse_down(
-                    pointer_id,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    button,
-                    key_modifier,
-                    target.ht_root(),
-                    &mut keyboard_focus_registry,
-                );
-            }
+            } => inst.dispatch_menu_pointer_down(target, pointer_id, button, key_modifier),
             Event::MenuPointerMove {
                 pointer_id,
                 target,
                 client_pos,
                 key_modifier,
-            } => {
-                pointer_input_manager.handle_mouse_move(
-                    NativeDesktopSurface::ContextMenu(target),
-                    pointer_id,
-                    client_pos,
-                    key_modifier,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    target.ht_root(),
-                );
-
-                let cursor_shape = pointer_input_manager.cursor_shape(&ht_manager);
-                system_link.set_cursor(&pointer_id, cursor_shape);
-            }
+            } => inst.handle_menu_pointer_move(target, pointer_id, client_pos, key_modifier),
             Event::MenuPointerUp {
                 pointer_id,
                 target,
                 button,
                 key_modifier,
-            } => {
-                pointer_input_manager.handle_mouse_up(
-                    pointer_id,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                    button,
-                    key_modifier,
-                    target.ht_root(),
-                );
-            }
+            } => inst.dispatch_menu_pointer_up(target, pointer_id, button, key_modifier),
             Event::MenuPointerLeave { pointer_id, .. } => {
-                pointer_input_manager.handle_mouse_leave(
-                    pointer_id,
-                    &ht_manager,
-                    &mut InputEventContext {
-                        composite_tree: &mut composite_tree,
-                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut system_link,
-                        ht_manager: &ht_manager,
-                        dock_store: &mut dock_store,
-                        view_instance_store: &mut view_instance_store,
-                        view_group_relation_store: &view_group_relation_store,
-                        view_render_queue: &mut view_render_queue,
-                        application: ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    },
-                );
+                inst.dispatch_menu_pointer_leave(pointer_id)
             }
-            Event::MenuSelectCommand { id } => {
-                // コマンド選択したらとじる
-                let ch = if let Some(c) = current_active_menu_session.take() {
-                    if let Some(ref a) =
-                        unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu
-                    {
-                        uicore::view_instance::<ui::app_menu_bar::View>(
-                            a.into_untyped(),
-                            &view_instance_store,
-                        )
-                        .expect("query failed")
-                        .on_close_all(
-                            &mut composite_tree,
-                            global_time_base.elapsed().as_secs_f32(),
-                        );
-                    }
-
-                    let ch = c.terminate(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-
-                    Some(ch)
-                } else {
-                    None
-                };
-
-                if let Some(mut ch) = ch {
-                    ch.on_select_command(
-                        id,
-                        &mut ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                    );
-                }
-            }
+            Event::MenuSelectCommand { id } => inst.perform_select_menu_command(id),
             Event::DropdownMenuSelectItem { id, receiver } => {
-                if let Some(r) = receiver.upgrade() {
-                    struct LocalContext<'env> {
-                        view_instance_store: &'env mut ViewInstanceStore,
-                        view_render_queue: &'env mut ViewRenderQueue,
-                    }
-                    impl ViewInstanceQueryableMut for LocalContext<'_> {
-                        #[inline(always)]
-                        fn view_instance_mut_of<T: View + 'static>(
-                            &mut self,
-                            id: ViewIdentifier,
-                        ) -> Option<&mut T> {
-                            uicore::view_instance_mut(id, self.view_instance_store)
-                        }
-
-                        #[inline(always)]
-                        fn view_set_visibility_untyped(
-                            &mut self,
-                            id: ViewIdentifier,
-                            visible: bool,
-                        ) {
-                            uicore::view_set_visibility(id, visible, self.view_instance_store)
-                        }
-
-                        #[inline(always)]
-                        fn view_layout_mut_untyped(
-                            &mut self,
-                            id: ViewIdentifier,
-                        ) -> Option<&mut uicore::ViewLayout> {
-                            uicore::view_layout_mut(id, self.view_instance_store)
-                        }
-                    }
-                    impl ViewRenderer for LocalContext<'_> {
-                        #[inline(always)]
-                        fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
-                            self.view_render_queue.schedule(target);
-                        }
-                    }
-                    r.set_selection_id(
-                        id,
-                        &mut ApplicationMutation {
-                            state: &mut application,
-                            view_feedbacks: &mut view_feedback_store,
-                        },
-                        &mut LocalContext {
-                            view_instance_store: &mut view_instance_store,
-                            view_render_queue: &mut view_render_queue,
-                        },
-                    );
-                }
-
-                // 選択したら閉じる
-                if let Some(mut c) = current_active_dropdown_menu_session.take() {
-                    c.close_all(
-                        &system_link,
-                        &mut composite_tree,
-                        &mut ht_manager,
-                        &mut keyboard_focus_registry,
-                    );
-                }
+                inst.perform_dropdown_menu_select_item(id, receiver)
             }
             Event::DockMoveSplitter {
                 controlling_dock,
                 pos_client,
-            } => {
-                ui::dock::move_splitter(
-                    controlling_dock,
-                    &mut dock_store,
-                    pos_client,
-                    &mut PaneContentResizeContext {
-                        view_instance_store: &mut view_instance_store,
-                        view_render_queue: &mut view_render_queue,
-                        composite_tree: &mut composite_tree,
-                        ht_manager: &mut ht_manager,
-                    },
-                );
-            }
+            } => inst.move_dock_splitter(controlling_dock, pos_client),
             Event::DockBeginPreview {
                 initiator,
                 pointer,
@@ -4733,250 +5336,33 @@ async fn run<'sys>(
                 pane_rect,
                 tab_size,
                 client_pos,
-            } => {
-                let (state, popover_rect) = ui::dock::begin_preview(
-                    pane_rect,
-                    tab_size,
-                    &client_pos,
-                    initiator,
-                    source_dock,
-                    tab_index,
-                );
-
-                system_link.begin_pane_drag(initiator, &pointer, state.offset, &popover_rect);
-                docking_preview_state = Some(state);
-            }
+            } => inst.begin_redock_preview(
+                initiator,
+                pointer,
+                source_dock,
+                tab_index,
+                pane_rect,
+                tab_size,
+                client_pos,
+            ),
             Event::DockMovePreview {
                 dest_window,
                 client_pos_in_dest,
-            } => {
-                if let Some(ref mut state) = docking_preview_state {
-                    let popover_rect = ui::dock::move_preview(
-                        &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
-                        &dock_store,
-                        &client_pos_in_dest,
-                        state,
-                    );
-                    system_link.update_pane_drag(dest_window, &popover_rect);
-                }
-            }
+            } => inst.move_redock_preview(dest_window, client_pos_in_dest),
             Event::DockConfirm {
                 pointer,
-                mut destination_window,
+                destination_window,
                 client_pos_in_dest,
-            } => {
-                if let Some(state) = docking_preview_state.take() {
-                    let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
-                        .docking_manager;
-
-                    tracing::debug!(?client_pos_in_dest, "dock confirm");
-
-                    let mut view_feedback_registry_delayed_ops = VecDeque::new();
-                    let mut source_window = state.source_window;
-                    let source_dock = state.source_dock;
-                    let tab_index = state.tab_index;
-                    system_link.end_pane_drag();
-                    let (op, suggested_rect) =
-                        ui::dock::end_preview(dm, &mut dock_store, &client_pos_in_dest, state);
-                    let (diverged_content, undock_result) = dm.redock(
-                        source_dock,
-                        &mut dock_store,
-                        tab_index,
-                        op,
-                        &suggested_rect,
-                        &mut ui::dock::RedockingContext {
-                            view_init_ctx: ViewInitContext {
-                                mount_context: MountContext {
-                                    composite_tree: &mut composite_tree,
-                                    ht_manager: &mut ht_manager,
-                                    current_sec: global_time_base.elapsed().as_secs_f32(),
-                                    keyboard_focus_registry: &mut keyboard_focus_registry,
-                                },
-                                view_allocator: &mut view_allocator,
-                                view_instance_store: &mut view_instance_store,
-                                view_tree_relation_store: &mut view_tree_relation_store,
-                                view_group_relation_store: &mut view_group_relation_store,
-                                view_layout_state_store: &mut view_layout_state_store,
-                                view_render_state_store: &mut view_render_state_store,
-                                view_feedback_subscription_delayed_ops:
-                                    &mut view_feedback_registry_delayed_ops,
-                                system_link: &system_link,
-                                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                application: &application,
-                            },
-                            view_render_queue: &mut view_render_queue,
-                        },
-                    );
-
-                    match undock_result {
-                        ui::dock::UndockResult::Success => {}
-                        ui::dock::UndockResult::ToBeEmpty => {
-                            unsafe {
-                                drop(source_window.take_extra_data::<PerWindowData>());
-                            }
-                            sub_windows.remove(&source_window);
-                            system_link.close_window(
-                                source_window,
-                                &mut composite_tree,
-                                &mut ht_manager,
-                                &mut keyboard_focus_registry,
-                            );
-                        }
-                    }
-
-                    if let Some(content) = diverged_content {
-                        let new_window = system_link.open_window(
-                            SubWindowOpenMode::DockDiverge {
-                                rect: Rect::from_lt_size(
-                                    Point::new_logical(
-                                        suggested_rect.left,
-                                        suggested_rect.top - ui::window_header::View::THICKNESS,
-                                    ),
-                                    Size::new_logical(
-                                        suggested_rect.width,
-                                        suggested_rect.height + ui::window_header::View::THICKNESS,
-                                    ),
-                                ),
-                                position_ref_window: destination_window,
-                            },
-                            &mut composite_tree,
-                            &mut ht_manager,
-                            &mut keyboard_focus_registry,
-                            &mut delayed_render_messages,
-                            |mut w,
-                             composite_tree,
-                             ht_manager,
-                             keyboard_focus_registry,
-                             system_link| {
-                                ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
-
-                                composite_tree
-                                    .begin_mod_chain(w.ct_root())
-                                    .has_bitmap(true)
-                                    .composite_mode(CompositeMode::FillCornerGradient(
-                                        window_bg_gradient,
-                                        AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
-                                    ))
-                                    .apply();
-
-                                let mut view_init_ctx = ViewInitContext {
-                                    mount_context: MountContext {
-                                        composite_tree,
-                                        ht_manager,
-                                        current_sec: global_time_base.elapsed().as_secs_f32(),
-                                        keyboard_focus_registry,
-                                    },
-                                    view_allocator: &mut view_allocator,
-                                    view_instance_store: &mut view_instance_store,
-                                    view_tree_relation_store: &mut view_tree_relation_store,
-                                    view_group_relation_store: &mut view_group_relation_store,
-                                    view_layout_state_store: &mut view_layout_state_store,
-                                    view_render_state_store: &mut view_render_state_store,
-                                    view_feedback_subscription_delayed_ops:
-                                        &mut view_feedback_registry_delayed_ops,
-                                    system_link,
-                                    main_thread_texture_id_issuer: &mut texture_id_issuer,
-                                    application: &application,
-                                };
-                                let root_view = view_init_ctx
-                                    .construct_view_direct(|_| Box::new(WindowRootView {}));
-                                let window_header_view = ui::window_header::Component::new(
-                                    ui::window_header::Caption::Sub,
-                                    ui::window_header::ComponentInit {
-                                        with_system_command_buttons: w
-                                            .needs_system_command_buttons(),
-                                    },
-                                    &mut view_init_ctx,
-                                );
-                                view_init_ctx.view_set_parent_untyped(
-                                    window_header_view.root_view(),
-                                    root_view.into_untyped(),
-                                );
-
-                                view_init_ctx.render_view_with_base(
-                                    root_view.into_untyped(),
-                                    &w,
-                                    w.keyboard_focus_group(),
-                                    Rect::from_lt_size(
-                                        Point::new_logical(0.0, 0.0),
-                                        w.client_size(),
-                                    ),
-                                );
-
-                                w.associate_extra_data(Box::new(PerWindowData {
-                                    root_view,
-                                    screen_reposition_interests: HashSet::new(),
-                                    header: window_header_view,
-                                    appmenu: None,
-                                    footer: None,
-                                    docking_manager: ui::dock::WindowDockingManager::new(
-                                        w,
-                                        &mut view_init_ctx,
-                                        &mut view_render_queue,
-                                        Rect::from_lt_size(
-                                            Point::new_logical(
-                                                0.0,
-                                                ui::window_header::View::THICKNESS,
-                                            ),
-                                            suggested_rect.size(),
-                                        ),
-                                        &mut dock_store,
-                                        |view_init_ctx, view_render_queue, store| {
-                                            store.alloc_root(|root_id, store| {
-                                                store.alloc_fill(
-                                                    root_id,
-                                                    &mut PaneGroupCreateContext {
-                                                        view_init_context: view_init_ctx,
-                                                        view_render_queue,
-                                                    },
-                                                    |_| vec![content],
-                                                    0,
-                                                )
-                                            })
-                                        },
-                                    ),
-                                }));
-                            },
-                        );
-                        sub_windows.insert(new_window);
-                    }
-                }
-            }
-            Event::Sync(SyncEvent::NewPresentID { .. }) => {
-                // vsync update period
-                preview_state.update(
-                    &mut *profiler::wrap!(
-                        LOCK_WAIT,
-                        committed_preview_state.lock().expect("poisoned")
-                    ),
-                    &mut preview_input_state,
-                    &mut ApplicationMutation {
-                        state: &mut application,
-                        view_feedbacks: &mut view_feedback_store,
-                    },
-                );
-            }
+            } => inst.confirm_redock(destination_window, client_pos_in_dest),
+            Event::Sync(SyncEvent::NewPresentID { .. }) => inst.update_preview(),
             #[cfg(feature = "wayland")]
-            Event::OfferAcceptingDrop => {
-                unsafe { &mut *system_link.display_server.global_messaging_ptr }
-                    .offer_accepting_drop(&pointer_input_manager, &mut ht_manager);
-            }
+            Event::OfferAcceptingDrop => inst.offer_accepting_drop(),
             Event::PerformDrop {
                 data,
                 target_window,
                 client_pos,
-            } => {
-                pointer_input_manager.perform_drop(
-                    data.0.0,
-                    client_pos,
-                    target_window.ht_root(),
-                    target_window.client_size(),
-                    &ht_manager,
-                );
-            }
-            Event::ScheduleViewRenderExt { id } => {
-                view_render_queue.schedule(id);
-            }
+            } => inst.perform_drop(data.0.0, target_window, client_pos),
+            Event::ScheduleViewRenderExt { id } => inst.schedule_view_render(id),
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
                 ht,
@@ -5117,90 +5503,13 @@ async fn run<'sys>(
         }
 
         // after-input common update phase
-        if !view_feedback_store.is_empty() {
-            let mut fb_context = ViewFeedbackContext {
-                application: &application,
-                composite_tree: &mut composite_tree,
-                ht_manager: &mut ht_manager,
-                current_sec: global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut keyboard_focus_registry,
-                view_allocator: &mut view_allocator,
-                view_instance_store: &mut view_instance_store,
-                view_tree_relation_store: &mut view_tree_relation_store,
-                view_group_relation_store: &mut view_group_relation_store,
-                view_layout_state_store: &mut view_layout_state_store,
-                view_render_state_store: &mut view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-                system_link: &system_link,
-                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                view_render_queue: &mut view_render_queue,
-            };
-
-            for (t, p) in view_feedback_store.iter() {
-                unsafe {
-                    view_feedback_registry.dispatch_dynamic_unchecked(p, t, &mut fb_context);
-                }
-            }
-            view_feedback_store.clear();
-            view_feedback_registry.perform_atomic(&mut fb_context);
-        }
-
-        view_render_queue.perform(
-            &mut RenderContext {
-                composite_tree: &mut composite_tree,
-                ht_manager: &mut ht_manager,
-                keyboard_focus_registry: &mut keyboard_focus_registry,
-                current_sec: global_time_base.elapsed().as_secs_f32(),
-                system_link: &system_link,
-                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                application: &application,
-                view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-            },
-            &mut view_instance_store,
-            &view_tree_relation_store,
-            &mut view_layout_state_store,
-            &mut view_render_state_store,
-        );
-
-        composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-        view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
-
-        for msg in delayed_render_messages.drain(..) {
-            system_link.rt_sender().send(msg).expect("rt_sender.send");
-        }
+        inst.dispatch_view_feedback();
+        inst.update_view();
+        inst.process_delayed_view_feedback_registry_ops();
+        inst.sync_threads();
     }
 
-    tracing::info!("saving window state");
-    let window_state_persist = PersistStateWindowData {
-        main: WindowState {
-            geometry: main_window.geometry_state_snapshot(&system_link),
-            dock: unsafe { main_window.extra_data_ref::<PerWindowData>() }
-                .docking_manager
-                .state_snapshot(&dock_store),
-        },
-        sub: sub_windows
-            .iter()
-            .map(|w| WindowState {
-                geometry: w.geometry_state_snapshot(&system_link),
-                dock: unsafe { w.extra_data_ref::<PerWindowData>() }
-                    .docking_manager
-                    .state_snapshot(&dock_store),
-            })
-            .collect(),
-    };
-    'try_save_window_state: {
-        let fp = match std::fs::File::create(file_system.window_state_save_path()) {
-            Ok(fp) => fp,
-            Err(e) => {
-                tracing::warn!(reason = %e, "persist.create.window_state");
-                break 'try_save_window_state;
-            }
-        };
-        if let Err(e) = window_state_persist.serialize(&mut std::io::BufWriter::new(fp)) {
-            tracing::warn!(reason = %e, "persist.save.window_state");
-        }
-    }
-
+    inst.save_window_state();
     tracing::info!("app finish");
     #[cfg(windows)]
     unsafe {
