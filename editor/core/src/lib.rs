@@ -2,7 +2,7 @@ extern crate peridot_marble_editor_model as model;
 extern crate peridot_marble_editor_shared as shared;
 
 use bitflags::Flags;
-use core::cell::Cell;
+use core::{cell::Cell, pin::Pin};
 #[cfg(target_os = "linux")]
 use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
@@ -139,15 +139,15 @@ pub fn launch() {
     let dbus = dbus::Connection::connect_bus(dbus::BusType::Session).expect("dbus.connect");
 
     let root_font_set = RootFontSet::new();
-    let vk_device = Graphics::init(&fs);
+    let gfx = Graphics::init(&fs);
     #[cfg(windows)]
     assert!(
-        vk_device.presentation_support(),
+        gfx.presentation_support(),
         "win32 presentation not supported on graphics queue"
     );
     #[cfg(feature = "wayland")]
     assert!(
-        dp_context.check_for_vk(&vk_device),
+        dp_context.check_for_vk(&gfx),
         "wayland presentation not supported on graphics queue"
     );
 
@@ -167,6 +167,9 @@ pub fn launch() {
         Some(peridot_math::Vector3::up()),
     );
 
+    let renderer_sync = Mutex::new(RendererSync {
+        composite_buffer: CompositeTreeSyncBuffer::new(),
+    });
     let preview_state = Mutex::new(rendering::preview::CommittedState {
         viewport_size: Size::new_logical(640.0, 480.0),
         main_camera,
@@ -184,52 +187,6 @@ pub fn launch() {
     });
 
     let global_time_base = std::time::Instant::now();
-    main_wrapper(
-        move |args, system_link| run(args, system_link),
-        &mut event_store,
-        &global_time_base,
-        &Mutex::new(RendererSync {
-            composite_buffer: CompositeTreeSyncBuffer::new(),
-        }),
-        &fs,
-        &vk_device,
-        rt_sender,
-        rt_receiver,
-        &root_font_set,
-        &preview_state,
-        #[cfg(windows)]
-        &mut app_context,
-        #[cfg(windows)]
-        &dx_context,
-        #[cfg(feature = "wayland")]
-        &mut dp_context,
-        #[cfg(feature = "wayland")]
-        &static_pixbufs,
-        #[cfg(target_os = "linux")]
-        &dbus,
-    );
-
-    profiler::fini_profiler();
-}
-
-fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(LaunchArgs<'sys>, SystemLink<'sys>) -> AppFuture,
-    event_store: &mut VecDeque<Event>,
-    global_time_base: &'sys std::time::Instant,
-    renderer_sync: &'sys Mutex<RendererSync>,
-    fs: &'sys FileSystem,
-    gfx: &'sys Graphics,
-    rt_sender: RenderMessageSender,
-    rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    root_font_set: &'sys RootFontSet,
-    preview_state: &'sys Mutex<rendering::preview::CommittedState>,
-    #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
-    #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
-    #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
-    #[cfg(feature = "wayland")] static_pixbufs: &'sys platform::unix::wayland::StaticPixbufs,
-    #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
-) {
-    profiler::sample_memory!();
 
     #[cfg(feature = "wayland")]
     let terminate_event = std::sync::Arc::new(
@@ -238,17 +195,17 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     let mut polling = false;
     let empty_dispatcher = LogicFiberEventDispatcher {
-        event_store,
+        event_store: &mut event_store,
         polling: &mut polling,
-        poll_fn_ptr: unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) },
+        poll_fn_ptr: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
         future_ptr: core::ptr::null_mut(),
     };
     let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
 
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging::new(
-        dp_context,
-        static_pixbufs,
+        &mut dp_context,
+        &static_pixbufs,
         empty_dispatcher.clone()
     ));
     #[cfg(feature = "wayland")]
@@ -287,14 +244,8 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     let delayed_action_timer = utils::platform::linux::TimerFD::new().expect("timerfd.create");
     #[cfg(feature = "wayland")]
     let delayed_action_timer_fd = std::os::unix::prelude::AsRawFd::as_raw_fd(&delayed_action_timer);
-    let mut app = core::pin::pin!(run_app(
-        LaunchArgs {
-            event_queue: EventQueue { event_store },
-            global_time_base,
-            renderer_sync,
-            file_system: fs,
-            committed_preview_state: preview_state
-        },
+
+    let mut coreloop = core::pin::pin!(CoreLoop::new(
         #[cfg(windows)]
         SystemLink {
             font_set: FontSet::new(root_font_set),
@@ -312,15 +263,15 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         #[cfg(not(windows))]
         SystemLink {
             rt_sender: rt_sender.clone(),
-            gfx,
-            font_set: FontSet::new(root_font_set),
+            gfx: &gfx,
+            font_set: FontSet::new(&root_font_set),
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
-            dbus,
+            dbus: &dbus,
             #[cfg(feature = "wayland")]
             display_server: platform::unix::DisplayServerLink {
-                context: dp_context,
-                static_pixbufs,
+                context: &mut dp_context,
+                static_pixbufs: &static_pixbufs,
                 global_messaging_ptr: unsafe { wl_global_msg.as_mut().get_unchecked_mut() },
             },
             #[cfg(target_os = "linux")]
@@ -336,26 +287,85 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 event_dispatcher: app_event_dispatcher.as_mut().get_mut()
             },
         },
+        &fs,
+        &global_time_base,
+        &renderer_sync,
+        &preview_state,
     ));
 
+    profiler::sample_memory!();
+    main_wrapper(
+        move |cl, eq| run(cl, eq),
+        &mut app_event_dispatcher,
+        coreloop,
+        &mut event_store,
+        &global_time_base,
+        &renderer_sync,
+        &gfx,
+        rt_receiver,
+        &root_font_set,
+        &preview_state,
+        #[cfg(windows)]
+        &mut app_context,
+        #[cfg(windows)]
+        &dx_context,
+        #[cfg(feature = "wayland")]
+        &mut dp_context,
+        #[cfg(feature = "wayland")]
+        wl_global_msg,
+        #[cfg(feature = "wayland")]
+        &terminate_event,
+        #[cfg(target_os = "linux")]
+        &dbus,
+        #[cfg(target_os = "linux")]
+        &pointer_hovering_timer,
+        #[cfg(target_os = "linux")]
+        &delayed_action_timer_fd,
+        #[cfg(target_os = "linux")]
+        #[cfg(feature = "enable-profiling")]
+        &memory_sample_timer_fd,
+    );
+
+    profiler::fini_profiler();
+}
+
+fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
+    run_app: impl FnOnce(Pin<&'sys mut CoreLoop<'sys, 'sys>>, EventQueue) -> AppFuture,
+    app_event_dispatcher: &mut LogicFiberEventDispatcher,
+    mut coreloop: Pin<&'sys mut CoreLoop<'sys, 'sys>>,
+    event_store: &mut VecDeque<Event>,
+    global_time_base: &'sys std::time::Instant,
+    renderer_sync: &'sys Mutex<RendererSync>,
+    gfx: &'sys Graphics,
+    rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
+    root_font_set: &'sys RootFontSet,
+    preview_state: &'sys Mutex<rendering::preview::CommittedState>,
+    #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
+    #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
+    #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
+    #[cfg(feature = "wayland")] mut wl_global_msg: Pin<
+        &'sys mut platform::unix::wayland::GlobalMessaging,
+    >,
+    #[cfg(feature = "wayland")] terminate_event: &(impl AsRawFd + ?Sized),
+    #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
+    #[cfg(target_os = "linux")] pointer_hovering_timer: &(impl AsRawFd + ?Sized),
+    #[cfg(target_os = "linux")] delayed_action_timer_fd: &(impl AsRawFd + ?Sized),
+    #[cfg(target_os = "linux")]
+    #[cfg(feature = "enable-profiling")]
+    memory_sample_timer_fd: &(impl AsRawFd + ?Sized),
+) {
+    let cl_ptr = core::ptr::from_mut(unsafe { coreloop.as_mut().get_unchecked_mut() });
+    let mut app = core::pin::pin!(run_app(coreloop, EventQueue { event_store }));
     app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
+    app_event_dispatcher.poll_fn_ptr =
+        unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) };
     #[cfg(feature = "wayland")]
     wl_global_msg
         .as_mut()
         .reset_event_dispatcher(app_event_dispatcher.clone());
 
-    // initial poll
-    unsafe {
-        core::ptr::write_volatile(&mut polling, true);
-    }
-    let _ = app
-        .as_mut()
-        .poll(&mut core::task::Context::from_waker(&unsafe {
-            core::task::Waker::new(&(), &APP_WAKER_VTABLE)
-        }));
-    unsafe {
-        core::ptr::write_volatile(&mut polling, false);
-    }
+    unsafe { Pin::new_unchecked(&mut *cl_ptr) }.init();
+    app_event_dispatcher.poll_init();
 
     let sync_event_bus = SyncEventBus::new(app_event_dispatcher.clone());
     let shutdown = std::sync::atomic::AtomicBool::new(false);
@@ -389,7 +399,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
-            .add(&terminate_event, EpollEventBits::IN, 1)
+            .add(terminate_event, EpollEventBits::IN, 1)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
@@ -397,16 +407,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             .expect("epoll.add");
         #[cfg(target_os = "linux")]
         epoll
-            .add(&pointer_hovering_timer, EpollEventBits::IN, 3)
+            .add(pointer_hovering_timer, EpollEventBits::IN, 3)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
-            .add(&delayed_action_timer_fd, EpollEventBits::IN, 4)
+            .add(delayed_action_timer_fd, EpollEventBits::IN, 4)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         #[cfg(feature = "enable-profiling")]
         epoll
-            .add(&memory_sample_timer_fd, EpollEventBits::IN, 5)
+            .add(memory_sample_timer_fd, EpollEventBits::IN, 5)
             .expect("epoll.add");
         #[cfg(target_os = "linux")]
         let poll_id_to_watch_ref = core::cell::UnsafeCell::new(std::collections::HashMap::new());
@@ -481,7 +491,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                     let mut b = [core::mem::MaybeUninit::<u8>::uninit(); 8];
                     if unsafe {
                         libc::read(
-                            std::os::fd::AsRawFd::as_raw_fd(&memory_sample_timer_fd),
+                            std::os::fd::AsRawFd::as_raw_fd(memory_sample_timer_fd),
                             b.as_mut_ptr().cast(),
                             8,
                         )
@@ -1042,6 +1052,24 @@ pub struct LogicFiberEventDispatcher {
     future_ptr: *mut core::ffi::c_void,
 }
 impl LogicFiberEventDispatcher {
+    pub fn poll_init(&self) {
+        unsafe {
+            self.polling.write_volatile(true);
+        }
+        let _ = unsafe {
+            (self.poll_fn_ptr)(
+                self.future_ptr,
+                &mut core::task::Context::from_waker(&core::task::Waker::new(
+                    &(),
+                    &APP_WAKER_VTABLE,
+                )),
+            )
+        };
+        unsafe {
+            self.polling.write_volatile(false);
+        }
+    }
+
     pub fn dispatch(&self, e: Event) {
         unsafe {
             (*self.event_store).push_back(e);
@@ -3024,9 +3052,9 @@ pub struct CoreLoop<'h, 'sys> {
     application: Application,
     // base functionalities
     composite_tree: CompositeTree<SyncEvent>,
-    ht_manager: core::pin::Pin<Box<HitTestTreeManager<'h>>>,
+    ht_manager: HitTestTreeManager<'h>,
     keyboard_focus_registry: KeyboardFocusTokenRegistry,
-    pointer_input_manager: core::pin::Pin<Box<PointerInputManager>>,
+    pointer_input_manager: PointerInputManager,
     texture_id_issuer: MainThreadTextureIDIssuer,
     delayed_render_messages: Vec<RenderMessage>,
     // view management
@@ -3056,9 +3084,10 @@ pub struct CoreLoop<'h, 'sys> {
     // preview
     preview_input_state: core::pin::Pin<Box<PreviewInputState>>,
     preview_state: PreviewMainThreadState,
+    // should be pinned
+    _marker: core::marker::PhantomPinned,
 }
 impl<'h, 'sys> CoreLoop<'h, 'sys> {
-    #[profiler::instrument("CoreLoop.Initialize")]
     pub fn new(
         syslink: SystemLink<'sys>,
         fs: &'sys FileSystem,
@@ -3066,44 +3095,84 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
         renderer_sync: &'sys Mutex<RendererSync>,
         committed_preview_state: &'sys Mutex<rendering::preview::CommittedState>,
     ) -> Self {
-        let application = Application::new();
-        let mut composite_tree = CompositeTree::new();
-        let mut ht_manager = Box::pin(HitTestTreeManager::new());
-        let mut keyboard_focus_registry = KeyboardFocusTokenRegistry::new();
-        let pointer_input_manager = Box::pin(PointerInputManager::new());
-        let mut texture_id_issuer = MainThreadTextureIDIssuer::new();
-        let mut view_allocator = ViewIdentifierAllocator::new();
-        let mut view_instance_store = ViewInstanceStore::new();
-        let mut view_tree_relation_store = ViewTreeRelationStore::new();
-        let mut view_group_relation_store = ViewGroupRelationStore::new();
-        let mut view_layout_state_store = ViewLayoutStateStore::new();
-        let mut view_render_state_store = ViewRenderStateStore::new();
-        let mut view_render_queue = ViewRenderQueue::new();
-        let mut view_feedback_registry = ViewFeedbackRegistry::new();
-        let mut view_feedback_registry_delayed_ops = VecDeque::new();
-        let mut view_feedback_store = NonDropAnyTypeQueue::new();
-        let popup_manager = PopupManager::new();
-        let mut dock_store = ui::dock::DockStore::new();
-        let mut delayed_render_messages = Vec::new();
-        let mut preview_input_state = Box::pin(PreviewInputState::new());
+        // いくつかは現時点では初期化できない いまのところどれもdropしない型なので適当な値で埋めておく
+        Self {
+            syslink,
+            fs,
+            global_time_base,
+            renderer_sync,
+            committed_preview_state,
+            // base model
+            application: Application::new(),
+            // base functionalities
+            composite_tree: CompositeTree::new(),
+            ht_manager: HitTestTreeManager::new(),
+            keyboard_focus_registry: KeyboardFocusTokenRegistry::new(),
+            pointer_input_manager: PointerInputManager::new(),
+            texture_id_issuer: MainThreadTextureIDIssuer::new(),
+            delayed_render_messages: Vec::new(),
+            // view management
+            view_allocator: ViewIdentifierAllocator::new(),
+            view_instance_store: ViewInstanceStore::new(),
+            view_tree_relation_store: ViewTreeRelationStore::new(),
+            view_group_relation_store: ViewGroupRelationStore::new(),
+            view_layout_state_store: ViewLayoutStateStore::new(),
+            view_render_state_store: ViewRenderStateStore::new(),
+            view_render_queue: ViewRenderQueue::new(),
+            view_feedback_registry: ViewFeedbackRegistry::new(),
+            view_feedback_registry_delayed_ops: VecDeque::new(),
+            view_feedback_store: NonDropAnyTypeQueue::new(),
+            // view common res
+            #[allow(invalid_value)]
+            window_bg_gradient: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
+            #[allow(invalid_value)]
+            context_menu_common_resources: unsafe {
+                core::mem::MaybeUninit::uninit().assume_init()
+            },
+            // window management
+            #[allow(invalid_value)]
+            main_window: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
+            sub_windows: HashSet::new(),
+            // high-level functionalities
+            popup_manager: PopupManager::new(),
+            dock_store: ui::dock::DockStore::new(),
+            current_active_menu_session: None,
+            current_active_dropdown_menu_session: None,
+            custom_view_flyout_session: None,
+            docking_preview_state: None,
+            // preview
+            preview_input_state: Box::pin(PreviewInputState::new()),
+            preview_state: PreviewMainThreadState::new(),
+            // should pinned
+            _marker: core::marker::PhantomPinned,
+        }
+    }
 
+    #[profiler::instrument("CoreLoop.Initialize")]
+    pub fn init(mut self: core::pin::Pin<&mut Self>) {
         // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
         #[cfg(windows)]
         unsafe {
             platform::windows::locate_non_client_hittest_managers(
-                &pointer_input_manager,
-                &ht_manager,
+                &self.pointer_input_manager,
+                &self.ht_manager,
             );
         }
 
-        let context_menu_common_resources = MenuItemCommonResources::new(
-            &mut composite_tree,
-            &mut texture_id_issuer,
-            syslink.rt_sender(),
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        this.context_menu_common_resources = MenuItemCommonResources::new(
+            &mut this.composite_tree,
+            &mut this.texture_id_issuer,
+            this.syslink.rt_sender(),
         );
+        this.window_bg_gradient = this.composite_tree.create_gradient(Gradient::Corner {
+            right_top: [0.1, 0.1, 0.1, 1.0],
+            left_bottom: [0.1, 0.1, 0.1, 1.0],
+            right_bottom: [0.05, 0.025, 0.0, 1.0],
+        });
 
         let last_window_state = 'try_restore_last_window_state: {
-            let fp = match std::fs::File::open(fs.window_state_save_path()) {
+            let fp = match std::fs::File::open(this.fs.window_state_save_path()) {
                 Ok(fp) => fp,
                 Err(e) => {
                     tracing::warn!(reason = %e, "persist.open.window_state");
@@ -3119,49 +3188,42 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             }
         };
 
-        let window_bg_gradient = composite_tree.create_gradient(Gradient::Corner {
-            right_top: [0.1, 0.1, 0.1, 1.0],
-            left_bottom: [0.1, 0.1, 0.1, 1.0],
-            right_bottom: [0.05, 0.025, 0.0, 1.0],
-        });
-
-        let mut sub_windows = HashSet::new();
-        let mut main_window = syslink.create_main_window(
+        this.main_window = this.syslink.create_main_window(
             match last_window_state {
                 None => MainWindowOpenMode::New,
                 Some(ref x) => MainWindowOpenMode::Restore(x.main.geometry.clone()),
             },
-            &mut composite_tree,
-            &mut ht_manager,
-            &mut keyboard_focus_registry,
-            &mut delayed_render_messages,
+            &mut this.composite_tree,
+            &mut this.ht_manager,
+            &mut this.keyboard_focus_registry,
+            &mut this.delayed_render_messages,
         );
 
         let mut view_init_ctx = ViewInitContext {
             mount_context: MountContext {
-                composite_tree: &mut composite_tree,
-                ht_manager: &mut ht_manager,
-                current_sec: global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut keyboard_focus_registry,
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
             },
-            view_allocator: &mut view_allocator,
-            view_instance_store: &mut view_instance_store,
-            view_tree_relation_store: &mut view_tree_relation_store,
-            view_group_relation_store: &mut view_group_relation_store,
-            view_layout_state_store: &mut view_layout_state_store,
-            view_render_state_store: &mut view_render_state_store,
-            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-            system_link: &syslink,
-            main_thread_texture_id_issuer: &mut texture_id_issuer,
-            application: &application,
+            view_allocator: &mut this.view_allocator,
+            view_instance_store: &mut this.view_instance_store,
+            view_tree_relation_store: &mut this.view_tree_relation_store,
+            view_group_relation_store: &mut this.view_group_relation_store,
+            view_layout_state_store: &mut this.view_layout_state_store,
+            view_render_state_store: &mut this.view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut this.view_feedback_registry_delayed_ops,
+            system_link: &this.syslink,
+            main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+            application: &this.application,
         };
 
         view_init_ctx
             .composite_tree
-            .begin_mod_chain(main_window.ct_root())
+            .begin_mod_chain(this.main_window.ct_root())
             .has_bitmap(true)
             .composite_mode(CompositeMode::FillCornerGradient(
-                window_bg_gradient,
+                this.window_bg_gradient,
                 AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
             ))
             .apply();
@@ -3170,7 +3232,7 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
         let window_header = ui::window_header::Component::new(
             ui::window_header::Caption::Main,
             ui::window_header::ComponentInit {
-                with_system_command_buttons: main_window.needs_system_command_buttons(),
+                with_system_command_buttons: this.main_window.needs_system_command_buttons(),
             },
             &mut view_init_ctx,
         );
@@ -3179,7 +3241,7 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             main_window_root_view.into_untyped(),
         );
 
-        let app_menu_view = if syslink.needs_app_menu_in_surface() {
+        let app_menu_view = if this.syslink.needs_app_menu_in_surface() {
             let app_menu_view = view_init_ctx.construct_view_direct(|_| {
                 Box::new(ui::app_menu_bar::View::new(
                     ui::window_header::View::THICKNESS,
@@ -3277,88 +3339,89 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             } else {
                 0.0
             };
-        let main_window_size = main_window.client_size();
-        main_window.associate_extra_data(Box::new(PerWindowData {
-            screen_reposition_interests: HashSet::new(),
-            root_view: main_window_root_view,
-            header: window_header,
-            appmenu: app_menu_view,
-            footer: Some(window_footer_view),
-            docking_manager: ui::dock::WindowDockingManager::new(
-                main_window,
-                &mut view_init_ctx,
-                &mut view_render_queue,
-                Rect::from_lt_size(
-                    Point::new_logical(0.0, dock_top_offset),
-                    Size::new_logical(
-                        main_window_size.width,
-                        main_window_size.height
-                            - dock_top_offset
-                            - ui::window_footer::View::THICKNESS,
+        let main_window_size = this.main_window.client_size();
+        this.main_window
+            .associate_extra_data(Box::new(PerWindowData {
+                screen_reposition_interests: HashSet::new(),
+                root_view: main_window_root_view,
+                header: window_header,
+                appmenu: app_menu_view,
+                footer: Some(window_footer_view),
+                docking_manager: ui::dock::WindowDockingManager::new(
+                    this.main_window,
+                    &mut view_init_ctx,
+                    &mut this.view_render_queue,
+                    Rect::from_lt_size(
+                        Point::new_logical(0.0, dock_top_offset),
+                        Size::new_logical(
+                            main_window_size.width,
+                            main_window_size.height
+                                - dock_top_offset
+                                - ui::window_footer::View::THICKNESS,
+                        ),
                     ),
+                    &mut this.dock_store,
+                    |view_init_ctx, view_render_queue, store| {
+                        construct_dock_from_state(
+                            match last_window_state {
+                                None => &initial_dock_state,
+                                Some(ref x) => &x.main.dock,
+                            },
+                            this.main_window.keyboard_focus_group(),
+                            &mut PaneGroupCreateContext {
+                                view_init_context: view_init_ctx,
+                                view_render_queue,
+                            },
+                            store,
+                            |id, view_init_ctx| match id {
+                                // TODO: このへんうまい具合にRegistryつくりたい
+                                UIKitPreviewPanePresenter::ID => {
+                                    Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
+                                }
+                                ui::pane::object_tree::Presenter::ID => {
+                                    Box::new(ui::pane::object_tree::Presenter::new(view_init_ctx))
+                                }
+                                ui::pane::inspector::Presenter::ID => {
+                                    Box::new(ui::pane::inspector::Presenter::new(view_init_ctx))
+                                }
+                                ui::pane::asset_explorer::Presenter::ID => Box::new(
+                                    ui::pane::asset_explorer::Presenter::new(view_init_ctx),
+                                ),
+                                ProjectSettingsPanePresenter::ID => {
+                                    Box::new(ProjectSettingsPanePresenter::new(view_init_ctx))
+                                }
+                                TimelinePanePresenter::ID => {
+                                    Box::new(TimelinePanePresenter::new(view_init_ctx))
+                                }
+                                AssetPreviewPanePresenter::ID => {
+                                    Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
+                                }
+                                PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
+                                    view_init_ctx,
+                                    this.preview_input_state.as_mut().get_mut(),
+                                )),
+                                id => todo!("generic pane id handling: {id:?}"),
+                            },
+                        )
+                    },
                 ),
-                &mut dock_store,
-                |view_init_ctx, view_render_queue, store| {
-                    construct_dock_from_state(
-                        match last_window_state {
-                            None => &initial_dock_state,
-                            Some(ref x) => &x.main.dock,
-                        },
-                        main_window.keyboard_focus_group(),
-                        &mut PaneGroupCreateContext {
-                            view_init_context: view_init_ctx,
-                            view_render_queue,
-                        },
-                        store,
-                        |id, view_init_ctx| match id {
-                            // TODO: このへんうまい具合にRegistryつくりたい
-                            UIKitPreviewPanePresenter::ID => {
-                                Box::new(UIKitPreviewPanePresenter::new(view_init_ctx))
-                            }
-                            ui::pane::object_tree::Presenter::ID => {
-                                Box::new(ui::pane::object_tree::Presenter::new(view_init_ctx))
-                            }
-                            ui::pane::inspector::Presenter::ID => {
-                                Box::new(ui::pane::inspector::Presenter::new(view_init_ctx))
-                            }
-                            ui::pane::asset_explorer::Presenter::ID => {
-                                Box::new(ui::pane::asset_explorer::Presenter::new(view_init_ctx))
-                            }
-                            ProjectSettingsPanePresenter::ID => {
-                                Box::new(ProjectSettingsPanePresenter::new(view_init_ctx))
-                            }
-                            TimelinePanePresenter::ID => {
-                                Box::new(TimelinePanePresenter::new(view_init_ctx))
-                            }
-                            AssetPreviewPanePresenter::ID => {
-                                Box::new(AssetPreviewPanePresenter::new(view_init_ctx))
-                            }
-                            PreviewPanePresenter::ID => Box::new(PreviewPanePresenter::new(
-                                view_init_ctx,
-                                preview_input_state.as_mut().get_mut(),
-                            )),
-                            id => todo!("generic pane id handling: {id:?}"),
-                        },
-                    )
-                },
-            ),
-        }));
+            }));
 
         view_init_ctx.render_view_with_base(
             main_window_root_view.into_untyped(),
-            &main_window,
-            main_window.keyboard_focus_group(),
-            Rect::from_lt_size(Point::new_logical(0.0, 0.0), main_window.client_size()),
+            &this.main_window,
+            this.main_window.keyboard_focus_group(),
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), this.main_window.client_size()),
         );
 
         if let Some(ref last_window_state) = last_window_state {
             for sub in last_window_state.sub.iter() {
-                let new_window = syslink.open_window(
+                let new_window = this.syslink.open_window(
                     SubWindowOpenMode::Restore(sub.geometry.clone()),
-                    &mut composite_tree,
-                    &mut ht_manager,
-                    &mut keyboard_focus_registry,
-                    &mut delayed_render_messages,
+                    &mut this.composite_tree,
+                    &mut this.ht_manager,
+                    &mut this.keyboard_focus_registry,
+                    &mut this.delayed_render_messages,
                     |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
                         ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
@@ -3366,30 +3429,29 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                             .begin_mod_chain(w.ct_root())
                             .has_bitmap(true)
                             .composite_mode(CompositeMode::FillCornerGradient(
-                                window_bg_gradient,
+                                this.window_bg_gradient,
                                 AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
                             ))
                             .apply();
 
-                        let mut view_feedback_registry_delayed_ops = VecDeque::new();
                         let mut view_init_ctx = ViewInitContext {
                             mount_context: MountContext {
                                 composite_tree,
                                 ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
+                                current_sec: this.global_time_base.elapsed().as_secs_f32(),
                                 keyboard_focus_registry,
                             },
-                            view_allocator: &mut view_allocator,
-                            view_instance_store: &mut view_instance_store,
-                            view_tree_relation_store: &mut view_tree_relation_store,
-                            view_group_relation_store: &mut view_group_relation_store,
-                            view_layout_state_store: &mut view_layout_state_store,
-                            view_render_state_store: &mut view_render_state_store,
-                            view_feedback_subscription_delayed_ops:
-                                &mut view_feedback_registry_delayed_ops,
+                            view_allocator: &mut this.view_allocator,
+                            view_instance_store: &mut this.view_instance_store,
+                            view_tree_relation_store: &mut this.view_tree_relation_store,
+                            view_group_relation_store: &mut this.view_group_relation_store,
+                            view_layout_state_store: &mut this.view_layout_state_store,
+                            view_render_state_store: &mut this.view_render_state_store,
+                            view_feedback_subscription_delayed_ops: &mut this
+                                .view_feedback_registry_delayed_ops,
                             system_link,
-                            main_thread_texture_id_issuer: &mut texture_id_issuer,
-                            application: &application,
+                            main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                            application: &this.application,
                         };
                         let root_view =
                             view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
@@ -3421,12 +3483,12 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                             docking_manager: ui::dock::WindowDockingManager::new(
                                 w,
                                 &mut view_init_ctx,
-                                &mut view_render_queue,
+                                &mut this.view_render_queue,
                                 Rect::from_lt_size(
                                     Point::new_logical(0.0, ui::window_header::View::THICKNESS),
                                     Size::new_logical(320.0, 240.0),
                                 ),
-                                &mut dock_store,
+                                &mut this.dock_store,
                                 |view_init_ctx, view_render_queue, store| {
                                     construct_dock_from_state(
                                         &sub.dock,
@@ -3466,7 +3528,7 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                                             PreviewPanePresenter::ID => {
                                                 Box::new(PreviewPanePresenter::new(
                                                     view_init_ctx,
-                                                    preview_input_state.as_mut().get_mut(),
+                                                    this.preview_input_state.as_mut().get_mut(),
                                                 ))
                                             }
                                             id => todo!("generic pane id handling: {id:?}"),
@@ -3477,106 +3539,28 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                         }));
                     },
                 );
-                sub_windows.insert(new_window);
+                this.sub_windows.insert(new_window);
             }
         }
 
-        view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
+        this.view_feedback_registry
+            .perform_delayed(&mut this.view_feedback_registry_delayed_ops);
 
         // initial sync model with view
-        application.sync(&mut view_feedback_store);
-        let mut fb_context = ViewFeedbackContext {
-            application: &application,
-            composite_tree: &mut composite_tree,
-            ht_manager: &mut ht_manager,
-            current_sec: global_time_base.elapsed().as_secs_f32(),
-            keyboard_focus_registry: &mut keyboard_focus_registry,
-            view_allocator: &mut view_allocator,
-            view_instance_store: &mut view_instance_store,
-            view_tree_relation_store: &mut view_tree_relation_store,
-            view_group_relation_store: &mut view_group_relation_store,
-            view_layout_state_store: &mut view_layout_state_store,
-            view_render_state_store: &mut view_render_state_store,
-            view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-            system_link: &syslink,
-            main_thread_texture_id_issuer: &mut texture_id_issuer,
+        this.application.sync(&mut this.view_feedback_store);
 
-            view_render_queue: &mut view_render_queue,
-        };
+        // final sync
+        self.as_mut().dispatch_view_feedback();
+        self.as_mut().update_view();
+        self.as_mut().sync_threads();
+        self.as_mut().process_delayed_view_feedback_registry_ops();
 
-        for (t, p) in view_feedback_store.iter() {
-            unsafe {
-                view_feedback_registry.dispatch_dynamic_unchecked(p, t, &mut fb_context);
-            }
-        }
-        view_feedback_store.clear();
-        view_feedback_registry.perform_atomic(&mut fb_context);
-
-        view_render_queue.perform(
-            &mut RenderContext {
-                composite_tree: &mut composite_tree,
-                ht_manager: &mut ht_manager,
-                keyboard_focus_registry: &mut keyboard_focus_registry,
-                current_sec: global_time_base.elapsed().as_secs_f32(),
-                system_link: &syslink,
-                main_thread_texture_id_issuer: &mut texture_id_issuer,
-                application: &application,
-                view_feedback_subscription_delayed_ops: &mut view_feedback_registry_delayed_ops,
-            },
-            &mut view_instance_store,
-            &view_tree_relation_store,
-            &mut view_layout_state_store,
-            &mut view_render_state_store,
-        );
-
-        composite_tree.commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-        ht_manager.dump(main_window.ht_root());
-        for msg in delayed_render_messages.drain(..) {
-            syslink.rt_sender().send(msg).expect("rt_sender.send");
-        }
-        view_feedback_registry.perform_delayed(&mut view_feedback_registry_delayed_ops);
-
-        syslink.prelaunch(main_window);
-
-        Self {
-            syslink,
-            fs,
-            global_time_base,
-            renderer_sync,
-            committed_preview_state,
-            application,
-            composite_tree,
-            ht_manager,
-            keyboard_focus_registry,
-            pointer_input_manager,
-            texture_id_issuer,
-            delayed_render_messages,
-            view_allocator,
-            view_instance_store,
-            view_tree_relation_store,
-            view_group_relation_store,
-            view_layout_state_store,
-            view_render_state_store,
-            view_render_queue,
-            view_feedback_registry,
-            view_feedback_registry_delayed_ops,
-            view_feedback_store,
-            window_bg_gradient,
-            context_menu_common_resources,
-            main_window,
-            sub_windows,
-            popup_manager,
-            dock_store,
-            current_active_menu_session: None,
-            current_active_dropdown_menu_session: None,
-            custom_view_flyout_session: None,
-            docking_preview_state: None,
-            preview_input_state,
-            preview_state: PreviewMainThreadState::new(),
-        }
+        let this = unsafe { self.get_unchecked_mut() };
+        this.ht_manager.dump(this.main_window.ht_root());
+        this.syslink.prelaunch(this.main_window);
     }
 
-    fn close_sub_window(&mut self, mut target: WindowHandle) {
+    fn close_sub_window(self: core::pin::Pin<&mut Self>, mut target: WindowHandle) {
         let wd = unsafe { target.take_extra_data::<PerWindowData>() };
         struct LocalContext<'a, 'h>(ViewInitContext<'a, 'h>);
         impl ViewDestructionContext for LocalContext<'_, '_> {
@@ -3601,141 +3585,164 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                 );
             }
         }
+
+        let this = unsafe { self.get_unchecked_mut() };
         wd.docking_manager.teardown(
-            &mut self.dock_store,
+            &mut this.dock_store,
             &mut LocalContext(ViewInitContext {
                 mount_context: MountContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 },
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut self
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
             }),
         );
-        self.sub_windows.remove(&target);
-        self.syslink.close_window(
+        this.sub_windows.remove(&target);
+        this.syslink.close_window(
             target,
-            &mut self.composite_tree,
-            &mut self.ht_manager,
-            &mut self.keyboard_focus_registry,
+            &mut this.composite_tree,
+            &mut this.ht_manager,
+            &mut this.keyboard_focus_registry,
         );
     }
 
-    fn resize_window(&mut self, target: WindowHandle, size: Size<LogicalUnit>) {
+    fn resize_window(
+        mut self: core::pin::Pin<&mut Self>,
+        target: WindowHandle,
+        size: Size<LogicalUnit>,
+    ) {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
         let wd = unsafe { target.extra_data_ref::<PerWindowData>() };
         wd.docking_manager.resize(
             wd.compute_content_area(size),
-            &mut self.dock_store,
+            &mut this.dock_store,
             &mut PaneContentResizeContext {
-                view_instance_store: &mut self.view_instance_store,
-                view_render_queue: &mut self.view_render_queue,
-                composite_tree: &mut self.composite_tree,
-                ht_manager: &mut self.ht_manager,
+                view_instance_store: &mut this.view_instance_store,
+                view_render_queue: &mut this.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
             },
         );
+
+        self.update_view();
     }
 
-    fn handle_window_move(&mut self, mut target: WindowHandle, pos: Point<LogicalUnit>) {
+    fn handle_window_move(
+        self: core::pin::Pin<&mut Self>,
+        mut target: WindowHandle,
+        pos: Point<LogicalUnit>,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
         let wd = unsafe { target.extra_data_mut::<PerWindowData>() };
         let mut input_context = InputEventContext {
-            composite_tree: &mut self.composite_tree,
-            current_sec: self.global_time_base.elapsed().as_secs_f32(),
-            system_link: &mut self.syslink,
-            ht_manager: &self.ht_manager,
-            dock_store: &mut self.dock_store,
-            view_instance_store: &mut self.view_instance_store,
-            view_group_relation_store: &self.view_group_relation_store,
-            view_render_queue: &mut self.view_render_queue,
+            composite_tree: &mut this.composite_tree,
+            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+            system_link: &mut this.syslink,
+            ht_manager: &this.ht_manager,
+            dock_store: &mut this.dock_store,
+            view_instance_store: &mut this.view_instance_store,
+            view_group_relation_store: &this.view_group_relation_store,
+            view_render_queue: &mut this.view_render_queue,
             application: ApplicationMutation {
-                state: &mut self.application,
-                view_feedbacks: &mut self.view_feedback_store,
+                state: &mut this.application,
+                view_feedbacks: &mut this.view_feedback_store,
             },
         };
 
         for &ht in wd.screen_reposition_interests.iter() {
-            if let Some(e) = self.ht_manager.get_data(ht).screen_reposition_handler() {
+            if let Some(e) = this.ht_manager.get_data(ht).screen_reposition_handler() {
                 e.on_screen_reposition_required(ht, &mut input_context, pos);
             }
         }
 
         // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
-        if let Some(c) = self
+        if let Some(c) = this
             .current_active_menu_session
             .take_if(|x| x.parent == target)
         {
             if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
-                    &self.view_instance_store,
+                    &this.view_instance_store,
                 )
                 .expect("query failed")
                 .on_close_all(
-                    &mut self.composite_tree,
-                    self.global_time_base.elapsed().as_secs_f32(),
+                    &mut this.composite_tree,
+                    this.global_time_base.elapsed().as_secs_f32(),
                 );
             }
 
             c.terminate(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
 
-        if let Some(mut c) = self
+        if let Some(mut c) = this
             .current_active_dropdown_menu_session
             .take_if(|x| x.parent == target)
         {
             c.close_all(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
 
-        if let Some(c) = self
+        if let Some(c) = this
             .custom_view_flyout_session
             .take_if(|x| x.parent == target)
         {
             c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
-                syslink: &self.syslink,
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
+                syslink: &this.syslink,
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
                 teardown_context: TeardownContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    view_feedback_subscription_delayed_ops: &mut self
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    view_feedback_subscription_delayed_ops: &mut this
                         .view_feedback_registry_delayed_ops,
                 },
             });
         }
     }
 
-    fn rescale_popup_of_window(&mut self, target: WindowHandle, new_scale: f32) {
-        self.popup_manager
-            .rescale(target, new_scale, &mut self.composite_tree);
+    fn rescale_popup_of_window(
+        self: core::pin::Pin<&mut Self>,
+        target: WindowHandle,
+        new_scale: f32,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.popup_manager
+            .rescale(target, new_scale, &mut this.composite_tree);
     }
 
-    fn handle_window_maximize_state_changes(&mut self, target: WindowHandle, is_maximized: bool) {
+    fn handle_window_maximize_state_changes(
+        self: core::pin::Pin<&mut Self>,
+        target: WindowHandle,
+        is_maximized: bool,
+    ) {
         struct LocalContext<'a> {
             view_render_queue: &'a mut ViewRenderQueue,
             view_instance_store: &'a mut ViewInstanceStore,
@@ -3769,42 +3776,48 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             }
         }
 
+        let this = unsafe { self.get_unchecked_mut() };
         unsafe { target.extra_data_ref::<PerWindowData>() }
             .header
             .set_maximize_state(
                 is_maximized,
                 &mut LocalContext {
-                    view_render_queue: &mut self.view_render_queue,
-                    view_instance_store: &mut self.view_instance_store,
+                    view_render_queue: &mut this.view_render_queue,
+                    view_instance_store: &mut this.view_instance_store,
                 },
             );
     }
 
-    fn handle_window_focus_changed(&mut self, mut target: WindowHandle, focused: bool) {
+    fn handle_window_focus_changed(
+        self: core::pin::Pin<&mut Self>,
+        mut target: WindowHandle,
+        focused: bool,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
         let mut input_context = InputEventContext {
-            composite_tree: &mut self.composite_tree,
-            current_sec: self.global_time_base.elapsed().as_secs_f32(),
-            system_link: &mut self.syslink,
-            ht_manager: &self.ht_manager,
-            dock_store: &mut self.dock_store,
-            view_instance_store: &mut self.view_instance_store,
-            view_group_relation_store: &self.view_group_relation_store,
-            view_render_queue: &mut self.view_render_queue,
+            composite_tree: &mut this.composite_tree,
+            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+            system_link: &mut this.syslink,
+            ht_manager: &this.ht_manager,
+            dock_store: &mut this.dock_store,
+            view_instance_store: &mut this.view_instance_store,
+            view_group_relation_store: &this.view_group_relation_store,
+            view_render_queue: &mut this.view_render_queue,
             application: ApplicationMutation {
-                state: &mut self.application,
-                view_feedbacks: &mut self.view_feedback_store,
+                state: &mut this.application,
+                view_feedbacks: &mut this.view_feedback_store,
             },
         };
         let mgr = target.keyboard_focus_state_mut();
 
         if focused {
-            mgr.notify_window_focus(&mut input_context, &self.keyboard_focus_registry);
+            mgr.notify_window_focus(&mut input_context, &this.keyboard_focus_registry);
         } else {
-            mgr.notify_window_lost_focus(&mut input_context, &self.keyboard_focus_registry);
+            mgr.notify_window_lost_focus(&mut input_context, &this.keyboard_focus_registry);
         }
 
         if !focused
-            && let Some(c) = self
+            && let Some(c) = this
                 .current_active_menu_session
                 .take_if(|x| x.parent == target)
         {
@@ -3812,54 +3825,59 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
-                    &self.view_instance_store,
+                    &this.view_instance_store,
                 )
                 .expect("query failed")
                 .on_close_all(
-                    &mut self.composite_tree,
-                    self.global_time_base.elapsed().as_secs_f32(),
+                    &mut this.composite_tree,
+                    this.global_time_base.elapsed().as_secs_f32(),
                 );
             }
 
             c.terminate(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
     }
 
-    fn handle_window_activation_state_changed(&mut self, target: WindowHandle, activated: bool) {
+    fn handle_window_activation_state_changed(
+        self: core::pin::Pin<&mut Self>,
+        target: WindowHandle,
+        activated: bool,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
         if !activated {
-            if let Some(c) = self
+            if let Some(c) = this
                 .current_active_menu_session
                 .take_if(|x| x.parent == target)
             {
                 if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
                     uicore::view_instance::<ui::app_menu_bar::View>(
                         a.into_untyped(),
-                        &self.view_instance_store,
+                        &this.view_instance_store,
                     )
                     .expect("query failed")
                     .on_close_all(
-                        &mut self.composite_tree,
-                        self.global_time_base.elapsed().as_secs_f32(),
+                        &mut this.composite_tree,
+                        this.global_time_base.elapsed().as_secs_f32(),
                     );
                 }
 
                 c.terminate(
-                    &self.syslink,
-                    &mut self.composite_tree,
-                    &mut self.ht_manager,
-                    &mut self.keyboard_focus_registry,
+                    &this.syslink,
+                    &mut this.composite_tree,
+                    &mut this.ht_manager,
+                    &mut this.keyboard_focus_registry,
                 );
             }
         }
     }
 
     fn handle_pointer_down(
-        &mut self,
+        self: core::pin::Pin<&mut Self>,
         target: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
@@ -3868,174 +3886,178 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
         // #[cfg(target_os = "macos")]
         // drag_preview_popover.bind_position_base_window_link(window);
 
+        let this = unsafe { self.get_unchecked_mut() };
         if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
             uicore::view_instance::<ui::app_menu_bar::View>(
                 a.into_untyped(),
-                &self.view_instance_store,
+                &this.view_instance_store,
             )
             .expect("query failed")
             .on_close_all(
-                &mut self.composite_tree,
-                self.global_time_base.elapsed().as_secs_f32(),
+                &mut this.composite_tree,
+                this.global_time_base.elapsed().as_secs_f32(),
             );
         }
 
-        if let Some(c) = self.current_active_menu_session.take() {
+        if let Some(c) = this.current_active_menu_session.take() {
             if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
-                    &self.view_instance_store,
+                    &this.view_instance_store,
                 )
                 .expect("query failed")
                 .on_close_all(
-                    &mut self.composite_tree,
-                    self.global_time_base.elapsed().as_secs_f32(),
+                    &mut this.composite_tree,
+                    this.global_time_base.elapsed().as_secs_f32(),
                 );
             }
 
             c.terminate(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
 
-        if let Some(mut c) = self.current_active_dropdown_menu_session.take() {
+        if let Some(mut c) = this.current_active_dropdown_menu_session.take() {
             c.close_all(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
 
-        if let Some(c) = self.custom_view_flyout_session.take() {
+        if let Some(c) = this.custom_view_flyout_session.take() {
             c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
-                syslink: &self.syslink,
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
+                syslink: &this.syslink,
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
                 teardown_context: TeardownContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    view_feedback_subscription_delayed_ops: &mut self
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    view_feedback_subscription_delayed_ops: &mut this
                         .view_feedback_registry_delayed_ops,
                 },
             });
         }
 
-        self.pointer_input_manager.handle_mouse_down(
+        this.pointer_input_manager.handle_mouse_down(
             pointer_id,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
             button,
             key_modifier,
             target.ht_root(),
-            &mut self.keyboard_focus_registry,
+            &mut this.keyboard_focus_registry,
         );
     }
 
     fn handle_pointer_move(
-        &mut self,
+        self: core::pin::Pin<&mut Self>,
         target: WindowHandle,
         pointer_id: PointerID,
         client_pos: Point<LogicalUnit>,
         key_modifier: ModifierKey,
     ) {
-        self.pointer_input_manager.handle_mouse_move(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_move(
             NativeDesktopSurface::Window(target),
             pointer_id,
             client_pos,
             key_modifier,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
             target.ht_root(),
         );
 
-        let cursor_shape = self.pointer_input_manager.cursor_shape(&self.ht_manager);
-        self.syslink.set_cursor(&pointer_id, cursor_shape);
+        let cursor_shape = this.pointer_input_manager.cursor_shape(&this.ht_manager);
+        this.syslink.set_cursor(&pointer_id, cursor_shape);
     }
 
     fn handle_pointer_move_relative(
-        &mut self,
+        self: core::pin::Pin<&mut Self>,
         pointer_id: PointerID,
         relative: Point<LogicalUnit>,
     ) {
-        self.pointer_input_manager.handle_mouse_move_relative(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_move_relative(
             pointer_id,
             relative,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
         );
     }
 
     fn handle_pointer_up(
-        &mut self,
+        self: core::pin::Pin<&mut Self>,
         target: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
-        self.pointer_input_manager.handle_mouse_up(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_up(
             pointer_id,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
             button,
@@ -4044,68 +4066,79 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
         );
     }
 
-    fn handle_pointer_leave_window(&mut self, pointer_id: PointerID) {
-        self.pointer_input_manager.handle_mouse_leave(
+    fn handle_pointer_leave_window(self: core::pin::Pin<&mut Self>, pointer_id: PointerID) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_leave(
             pointer_id,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
         );
     }
 
-    fn handle_pointer_hover_timeout(&mut self) {
-        self.syslink.kill_pointer_hovering_timeout();
-        self.pointer_input_manager
+    fn handle_pointer_hover_timeout(self: core::pin::Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.syslink.kill_pointer_hovering_timeout();
+        this.pointer_input_manager
             .handle_pointer_hover(&mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             });
     }
 
-    fn dispatch_scroll_wheel(&mut self, amount: f32, key_modifier: ModifierKey) {
-        self.pointer_input_manager.handle_scroll_wheel(
+    fn dispatch_scroll_wheel(
+        self: core::pin::Pin<&mut Self>,
+        amount: f32,
+        key_modifier: ModifierKey,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_scroll_wheel(
             amount,
             key_modifier,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
         );
     }
 
-    fn switch_focus_by_key(&mut self, mut target: WindowHandle, key_modifier: ModifierKey) {
+    fn switch_focus_by_key(
+        self: core::pin::Pin<&mut Self>,
+        mut target: WindowHandle,
+        key_modifier: ModifierKey,
+    ) {
         let Some(next_focus) = (if key_modifier.contains(ModifierKey::SHIFT) {
             target
                 .keyboard_focus_state()
@@ -4118,289 +4151,310 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             return;
         };
 
+        let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state_mut().update_focus_with_event(
             next_focus,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
-            &self.keyboard_focus_registry,
+            &this.keyboard_focus_registry,
         );
     }
 
     fn dispatch_key_down(
-        &mut self,
+        self: core::pin::Pin<&mut Self>,
         target: WindowHandle,
         code: KeyInputCode,
         modifier: ModifierKey,
     ) {
+        let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_keydown(
             code,
             modifier,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
-            &self.keyboard_focus_registry,
+            &this.keyboard_focus_registry,
         );
     }
 
-    fn dispatch_key_up(&mut self, target: WindowHandle, code: KeyInputCode, modifier: ModifierKey) {
+    fn dispatch_key_up(
+        self: core::pin::Pin<&mut Self>,
+        target: WindowHandle,
+        code: KeyInputCode,
+        modifier: ModifierKey,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_keyup(
             code,
             modifier,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
-            &self.keyboard_focus_registry,
+            &this.keyboard_focus_registry,
         );
     }
 
-    fn dispatch_key_char(&mut self, target: WindowHandle, ch: char, modifier: ModifierKey) {
+    fn dispatch_key_char(
+        self: Pin<&mut Self>,
+        target: WindowHandle,
+        ch: char,
+        modifier: ModifierKey,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_char(
             ch,
             modifier,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
-            &self.keyboard_focus_registry,
+            &this.keyboard_focus_registry,
         );
     }
 
     #[cfg(feature = "wayland")]
     fn dispatch_ime_state_changes(
-        &mut self,
+        self: Pin<&mut Self>,
         target: WindowHandle,
         preedit_string: Option<String>,
         committed_string: Option<String>,
     ) {
+        let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_ime_state_changes(
             committed_string.as_deref(),
             preedit_string.as_deref(),
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
-            &self.keyboard_focus_registry,
+            &this.keyboard_focus_registry,
         );
     }
 
-    fn close_popup(&mut self, id: PopupID) {
-        self.popup_manager.close(
+    fn close_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.popup_manager.close(
             id,
             &mut RenderContext {
-                composite_tree: &mut self.composite_tree,
-                ht_manager: &mut self.ht_manager,
-                keyboard_focus_registry: &mut self.keyboard_focus_registry,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
-                view_feedback_subscription_delayed_ops: &mut self
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
             },
-            &mut self.view_instance_store,
-            &self.view_tree_relation_store,
-            &mut self.view_layout_state_store,
-            &mut self.view_render_state_store,
+            &mut this.view_instance_store,
+            &this.view_tree_relation_store,
+            &mut this.view_layout_state_store,
+            &mut this.view_render_state_store,
         );
     }
 
-    fn destroy_popup(&mut self, id: PopupID) {
-        self.popup_manager.teardown(
+    fn destroy_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.popup_manager.teardown(
             id,
-            &mut self.view_instance_store,
-            &mut self.view_tree_relation_store,
-            &mut self.view_render_state_store,
+            &mut this.view_instance_store,
+            &mut this.view_tree_relation_store,
+            &mut this.view_render_state_store,
             &mut TeardownContext {
-                composite_tree: &mut self.composite_tree,
-                ht_manager: &mut self.ht_manager,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut self.keyboard_focus_registry,
-                view_feedback_subscription_delayed_ops: &mut self
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
             },
         );
     }
 
-    fn open_alert_dialog(&mut self, target_window: WindowHandle, message: String) {
-        let opened_id = self.popup_manager.open(
+    fn open_alert_dialog(self: Pin<&mut Self>, target_window: WindowHandle, message: String) {
+        let this = unsafe { self.get_unchecked_mut() };
+        let opened_id = this.popup_manager.open(
             &mut ViewInitContext {
                 mount_context: MountContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 },
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut self
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
             },
             target_window,
             |id, ctx| uikit::AlertDialogPresenter::new(ctx, id, message, target_window),
         );
-        self.popup_manager.post_open_action(
+        this.popup_manager.post_open_action(
             opened_id,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
-            &self.keyboard_focus_registry,
+            &this.keyboard_focus_registry,
         );
     }
 
     fn open_custom_flyout(
-        &mut self,
+        self: Pin<&mut Self>,
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
         view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
     ) {
-        self.custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.custom_view_flyout_session = Some(CustomViewFlyoutSession::begin(
             parent,
             surface_pos,
             view_constructor,
             &mut ViewInitContext {
                 mount_context: MountContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 },
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut self
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
             },
-            &mut self.delayed_render_messages,
+            &mut this.delayed_render_messages,
         ));
     }
 
     fn open_menu(
-        &mut self,
+        self: Pin<&mut Self>,
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
         items: Vec<MenuItem>,
         command_handler: Box<dyn MenuCommandSelectionHandler>,
     ) {
-        self.current_active_menu_session = Some(MenuSession::new(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.current_active_menu_session = Some(MenuSession::new(
             parent,
             items,
             command_handler,
             surface_pos,
             &mut ViewInitContext {
                 mount_context: MountContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 },
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut self
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
             },
-            &mut self.delayed_render_messages,
-            &self.context_menu_common_resources,
+            &mut this.delayed_render_messages,
+            &this.context_menu_common_resources,
         ));
     }
 
     fn reopen_menu(
-        &mut self,
+        mut self: Pin<&mut Self>,
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
         items: Vec<MenuItem>,
         command_handler: Box<dyn MenuCommandSelectionHandler>,
     ) {
-        if let Some(c) = self.current_active_menu_session.take() {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        if let Some(c) = this.current_active_menu_session.take() {
             c.terminate(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
 
@@ -4408,222 +4462,231 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
     }
 
     fn open_dropdown_menu(
-        &mut self,
+        self: Pin<&mut Self>,
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
         min_width: f32,
         items: Vec<uikit::dropdown_box::MenuItem>,
         selection_receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     ) {
-        self.current_active_dropdown_menu_session = Some(DropdownMenuSession::new(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.current_active_dropdown_menu_session = Some(DropdownMenuSession::new(
             selection_receiver,
             parent,
-            &self.syslink,
+            &this.syslink,
             &mut ViewInitContext {
                 mount_context: MountContext {
-                    composite_tree: &mut self.composite_tree,
-                    ht_manager: &mut self.ht_manager,
-                    current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 },
-                view_allocator: &mut self.view_allocator,
-                view_instance_store: &mut self.view_instance_store,
-                view_tree_relation_store: &mut self.view_tree_relation_store,
-                view_group_relation_store: &mut self.view_group_relation_store,
-                view_layout_state_store: &mut self.view_layout_state_store,
-                view_render_state_store: &mut self.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut self
+                view_allocator: &mut this.view_allocator,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &mut this.view_tree_relation_store,
+                view_group_relation_store: &mut this.view_group_relation_store,
+                view_layout_state_store: &mut this.view_layout_state_store,
+                view_render_state_store: &mut this.view_render_state_store,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
             },
-            &mut self.delayed_render_messages,
+            &mut this.delayed_render_messages,
             surface_pos,
             min_width,
             items,
         ));
     }
 
-    fn close_all_menus(&mut self) {
-        if let Some(c) = self.current_active_menu_session.take() {
+    fn close_all_menus(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        if let Some(c) = this.current_active_menu_session.take() {
             if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
-                    &self.view_instance_store,
+                    &this.view_instance_store,
                 )
                 .expect("query failed")
                 .on_close_all(
-                    &mut self.composite_tree,
-                    self.global_time_base.elapsed().as_secs_f32(),
+                    &mut this.composite_tree,
+                    this.global_time_base.elapsed().as_secs_f32(),
                 );
             }
 
             c.terminate(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
     }
 
-    fn rescale_menu(&mut self, new_scale: f32) {
-        if let Some(ref c) = self.custom_view_flyout_session {
+    fn rescale_menu(self: Pin<&mut Self>, new_scale: f32) {
+        let this = unsafe { self.get_unchecked_mut() };
+        if let Some(ref c) = this.custom_view_flyout_session {
             c.rescale(
                 new_scale,
-                &mut self.composite_tree,
-                &self.ht_manager,
-                &self.syslink,
+                &mut this.composite_tree,
+                &this.ht_manager,
+                &this.syslink,
             );
         }
     }
 
-    fn handle_menu_item_selection(&mut self, depth: usize, index: usize) {
-        if let Some(c) = self.current_active_menu_session.as_mut() {
+    fn handle_menu_item_selection(self: Pin<&mut Self>, depth: usize, index: usize) {
+        let this = unsafe { self.get_unchecked_mut() };
+        if let Some(c) = this.current_active_menu_session.as_mut() {
             c.select_item(
                 depth,
                 index,
-                &mut self.composite_tree,
-                self.global_time_base.elapsed().as_secs_f32(),
+                &mut this.composite_tree,
+                this.global_time_base.elapsed().as_secs_f32(),
             );
 
-            self.syslink.flyout_surface_context.reserve_delayed_action();
+            this.syslink.flyout_surface_context.reserve_delayed_action();
         }
     }
 
-    fn handle_menu_item_deselection(&mut self, depth: usize) {
-        if let Some(c) = self.current_active_menu_session.as_mut() {
+    fn handle_menu_item_deselection(self: Pin<&mut Self>, depth: usize) {
+        let this = unsafe { self.get_unchecked_mut() };
+        if let Some(c) = this.current_active_menu_session.as_mut() {
             c.deselect_item(
                 depth,
-                &mut self.composite_tree,
-                self.global_time_base.elapsed().as_secs_f32(),
+                &mut this.composite_tree,
+                this.global_time_base.elapsed().as_secs_f32(),
             );
 
-            self.syslink.flyout_surface_context.reserve_delayed_action();
+            this.syslink.flyout_surface_context.reserve_delayed_action();
         }
     }
 
-    fn perform_menu_delayed_action(&mut self) {
-        self.syslink
+    fn perform_menu_delayed_action(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.syslink
             .flyout_surface_context
             .unreserve_delayed_action();
 
-        if let Some(c) = self.current_active_menu_session.as_mut() {
+        if let Some(c) = this.current_active_menu_session.as_mut() {
             c.perform_delayed_action(
-                &self.syslink,
+                &this.syslink,
                 &mut ViewInitContext {
                     mount_context: MountContext {
-                        composite_tree: &mut self.composite_tree,
-                        ht_manager: &mut self.ht_manager,
-                        current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                        keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                        composite_tree: &mut this.composite_tree,
+                        ht_manager: &mut this.ht_manager,
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut this.keyboard_focus_registry,
                     },
-                    view_allocator: &mut self.view_allocator,
-                    view_instance_store: &mut self.view_instance_store,
-                    view_tree_relation_store: &mut self.view_tree_relation_store,
-                    view_group_relation_store: &mut self.view_group_relation_store,
-                    view_layout_state_store: &mut self.view_layout_state_store,
-                    view_render_state_store: &mut self.view_render_state_store,
-                    view_feedback_subscription_delayed_ops: &mut self
+                    view_allocator: &mut this.view_allocator,
+                    view_instance_store: &mut this.view_instance_store,
+                    view_tree_relation_store: &mut this.view_tree_relation_store,
+                    view_group_relation_store: &mut this.view_group_relation_store,
+                    view_layout_state_store: &mut this.view_layout_state_store,
+                    view_render_state_store: &mut this.view_render_state_store,
+                    view_feedback_subscription_delayed_ops: &mut this
                         .view_feedback_registry_delayed_ops,
-                    system_link: &self.syslink,
-                    main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                    application: &self.application,
+                    system_link: &this.syslink,
+                    main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                    application: &this.application,
                 },
-                &mut self.delayed_render_messages,
-                &self.context_menu_common_resources,
+                &mut this.delayed_render_messages,
+                &this.context_menu_common_resources,
             );
         }
     }
 
     fn dispatch_menu_pointer_down(
-        &mut self,
+        self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
-        self.pointer_input_manager.handle_mouse_down(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_down(
             pointer_id,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
             button,
             key_modifier,
             target.ht_root(),
-            &mut self.keyboard_focus_registry,
+            &mut this.keyboard_focus_registry,
         );
     }
 
     fn handle_menu_pointer_move(
-        &mut self,
+        self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
     ) {
-        self.pointer_input_manager.handle_mouse_move(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_move(
             NativeDesktopSurface::ContextMenu(target),
             pointer_id,
             client_pos,
             key_modifier,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
             target.ht_root(),
         );
 
-        let cursor_shape = self.pointer_input_manager.cursor_shape(&self.ht_manager);
-        self.syslink.set_cursor(&pointer_id, cursor_shape);
+        let cursor_shape = this.pointer_input_manager.cursor_shape(&this.ht_manager);
+        this.syslink.set_cursor(&pointer_id, cursor_shape);
     }
 
     fn dispatch_menu_pointer_up(
-        &mut self,
+        self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
-        self.pointer_input_manager.handle_mouse_up(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_up(
             pointer_id,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
             button,
@@ -4632,51 +4695,53 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
         );
     }
 
-    fn dispatch_menu_pointer_leave(&mut self, pointer_id: PointerID) {
-        self.pointer_input_manager.handle_mouse_leave(
+    fn dispatch_menu_pointer_leave(self: Pin<&mut Self>, pointer_id: PointerID) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.handle_mouse_leave(
             pointer_id,
-            &self.ht_manager,
+            &this.ht_manager,
             &mut InputEventContext {
-                composite_tree: &mut self.composite_tree,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut self.syslink,
-                ht_manager: &self.ht_manager,
-                dock_store: &mut self.dock_store,
-                view_instance_store: &mut self.view_instance_store,
-                view_group_relation_store: &self.view_group_relation_store,
-                view_render_queue: &mut self.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
                 application: ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             },
         );
     }
 
-    fn perform_select_menu_command(&mut self, id: u64) {
+    fn perform_select_menu_command(self: Pin<&mut Self>, id: u64) {
+        let this = unsafe { self.get_unchecked_mut() };
         // コマンド選択したらとじる
-        let ch = if let Some(c) = self.current_active_menu_session.take() {
+        let ch = if let Some(c) = this.current_active_menu_session.take() {
             if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
-                    &self.view_instance_store,
+                    &this.view_instance_store,
                 )
                 .expect("query failed")
                 .on_close_all(
-                    &mut self.composite_tree,
-                    self.global_time_base.elapsed().as_secs_f32(),
+                    &mut this.composite_tree,
+                    this.global_time_base.elapsed().as_secs_f32(),
                 );
             }
 
             let ch = c.terminate(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
 
-            self.composite_tree.commit(
-                &mut self
+            this.composite_tree.commit(
+                &mut this
                     .renderer_sync
                     .lock()
                     .expect("poisoned")
@@ -4692,18 +4757,19 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             ch.on_select_command(
                 id,
                 &mut ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
             );
         }
     }
 
     fn perform_dropdown_menu_select_item(
-        &mut self,
+        self: Pin<&mut Self>,
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     ) {
+        let this = unsafe { self.get_unchecked_mut() };
         if let Some(r) = receiver.upgrade() {
             struct LocalContext<'env> {
                 view_instance_store: &'env mut ViewInstanceStore,
@@ -4740,43 +4806,44 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             r.set_selection_id(
                 id,
                 &mut ApplicationMutation {
-                    state: &mut self.application,
-                    view_feedbacks: &mut self.view_feedback_store,
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
                 },
                 &mut LocalContext {
-                    view_instance_store: &mut self.view_instance_store,
-                    view_render_queue: &mut self.view_render_queue,
+                    view_instance_store: &mut this.view_instance_store,
+                    view_render_queue: &mut this.view_render_queue,
                 },
             );
         }
 
         // 選択したら閉じる
-        if let Some(mut c) = self.current_active_dropdown_menu_session.take() {
+        if let Some(mut c) = this.current_active_dropdown_menu_session.take() {
             c.close_all(
-                &self.syslink,
-                &mut self.composite_tree,
-                &mut self.ht_manager,
-                &mut self.keyboard_focus_registry,
+                &this.syslink,
+                &mut this.composite_tree,
+                &mut this.ht_manager,
+                &mut this.keyboard_focus_registry,
             );
         }
     }
 
-    fn move_dock_splitter(&mut self, target: ui::dock::DockID, pos_client: f32) {
+    fn move_dock_splitter(self: Pin<&mut Self>, target: ui::dock::DockID, pos_client: f32) {
+        let this = unsafe { self.get_unchecked_mut() };
         ui::dock::move_splitter(
             target,
-            &mut self.dock_store,
+            &mut this.dock_store,
             pos_client,
             &mut PaneContentResizeContext {
-                view_instance_store: &mut self.view_instance_store,
-                view_render_queue: &mut self.view_render_queue,
-                composite_tree: &mut self.composite_tree,
-                ht_manager: &mut self.ht_manager,
+                view_instance_store: &mut this.view_instance_store,
+                view_render_queue: &mut this.view_render_queue,
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
             },
         );
     }
 
     fn begin_redock_preview(
-        &mut self,
+        self: Pin<&mut Self>,
         initiator: WindowHandle,
         pointer: PointerID,
         source_dock: ui::dock::DockID,
@@ -4794,33 +4861,36 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             tab_index,
         );
 
-        self.syslink
+        let this = unsafe { self.get_unchecked_mut() };
+        this.syslink
             .begin_pane_drag(initiator, &pointer, state.offset, &popover_rect);
-        self.docking_preview_state = Some(state);
+        this.docking_preview_state = Some(state);
     }
 
     fn move_redock_preview(
-        &mut self,
+        self: Pin<&mut Self>,
         dest_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
-        if let Some(ref mut state) = self.docking_preview_state {
+        let this = unsafe { self.get_unchecked_mut() };
+        if let Some(ref mut state) = this.docking_preview_state {
             let popover_rect = ui::dock::move_preview(
                 &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
-                &self.dock_store,
+                &this.dock_store,
                 &client_pos_in_dest,
                 state,
             );
-            self.syslink.update_pane_drag(dest_window, &popover_rect);
+            this.syslink.update_pane_drag(dest_window, &popover_rect);
         }
     }
 
     fn confirm_redock(
-        &mut self,
+        self: Pin<&mut Self>,
         mut destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
-        if let Some(state) = self.docking_preview_state.take() {
+        let this = unsafe { self.get_unchecked_mut() };
+        if let Some(state) = this.docking_preview_state.take() {
             let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
                 .docking_manager;
 
@@ -4829,36 +4899,36 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
             let mut source_window = state.source_window;
             let source_dock = state.source_dock;
             let tab_index = state.tab_index;
-            self.syslink.end_pane_drag();
+            this.syslink.end_pane_drag();
             let (op, suggested_rect) =
-                ui::dock::end_preview(dm, &mut self.dock_store, &client_pos_in_dest, state);
+                ui::dock::end_preview(dm, &mut this.dock_store, &client_pos_in_dest, state);
             let (diverged_content, undock_result) = dm.redock(
                 source_dock,
-                &mut self.dock_store,
+                &mut this.dock_store,
                 tab_index,
                 op,
                 &suggested_rect,
                 &mut ui::dock::RedockingContext {
                     view_init_ctx: ViewInitContext {
                         mount_context: MountContext {
-                            composite_tree: &mut self.composite_tree,
-                            ht_manager: &mut self.ht_manager,
-                            current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                            composite_tree: &mut this.composite_tree,
+                            ht_manager: &mut this.ht_manager,
+                            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut this.keyboard_focus_registry,
                         },
-                        view_allocator: &mut self.view_allocator,
-                        view_instance_store: &mut self.view_instance_store,
-                        view_tree_relation_store: &mut self.view_tree_relation_store,
-                        view_group_relation_store: &mut self.view_group_relation_store,
-                        view_layout_state_store: &mut self.view_layout_state_store,
-                        view_render_state_store: &mut self.view_render_state_store,
-                        view_feedback_subscription_delayed_ops: &mut self
+                        view_allocator: &mut this.view_allocator,
+                        view_instance_store: &mut this.view_instance_store,
+                        view_tree_relation_store: &mut this.view_tree_relation_store,
+                        view_group_relation_store: &mut this.view_group_relation_store,
+                        view_layout_state_store: &mut this.view_layout_state_store,
+                        view_render_state_store: &mut this.view_render_state_store,
+                        view_feedback_subscription_delayed_ops: &mut this
                             .view_feedback_registry_delayed_ops,
-                        system_link: &self.syslink,
-                        main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                        application: &self.application,
+                        system_link: &this.syslink,
+                        main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                        application: &this.application,
                     },
-                    view_render_queue: &mut self.view_render_queue,
+                    view_render_queue: &mut this.view_render_queue,
                 },
             );
 
@@ -4868,18 +4938,18 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                     unsafe {
                         drop(source_window.take_extra_data::<PerWindowData>());
                     }
-                    self.sub_windows.remove(&source_window);
-                    self.syslink.close_window(
+                    this.sub_windows.remove(&source_window);
+                    this.syslink.close_window(
                         source_window,
-                        &mut self.composite_tree,
-                        &mut self.ht_manager,
-                        &mut self.keyboard_focus_registry,
+                        &mut this.composite_tree,
+                        &mut this.ht_manager,
+                        &mut this.keyboard_focus_registry,
                     );
                 }
             }
 
             if let Some(content) = diverged_content {
-                let new_window = self.syslink.open_window(
+                let new_window = this.syslink.open_window(
                     SubWindowOpenMode::DockDiverge {
                         rect: Rect::from_lt_size(
                             Point::new_logical(
@@ -4893,10 +4963,10 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                         ),
                         position_ref_window: destination_window,
                     },
-                    &mut self.composite_tree,
-                    &mut self.ht_manager,
-                    &mut self.keyboard_focus_registry,
-                    &mut self.delayed_render_messages,
+                    &mut this.composite_tree,
+                    &mut this.ht_manager,
+                    &mut this.keyboard_focus_registry,
+                    &mut this.delayed_render_messages,
                     |mut w, composite_tree, ht_manager, keyboard_focus_registry, system_link| {
                         ht_manager.get_data_mut(w.ht_root()).root_of_window = Some(w);
 
@@ -4904,7 +4974,7 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                             .begin_mod_chain(w.ct_root())
                             .has_bitmap(true)
                             .composite_mode(CompositeMode::FillCornerGradient(
-                                self.window_bg_gradient,
+                                this.window_bg_gradient,
                                 AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
                             ))
                             .apply();
@@ -4913,20 +4983,20 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                             mount_context: MountContext {
                                 composite_tree,
                                 ht_manager,
-                                current_sec: self.global_time_base.elapsed().as_secs_f32(),
+                                current_sec: this.global_time_base.elapsed().as_secs_f32(),
                                 keyboard_focus_registry,
                             },
-                            view_allocator: &mut self.view_allocator,
-                            view_instance_store: &mut self.view_instance_store,
-                            view_tree_relation_store: &mut self.view_tree_relation_store,
-                            view_group_relation_store: &mut self.view_group_relation_store,
-                            view_layout_state_store: &mut self.view_layout_state_store,
-                            view_render_state_store: &mut self.view_render_state_store,
-                            view_feedback_subscription_delayed_ops: &mut self
+                            view_allocator: &mut this.view_allocator,
+                            view_instance_store: &mut this.view_instance_store,
+                            view_tree_relation_store: &mut this.view_tree_relation_store,
+                            view_group_relation_store: &mut this.view_group_relation_store,
+                            view_layout_state_store: &mut this.view_layout_state_store,
+                            view_render_state_store: &mut this.view_render_state_store,
+                            view_feedback_subscription_delayed_ops: &mut this
                                 .view_feedback_registry_delayed_ops,
                             system_link,
-                            main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                            application: &self.application,
+                            main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                            application: &this.application,
                         };
                         let root_view =
                             view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
@@ -4958,12 +5028,12 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                             docking_manager: ui::dock::WindowDockingManager::new(
                                 w,
                                 &mut view_init_ctx,
-                                &mut self.view_render_queue,
+                                &mut this.view_render_queue,
                                 Rect::from_lt_size(
                                     Point::new_logical(0.0, ui::window_header::View::THICKNESS),
                                     suggested_rect.size(),
                                 ),
-                                &mut self.dock_store,
+                                &mut this.dock_store,
                                 |view_init_ctx, view_render_queue, store| {
                                     store.alloc_root(|root_id, store| {
                                         store.alloc_fill(
@@ -4981,120 +5051,128 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
                         }));
                     },
                 );
-                self.sub_windows.insert(new_window);
+                this.sub_windows.insert(new_window);
             }
         }
     }
 
-    fn update_preview(&mut self) {
-        // vsync update period
-        self.preview_state.update(
+    fn update_preview(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        this.preview_state.update(
             &mut *profiler::wrap!(
                 LOCK_WAIT,
-                self.committed_preview_state.lock().expect("poisoned")
+                this.committed_preview_state.lock().expect("poisoned")
             ),
-            &mut self.preview_input_state,
+            &mut this.preview_input_state,
             &mut ApplicationMutation {
-                state: &mut self.application,
-                view_feedbacks: &mut self.view_feedback_store,
+                state: &mut this.application,
+                view_feedbacks: &mut this.view_feedback_store,
             },
         );
     }
 
     #[cfg(feature = "wayland")]
-    fn offer_accepting_drop(&mut self) {
-        unsafe { &mut *self.syslink.display_server.global_messaging_ptr }
-            .offer_accepting_drop(&self.pointer_input_manager, &mut self.ht_manager);
+    fn offer_accepting_drop(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        unsafe { &mut *this.syslink.display_server.global_messaging_ptr }
+            .offer_accepting_drop(&this.pointer_input_manager, &mut this.ht_manager);
     }
 
     fn perform_drop(
-        &mut self,
+        self: Pin<&mut Self>,
         data: DragData,
         target_window: WindowHandle,
         client_pos: Point<LogicalUnit>,
     ) {
-        self.pointer_input_manager.perform_drop(
+        let this = unsafe { self.get_unchecked_mut() };
+        this.pointer_input_manager.perform_drop(
             data,
             client_pos,
             target_window.ht_root(),
             target_window.client_size(),
-            &self.ht_manager,
+            &this.ht_manager,
         );
     }
 
-    fn schedule_view_render(&mut self, id: ViewIdentifier) {
-        self.view_render_queue.schedule(id);
+    fn schedule_view_render(self: Pin<&mut Self>, id: ViewIdentifier) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.view_render_queue.schedule(id);
     }
 
-    fn dispatch_view_feedback(&mut self) {
+    fn dispatch_view_feedback(self: core::pin::Pin<&mut Self>) {
         if self.view_feedback_store.is_empty() {
             // no view feedbacks
             return;
         }
 
+        let this = unsafe { self.get_unchecked_mut() };
         let mut fb_context = ViewFeedbackContext {
-            application: &self.application,
-            composite_tree: &mut self.composite_tree,
-            ht_manager: &mut self.ht_manager,
-            current_sec: self.global_time_base.elapsed().as_secs_f32(),
-            keyboard_focus_registry: &mut self.keyboard_focus_registry,
-            view_allocator: &mut self.view_allocator,
-            view_instance_store: &mut self.view_instance_store,
-            view_tree_relation_store: &mut self.view_tree_relation_store,
-            view_group_relation_store: &mut self.view_group_relation_store,
-            view_layout_state_store: &mut self.view_layout_state_store,
-            view_render_state_store: &mut self.view_render_state_store,
-            view_feedback_subscription_delayed_ops: &mut self.view_feedback_registry_delayed_ops,
-            system_link: &self.syslink,
-            main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-            view_render_queue: &mut self.view_render_queue,
+            application: &this.application,
+            composite_tree: &mut this.composite_tree,
+            ht_manager: &mut this.ht_manager,
+            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+            keyboard_focus_registry: &mut this.keyboard_focus_registry,
+            view_allocator: &mut this.view_allocator,
+            view_instance_store: &mut this.view_instance_store,
+            view_tree_relation_store: &mut this.view_tree_relation_store,
+            view_group_relation_store: &mut this.view_group_relation_store,
+            view_layout_state_store: &mut this.view_layout_state_store,
+            view_render_state_store: &mut this.view_render_state_store,
+            view_feedback_subscription_delayed_ops: &mut this.view_feedback_registry_delayed_ops,
+            system_link: &this.syslink,
+            main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+            view_render_queue: &mut this.view_render_queue,
         };
 
-        for (t, p) in self.view_feedback_store.iter() {
+        for (t, p) in this.view_feedback_store.iter() {
             unsafe {
-                self.view_feedback_registry
+                this.view_feedback_registry
                     .dispatch_dynamic_unchecked(p, t, &mut fb_context);
             }
         }
-        self.view_feedback_store.clear();
-        self.view_feedback_registry.perform_atomic(&mut fb_context);
+        this.view_feedback_store.clear();
+        this.view_feedback_registry.perform_atomic(&mut fb_context);
     }
 
-    fn update_view(&mut self) {
-        self.view_render_queue.perform(
+    fn update_view(self: core::pin::Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.view_render_queue.perform(
             &mut RenderContext {
-                composite_tree: &mut self.composite_tree,
-                ht_manager: &mut self.ht_manager,
-                keyboard_focus_registry: &mut self.keyboard_focus_registry,
-                current_sec: self.global_time_base.elapsed().as_secs_f32(),
-                system_link: &self.syslink,
-                main_thread_texture_id_issuer: &mut self.texture_id_issuer,
-                application: &self.application,
-                view_feedback_subscription_delayed_ops: &mut self
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
+                view_feedback_subscription_delayed_ops: &mut this
                     .view_feedback_registry_delayed_ops,
             },
-            &mut self.view_instance_store,
-            &self.view_tree_relation_store,
-            &mut self.view_layout_state_store,
-            &mut self.view_render_state_store,
+            &mut this.view_instance_store,
+            &this.view_tree_relation_store,
+            &mut this.view_layout_state_store,
+            &mut this.view_render_state_store,
         );
     }
 
-    fn process_delayed_view_feedback_registry_ops(&mut self) {
-        self.view_feedback_registry
-            .perform_delayed(&mut self.view_feedback_registry_delayed_ops);
+    fn process_delayed_view_feedback_registry_ops(self: core::pin::Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.view_feedback_registry
+            .perform_delayed(&mut this.view_feedback_registry_delayed_ops);
     }
 
-    fn sync_threads(&mut self) {
-        self.composite_tree.commit(
-            &mut self
+    fn sync_threads(self: core::pin::Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        this.composite_tree.commit(
+            &mut this
                 .renderer_sync
                 .lock()
                 .expect("poisoned")
                 .composite_buffer,
         );
-        for msg in self.delayed_render_messages.drain(..) {
-            self.syslink.rt_sender().send(msg).expect("rt_sender.send");
+        for msg in this.delayed_render_messages.drain(..) {
+            this.syslink.rt_sender().send(msg).expect("rt_sender.send");
         }
     }
 
@@ -5133,24 +5211,8 @@ impl<'h, 'sys> CoreLoop<'h, 'sys> {
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
-async fn run<'sys>(
-    LaunchArgs {
-        event_queue,
-        global_time_base,
-        renderer_sync,
-        file_system,
-        committed_preview_state,
-    }: LaunchArgs<'sys>,
-    system_link: SystemLink<'sys>,
-) {
+async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys, 'sys>>, event_queue: EventQueue) {
     tracing::info!("app start");
-    let mut inst = CoreLoop::new(
-        system_link,
-        file_system,
-        global_time_base,
-        renderer_sync,
-        committed_preview_state,
-    );
 
     loop {
         let e = event_queue.next_event().await;
@@ -5158,8 +5220,8 @@ async fn run<'sys>(
         profiler::scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
-            Event::SubWindowClose { window } => inst.close_sub_window(window),
-            Event::WindowResize { window, size } => inst.resize_window(window, size),
+            Event::SubWindowClose { window } => inst.as_mut().close_sub_window(window),
+            Event::WindowResize { window, size } => inst.as_mut().resize_window(window, size),
             Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
@@ -5168,112 +5230,138 @@ async fn run<'sys>(
                 #[cfg(feature = "wayland")]
                 target.update_manual_scaling();
             }
-            Event::WindowMove { window, pos } => inst.handle_window_move(window, pos),
+            Event::WindowMove { window, pos } => inst.as_mut().handle_window_move(window, pos),
             Event::WindowRescaleUI { window, new_scale } => {
-                inst.rescale_popup_of_window(window, new_scale)
+                inst.as_mut().rescale_popup_of_window(window, new_scale)
             }
             Event::WindowMaximizeStateChanged {
                 window,
                 is_maximized,
-            } => inst.handle_window_maximize_state_changes(window, is_maximized),
+            } => inst
+                .as_mut()
+                .handle_window_maximize_state_changes(window, is_maximized),
             Event::WindowFocusChanged { window, focused } => {
-                inst.handle_window_focus_changed(window, focused)
+                inst.as_mut().handle_window_focus_changed(window, focused)
             }
-            Event::WindowActivatingStateChanged { window, activated } => {
-                inst.handle_window_activation_state_changed(window, activated)
-            }
+            Event::WindowActivatingStateChanged { window, activated } => inst
+                .as_mut()
+                .handle_window_activation_state_changed(window, activated),
             Event::PointerDown {
                 window,
                 pointer_id,
                 button,
                 key_modifier,
-            } => inst.handle_pointer_down(window, pointer_id, button, key_modifier),
+            } => inst
+                .as_mut()
+                .handle_pointer_down(window, pointer_id, button, key_modifier),
             Event::PointerMove {
                 pointer_id,
                 window,
                 client_pos,
                 key_modifier,
-            } => inst.handle_pointer_move(window, pointer_id, client_pos, key_modifier),
+            } => inst
+                .as_mut()
+                .handle_pointer_move(window, pointer_id, client_pos, key_modifier),
             Event::PointerMoveRelative {
                 pointer_id,
                 window,
                 relative,
-            } => inst.handle_pointer_move_relative(pointer_id, relative),
+            } => inst
+                .as_mut()
+                .handle_pointer_move_relative(pointer_id, relative),
             Event::PointerUp {
                 window,
                 pointer_id,
                 button,
                 key_modifier,
-            } => inst.handle_pointer_up(window, pointer_id, button, key_modifier),
+            } => inst
+                .as_mut()
+                .handle_pointer_up(window, pointer_id, button, key_modifier),
             Event::PointerLeaveWindow { window, pointer_id } => {
-                inst.handle_pointer_leave_window(pointer_id)
+                inst.as_mut().handle_pointer_leave_window(pointer_id)
             }
-            Event::PointerHover => inst.handle_pointer_hover_timeout(),
+            Event::PointerHover => inst.as_mut().handle_pointer_hover_timeout(),
             Event::ScrollWheel {
                 amount,
                 key_modifier,
-            } => inst.dispatch_scroll_wheel(amount, key_modifier),
+            } => inst.as_mut().dispatch_scroll_wheel(amount, key_modifier),
             Event::KeyDown {
                 window,
                 code,
                 modifier,
             } if code == KeyInputCode::Character('\t') || code == KeyInputCode::Tab => {
-                inst.switch_focus_by_key(window, modifier)
+                inst.as_mut().switch_focus_by_key(window, modifier)
             }
             Event::KeyDown {
                 window,
                 code,
                 modifier,
-            } => inst.dispatch_key_down(window, code, modifier),
+            } => inst.as_mut().dispatch_key_down(window, code, modifier),
             Event::KeyUp {
                 window,
                 code,
                 modifier,
-            } => inst.dispatch_key_up(window, code, modifier),
+            } => inst.as_mut().dispatch_key_up(window, code, modifier),
             Event::KeyChar {
                 window,
                 ch,
                 modifier,
-            } => inst.dispatch_key_char(window, ch, modifier),
+            } => inst.as_mut().dispatch_key_char(window, ch, modifier),
             Event::IMEStateChanges {
                 window,
                 committed_string,
                 preedit_string,
-            } => inst.dispatch_ime_state_changes(window, preedit_string, committed_string),
+            } => inst
+                .as_mut()
+                .dispatch_ime_state_changes(window, preedit_string, committed_string),
             Event::OpenAlertDialog {
                 target_window,
                 message,
-            } => inst.open_alert_dialog(target_window, message),
-            Event::PopupClose { id } => inst.close_popup(id),
-            Event::Sync(SyncEvent::PopupUnmount { id }) => inst.destroy_popup(id),
+            } => inst.as_mut().open_alert_dialog(target_window, message),
+            Event::PopupClose { id } => inst.as_mut().close_popup(id),
+            Event::Sync(SyncEvent::PopupUnmount { id }) => inst.as_mut().destroy_popup(id),
             Event::OpenCustomViewFlyout {
                 parent,
                 surface_pos,
                 view_constructor,
-            } => inst.open_custom_flyout(parent, surface_pos, view_constructor.0.0),
+            } => inst
+                .as_mut()
+                .open_custom_flyout(parent, surface_pos, view_constructor.0.0),
             Event::MenuOpen {
                 parent,
                 items,
                 surface_pos,
                 command_handler,
-            } => inst.open_menu(parent, surface_pos, items, command_handler.0.0),
+            } => inst
+                .as_mut()
+                .open_menu(parent, surface_pos, items, command_handler.0.0),
             Event::MenuReopen {
                 parent,
                 items,
                 surface_pos,
                 command_handler,
-            } => inst.reopen_menu(parent, surface_pos, items, command_handler.0.0),
+            } => inst
+                .as_mut()
+                .reopen_menu(parent, surface_pos, items, command_handler.0.0),
             Event::DropdownMenuOpen {
                 parent,
                 surface_pos,
                 min_width,
                 items,
                 selection_receiver,
-            } => inst.open_dropdown_menu(parent, surface_pos, min_width, items, selection_receiver),
-            Event::MenuCloseAll => inst.close_all_menus(),
-            Event::MenuRescale { scale } => inst.rescale_menu(scale),
-            Event::MenuSelectItem { depth, index } => inst.handle_menu_item_selection(depth, index),
-            Event::MenuDeselectItem { depth } => inst.handle_menu_item_deselection(depth),
+            } => inst.as_mut().open_dropdown_menu(
+                parent,
+                surface_pos,
+                min_width,
+                items,
+                selection_receiver,
+            ),
+            Event::MenuCloseAll => inst.as_mut().close_all_menus(),
+            Event::MenuRescale { scale } => inst.as_mut().rescale_menu(scale),
+            Event::MenuSelectItem { depth, index } => {
+                inst.as_mut().handle_menu_item_selection(depth, index)
+            }
+            Event::MenuDeselectItem { depth } => inst.as_mut().handle_menu_item_deselection(depth),
             Event::MenuOpenSubmenu { depth, index } => {
                 /* if let Some(c) = current_active_context_menu_session.as_mut() {
                     c.open_submenu(
@@ -5298,36 +5386,45 @@ async fn run<'sys>(
                         .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
                 }*/
             }
-            Event::MenuPerformDelayedAction => inst.perform_menu_delayed_action(),
+            Event::MenuPerformDelayedAction => inst.as_mut().perform_menu_delayed_action(),
             Event::MenuPointerDown {
                 pointer_id,
                 target,
                 button,
                 key_modifier,
-            } => inst.dispatch_menu_pointer_down(target, pointer_id, button, key_modifier),
+            } => inst
+                .as_mut()
+                .dispatch_menu_pointer_down(target, pointer_id, button, key_modifier),
             Event::MenuPointerMove {
                 pointer_id,
                 target,
                 client_pos,
                 key_modifier,
-            } => inst.handle_menu_pointer_move(target, pointer_id, client_pos, key_modifier),
+            } => {
+                inst.as_mut()
+                    .handle_menu_pointer_move(target, pointer_id, client_pos, key_modifier)
+            }
             Event::MenuPointerUp {
                 pointer_id,
                 target,
                 button,
                 key_modifier,
-            } => inst.dispatch_menu_pointer_up(target, pointer_id, button, key_modifier),
+            } => inst
+                .as_mut()
+                .dispatch_menu_pointer_up(target, pointer_id, button, key_modifier),
             Event::MenuPointerLeave { pointer_id, .. } => {
-                inst.dispatch_menu_pointer_leave(pointer_id)
+                inst.as_mut().dispatch_menu_pointer_leave(pointer_id)
             }
-            Event::MenuSelectCommand { id } => inst.perform_select_menu_command(id),
-            Event::DropdownMenuSelectItem { id, receiver } => {
-                inst.perform_dropdown_menu_select_item(id, receiver)
-            }
+            Event::MenuSelectCommand { id } => inst.as_mut().perform_select_menu_command(id),
+            Event::DropdownMenuSelectItem { id, receiver } => inst
+                .as_mut()
+                .perform_dropdown_menu_select_item(id, receiver),
             Event::DockMoveSplitter {
                 controlling_dock,
                 pos_client,
-            } => inst.move_dock_splitter(controlling_dock, pos_client),
+            } => inst
+                .as_mut()
+                .move_dock_splitter(controlling_dock, pos_client),
             Event::DockBeginPreview {
                 initiator,
                 pointer,
@@ -5336,7 +5433,7 @@ async fn run<'sys>(
                 pane_rect,
                 tab_size,
                 client_pos,
-            } => inst.begin_redock_preview(
+            } => inst.as_mut().begin_redock_preview(
                 initiator,
                 pointer,
                 source_dock,
@@ -5348,21 +5445,27 @@ async fn run<'sys>(
             Event::DockMovePreview {
                 dest_window,
                 client_pos_in_dest,
-            } => inst.move_redock_preview(dest_window, client_pos_in_dest),
+            } => inst
+                .as_mut()
+                .move_redock_preview(dest_window, client_pos_in_dest),
             Event::DockConfirm {
                 pointer,
                 destination_window,
                 client_pos_in_dest,
-            } => inst.confirm_redock(destination_window, client_pos_in_dest),
-            Event::Sync(SyncEvent::NewPresentID { .. }) => inst.update_preview(),
+            } => inst
+                .as_mut()
+                .confirm_redock(destination_window, client_pos_in_dest),
+            Event::Sync(SyncEvent::NewPresentID { .. }) => inst.as_mut().update_preview(),
             #[cfg(feature = "wayland")]
-            Event::OfferAcceptingDrop => inst.offer_accepting_drop(),
+            Event::OfferAcceptingDrop => inst.as_mut().offer_accepting_drop(),
             Event::PerformDrop {
                 data,
                 target_window,
                 client_pos,
-            } => inst.perform_drop(data.0.0, target_window, client_pos),
-            Event::ScheduleViewRenderExt { id } => inst.schedule_view_render(id),
+            } => inst
+                .as_mut()
+                .perform_drop(data.0.0, target_window, client_pos),
+            Event::ScheduleViewRenderExt { id } => inst.as_mut().schedule_view_render(id),
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
                 ht,
@@ -5503,10 +5606,10 @@ async fn run<'sys>(
         }
 
         // after-input common update phase
-        inst.dispatch_view_feedback();
-        inst.update_view();
-        inst.process_delayed_view_feedback_registry_ops();
-        inst.sync_threads();
+        inst.as_mut().dispatch_view_feedback();
+        inst.as_mut().update_view();
+        inst.as_mut().process_delayed_view_feedback_registry_ops();
+        inst.as_mut().sync_threads();
     }
 
     inst.save_window_state();
