@@ -6,7 +6,7 @@ use peridot_tp_wayland as wl;
 use shared::{LogicalUnit, PixelsUnit, Point, Size};
 
 use crate::{
-    CoreLoop, Event, SystemLink,
+    CoreLoop, SystemLink,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -260,10 +260,9 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "xdg_surface::configure", skip(self, sender))]
     fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
         super::event_trace!();
-        let mut delayed_event_queue = Vec::with_capacity(1);
 
         let mut committed_state_ref = self.0.data.committed_state.lock().expect("poisoned");
-        let mut rescaled = false;
+        let mut rescaled = None;
         if let Some(s) = self.0.data.pending_configure_buffer_scale.take() {
             match self.0.data.scaling {
                 SurfaceScaling::Automatic => {
@@ -286,15 +285,14 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
                 .latest_ui_scale_changes
                 .lock()
                 .expect("poisoned") = Some(s);
-            delayed_event_queue.push(Event::MenuRescale { scale: s });
-            rescaled = true;
+            rescaled = Some(s);
         }
 
         let (w, h) = (
             self.0.data.pending_configure_size.0.take(),
             self.0.data.pending_configure_size.1.take(),
         );
-        if rescaled || w.is_some() || h.is_some() {
+        if rescaled.is_some() || w.is_some() || h.is_some() {
             // recompute size
             let logical_size = Size::new_logical(
                 w.map_or(committed_state_ref.size.width, |x| x as _),
@@ -321,8 +319,8 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
         unsafe { &*self.0.data.surface_ptr }
             .commit()
             .expect("surface.commit");
-        for e in delayed_event_queue {
-            unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.on_event(e);
+        if let Some(s) = rescaled {
+            unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.rescale_menu(s);
         }
         unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.update_view_all();
         sender.ack_configure(serial).expect("ack_configure");

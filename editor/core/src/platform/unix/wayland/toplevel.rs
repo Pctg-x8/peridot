@@ -8,7 +8,7 @@ use peridot_tp_wayland::{self as wl, ProxyObject};
 use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
 
 use crate::{
-    CoreLoop, Event, WindowType,
+    CoreLoop, WindowType,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, PerWindowKeyboardFocusState,
@@ -505,10 +505,8 @@ impl<'sys> EventListener<'sys> {
     }
 
     fn commit(&mut self) {
-        let mut delayed_event_queue = Vec::with_capacity(8);
-
         let mut committed_state_ref = self.state.data.committed_state.lock().expect("poisoned");
-        let mut rescaled = false;
+        let mut rescaled = None;
         let mut should_update_decoration = false;
         if let Some(s) = self.pending_configure_buffer_scale.take() {
             match self.scaling {
@@ -526,17 +524,13 @@ impl<'sys> EventListener<'sys> {
             }
 
             committed_state_ref.active_buffer_scale = s;
-            delayed_event_queue.push(Event::WindowRescaleUI {
-                window: Handle(self.state.data.surface_ptr),
-                new_scale: s,
-            });
             *self
                 .state
                 .data
                 .latest_ui_scale_changes
                 .lock()
                 .expect("poisoned") = Some(s);
-            rescaled = true;
+            rescaled = Some(s);
         }
 
         if let Some(e) = self.pending_decoration_edge_changes.take() {
@@ -548,7 +542,8 @@ impl<'sys> EventListener<'sys> {
             self.pending_configure_size.0.take(),
             self.pending_configure_size.1.take(),
         );
-        if rescaled || w.is_some() || h.is_some() {
+        let mut resized = None;
+        if rescaled.is_some() || w.is_some() || h.is_some() {
             // potentially size changes
             let logical_size = Size::new_logical(
                 w.map_or(committed_state_ref.active_size_logical.width, |x| x as _),
@@ -569,22 +564,17 @@ impl<'sys> EventListener<'sys> {
                     .swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
 
-                delayed_event_queue.push(Event::WindowResize {
-                    window: Handle(self.state.data.surface_ptr),
-                    size: logical_size,
-                });
+                resized = Some(logical_size);
                 should_update_decoration = true;
             }
         }
 
+        let mut maximize_changed = None;
         if let Some(new_maximized) = self.pending_maximized_changes.take()
             && new_maximized != committed_state_ref.maximized
         {
             committed_state_ref.maximized = new_maximized;
-            delayed_event_queue.push(Event::WindowMaximizeStateChanged {
-                window: Handle(self.state.data.surface_ptr),
-                is_maximized: new_maximized,
-            });
+            maximize_changed = Some(new_maximized);
         }
 
         if let Some(activated) = self.pending_activated_changes
@@ -613,10 +603,18 @@ impl<'sys> EventListener<'sys> {
 
         let window_deactivated = self.pending_activated_changes.take() == Some(false);
 
-        for x in delayed_event_queue {
-            self.coreloop().on_event(x);
+        if let Some(s) = rescaled {
+            self.coreloop()
+                .rescale_popup_of_window(Handle(self.state.data.surface_ptr), s);
         }
-
+        if let Some(s) = resized {
+            self.coreloop()
+                .resize_window(Handle(self.state.data.surface_ptr), s);
+        }
+        if let Some(x) = maximize_changed {
+            self.coreloop()
+                .handle_window_maximize_state_changes(Handle(self.state.data.surface_ptr), x);
+        }
         if window_deactivated {
             self.coreloop().close_all_menus();
         }

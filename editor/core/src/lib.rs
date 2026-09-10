@@ -363,7 +363,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     app_event_dispatcher.poll_fn_ptr =
         unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) };
     #[cfg(feature = "wayland")]
-    wl_global_msg.as_mut().bind_coreloop(coreloop);
+    wl_global_msg.as_mut().bind_coreloop(coreloop.as_mut());
 
     app_event_dispatcher.poll_init();
     unsafe { Pin::new_unchecked(&mut *cl_ptr) }.init();
@@ -520,11 +520,11 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }
 
             if pointer_hovering_timer_signal {
-                app_event_dispatcher.dispatch(Event::PointerHover);
+                coreloop.as_mut().handle_pointer_hover_timeout();
             }
 
             if delayed_action_timer_signal {
-                app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
+                coreloop.as_mut().perform_menu_delayed_action();
             }
 
             if dbus_signal {
@@ -767,23 +767,6 @@ impl SyncEvent {
 pub enum Event {
     Sync(SyncEvent),
     Quit,
-    PointerHover,
-    WindowMove {
-        window: WindowHandle,
-        pos: Point<PointerInputUnit>,
-    },
-    WindowResize {
-        window: WindowHandle,
-        size: Size<PointerInputUnit>,
-    },
-    WindowRescaleUI {
-        window: WindowHandle,
-        new_scale: f32,
-    },
-    WindowMaximizeStateChanged {
-        window: WindowHandle,
-        is_maximized: bool,
-    },
     OpenAlertDialog {
         target_window: WindowHandle,
         message: String,
@@ -796,42 +779,12 @@ pub enum Event {
         surface_pos: Point<LogicalUnit>,
         view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfacePresenterConstructor>>>,
     },
-    MenuRescale {
-        scale: f32,
-    },
     MenuSelectItem {
         depth: usize,
         index: usize,
     },
     MenuDeselectItem {
         depth: usize,
-    },
-    MenuOpenSubmenu {
-        depth: usize,
-        index: usize,
-    },
-    MenuPerformDelayedAction,
-    MenuPointerDown {
-        pointer_id: PointerID,
-        target: FlyoutSurfaceHandle,
-        button: PointerButton,
-        key_modifier: ModifierKey,
-    },
-    MenuPointerMove {
-        pointer_id: PointerID,
-        target: FlyoutSurfaceHandle,
-        client_pos: Point<PointerInputUnit>,
-        key_modifier: ModifierKey,
-    },
-    MenuPointerUp {
-        pointer_id: PointerID,
-        target: FlyoutSurfaceHandle,
-        button: PointerButton,
-        key_modifier: ModifierKey,
-    },
-    MenuPointerLeave {
-        pointer_id: PointerID,
-        target: FlyoutSurfaceHandle,
     },
     MenuSelectCommand {
         id: u64,
@@ -851,20 +804,6 @@ pub enum Event {
         tab_index: usize,
         pane_rect: Rect<LogicalUnit>,
         tab_size: Size<LogicalUnit>,
-        client_pos: Point<LogicalUnit>,
-    },
-    DockMovePreview {
-        dest_window: WindowHandle,
-        client_pos_in_dest: Point<LogicalUnit>,
-    },
-    DockConfirm {
-        pointer: PointerID,
-        destination_window: WindowHandle,
-        client_pos_in_dest: Point<LogicalUnit>,
-    },
-    PerformDrop {
-        data: NonCloneable<DummyDebug<DragData>>,
-        target_window: WindowHandle,
         client_pos: Point<LogicalUnit>,
     },
     // TODO: これあんまりいい設計じゃないので使わない形にしたい（macOSでのIME入力によるView更新のためだけに必要）
@@ -897,30 +836,15 @@ impl Event {
         match self {
             Self::Sync(e) => e.p_name(),
             Self::Quit => "Quit",
-            Self::PointerHover => "PointerHover",
-            Self::WindowMove { .. } => "WindowMove",
-            Self::WindowResize { .. } => "WindowResize",
-            Self::WindowRescaleUI { .. } => "WindowRescaleUI",
-            Self::WindowMaximizeStateChanged { .. } => "WindowMaximizeStateChanged",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::PopupClose { .. } => "PopupClose",
             Self::OpenCustomViewFlyout { .. } => "OpenCustomViewFlyout",
-            Self::MenuRescale { .. } => "MenuRescale",
             Self::MenuSelectItem { .. } => "MenuSelectItem",
             Self::MenuDeselectItem { .. } => "MenuDeselectItem",
-            Self::MenuOpenSubmenu { .. } => "MenuOpenSubmenu",
-            Self::MenuPerformDelayedAction => "MenuPerformDelayedAction",
-            Self::MenuPointerDown { .. } => "MenuPointerDown",
-            Self::MenuPointerMove { .. } => "MenuPointerMove",
-            Self::MenuPointerUp { .. } => "MenuPointerUp",
-            Self::MenuPointerLeave { .. } => "MenuPointerLeave",
             Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::DockMoveSplitter { .. } => "DockMoveSplitter",
             Self::DockBeginPreview { .. } => "DockBeginPreview",
-            Self::DockMovePreview { .. } => "DockMovePreview",
-            Self::DockConfirm { .. } => "DockConfirm",
-            Self::PerformDrop { .. } => "PerformDrop",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
             #[cfg(not(target_os = "macos"))]
             #[cfg(windows)]
@@ -5098,7 +5022,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
 
         match e {
             Event::Quit => unreachable!("could not exit by calling on_event"),
-            Event::WindowResize { window, size } => self.as_mut().resize_window(window, size),
             Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
                 window.update_manual_scaling();
@@ -5107,17 +5030,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 #[cfg(feature = "wayland")]
                 target.update_manual_scaling();
             }
-            Event::WindowMove { window, pos } => self.as_mut().handle_window_move(window, pos),
-            Event::WindowRescaleUI { window, new_scale } => {
-                self.as_mut().rescale_popup_of_window(window, new_scale)
-            }
-            Event::WindowMaximizeStateChanged {
-                window,
-                is_maximized,
-            } => self
-                .as_mut()
-                .handle_window_maximize_state_changes(window, is_maximized),
-            Event::PointerHover => self.as_mut().handle_pointer_hover_timeout(),
             Event::OpenAlertDialog {
                 target_window,
                 message,
@@ -5131,64 +5043,10 @@ impl<'sys> CoreLoop<'static, 'sys> {
             } => self
                 .as_mut()
                 .open_custom_flyout(parent, surface_pos, view_constructor.0.0),
-            Event::MenuRescale { scale } => self.as_mut().rescale_menu(scale),
             Event::MenuSelectItem { depth, index } => {
                 self.as_mut().handle_menu_item_selection(depth, index)
             }
             Event::MenuDeselectItem { depth } => self.as_mut().handle_menu_item_deselection(depth),
-            Event::MenuOpenSubmenu { depth, index } => {
-                /* if let Some(c) = current_active_context_menu_session.as_mut() {
-                    c.open_submenu(
-                        depth,
-                        index,
-                        &system_link,
-                        &mut ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut composite_tree,
-                                ht_manager: &mut ht_manager,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                            },
-                            keyboard_focus_registry: &mut keyboard_focus_registry,
-                            ui_scale_factor: 1.0, // updated later
-                            system_link: &system_link,
-                        },
-                        &context_menu_common_resources,
-                        &typing_context,
-                    );
-
-                    composite_tree
-                        .commit(&mut renderer_sync.lock().expect("poisoned").composite_buffer);
-                }*/
-            }
-            Event::MenuPerformDelayedAction => self.as_mut().perform_menu_delayed_action(),
-            Event::MenuPointerDown {
-                pointer_id,
-                target,
-                button,
-                key_modifier,
-            } => self
-                .as_mut()
-                .dispatch_menu_pointer_down(target, pointer_id, button, key_modifier),
-            Event::MenuPointerMove {
-                pointer_id,
-                target,
-                client_pos,
-                key_modifier,
-            } => {
-                self.as_mut()
-                    .handle_menu_pointer_move(target, pointer_id, client_pos, key_modifier)
-            }
-            Event::MenuPointerUp {
-                pointer_id,
-                target,
-                button,
-                key_modifier,
-            } => self
-                .as_mut()
-                .dispatch_menu_pointer_up(target, pointer_id, button, key_modifier),
-            Event::MenuPointerLeave { pointer_id, .. } => {
-                self.as_mut().dispatch_menu_pointer_leave(pointer_id)
-            }
             Event::MenuSelectCommand { id } => self.as_mut().perform_select_menu_command(id),
             Event::DropdownMenuSelectItem { id, receiver } => self
                 .as_mut()
@@ -5216,27 +5074,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 tab_size,
                 client_pos,
             ),
-            Event::DockMovePreview {
-                dest_window,
-                client_pos_in_dest,
-            } => self
-                .as_mut()
-                .move_redock_preview(dest_window, client_pos_in_dest),
-            Event::DockConfirm {
-                destination_window,
-                client_pos_in_dest,
-                ..
-            } => self
-                .as_mut()
-                .confirm_redock(destination_window, client_pos_in_dest),
             Event::Sync(SyncEvent::NewPresentID { .. }) => self.as_mut().update_preview(),
-            Event::PerformDrop {
-                data,
-                target_window,
-                client_pos,
-            } => self
-                .as_mut()
-                .perform_drop(data.0.0, target_window, client_pos),
             Event::ScheduleViewRenderExt { id } => self.as_mut().schedule_view_render(id),
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
