@@ -529,129 +529,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
             if dbus_signal {
                 while let Some(m) = dbus.pop_message() {
-                    let span = tracing::info_span!(target: "dbus::loop", "dbus message recv", r#type = ?m.r#type(), path = ?m.path(), interface = ?m.interface(), member = ?m.member());
-                    let _enter = span.enter();
-                    match m.r#type() {
-                        dbus::MessageType::MethodCall
-                            if m.path()
-                                .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
-                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
-                                && m.member() == Some(c"GetLayout") =>
-                        {
-                            let args =
-                                proto::dbus_menu::GetLayoutRequest::deserialize(&mut m.iter());
-
-                            tracing::debug!(?args, "com.canonical.dbusmenu.GetLayout");
-
-                            // toriaezu
-                            assert_eq!(args.recursion_depth, 1);
-
-                            if args.parent_id == 1 {
-                                let mut reply = dbus::Message::new_method_return(&m)
-                                    .expect("dbus.message.new_method_return");
-                                proto::dbus_menu::GetLayoutReply {
-                                    revision: 1,
-                                    layout: proto::dbus_menu::Layout {
-                                        id: 1,
-                                        properties: Default::default(),
-                                        children: &[proto::dbus_menu::Layout {
-                                            id: 100,
-                                            properties: proto::dbus_menu::LayoutProperties {
-                                                label: Some(c"終了"),
-                                                enabled: Some(true),
-                                                visible: Some(true),
-                                                icon_name: Some(c"window-close"),
-                                                shortcut: Some(&[
-                                                    &[c"Alt", c"F4"],
-                                                    &[c"Meta", c"Q"],
-                                                ]),
-                                                ..Default::default()
-                                            },
-                                            children: &[],
-                                        }],
-                                    },
-                                }
-                                .serialize(&mut reply.iter_append())
-                                .expect("dbus_menu.get_layout.serialize_reply");
-                                dbus.send(&mut reply).expect("dbus.send");
-                            } else if args.parent_id == 0 {
-                                let mut reply = dbus::Message::new_method_return(&m)
-                                    .expect("dbus.message.new_method_return");
-                                proto::dbus_menu::GetLayoutReply {
-                                    revision: 1,
-                                    layout: proto::dbus_menu::Layout {
-                                        id: 0,
-                                        properties: proto::dbus_menu::LayoutProperties {
-                                            children_display: Some(c"submenu"),
-                                            ..Default::default()
-                                        },
-                                        children: &[proto::dbus_menu::Layout {
-                                            id: 1,
-                                            properties: proto::dbus_menu::LayoutProperties {
-                                                label: Some(c"ファイル"),
-                                                enabled: Some(true),
-                                                visible: Some(true),
-                                                children_display: Some(c"submenu"),
-                                                ..Default::default()
-                                            },
-                                            children: &[],
-                                        }],
-                                    },
-                                }
-                                .serialize(&mut reply.iter_append())
-                                .expect("dbus_menu.get_layout.serialize_reply");
-                                dbus.send(&mut reply).expect("dbus.send");
-                            } else {
-                                unreachable!("unknown menu id");
-                            }
-                        }
-                        dbus::MessageType::MethodCall
-                            if m.path()
-                                .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
-                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
-                                && m.member() == Some(c"Event") =>
-                        {
-                            let mut args_iter = m.iter();
-                            let id = args_iter.try_get_i32().expect("id:i");
-                            args_iter.next();
-                            let event_id = args_iter.try_get_cstr().expect("event_id:s").to_owned();
-                            args_iter.next();
-                            let data_container =
-                                args_iter.try_begin_iter_variant_content().expect("data:v");
-                            args_iter.next();
-                            let timestamp = args_iter.try_get_u32().expect("timestamp:u");
-
-                            tracing::trace!(
-                                id,
-                                ?event_id,
-                                data.signature = ?data_container.signature(),
-                                timestamp,
-                                "menu event"
-                            );
-
-                            if id == 100 && event_id == c"clicked" {
-                                // clicked quit menu item
-                                break 'app;
-                            }
-                        }
-                        dbus::MessageType::MethodCall
-                            if m.path()
-                                .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
-                                && m.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
-                                && m.member() == Some(c"AboutToShow") =>
-                        {
-                            let mut args_iter = m.iter();
-                            let id = args_iter.try_get_i32().expect("id:i");
-
-                            let mut reply = dbus::Message::new_method_return(&m)
-                                .expect("dbus.message.new_method_return");
-                            proto::dbus_menu::AboutToShowReply { need_update: false }
-                                .serialize(&mut reply.iter_append())
-                                .expect("dbus_menu.about_to_show.serialize_reply");
-                            dbus.send(&mut reply).expect("dbus.send");
-                        }
-                        _ => tracing::trace!(target: "dbus::loop", "unknown dbus message"),
-                    }
+                    coreloop.as_mut().handle_dbus_message(m);
                 }
             }
         }
@@ -5213,6 +5091,136 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     }
                 }
             }
+        }
+    }
+
+    #[cfg(unix)]
+    #[tracing::instrument(target = "dbus::loop", skip(self, msg), fields(type = ?msg.r#type(), path = ?msg.path(), interface = ?msg.interface(), member = ?msg.member()))]
+    fn handle_dbus_message(self: Pin<&mut Self>, msg: dbus::Message) {
+        match msg.r#type() {
+            dbus::MessageType::MethodCall
+                if msg
+                    .path()
+                    .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                    && msg.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
+                    && msg.member() == Some(c"GetLayout") =>
+            {
+                let args = proto::dbus_menu::GetLayoutRequest::deserialize(&mut msg.iter());
+
+                tracing::debug!(?args, "com.canonical.dbusmenu.GetLayout");
+
+                // toriaezu
+                assert_eq!(args.recursion_depth, 1);
+
+                if args.parent_id == 1 {
+                    let mut reply = dbus::Message::new_method_return(&msg)
+                        .expect("dbus.message.new_method_return");
+                    proto::dbus_menu::GetLayoutReply {
+                        revision: 1,
+                        layout: proto::dbus_menu::Layout {
+                            id: 1,
+                            properties: Default::default(),
+                            children: &[proto::dbus_menu::Layout {
+                                id: 100,
+                                properties: proto::dbus_menu::LayoutProperties {
+                                    label: Some(c"終了"),
+                                    enabled: Some(true),
+                                    visible: Some(true),
+                                    icon_name: Some(c"window-close"),
+                                    shortcut: Some(&[&[c"Alt", c"F4"], &[c"Meta", c"Q"]]),
+                                    ..Default::default()
+                                },
+                                children: &[],
+                            }],
+                        },
+                    }
+                    .serialize(&mut reply.iter_append())
+                    .expect("dbus_menu.get_layout.serialize_reply");
+                    unsafe { &*self.syslink.dbus }
+                        .send(&mut reply)
+                        .expect("dbus.send");
+                } else if args.parent_id == 0 {
+                    let mut reply = dbus::Message::new_method_return(&msg)
+                        .expect("dbus.message.new_method_return");
+                    proto::dbus_menu::GetLayoutReply {
+                        revision: 1,
+                        layout: proto::dbus_menu::Layout {
+                            id: 0,
+                            properties: proto::dbus_menu::LayoutProperties {
+                                children_display: Some(c"submenu"),
+                                ..Default::default()
+                            },
+                            children: &[proto::dbus_menu::Layout {
+                                id: 1,
+                                properties: proto::dbus_menu::LayoutProperties {
+                                    label: Some(c"ファイル"),
+                                    enabled: Some(true),
+                                    visible: Some(true),
+                                    children_display: Some(c"submenu"),
+                                    ..Default::default()
+                                },
+                                children: &[],
+                            }],
+                        },
+                    }
+                    .serialize(&mut reply.iter_append())
+                    .expect("dbus_menu.get_layout.serialize_reply");
+                    unsafe { &*self.syslink.dbus }
+                        .send(&mut reply)
+                        .expect("dbus.send");
+                } else {
+                    unreachable!("unknown menu id");
+                }
+            }
+            dbus::MessageType::MethodCall
+                if msg
+                    .path()
+                    .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                    && msg.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
+                    && msg.member() == Some(c"Event") =>
+            {
+                let mut args_iter = msg.iter();
+                let id = args_iter.try_get_i32().expect("id:i");
+                args_iter.next();
+                let event_id = args_iter.try_get_cstr().expect("event_id:s").to_owned();
+                args_iter.next();
+                let data_container = args_iter.try_begin_iter_variant_content().expect("data:v");
+                args_iter.next();
+                let timestamp = args_iter.try_get_u32().expect("timestamp:u");
+
+                tracing::trace!(
+                    id,
+                    ?event_id,
+                    data.signature = ?data_container.signature(),
+                    timestamp,
+                    "menu event"
+                );
+
+                if id == 100 && event_id == c"clicked" {
+                    // clicked quit menu item
+                    return;
+                }
+            }
+            dbus::MessageType::MethodCall
+                if msg
+                    .path()
+                    .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                    && msg.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
+                    && msg.member() == Some(c"AboutToShow") =>
+            {
+                let mut args_iter = msg.iter();
+                let id = args_iter.try_get_i32().expect("id:i");
+
+                let mut reply =
+                    dbus::Message::new_method_return(&msg).expect("dbus.message.new_method_return");
+                proto::dbus_menu::AboutToShowReply { need_update: false }
+                    .serialize(&mut reply.iter_append())
+                    .expect("dbus_menu.about_to_show.serialize_reply");
+                unsafe { &*self.syslink.dbus }
+                    .send(&mut reply)
+                    .expect("dbus.send");
+            }
+            _ => tracing::trace!(target: "dbus::loop", "unknown dbus message"),
         }
     }
 }
