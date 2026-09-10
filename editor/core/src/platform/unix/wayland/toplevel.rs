@@ -611,13 +611,14 @@ impl<'sys> EventListener<'sys> {
             d.commit_all();
         }
 
-        if self.pending_activated_changes.take() == Some(false) {
-            // window deactivated
-            delayed_event_queue.push(Event::MenuCloseAll);
-        }
+        let window_deactivated = self.pending_activated_changes.take() == Some(false);
 
         for x in delayed_event_queue {
             self.coreloop().on_event(x);
+        }
+
+        if window_deactivated {
+            self.coreloop().close_all_menus();
         }
 
         self.coreloop().update_view_all();

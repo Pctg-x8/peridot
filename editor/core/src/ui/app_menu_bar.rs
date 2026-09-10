@@ -4,7 +4,7 @@ use std::rc::Rc;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    Event, SystemLink,
+    MenuOpenRequest, SystemLink,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -185,7 +185,7 @@ impl HitTestTreeActionHandler for EventHandler {
                     let (x, y, _, h, _) = context
                         .ht_manager
                         .compute_global_rect_autoroot(self.items[x].ht_root);
-                    context.system_link.dispatch_event(Event::MenuReopen {
+                    context.request_reopen_menu(MenuOpenRequest {
                         parent,
                         items,
                         surface_pos: Point::new_logical(x, y + h),
@@ -235,7 +235,7 @@ impl HitTestTreeActionHandler for EventHandler {
 
         self.opening.set(true);
         let (x, y, _, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
-        context.system_link.dispatch_event(Event::MenuOpen {
+        context.request_open_menu(MenuOpenRequest {
             parent: context
                 .ht_manager
                 .query_root_window(sender)

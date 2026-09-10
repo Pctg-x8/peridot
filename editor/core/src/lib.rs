@@ -767,58 +767,7 @@ impl SyncEvent {
 pub enum Event {
     Sync(SyncEvent),
     Quit,
-    PointerDown {
-        window: WindowHandle,
-        pointer_id: PointerID,
-        button: PointerButton,
-        key_modifier: ModifierKey,
-    },
-    PointerMove {
-        pointer_id: PointerID,
-        window: WindowHandle,
-        client_pos: Point<PointerInputUnit>,
-        key_modifier: ModifierKey,
-    },
-    PointerMoveRelative {
-        pointer_id: PointerID,
-        window: WindowHandle,
-        relative: Point<PointerInputUnit>,
-    },
-    PointerUp {
-        window: WindowHandle,
-        pointer_id: PointerID,
-        button: PointerButton,
-        key_modifier: ModifierKey,
-    },
-    PointerLeaveWindow {
-        window: WindowHandle,
-        pointer_id: PointerID,
-    },
     PointerHover,
-    ScrollWheel {
-        amount: f32,
-        key_modifier: ModifierKey,
-    },
-    KeyDown {
-        window: WindowHandle,
-        code: KeyInputCode,
-        modifier: ModifierKey,
-    },
-    KeyUp {
-        window: WindowHandle,
-        code: KeyInputCode,
-        modifier: ModifierKey,
-    },
-    KeyChar {
-        window: WindowHandle,
-        ch: char,
-        modifier: ModifierKey,
-    },
-    IMEStateChanges {
-        window: WindowHandle,
-        committed_string: Option<String>,
-        preedit_string: Option<String>,
-    },
     WindowMove {
         window: WindowHandle,
         pos: Point<PointerInputUnit>,
@@ -835,17 +784,6 @@ pub enum Event {
         window: WindowHandle,
         is_maximized: bool,
     },
-    WindowFocusChanged {
-        window: WindowHandle,
-        focused: bool,
-    },
-    WindowActivatingStateChanged {
-        window: WindowHandle,
-        activated: bool,
-    },
-    SubWindowClose {
-        window: WindowHandle,
-    },
     OpenAlertDialog {
         target_window: WindowHandle,
         message: String,
@@ -858,26 +796,6 @@ pub enum Event {
         surface_pos: Point<LogicalUnit>,
         view_constructor: NonCloneable<DummyDebug<Box<dyn FlyoutSurfacePresenterConstructor>>>,
     },
-    MenuOpen {
-        parent: WindowHandle,
-        items: Vec<MenuItem>,
-        surface_pos: Point<LogicalUnit>,
-        command_handler: NonCloneable<DummyDebug<Box<dyn MenuCommandSelectionHandler>>>,
-    },
-    MenuReopen {
-        parent: WindowHandle,
-        items: Vec<MenuItem>,
-        surface_pos: Point<LogicalUnit>,
-        command_handler: NonCloneable<DummyDebug<Box<dyn MenuCommandSelectionHandler>>>,
-    },
-    DropdownMenuOpen {
-        parent: WindowHandle,
-        surface_pos: Point<LogicalUnit>,
-        min_width: f32,
-        items: Vec<crate::uikit::dropdown_box::MenuItem>,
-        selection_receiver: std::rc::Weak<crate::uikit::dropdown_box::EventHandler>,
-    },
-    MenuCloseAll,
     MenuRescale {
         scale: f32,
     },
@@ -979,31 +897,14 @@ impl Event {
         match self {
             Self::Sync(e) => e.p_name(),
             Self::Quit => "Quit",
-            Self::PointerDown { .. } => "PointerDown",
-            Self::PointerMove { .. } => "PointerMove",
-            Self::PointerMoveRelative { .. } => "PointerMoveRelative",
-            Self::PointerUp { .. } => "PointerUp",
-            Self::PointerLeaveWindow { .. } => "PointerLeaveWindow",
             Self::PointerHover => "PointerHover",
-            Self::ScrollWheel { .. } => "ScrollWheel",
-            Self::KeyDown { .. } => "KeyDown",
-            Self::KeyUp { .. } => "KeyUp",
-            Self::KeyChar { .. } => "KeyChar",
-            Self::IMEStateChanges { .. } => "IMEStateChanges",
             Self::WindowMove { .. } => "WindowMove",
             Self::WindowResize { .. } => "WindowResize",
             Self::WindowRescaleUI { .. } => "WindowRescaleUI",
             Self::WindowMaximizeStateChanged { .. } => "WindowMaximizeStateChanged",
-            Self::WindowFocusChanged { .. } => "WindowFocusChanged",
-            Self::WindowActivatingStateChanged { .. } => "WindowActivatingStateChanged",
-            Self::SubWindowClose { .. } => "SubWindowClose",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::PopupClose { .. } => "PopupClose",
             Self::OpenCustomViewFlyout { .. } => "OpenCustomViewFlyout",
-            Self::MenuOpen { .. } => "MenuOpen",
-            Self::MenuReopen { .. } => "MenuReopen",
-            Self::DropdownMenuOpen { .. } => "DropdownMenuOpen",
-            Self::MenuCloseAll => "MenuCloseAll",
             Self::MenuRescale { .. } => "MenuRescale",
             Self::MenuSelectItem { .. } => "MenuSelectItem",
             Self::MenuDeselectItem { .. } => "MenuDeselectItem",
@@ -3074,7 +2975,10 @@ pub struct CoreLoop<'h, 'sys> {
     // high-level functionalities
     popup_manager: PopupManager,
     dock_store: ui::dock::DockStore,
+    menu_open_requests: Vec<MenuOpenRequest>,
+    menu_reopen_request: Option<MenuOpenRequest>,
     current_active_menu_session: Option<MenuSession>,
+    dropdown_menu_open_requests: Vec<DropdownMenuOpenRequest>,
     current_active_dropdown_menu_session: Option<DropdownMenuSession>,
     custom_view_flyout_session: Option<CustomViewFlyoutSession>,
     docking_preview_state: Option<ui::dock::DockingPreviewState>,
@@ -3133,7 +3037,10 @@ impl<'sys> CoreLoop<'static, 'sys> {
             // high-level functionalities
             popup_manager: PopupManager::new(),
             dock_store: ui::dock::DockStore::new(),
+            menu_open_requests: Vec::new(),
+            menu_reopen_request: None,
             current_active_menu_session: None,
+            dropdown_menu_open_requests: Vec::new(),
             current_active_dropdown_menu_session: None,
             custom_view_flyout_session: None,
             docking_preview_state: None,
@@ -3651,6 +3558,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
             view_instance_store: &mut this.view_instance_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
+            menu_open_requests: &mut this.menu_open_requests,
+            menu_reopen_request: &mut this.menu_reopen_request,
+            dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
             application: ApplicationMutation {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
@@ -3799,6 +3709,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
             view_instance_store: &mut this.view_instance_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
+            menu_open_requests: &mut this.menu_open_requests,
+            menu_reopen_request: &mut this.menu_reopen_request,
+            dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
             application: ApplicationMutation {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
@@ -3840,7 +3753,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
     }
 
     fn handle_window_activation_state_changed(
-        self: core::pin::Pin<&mut Self>,
+        self: Pin<&mut Self>,
         target: WindowHandle,
         activated: bool,
     ) {
@@ -3957,6 +3870,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -3992,6 +3908,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4023,6 +3942,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4051,6 +3973,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4076,6 +4001,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4097,6 +4025,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4122,6 +4053,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4159,6 +4093,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4187,6 +4124,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4215,6 +4155,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4243,6 +4186,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4272,6 +4218,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4357,6 +4306,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4376,60 +4328,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
             CustomViewFlyoutSession::begin(parent, surface_pos, view_constructor, self.as_mut());
         unsafe { self.get_unchecked_mut() }.custom_view_flyout_session =
             Some(custom_view_flyout_session);
-    }
-
-    fn open_menu(
-        mut self: Pin<&mut Self>,
-        parent: WindowHandle,
-        surface_pos: Point<LogicalUnit>,
-        items: Vec<MenuItem>,
-        command_handler: Box<dyn MenuCommandSelectionHandler>,
-    ) {
-        let new_menu_session =
-            MenuSession::new(parent, items, command_handler, surface_pos, self.as_mut());
-
-        unsafe { self.get_unchecked_mut() }.current_active_menu_session = Some(new_menu_session);
-    }
-
-    fn reopen_menu(
-        mut self: Pin<&mut Self>,
-        parent: WindowHandle,
-        surface_pos: Point<LogicalUnit>,
-        items: Vec<MenuItem>,
-        command_handler: Box<dyn MenuCommandSelectionHandler>,
-    ) {
-        let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if let Some(c) = this.current_active_menu_session.take() {
-            c.terminate(
-                &this.syslink,
-                &mut this.composite_tree,
-                &mut this.ht_manager,
-                &mut this.keyboard_focus_registry,
-            );
-        }
-
-        self.open_menu(parent, surface_pos, items, command_handler);
-    }
-
-    fn open_dropdown_menu(
-        mut self: Pin<&mut Self>,
-        parent: WindowHandle,
-        surface_pos: Point<LogicalUnit>,
-        min_width: f32,
-        items: Vec<uikit::dropdown_box::MenuItem>,
-        selection_receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
-    ) {
-        let current_active_dropdown_menu_session = DropdownMenuSession::new(
-            selection_receiver,
-            parent,
-            self.as_mut(),
-            surface_pos,
-            min_width,
-            items,
-        );
-
-        unsafe { self.get_unchecked_mut() }.current_active_dropdown_menu_session =
-            Some(current_active_dropdown_menu_session);
     }
 
     fn close_all_menus(self: Pin<&mut Self>) {
@@ -4528,6 +4426,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4563,6 +4464,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4595,6 +4499,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4620,6 +4527,9 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                dropdown_menu_open_requests: &mut this.dropdown_menu_open_requests,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -4999,6 +4909,73 @@ impl<'sys> CoreLoop<'static, 'sys> {
         this.view_render_queue.schedule(id);
     }
 
+    fn perform_menu_opens(mut self: Pin<&mut Self>) {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        assert!(
+            this.menu_open_requests.len() <= 1,
+            "more open request in one event?"
+        );
+        if let Some(req) = this.menu_open_requests.pop() {
+            assert!(
+                this.current_active_menu_session.is_none(),
+                "another menu still active"
+            );
+            let session = MenuSession::new(
+                req.parent,
+                req.items,
+                req.command_handler,
+                req.surface_pos,
+                self.as_mut(),
+            );
+            unsafe { self.as_mut().get_unchecked_mut() }.current_active_menu_session =
+                Some(session);
+        }
+
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        if let Some(req) = this.menu_reopen_request.take() {
+            if let Some(c) = this.current_active_menu_session.take() {
+                c.terminate(
+                    &this.syslink,
+                    &mut this.composite_tree,
+                    &mut this.ht_manager,
+                    &mut this.keyboard_focus_registry,
+                );
+            }
+
+            let session = MenuSession::new(
+                req.parent,
+                req.items,
+                req.command_handler,
+                req.surface_pos,
+                self.as_mut(),
+            );
+            unsafe { self.as_mut().get_unchecked_mut() }.current_active_menu_session =
+                Some(session);
+        }
+
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        assert!(
+            this.dropdown_menu_open_requests.len() <= 1,
+            "more dropdown open request in one event?"
+        );
+        if let Some(req) = this.dropdown_menu_open_requests.pop() {
+            assert!(
+                this.current_active_dropdown_menu_session.is_none(),
+                "another dropdown menu still active"
+            );
+            let session = DropdownMenuSession::new(
+                req.selection_receiver,
+                req.parent,
+                self.as_mut(),
+                req.surface_pos,
+                req.min_width,
+                req.items,
+            );
+            unsafe { self.as_mut().get_unchecked_mut() }.current_active_dropdown_menu_session =
+                Some(session);
+        }
+    }
+
     fn dispatch_view_feedback(self: core::pin::Pin<&mut Self>) {
         if self.view_feedback_store.is_empty() {
             // no view feedbacks
@@ -5076,6 +5053,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
     }
 
     pub fn update_view_all(mut self: Pin<&mut Self>) {
+        self.as_mut().perform_menu_opens();
         self.as_mut().dispatch_view_feedback();
         self.as_mut().update_view();
         self.as_mut().process_delayed_view_feedback_registry_ops();
@@ -5120,7 +5098,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
 
         match e {
             Event::Quit => unreachable!("could not exit by calling on_event"),
-            Event::SubWindowClose { window } => self.as_mut().close_sub_window(window),
             Event::WindowResize { window, size } => self.as_mut().resize_window(window, size),
             Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
                 #[cfg(feature = "wayland")]
@@ -5140,80 +5117,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
             } => self
                 .as_mut()
                 .handle_window_maximize_state_changes(window, is_maximized),
-            Event::WindowFocusChanged { window, focused } => {
-                self.as_mut().handle_window_focus_changed(window, focused)
-            }
-            Event::WindowActivatingStateChanged { window, activated } => self
-                .as_mut()
-                .handle_window_activation_state_changed(window, activated),
-            Event::PointerDown {
-                window,
-                pointer_id,
-                button,
-                key_modifier,
-            } => self
-                .as_mut()
-                .handle_pointer_down(window, pointer_id, button, key_modifier),
-            Event::PointerMove {
-                pointer_id,
-                window,
-                client_pos,
-                key_modifier,
-            } => self
-                .as_mut()
-                .handle_pointer_move(window, pointer_id, client_pos, key_modifier),
-            Event::PointerMoveRelative {
-                pointer_id,
-                relative,
-                ..
-            } => self
-                .as_mut()
-                .handle_pointer_move_relative(pointer_id, relative),
-            Event::PointerUp {
-                window,
-                pointer_id,
-                button,
-                key_modifier,
-            } => self
-                .as_mut()
-                .handle_pointer_up(window, pointer_id, button, key_modifier),
-            Event::PointerLeaveWindow { pointer_id, .. } => {
-                self.as_mut().handle_pointer_leave_window(pointer_id)
-            }
             Event::PointerHover => self.as_mut().handle_pointer_hover_timeout(),
-            Event::ScrollWheel {
-                amount,
-                key_modifier,
-            } => self.as_mut().dispatch_scroll_wheel(amount, key_modifier),
-            Event::KeyDown {
-                window,
-                code,
-                modifier,
-            } if code == KeyInputCode::Character('\t') || code == KeyInputCode::Tab => {
-                self.as_mut().switch_focus_by_key(window, modifier)
-            }
-            Event::KeyDown {
-                window,
-                code,
-                modifier,
-            } => self.as_mut().dispatch_key_down(window, code, modifier),
-            Event::KeyUp {
-                window,
-                code,
-                modifier,
-            } => self.as_mut().dispatch_key_up(window, code, modifier),
-            Event::KeyChar {
-                window,
-                ch,
-                modifier,
-            } => self.as_mut().dispatch_key_char(window, ch, modifier),
-            Event::IMEStateChanges {
-                window,
-                committed_string,
-                preedit_string,
-            } => self
-                .as_mut()
-                .dispatch_ime_state_changes(window, preedit_string, committed_string),
             Event::OpenAlertDialog {
                 target_window,
                 message,
@@ -5227,36 +5131,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
             } => self
                 .as_mut()
                 .open_custom_flyout(parent, surface_pos, view_constructor.0.0),
-            Event::MenuOpen {
-                parent,
-                items,
-                surface_pos,
-                command_handler,
-            } => self
-                .as_mut()
-                .open_menu(parent, surface_pos, items, command_handler.0.0),
-            Event::MenuReopen {
-                parent,
-                items,
-                surface_pos,
-                command_handler,
-            } => self
-                .as_mut()
-                .reopen_menu(parent, surface_pos, items, command_handler.0.0),
-            Event::DropdownMenuOpen {
-                parent,
-                surface_pos,
-                min_width,
-                items,
-                selection_receiver,
-            } => self.as_mut().open_dropdown_menu(
-                parent,
-                surface_pos,
-                min_width,
-                items,
-                selection_receiver,
-            ),
-            Event::MenuCloseAll => self.as_mut().close_all_menus(),
             Event::MenuRescale { scale } => self.as_mut().rescale_menu(scale),
             Event::MenuSelectItem { depth, index } => {
                 self.as_mut().handle_menu_item_selection(depth, index)
@@ -5655,6 +5529,14 @@ impl CustomViewFlyoutSession {
     }
 }
 
+pub struct DropdownMenuOpenRequest {
+    pub parent: WindowHandle,
+    pub surface_pos: Point<LogicalUnit>,
+    pub min_width: f32,
+    pub items: Vec<crate::uikit::dropdown_box::MenuItem>,
+    pub selection_receiver: std::rc::Weak<crate::uikit::dropdown_box::EventHandler>,
+}
+
 pub struct DropdownMenuSurface {
     native_surface: FlyoutSurfaceHandle,
     item_views: Vec<uikit::dropdown_box::MenuItemView>,
@@ -5730,6 +5612,13 @@ impl DropdownMenuSession {
                 .close(syslink, composite_tree, ht_manager, keyboard_focus_registry);
         }
     }
+}
+
+pub struct MenuOpenRequest {
+    pub parent: WindowHandle,
+    pub items: Vec<MenuItem>,
+    pub surface_pos: Point<LogicalUnit>,
+    pub command_handler: Box<dyn MenuCommandSelectionHandler>,
 }
 
 pub struct MenuSurface {

@@ -6,7 +6,7 @@ use std::{
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    Event, SystemLink,
+    MenuOpenRequest, SystemLink,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -589,7 +589,7 @@ impl HitTestTreeActionHandler for PathNavigatorViewEntity {
                         .collect::<Vec<_>>();
                 tracing::debug!(?next_dir_names);
                 let (x, y, _, h, _) = context.ht_manager.compute_global_rect_autoroot(sender);
-                context.system_link.dispatch_event(Event::MenuOpen {
+                context.request_open_menu(MenuOpenRequest {
                     parent: context
                         .ht_manager
                         .query_root_window(sender)

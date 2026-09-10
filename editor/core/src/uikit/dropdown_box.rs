@@ -4,7 +4,7 @@ use peridot_math::Zero;
 use shared::{LogicalUnit, Point, Rect, SafeF32, Size};
 
 use crate::{
-    Event,
+    DropdownMenuOpenRequest, Event,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -382,7 +382,7 @@ impl HitTestTreeActionHandler for EventHandler {
             w.client_size().height,
         );
 
-        context.system_link.dispatch_event(Event::DropdownMenuOpen {
+        context.request_open_dropdown_menu(DropdownMenuOpenRequest {
             parent: w,
             surface_pos: Point::new_logical(x, y),
             min_width: 128.0,

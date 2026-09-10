@@ -4,7 +4,6 @@ use std::rc::Rc;
 use shared::{LogicalUnit, Rect, Size};
 
 use crate::{
-    SyncEvent,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -430,7 +429,7 @@ impl HitTestTreeActionHandler for SystemCommandButtonViewEntity {
     }
 }
 impl SystemCommandButtonViewEntity {
-    fn update(&self, ct: &mut CompositeTree<SyncEvent>, current_sec: f32) {
+    fn update<E>(&self, ct: &mut CompositeTree<E>, current_sec: f32) {
         if self.is_dirty.replace(false) {
             ct.get_mut(self.ct_hover).opacity = if self.hovering.get() {
                 AnimatableFloat::Animated {

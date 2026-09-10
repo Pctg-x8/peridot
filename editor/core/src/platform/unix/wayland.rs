@@ -1843,11 +1843,17 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
         };
         match state {
             wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
-                unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_down(
-                    toplevel::Handle(enter_state.surface),
-                    code.clone(),
-                    modifier,
-                );
+                if code == KeyInputCode::Tab {
+                    // TODO: キー入力を全部吸うタイプのもの(TextInputViewなど)にフォーカスがある場合はtabはそのまま流したい
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+                        .switch_focus_by_key(toplevel::Handle(enter_state.surface), modifier);
+                } else {
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_down(
+                        toplevel::Handle(enter_state.surface),
+                        code.clone(),
+                        modifier,
+                    );
+                }
 
                 if let KeyInputCode::Character(ch) = code {
                     unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_char(

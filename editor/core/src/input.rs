@@ -8,7 +8,8 @@ use bitflags::bitflags;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    DragData, FlyoutSurfaceHandle, PointerID, SyncEvent, SystemLink, WindowHandle,
+    DragData, DropdownMenuOpenRequest, FlyoutSurfaceHandle, MenuOpenRequest, PointerID, SyncEvent,
+    SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, DragDropFlags, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
@@ -41,6 +42,9 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub view_instance_store: &'env mut ViewInstanceStore,
     pub view_group_relation_store: &'env ViewGroupRelationStore,
     pub view_render_queue: &'env mut ViewRenderQueue,
+    pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
+    pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
+    pub dropdown_menu_open_requests: &'env mut Vec<DropdownMenuOpenRequest>,
 }
 impl InputEventContext<'_, '_, '_> {
     #[inline(always)]
@@ -49,6 +53,25 @@ impl InputEventContext<'_, '_, '_> {
         id: ViewIdentifier,
     ) -> impl Iterator<Item = ViewIdentifier> {
         view_iter_self_group_participants(id, self.view_group_relation_store)
+    }
+
+    #[inline(always)]
+    pub fn request_open_menu(&mut self, req: MenuOpenRequest) {
+        self.menu_open_requests.push(req);
+    }
+
+    #[inline(always)]
+    pub fn request_reopen_menu(&mut self, req: MenuOpenRequest) {
+        assert!(
+            self.menu_reopen_request.is_none(),
+            "menu reopen already requested in this event"
+        );
+        *self.menu_reopen_request = Some(req);
+    }
+
+    #[inline(always)]
+    pub fn request_open_dropdown_menu(&mut self, req: DropdownMenuOpenRequest) {
+        self.dropdown_menu_open_requests.push(req);
     }
 }
 impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {

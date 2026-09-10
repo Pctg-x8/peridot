@@ -8,7 +8,7 @@ use model::{ApplicationMutation, ObjectID, ObjectRenderShape};
 use shared::{LogicalUnit, Rect, Size};
 
 use crate::{
-    Event,
+    MenuOpenRequest,
     input::{
         EventContinueControl, InputEventContext, ModifierKey,
         hittest::{
@@ -164,7 +164,7 @@ impl HitTestTreeActionHandler for ViewEntity {
         args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         if args.button == PointerButton::Secondary {
-            context.system_link.dispatch_event(Event::MenuOpen {
+            context.request_open_menu(MenuOpenRequest {
                 parent: context
                     .ht_manager
                     .query_root_window(self.ht_root)
@@ -516,7 +516,7 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
         }
 
         if args.button == PointerButton::Secondary {
-            context.system_link.dispatch_event(Event::MenuOpen {
+            context.request_open_menu(MenuOpenRequest {
                 parent: context
                     .ht_manager
                     .query_root_window(self.ht_root)
