@@ -20,8 +20,8 @@ use crate::{
     },
 };
 
-pub trait SystemLinkAccess {
-    fn system_link<'a>(&'a self) -> &'a SystemLink<'a>;
+pub trait SystemLinkAccess<'sys> {
+    fn system_link<'a>(&'a self) -> &'a SystemLink<'sys>;
 }
 
 pub struct MountContext<'a, 'h> {
@@ -31,27 +31,27 @@ pub struct MountContext<'a, 'h> {
     pub current_sec: f32,
 }
 
-pub struct MeasureContext<'env> {
-    pub system_link: &'env SystemLink<'env>,
+pub struct MeasureContext<'env, 'sys> {
+    pub system_link: &'env SystemLink<'sys>,
 }
 
-pub struct RenderContext<'env, 'h> {
+pub struct RenderContext<'env, 'h, 'sys> {
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub ht_manager: &'env mut HitTestTreeManager<'h>,
     pub keyboard_focus_registry: &'env mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
-    pub system_link: &'env SystemLink<'env>,
+    pub system_link: &'env SystemLink<'sys>,
     pub main_thread_texture_id_issuer: &'env mut MainThreadTextureIDIssuer,
     pub application: &'env model::Application,
     pub view_feedback_subscription_delayed_ops: &'env mut VecDeque<ViewFeedbackRegistryDelayedOps>,
 }
-impl model::ApplicationAccess for RenderContext<'_, '_> {
+impl model::ApplicationAccess for RenderContext<'_, '_, '_> {
     #[inline(always)]
     fn application(&self) -> &model::Application {
         self.application
     }
 }
-impl ViewFeedbackRegisterable for RenderContext<'_, '_> {
+impl ViewFeedbackRegisterable for RenderContext<'_, '_, '_> {
     #[inline(always)]
     fn subscribe_view_feedback<T: 'static>(
         &mut self,
@@ -70,7 +70,7 @@ impl ViewFeedbackRegisterable for RenderContext<'_, '_> {
             .push_back(ViewFeedbackRegistryDelayedOps::make_unsubscribe(handler));
     }
 }
-impl<'h> RenderContext<'_, 'h> {
+impl<'h> RenderContext<'_, 'h, '_> {
     pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env, 'h> {
         MountContext {
             composite_tree: self.composite_tree,
@@ -81,7 +81,7 @@ impl<'h> RenderContext<'_, 'h> {
     }
 }
 
-pub struct ViewInitContext<'a, 'h> {
+pub struct ViewInitContext<'a, 'h, 'sys> {
     pub mount_context: MountContext<'a, 'h>,
     pub view_allocator: &'a mut ViewIdentifierAllocator,
     pub view_instance_store: &'a mut ViewInstanceStore,
@@ -90,11 +90,11 @@ pub struct ViewInitContext<'a, 'h> {
     pub view_layout_state_store: &'a mut ViewLayoutStateStore,
     pub view_render_state_store: &'a mut ViewRenderStateStore,
     pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
-    pub system_link: &'a SystemLink<'a>,
+    pub system_link: &'a SystemLink<'sys>,
     pub main_thread_texture_id_issuer: &'a mut MainThreadTextureIDIssuer,
     pub application: &'a model::Application,
 }
-impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h> {
+impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h, '_> {
     type Target = MountContext<'a, 'h>;
 
     #[inline(always)]
@@ -102,13 +102,13 @@ impl<'a, 'h> core::ops::Deref for ViewInitContext<'a, 'h> {
         &self.mount_context
     }
 }
-impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h> {
+impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, 'h, '_> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.mount_context
     }
 }
-impl ViewRegisterable for ViewInitContext<'_, '_> {
+impl ViewRegisterable for ViewInitContext<'_, '_, '_> {
     fn construct_view_direct<T: View + 'static>(
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
@@ -136,7 +136,7 @@ impl ViewRegisterable for ViewInitContext<'_, '_> {
         )
     }
 }
-impl ViewRelationControllable for ViewInitContext<'_, '_> {
+impl ViewRelationControllable for ViewInitContext<'_, '_, '_> {
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         view_set_parent(id, parent, self.view_tree_relation_store)
     }
@@ -145,13 +145,13 @@ impl ViewRelationControllable for ViewInitContext<'_, '_> {
         view_detach_parent(id, self.view_tree_relation_store);
     }
 }
-impl ViewInstanceQueryable for ViewInitContext<'_, '_> {
+impl ViewInstanceQueryable for ViewInitContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         view_instance(id, self.view_instance_store)
     }
 }
-impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
+impl ViewInstanceQueryableMut for ViewInitContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         view_instance_mut(id, self.view_instance_store)
@@ -167,7 +167,7 @@ impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
         view_layout_mut(id, self.view_instance_store)
     }
 }
-impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
+impl ViewImmediateRenderable for ViewInitContext<'_, '_, '_> {
     fn render_view_with_base(
         &mut self,
         id: ViewIdentifier,
@@ -197,7 +197,7 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
         )
     }
 }
-impl ViewFeedbackRegisterable for ViewInitContext<'_, '_> {
+impl ViewFeedbackRegisterable for ViewInitContext<'_, '_, '_> {
     fn subscribe_view_feedback<T: 'static>(
         &mut self,
         handler: &Rc<impl ViewFeedbackHandler<T> + 'static>,
@@ -214,7 +214,7 @@ impl ViewFeedbackRegisterable for ViewInitContext<'_, '_> {
             .push_back(ViewFeedbackRegistryDelayedOps::make_unsubscribe(handler));
     }
 }
-impl ViewGroupRegisterable for ViewInitContext<'_, '_> {
+impl ViewGroupRegisterable for ViewInitContext<'_, '_, '_> {
     #[inline(always)]
     fn create_view_group(&mut self) -> ViewGroupID {
         alloc_view_group(self.view_allocator, self.view_group_relation_store)
@@ -225,7 +225,7 @@ impl ViewGroupRegisterable for ViewInitContext<'_, '_> {
         free_view_group(id, self.view_allocator, self.view_group_relation_store);
     }
 }
-impl ViewGroupRelationControllable for ViewInitContext<'_, '_> {
+impl ViewGroupRelationControllable for ViewInitContext<'_, '_, '_> {
     #[inline(always)]
     fn join_view_group_untyped(&mut self, id: ViewIdentifier, group: ViewGroupID) {
         join_view_group(id, group, self.view_group_relation_store);
@@ -236,7 +236,7 @@ impl ViewGroupRelationControllable for ViewInitContext<'_, '_> {
         leave_view_group(id, self.view_group_relation_store);
     }
 }
-impl<'a, 'h> ViewInitContext<'a, 'h> {
+impl<'a, 'h, 'sys> ViewInitContext<'a, 'h, 'sys> {
     #[deprecated = "use render-teardown based view lifecycle"]
     pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
         alloc_view_id_without_instance(
@@ -260,7 +260,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         }
     }
 
-    pub const fn make_render_context<'env>(&'env mut self) -> RenderContext<'env, 'h> {
+    pub const fn make_render_context<'env>(&'env mut self) -> RenderContext<'env, 'h, 'sys> {
         RenderContext {
             composite_tree: &mut self.mount_context.composite_tree,
             ht_manager: &mut self.mount_context.ht_manager,
@@ -273,7 +273,7 @@ impl<'a, 'h> ViewInitContext<'a, 'h> {
         }
     }
 
-    pub const fn derive<'a2>(&'a2 mut self) -> ViewInitContext<'a2, 'h> {
+    pub const fn derive<'a2>(&'a2 mut self) -> ViewInitContext<'a2, 'h, 'sys> {
         ViewInitContext {
             mount_context: MountContext {
                 composite_tree: &mut self.mount_context.composite_tree,

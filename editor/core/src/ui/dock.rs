@@ -497,11 +497,11 @@ pub enum UndockResult {
     ToBeEmpty,
 }
 
-pub struct RedockingContext<'a, 'h> {
-    pub view_init_ctx: ViewInitContext<'a, 'h>,
+pub struct RedockingContext<'a, 'h, 'sys> {
+    pub view_init_ctx: ViewInitContext<'a, 'h, 'sys>,
     pub view_render_queue: &'a mut ViewRenderQueue,
 }
-impl ViewRegisterable for RedockingContext<'_, '_> {
+impl ViewRegisterable for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn construct_view_direct<T: View + 'static>(
         &mut self,
@@ -515,7 +515,7 @@ impl ViewRegisterable for RedockingContext<'_, '_> {
         self.view_init_ctx.free_view_untyped(id)
     }
 }
-impl ViewRelationControllable for RedockingContext<'_, '_> {
+impl ViewRelationControllable for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         crate::uicore::view_set_parent(id, parent, self.view_init_ctx.view_tree_relation_store)
@@ -526,13 +526,13 @@ impl ViewRelationControllable for RedockingContext<'_, '_> {
         crate::uicore::view_detach_parent(id, self.view_init_ctx.view_tree_relation_store)
     }
 }
-impl ViewRenderer for RedockingContext<'_, '_> {
+impl ViewRenderer for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
     }
 }
-impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
+impl ViewImmediateTeardownable for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn teardown_view_recursive_untyped(&mut self, target: ViewIdentifier) {
         crate::uicore::teardown_view_recursive(
@@ -552,7 +552,7 @@ impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
         );
     }
 }
-impl ViewDestructionContext for RedockingContext<'_, '_> {
+impl ViewDestructionContext for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
         crate::uicore::destruct_view_recursive(
@@ -575,13 +575,13 @@ impl ViewDestructionContext for RedockingContext<'_, '_> {
         );
     }
 }
-impl ViewInstanceQueryable for RedockingContext<'_, '_> {
+impl ViewInstanceQueryable for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uicore::view_instance(id, self.view_init_ctx.view_instance_store)
     }
 }
-impl ViewInstanceQueryableMut for RedockingContext<'_, '_> {
+impl ViewInstanceQueryableMut for RedockingContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         crate::uicore::view_instance_mut(id, self.view_init_ctx.view_instance_store)
@@ -597,7 +597,7 @@ impl ViewInstanceQueryableMut for RedockingContext<'_, '_> {
         crate::uicore::view_layout_mut(id, self.view_init_ctx.view_instance_store)
     }
 }
-impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h> {
+impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h, '_> {
     fn derive_pane_content_resize_context<'env2>(
         &'env2 mut self,
     ) -> PaneContentResizeContext<'env2, 'h> {
@@ -609,7 +609,7 @@ impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h> {
         }
     }
 }
-impl<'h> DeriveTeardownContext<'h> for RedockingContext<'_, 'h> {
+impl<'h> DeriveTeardownContext<'h> for RedockingContext<'_, 'h, '_> {
     fn derive_teardown_context<'env>(&'env mut self) -> TeardownContext<'env, 'h> {
         TeardownContext {
             composite_tree: self.view_init_ctx.mount_context.composite_tree,
@@ -622,13 +622,13 @@ impl<'h> DeriveTeardownContext<'h> for RedockingContext<'_, 'h> {
         }
     }
 }
-impl SystemLinkAccess for RedockingContext<'_, '_> {
+impl<'sys> SystemLinkAccess<'sys> for RedockingContext<'_, '_, 'sys> {
     #[inline(always)]
-    fn system_link<'a>(&'a self) -> &'a SystemLink<'a> {
+    fn system_link<'a>(&'a self) -> &'a SystemLink<'sys> {
         self.view_init_ctx.system_link
     }
 }
-impl<'a, 'h> core::ops::Deref for RedockingContext<'a, 'h> {
+impl<'a, 'h> core::ops::Deref for RedockingContext<'a, 'h, '_> {
     type Target = MountContext<'a, 'h>;
 
     #[inline(always)]
@@ -636,7 +636,7 @@ impl<'a, 'h> core::ops::Deref for RedockingContext<'a, 'h> {
         &self.view_init_ctx.mount_context
     }
 }
-impl<'a, 'h> core::ops::DerefMut for RedockingContext<'a, 'h> {
+impl<'a, 'h> core::ops::DerefMut for RedockingContext<'a, 'h, '_> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.view_init_ctx.mount_context
@@ -1806,11 +1806,11 @@ fn pane_group_tab_active_gradient<E>(composite_tree: &mut CompositeTree<E>) -> G
     })
 }
 
-pub struct PaneGroupCreateContext<'env, 'a, 'h> {
-    pub view_init_context: &'env mut ViewInitContext<'a, 'h>,
+pub struct PaneGroupCreateContext<'env, 'a, 'h, 'sys> {
+    pub view_init_context: &'env mut ViewInitContext<'a, 'h, 'sys>,
     pub view_render_queue: &'env mut ViewRenderQueue,
 }
-impl ViewRegisterable for PaneGroupCreateContext<'_, '_, '_> {
+impl ViewRegisterable for PaneGroupCreateContext<'_, '_, '_, '_> {
     #[inline(always)]
     fn construct_view_direct<T: View + 'static>(
         &mut self,
@@ -1824,7 +1824,7 @@ impl ViewRegisterable for PaneGroupCreateContext<'_, '_, '_> {
         self.view_init_context.free_view_untyped(id)
     }
 }
-impl ViewRelationControllable for PaneGroupCreateContext<'_, '_, '_> {
+impl ViewRelationControllable for PaneGroupCreateContext<'_, '_, '_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
         crate::uicore::view_set_parent(id, parent, self.view_init_context.view_tree_relation_store);
@@ -1835,19 +1835,19 @@ impl ViewRelationControllable for PaneGroupCreateContext<'_, '_, '_> {
         crate::uicore::view_detach_parent(id, self.view_init_context.view_tree_relation_store);
     }
 }
-impl ViewRenderer for PaneGroupCreateContext<'_, '_, '_> {
+impl ViewRenderer for PaneGroupCreateContext<'_, '_, '_, '_> {
     #[inline(always)]
     fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
     }
 }
-impl ViewInstanceQueryable for PaneGroupCreateContext<'_, '_, '_> {
+impl ViewInstanceQueryable for PaneGroupCreateContext<'_, '_, '_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         self.view_init_context.view_instance_of(id)
     }
 }
-impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_> {
+impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         self.view_init_context.view_instance_mut_of(id)
@@ -1863,7 +1863,7 @@ impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_> {
         crate::uicore::view_layout_mut(id, self.view_init_context.view_instance_store)
     }
 }
-impl<'a, 'h> core::ops::Deref for PaneGroupCreateContext<'_, 'a, 'h> {
+impl<'a, 'h> core::ops::Deref for PaneGroupCreateContext<'_, 'a, 'h, '_> {
     type Target = MountContext<'a, 'h>;
 
     #[inline(always)]
@@ -1871,15 +1871,15 @@ impl<'a, 'h> core::ops::Deref for PaneGroupCreateContext<'_, 'a, 'h> {
         &self.view_init_context.mount_context
     }
 }
-impl<'a, 'h> core::ops::DerefMut for PaneGroupCreateContext<'_, 'a, 'h> {
+impl<'a, 'h> core::ops::DerefMut for PaneGroupCreateContext<'_, 'a, 'h, '_> {
     #[inline(always)]
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.view_init_context.mount_context
     }
 }
-impl SystemLinkAccess for PaneGroupCreateContext<'_, '_, '_> {
+impl<'sys> SystemLinkAccess<'sys> for PaneGroupCreateContext<'_, '_, '_, 'sys> {
     #[inline(always)]
-    fn system_link<'a>(&'a self) -> &'a SystemLink<'a> {
+    fn system_link<'a>(&'a self) -> &'a SystemLink<'sys> {
         self.view_init_context.system_link
     }
 }
@@ -2240,7 +2240,7 @@ impl PaneGroupViewController {
     }
 
     /// コンテンツを追加する
-    fn add_content<'a, 'h: 'a>(
+    fn add_content<'a, 'h: 'a, 'sys>(
         &mut self,
         dock_root_view: TypedViewIdentifier<WindowDockRootView>,
         content: Box<dyn PaneContentPresenter>,
@@ -2249,7 +2249,7 @@ impl PaneGroupViewController {
                  impl ViewRegisterable
                  + ViewRenderer
                  + ViewInstanceQueryableMut
-                 + SystemLinkAccess
+                 + SystemLinkAccess<'sys>
                  + ViewRelationControllable
                  + ?Sized
              ),
@@ -2283,7 +2283,7 @@ impl PaneGroupViewController {
     }
 
     /// コンテンツを挿入する
-    fn insert_content<'a, 'h: 'a>(
+    fn insert_content<'a, 'h: 'a, 'sys>(
         &mut self,
         dock_root_view: TypedViewIdentifier<WindowDockRootView>,
         content: Box<dyn PaneContentPresenter>,
@@ -2293,7 +2293,7 @@ impl PaneGroupViewController {
                  impl ViewRegisterable
                  + ViewRenderer
                  + ViewInstanceQueryableMut
-                 + SystemLinkAccess
+                 + SystemLinkAccess<'sys>
                  + ViewRelationControllable
                  + ?Sized
              ),

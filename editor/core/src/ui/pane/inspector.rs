@@ -625,10 +625,10 @@ impl EventHandler {
     }
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &ViewFeedbackPerformAtomic,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         let object_selection_changed = self.object_selection_changed.replace(false);
 
@@ -689,19 +689,19 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for EventHandler {
     }
 }
 impl ViewFeedbackHandler<model::ViewFeedbackObjectSelectionChanged> for EventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::ViewFeedbackObjectSelectionChanged,
-        _context: &mut ViewFeedbackContext<'a, 'h>,
+        _context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         self.object_selection_changed.set(true);
     }
 }
 impl ViewFeedbackHandler<model::ViewFeedbackObjectNameChanged> for EventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::ViewFeedbackObjectNameChanged,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         if !self.object_name_editing.replace(false) {
             // 自分以外からの変更通知
@@ -714,10 +714,10 @@ impl ViewFeedbackHandler<model::ViewFeedbackObjectNameChanged> for EventHandler 
     }
 }
 impl ViewFeedbackHandler<model::ViewFeedbackObjectDataChanged> for EventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::ViewFeedbackObjectDataChanged,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         self.revalidate_all(true, context);
     }

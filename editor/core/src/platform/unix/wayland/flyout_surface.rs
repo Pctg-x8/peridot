@@ -1,4 +1,4 @@
-use core::ptr::NonNull;
+use core::{pin::Pin, ptr::NonNull};
 use std::sync::{Mutex, atomic::AtomicBool};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
@@ -6,7 +6,7 @@ use peridot_tp_wayland as wl;
 use shared::{LogicalUnit, PixelsUnit, Point, Size};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SystemLink,
+    CoreLoop, Event, SystemLink,
     graphics::VulkanSurface,
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -16,9 +16,7 @@ use crate::{
     platform::unix::wayland::{SurfaceScaling, SurfaceState, SurfaceStateTag},
     rendering::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
-        composite::{
-            AnimatableColor, CompositeMode, CompositeRect, CompositeTree, CompositeTreeRef,
-        },
+        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     uicore::MountTarget,
     uikit::MenuItemSubMenuView,
@@ -32,7 +30,7 @@ unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}
 impl Handle {
     #[inline(always)]
-    fn data(&self) -> &InstanceData {
+    fn data<'a, 'sys>(&'a self) -> &'a InstanceData<'sys> {
         &unsafe {
             &*self
                 .0
@@ -44,7 +42,7 @@ impl Handle {
     }
 
     #[inline(always)]
-    fn data_mut(&mut self) -> &mut InstanceData {
+    fn data_mut<'a, 'sys>(&'a mut self) -> &'a mut InstanceData<'sys> {
         &mut unsafe {
             &mut *self
                 .0
@@ -193,7 +191,7 @@ struct CommittedState {
     pub buffer_scale: f32,
 }
 
-struct InstanceData {
+struct InstanceData<'sys> {
     surface_ptr: *mut wl::Surface,
     scaling: SurfaceScaling,
     xdg_surface: wl::Owned<wl::XdgSurface>,
@@ -209,13 +207,13 @@ struct InstanceData {
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
-    event_dispatcher: LogicFiberEventDispatcher,
+    coreloop: *mut CoreLoop<'static, 'sys>,
     _pinned: core::marker::PhantomPinned,
 }
 
 #[repr(transparent)]
-struct EventHandler(SurfaceState<InstanceData>);
-impl wl::SurfaceEventListener for EventHandler {
+struct EventHandler<'sys>(SurfaceState<InstanceData<'sys>>);
+impl wl::SurfaceEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, _output))]
     fn enter(
         &mut self,
@@ -258,7 +256,7 @@ impl wl::SurfaceEventListener for EventHandler {
         super::event_trace!();
     }
 }
-impl wl::XdgSurfaceEventListener for EventHandler {
+impl wl::XdgSurfaceEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "xdg_surface::configure", skip(self, sender))]
     fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
         super::event_trace!();
@@ -324,12 +322,13 @@ impl wl::XdgSurfaceEventListener for EventHandler {
             .commit()
             .expect("surface.commit");
         for e in delayed_event_queue {
-            self.0.data.event_dispatcher.dispatch(e);
+            unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.on_event(e);
         }
+        unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.update_view_all();
         sender.ack_configure(serial).expect("ack_configure");
     }
 }
-impl wl::XdgPopupEventListener for EventHandler {
+impl wl::XdgPopupEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
     fn configure(
         &mut self,
@@ -352,7 +351,7 @@ impl wl::XdgPopupEventListener for EventHandler {
         super::event_trace!();
     }
 }
-impl wl::WpFractionalScaleV1EventListener for EventHandler {
+impl wl::WpFractionalScaleV1EventListener for EventHandler<'_> {
     #[tracing::instrument(name = "wp_fractional_scale_v1::repositioned", skip(self, _sender))]
     fn preferred_scale(
         &mut self,
@@ -383,35 +382,32 @@ impl SharedState {
     }
 }
 
-pub fn new_surface<E>(
+pub fn new_surface<'sys>(
     parent: super::toplevel::Handle,
     pos: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
-    syslink: &SystemLink,
-    composite_tree: &mut CompositeTree<E>,
-    ht_manager: &mut HitTestTreeManager,
-    keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    delayed_render_messages: &mut Vec<RenderMessage>,
+    coreloop: Pin<&mut CoreLoop<'static, 'sys>>,
     ref_scale_factor: f32,
 ) -> Handle {
-    let mut surface = unsafe { &*syslink.display_server.context }
+    let cl = unsafe { coreloop.get_unchecked_mut() };
+    let mut surface = unsafe { &*cl.syslink.display_server.context }
         .global_interfaces
         .compositor
         .create_surface()
         .expect("compositor.create_surface");
-    let xdg_surface = unsafe { &*syslink.display_server.context }
+    let xdg_surface = unsafe { &*cl.syslink.display_server.context }
         .global_interfaces
         .xdg_wm_base
         .get_xdg_surface(&surface)
         .expect("xdg_wm_base.get_xdg_surface");
-    let scaling = if let Some(ref fs) = unsafe { &*syslink.display_server.context }
+    let scaling = if let Some(ref fs) = unsafe { &*cl.syslink.display_server.context }
         .global_interfaces
         .fractional_scale_manager
     {
         let f = fs
             .get_fractional_scale(&surface)
             .expect("fractional_scale.create");
-        let vp = unsafe { &*syslink.display_server.context }
+        let vp = unsafe { &*cl.syslink.display_server.context }
             .global_interfaces
             .viewporter
             .get_viewport(&surface)
@@ -424,7 +420,7 @@ pub fn new_surface<E>(
     } else {
         SurfaceScaling::Automatic
     };
-    let blur = if let Some(ref bm) = unsafe { &*syslink.display_server.context }
+    let blur = if let Some(ref bm) = unsafe { &*cl.syslink.display_server.context }
         .global_interfaces
         .kde_blur_manager
     {
@@ -436,7 +432,7 @@ pub fn new_surface<E>(
         None
     };
 
-    let p = unsafe { &*syslink.display_server.context }
+    let p = unsafe { &*cl.syslink.display_server.context }
         .global_interfaces
         .xdg_wm_base
         .create_positioner()
@@ -452,18 +448,16 @@ pub fn new_surface<E>(
         .get_popup(Some(&parent.xdg_surface()), &p)
         .expect("xdg_surface.get_popup");
 
-    let ct_root = composite_tree.create(CompositeRect {
-        relative_size_adjustment: [1.0, 1.0],
-        has_bitmap: true,
-        composite_mode: CompositeMode::FillColor(AnimatableColor::Value([0.0, 0.0, 0.0, 0.375])),
-        ..Default::default()
-    });
-    let ht_root = ht_manager.create(HitTestTreeData {
+    let ct_root = CompositeRect::build()
+        .expand_full()
+        .composite_fill_color_imm([0.0, 0.0, 0.0, 0.375])
+        .create(&mut cl.composite_tree);
+    let ht_root = cl.ht_manager.create(HitTestTreeData {
         width_adjustment_factor: 1.0,
         height_adjustment_factor: 1.0,
         ..Default::default()
     });
-    let kf_root_group = keyboard_focus_registry.acquire_group();
+    let kf_root_group = cl.keyboard_focus_registry.acquire_group();
     let mut eh = Box::new(EventHandler(SurfaceState {
         tag: SurfaceStateTag::FlyoutSurface,
         data: InstanceData {
@@ -486,7 +480,7 @@ pub fn new_surface<E>(
             latest_ui_scale_changes: Mutex::new(Some(ref_scale_factor)),
             pending_configure_buffer_scale: Some(ref_scale_factor),
             pending_configure_size: (None, None),
-            event_dispatcher: unsafe { &*syslink.event_dispatcher }.clone(),
+            coreloop: cl,
             _pinned: core::marker::PhantomPinned,
         },
     }));
@@ -518,18 +512,19 @@ pub fn new_surface<E>(
 
     let vk_surface = unsafe {
         br::WaylandSurfaceCreateInfo::new(
-            (*syslink.display_server.context).dp.as_raw().cast(),
+            (*cl.syslink.display_server.context).dp.as_raw().cast(),
             surface.as_ptr().cast(),
         )
-        .execute((&*syslink.gfx).instance(), None)
+        .execute((&*cl.syslink.gfx).instance(), None)
         .expect("vk_surface.create")
     };
-    let vk_surface = VulkanSurface::new(unsafe { &*syslink.gfx }, vk_surface);
-    delayed_render_messages.push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
-        w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
-        vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-        composite_root: ct_root,
-    }));
+    let vk_surface = VulkanSurface::new(unsafe { &*cl.syslink.gfx }, vk_surface);
+    cl.delayed_render_messages
+        .push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
+            w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            composite_root: ct_root,
+        }));
 
     surface.commit().expect("surface.commit");
     Handle(surface.unwrap())

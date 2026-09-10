@@ -1,4 +1,4 @@
-use core::ptr::NonNull;
+use core::{pin::Pin, ptr::NonNull};
 use std::{
     collections::HashSet,
     os::fd::{AsRawFd, RawFd},
@@ -7,17 +7,16 @@ use std::{
 use linux_input::Key;
 use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
-use shared::{LogicalUnit, Point, Rect, rup2};
+use shared::{LogicalUnit, Point, Rect, Size, rup2};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent,
-    WindowGeometryState, WindowType,
+    CoreLoop, MainWindowOpenMode, SubWindowOpenMode, WindowGeometryState, WindowType,
     graphics::Graphics,
     input::{
-        KeyInputCode, KeyboardFocusTokenRegistry, ModifierKey, PointerInputManager,
-        hittest::{CursorShape, DragDropFlags, HitTestTreeManager, PointerButton},
+        KeyInputCode, ModifierKey,
+        hittest::{CursorShape, DragDropFlags, PointerButton},
     },
-    rendering::{RenderMessage, composite::CompositeTree},
+    rendering::RenderMessage,
     uicore::MountTarget,
     utils::platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
 };
@@ -137,10 +136,147 @@ impl DisplayServerContext {
     }
 }
 
-pub struct DisplayServerLink {
+pub struct DisplayServerLink<'sys> {
     pub context: *mut DisplayServerContext,
     pub static_pixbufs: *const StaticPixbufs,
-    pub global_messaging_ptr: *mut GlobalMessaging,
+    pub global_messaging_ptr: *mut GlobalMessaging<'sys>,
+}
+
+pub fn create_main_window<'sys, 'cl>(
+    mode: MainWindowOpenMode,
+    coreloop: Pin<&'cl mut CoreLoop<'static, 'sys>>,
+) -> toplevel::Handle {
+    let (target_output, pos, size, initial_maximize);
+    match mode {
+        MainWindowOpenMode::New => {
+            target_output = None;
+            pos = None;
+            size = None;
+            initial_maximize = false;
+        }
+        MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+            target_output = None;
+            pos = Some(rect.left_top());
+            size = Some(rect.size());
+            initial_maximize = false;
+        }
+        MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+            let target_monitor = &unsafe { &*coreloop.syslink.display_server.context }
+                .global_interfaces
+                .outputs
+                .get(monitor_index)
+                .unwrap_or(
+                    &unsafe { &*coreloop.syslink.display_server.context }
+                        .global_interfaces
+                        .outputs[0],
+                );
+
+            target_output = Some::<&wl::Output>(&target_monitor.0);
+            pos = Some(Point::new_logical(
+                target_monitor.1.x as _,
+                target_monitor.1.y as _,
+            ));
+            size = None;
+            initial_maximize = true;
+        }
+    }
+
+    toplevel::NativeWindow::new(
+        WindowType::Main {
+            #[cfg(target_os = "linux")]
+            termination_event: coreloop.syslink.terminate_event.clone(),
+        },
+        target_output,
+        pos,
+        size,
+        initial_maximize,
+        unsafe { &*coreloop.syslink.display_server.context },
+        unsafe { &*coreloop.syslink.dbus },
+        coreloop,
+    )
+    .into_handle()
+}
+
+pub fn open_sub_window<'sys, 'cl>(
+    mode: SubWindowOpenMode,
+    mut coreloop: Pin<&'cl mut CoreLoop<'static, 'sys>>,
+    setup_contents: impl FnOnce(toplevel::Handle, core::pin::Pin<&'cl mut CoreLoop<'static, 'sys>>),
+) -> toplevel::Handle {
+    let (target_output, pos, size, initial_maximize);
+    match mode {
+        SubWindowOpenMode::DockDiverge { rect, .. } => {
+            target_output = None;
+            pos = Some(rect.left_top());
+            size = Some(rect.size());
+            initial_maximize = false;
+        }
+        SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+            target_output = None;
+            pos = Some(rect.left_top());
+            size = Some(rect.size());
+            initial_maximize = false;
+        }
+        SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+            let target = &unsafe { &*coreloop.syslink.display_server.context }
+                .global_interfaces
+                .outputs
+                .get(monitor_index)
+                .unwrap_or(
+                    &unsafe { &*coreloop.syslink.display_server.context }
+                        .global_interfaces
+                        .outputs[0],
+                );
+
+            target_output = Some::<&wl::Output>(&target.0);
+            pos = Some(Point::new_logical(target.1.x as _, target.1.y as _));
+            size = None;
+            initial_maximize = true;
+        }
+    }
+
+    let w = toplevel::NativeWindow::new(
+        WindowType::Sub,
+        target_output,
+        pos,
+        size,
+        initial_maximize,
+        unsafe { &*coreloop.syslink.display_server.context },
+        unsafe { &*coreloop.syslink.dbus },
+        coreloop.as_mut(),
+    );
+
+    setup_contents(w.make_handle(), coreloop);
+    w.commit();
+    w.into_handle()
+}
+
+pub fn close_sub_window(window_handle: toplevel::Handle) {
+    let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+    window_handle
+        .event_listener()
+        .coreloop()
+        .syslink
+        .rt_sender
+        .send(RenderMessage::DestroyWindow(
+            window_handle,
+            done_event_sender,
+        ))
+        .expect("rt_sender.send.destroy_window");
+    done_event_receiver
+        .recv()
+        .expect("done_event_receiver.recv");
+
+    toplevel::NativeWindow::from_handle(window_handle).terminate();
+}
+
+#[inline(always)]
+pub fn create_flyout_surface<'sys>(
+    parent: toplevel::Handle,
+    pos: Point<LogicalUnit>,
+    size: Size<LogicalUnit>,
+    coreloop: Pin<&mut CoreLoop<'static, 'sys>>,
+) -> flyout_surface::Handle {
+    flyout_surface::new_surface(parent, pos, size, coreloop, parent.ui_scale_factor())
 }
 
 impl crate::SystemLink<'_> {
@@ -156,175 +292,6 @@ impl crate::SystemLink<'_> {
             .global_interfaces
             .kde_appmenu_manager
             .is_none()
-    }
-
-    pub fn create_main_window(
-        &self,
-        mode: MainWindowOpenMode,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-    ) -> toplevel::Handle {
-        let (target_output, pos, size, initial_maximize);
-        match mode {
-            MainWindowOpenMode::New => {
-                target_output = None;
-                pos = None;
-                size = None;
-                initial_maximize = false;
-            }
-            MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
-                target_output = None;
-                pos = Some(rect.left_top());
-                size = Some(rect.size());
-                initial_maximize = false;
-            }
-            MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-                let target_monitor = &unsafe { &*self.display_server.context }
-                    .global_interfaces
-                    .outputs
-                    .get(monitor_index)
-                    .unwrap_or(
-                        &unsafe { &*self.display_server.context }
-                            .global_interfaces
-                            .outputs[0],
-                    );
-
-                target_output = Some::<&wl::Output>(&target_monitor.0);
-                pos = Some(Point::new_logical(
-                    target_monitor.1.x as _,
-                    target_monitor.1.y as _,
-                ));
-                size = None;
-                initial_maximize = true;
-            }
-        }
-
-        toplevel::NativeWindow::new(
-            WindowType::Main {
-                #[cfg(target_os = "linux")]
-                termination_event: self.terminate_event.clone(),
-            },
-            target_output,
-            pos,
-            size,
-            initial_maximize,
-            unsafe { &*self.display_server.context },
-            unsafe { &*self.dbus },
-            unsafe { &*self.event_dispatcher }.clone(),
-            composite_tree,
-            ht_manager,
-            keyboard_focus_registry,
-            unsafe { &*self.display_server.static_pixbufs }
-                .window_decoration
-                .as_ref(),
-            unsafe { &*self.gfx },
-            delayed_render_messages,
-        )
-        .into_handle()
-    }
-
-    pub fn open_window<'h>(
-        &self,
-        mode: SubWindowOpenMode,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        hit_tree: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-        setup_contents: impl FnOnce(
-            toplevel::Handle,
-            &mut CompositeTree<SyncEvent>,
-            &mut HitTestTreeManager,
-            &mut KeyboardFocusTokenRegistry,
-            &Self,
-        ),
-    ) -> toplevel::Handle {
-        let (target_output, pos, size, initial_maximize);
-        match mode {
-            SubWindowOpenMode::DockDiverge { rect, .. } => {
-                target_output = None;
-                pos = Some(rect.left_top());
-                size = Some(rect.size());
-                initial_maximize = false;
-            }
-            SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
-                target_output = None;
-                pos = Some(rect.left_top());
-                size = Some(rect.size());
-                initial_maximize = false;
-            }
-            SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-                let target = &unsafe { &*self.display_server.context }
-                    .global_interfaces
-                    .outputs
-                    .get(monitor_index)
-                    .unwrap_or(
-                        &unsafe { &*self.display_server.context }
-                            .global_interfaces
-                            .outputs[0],
-                    );
-
-                target_output = Some::<&wl::Output>(&target.0);
-                pos = Some(Point::new_logical(target.1.x as _, target.1.y as _));
-                size = None;
-                initial_maximize = true;
-            }
-        }
-
-        let w = toplevel::NativeWindow::new(
-            WindowType::Sub,
-            target_output,
-            pos,
-            size,
-            initial_maximize,
-            unsafe { &*self.display_server.context },
-            unsafe { &*self.dbus },
-            unsafe { &*self.event_dispatcher }.clone(),
-            composite_tree,
-            hit_tree,
-            keyboard_focus_registry,
-            unsafe { &*self.display_server.static_pixbufs }
-                .window_decoration
-                .as_ref(),
-            unsafe { &*self.gfx },
-            delayed_render_messages,
-        );
-
-        setup_contents(
-            w.make_handle(),
-            composite_tree,
-            hit_tree,
-            keyboard_focus_registry,
-            self,
-        );
-        w.commit();
-        w.into_handle()
-    }
-
-    pub fn close_window(
-        &self,
-        window_handle: toplevel::Handle,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
-        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-        self.rt_sender
-            .send(RenderMessage::DestroyWindow(
-                window_handle,
-                done_event_sender,
-            ))
-            .expect("rt_sender.send.destroy_window");
-        done_event_receiver
-            .recv()
-            .expect("done_event_receiver.recv");
-
-        toplevel::NativeWindow::from_handle(window_handle).terminate(
-            composite_tree,
-            ht_manager,
-            keyboard_focus_registry,
-        );
     }
 
     pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
@@ -735,7 +702,7 @@ struct PointerLockState {
 }
 
 pub struct PointerState {
-    _wl_object: wl::Owned<wl::Pointer>,
+    wl_object: wl::Owned<wl::Pointer>,
     seat_ptr: *mut wl::Seat,
     cursor: Option<wl::Owned<wl::WpCursorShapeDeviceV1>>,
     pos: Point<LogicalUnit>,
@@ -874,7 +841,8 @@ struct DataDeviceState {
     active_offer: Option<DataDeviceActiveOfferState>,
 }
 
-pub struct GlobalMessaging {
+pub struct GlobalMessaging<'sys> {
+    coreloop: *mut CoreLoop<'static, 'sys>,
     dp: *mut wl::Display,
     global_interfaces: *const GlobalInterfaces,
     text_input_manager: NonNull<wl::ZwpTextInputManagerV3>,
@@ -886,17 +854,12 @@ pub struct GlobalMessaging {
     cursor_shape_manager: Option<NonNull<wl::WpCursorShapeManagerV1>>,
     pointer_constraints: Option<NonNull<wl::ZwpPointerConstraintsV1>>,
     relative_pointer_manager: Option<NonNull<wl::ZwpRelativePointerManagerV1>>,
-    event_dispatcher: LogicFiberEventDispatcher,
     ime_pending_state: IMEPendingState,
     drag_preview_popover: drag_preview::Controller,
     _pinned: core::marker::PhantomPinned,
 }
-impl GlobalMessaging {
-    pub fn new(
-        ctx: &mut DisplayServerContext,
-        static_pixbufs: &StaticPixbufs,
-        event_dispatcher: LogicFiberEventDispatcher,
-    ) -> Self {
+impl<'sys> GlobalMessaging<'sys> {
+    pub fn new(ctx: &mut DisplayServerContext, static_pixbufs: &StaticPixbufs) -> Self {
         Self {
             dp: &mut ctx.dp,
             global_interfaces: &ctx.global_interfaces,
@@ -922,7 +885,7 @@ impl GlobalMessaging {
                 .relative_pointer_manager
                 .as_ref()
                 .map(|x| unsafe { x.copy_ptr() }),
-            event_dispatcher,
+            coreloop: core::ptr::null_mut(),
             ime_pending_state: IMEPendingState {
                 committed_text: None,
                 preedit_text: None,
@@ -932,20 +895,17 @@ impl GlobalMessaging {
         }
     }
 
-    pub fn reset_event_dispatcher(
-        self: core::pin::Pin<&mut Self>,
-        event_dispatcher: LogicFiberEventDispatcher,
-    ) {
+    pub fn bind_coreloop(self: Pin<&mut Self>, cl: Pin<&mut CoreLoop<'static, 'sys>>) {
         unsafe {
-            self.get_unchecked_mut().event_dispatcher = event_dispatcher;
+            self.get_unchecked_mut().coreloop = cl.get_unchecked_mut();
         }
     }
 
-    pub fn offer_accepting_drop(
-        &mut self,
-        pointer_input_manager: &PointerInputManager,
-        ht_manager: &mut HitTestTreeManager,
-    ) {
+    const fn coreloop(&self) -> Pin<&mut CoreLoop<'static, 'sys>> {
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+    }
+
+    fn offer_accepting_drop(&mut self) {
         let Some(active_offer) = self
             .data_device
             .as_mut()
@@ -959,12 +919,13 @@ impl GlobalMessaging {
             return;
         };
 
-        let result = pointer_input_manager.offer_accepting_drop(
+        let cl = unsafe { &mut *self.coreloop };
+        let result = cl.pointer_input_manager.offer_accepting_drop(
             &active_offer.object,
             active_offer.client_pos,
             toplevel::Handle(entering_surface).ht_root(),
             toplevel::Handle(entering_surface).client_size(),
-            ht_manager,
+            &cl.ht_manager,
         );
         if !result.is_empty() {
             let mut actions = wl::DataDeviceManagerDndAction::empty();
@@ -996,13 +957,13 @@ impl GlobalMessaging {
         active_offer.accept_serial += 1;
     }
 }
-impl wl::XdgWmBaseEventListener for GlobalMessaging {
+impl wl::XdgWmBaseEventListener for GlobalMessaging<'_> {
     #[inline(always)]
     fn ping(&mut self, sender: &mut peridot_tp_wayland::XdgWmBase, serial: u32) {
         sender.pong(serial).expect("xdg_wm_base pong");
     }
 }
-impl wl::SeatEventListener for GlobalMessaging {
+impl wl::SeatEventListener for GlobalMessaging<'_> {
     #[tracing::instrument(skip(self, seat))]
     fn capabilities(&mut self, seat: &mut wl::Seat, capabilities: wl::SeatCapability) {
         event_trace!();
@@ -1036,7 +997,7 @@ impl wl::SeatEventListener for GlobalMessaging {
             };
 
             self.pointer = Some(PointerState {
-                _wl_object: p,
+                wl_object: p,
                 seat_ptr: seat as *mut _,
                 cursor: c,
                 pos: Point::new_logical(0.0, 0.0),
@@ -1081,7 +1042,7 @@ impl wl::SeatEventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::PointerEventListener for GlobalMessaging {
+impl wl::PointerEventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "pointer::enter", skip(self, pointer, surface), fields(surface_x = surface_x.to_f32(), surface_y = surface_y.to_f32()))]
     fn enter(
         &mut self,
@@ -1126,26 +1087,26 @@ impl wl::PointerEventListener for GlobalMessaging {
                 }
             }
             SurfaceStateTag::ToplevelWindow => {
-                self.event_dispatcher.dispatch(Event::PointerMove {
-                    pointer_id: PointerID(pointer),
-                    window: toplevel::Handle::from_mut(surface),
-                    client_pos: state.pos,
-                    key_modifier: self
-                        .keyboard
+                let pos = state.pos;
+                self.coreloop().handle_pointer_move(
+                    toplevel::Handle::from_mut(surface),
+                    PointerID(pointer),
+                    pos,
+                    self.keyboard
                         .as_ref()
-                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                });
+                        .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                );
             }
             SurfaceStateTag::FlyoutSurface => {
-                self.event_dispatcher.dispatch(Event::MenuPointerMove {
-                    pointer_id: PointerID(pointer),
-                    target: flyout_surface::Handle(NonNull::from_mut(surface)),
-                    client_pos: state.pos,
-                    key_modifier: self
-                        .keyboard
+                let pos = state.pos;
+                self.coreloop().handle_menu_pointer_move(
+                    flyout_surface::Handle(NonNull::from_mut(surface)),
+                    PointerID(pointer),
+                    pos,
+                    self.keyboard
                         .as_ref()
-                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                });
+                        .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                );
             }
         }
     }
@@ -1162,16 +1123,12 @@ impl wl::PointerEventListener for GlobalMessaging {
                 let surface_state = unsafe { &*surface_state_ptr };
                 match surface_state.tag {
                     SurfaceStateTag::ToplevelWindow => {
-                        self.event_dispatcher.dispatch(Event::PointerLeaveWindow {
-                            pointer_id: PointerID(pointer),
-                            window: toplevel::Handle::from_mut(surface),
-                        });
+                        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+                            .handle_pointer_leave_window(PointerID(pointer));
                     }
                     SurfaceStateTag::FlyoutSurface => {
-                        self.event_dispatcher.dispatch(Event::MenuPointerLeave {
-                            pointer_id: PointerID(pointer),
-                            target: flyout_surface::Handle(NonNull::from_mut(surface)),
-                        });
+                        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+                            .dispatch_menu_pointer_leave(PointerID(pointer));
                     }
                     _ => (),
                 }
@@ -1211,26 +1168,24 @@ impl wl::PointerEventListener for GlobalMessaging {
         match surface_state.tag {
             SurfaceStateTag::ResizeEdge => {}
             SurfaceStateTag::ToplevelWindow => {
-                self.event_dispatcher.dispatch(Event::PointerMove {
-                    pointer_id: PointerID(pointer),
-                    window: toplevel::Handle(enter_state.surface),
-                    client_pos: state.pos,
-                    key_modifier: self
-                        .keyboard
+                unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_pointer_move(
+                    toplevel::Handle(enter_state.surface),
+                    PointerID(pointer),
+                    state.pos,
+                    self.keyboard
                         .as_ref()
-                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                });
+                        .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                );
             }
             SurfaceStateTag::FlyoutSurface => {
-                self.event_dispatcher.dispatch(Event::MenuPointerMove {
-                    pointer_id: PointerID(pointer),
-                    target: flyout_surface::Handle(enter_state.surface),
-                    client_pos: state.pos,
-                    key_modifier: self
-                        .keyboard
+                unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_menu_pointer_move(
+                    flyout_surface::Handle(enter_state.surface),
+                    PointerID(pointer),
+                    state.pos,
+                    self.keyboard
                         .as_ref()
-                        .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                });
+                        .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                );
             }
         }
     }
@@ -1272,34 +1227,32 @@ impl wl::PointerEventListener for GlobalMessaging {
                         .perform_resize(unsafe { &*pointer_state.seat_ptr }, serial);
                 }
                 SurfaceStateTag::ToplevelWindow => {
-                    self.event_dispatcher.dispatch(Event::PointerDown {
-                        window: toplevel::Handle(enter_state.surface),
-                        pointer_id: PointerID(pointer),
-                        button: if button == linux_input::Key::MouseLeft as u32 {
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_pointer_down(
+                        toplevel::Handle(enter_state.surface),
+                        PointerID(pointer),
+                        if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
                         } else {
                             PointerButton::Secondary
                         },
-                        key_modifier: self
-                            .keyboard
+                        self.keyboard
                             .as_ref()
-                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                    });
+                            .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                    );
                 }
                 SurfaceStateTag::FlyoutSurface => {
-                    self.event_dispatcher.dispatch(Event::MenuPointerDown {
-                        pointer_id: PointerID(pointer),
-                        target: flyout_surface::Handle(enter_state.surface),
-                        button: if button == linux_input::Key::MouseLeft as u32 {
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_menu_pointer_down(
+                        flyout_surface::Handle(enter_state.surface),
+                        PointerID(pointer),
+                        if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
                         } else {
                             PointerButton::Secondary
                         },
-                        key_modifier: self
-                            .keyboard
+                        self.keyboard
                             .as_ref()
-                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                    });
+                            .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                    );
                 }
             }
         } else if state == wl::PointerButtonState::Released {
@@ -1314,34 +1267,32 @@ impl wl::PointerEventListener for GlobalMessaging {
             match surface_state.tag {
                 SurfaceStateTag::ResizeEdge => (/* no pointer up event for resize edge */),
                 SurfaceStateTag::ToplevelWindow => {
-                    self.event_dispatcher.dispatch(Event::PointerUp {
-                        window: toplevel::Handle(enter_state.surface),
-                        pointer_id: PointerID(pointer),
-                        button: if button == linux_input::Key::MouseLeft as u32 {
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_pointer_up(
+                        toplevel::Handle(enter_state.surface),
+                        PointerID(pointer),
+                        if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
                         } else {
                             PointerButton::Secondary
                         },
-                        key_modifier: self
-                            .keyboard
+                        self.keyboard
                             .as_ref()
-                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                    });
+                            .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                    );
                 }
                 SurfaceStateTag::FlyoutSurface => {
-                    self.event_dispatcher.dispatch(Event::MenuPointerUp {
-                        target: flyout_surface::Handle(enter_state.surface),
-                        pointer_id: PointerID(pointer),
-                        button: if button == linux_input::Key::MouseLeft as u32 {
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_menu_pointer_up(
+                        flyout_surface::Handle(enter_state.surface),
+                        PointerID(pointer),
+                        if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
                         } else {
                             PointerButton::Secondary
                         },
-                        key_modifier: self
-                            .keyboard
+                        self.keyboard
                             .as_ref()
-                            .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-                    });
+                            .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+                    );
                 }
             }
         }
@@ -1355,6 +1306,9 @@ impl wl::PointerEventListener for GlobalMessaging {
     #[tracing::instrument(name = "pointer::frame", skip(self, _pointer))]
     fn frame(&mut self, _pointer: &mut wl::Pointer) {
         event_trace!();
+
+        // done all contiguous pointer events
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(name = "pointer::axis_source", skip(self, _pointer))]
@@ -1377,14 +1331,13 @@ impl wl::PointerEventListener for GlobalMessaging {
         event_trace!();
 
         // TODO: 必要なら他のaxisイベントシーケンスも処理する
-        self.event_dispatcher.dispatch(Event::ScrollWheel {
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_scroll_wheel(
             // 逆でくる
-            amount: -value120 as f32 / 120.0,
-            key_modifier: self
-                .keyboard
+            -value120 as f32 / 120.0,
+            self.keyboard
                 .as_ref()
-                .map_or_else(ModifierKey::empty, |x| x.build_modifier()),
-        });
+                .map_or_else(ModifierKey::empty, KeyboardState::build_modifier),
+        );
     }
 
     #[tracing::instrument(name = "pointer::axis_relative_direction", skip(self, _pointer))]
@@ -1392,7 +1345,7 @@ impl wl::PointerEventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::ZwpLockedPointerV1EventListener for GlobalMessaging {
+impl wl::ZwpLockedPointerV1EventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "locked_pointer::locked", skip(self, _sender))]
     fn locked(&mut self, _sender: &mut wl::ZwpLockedPointerV1) {
         event_trace!();
@@ -1403,7 +1356,7 @@ impl wl::ZwpLockedPointerV1EventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::ZwpRelativePointerV1EventListener for GlobalMessaging {
+impl wl::ZwpRelativePointerV1EventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "pointer::relative_motion", skip(self, _sender))]
     fn relative_motion(
         &mut self,
@@ -1418,18 +1371,18 @@ impl wl::ZwpRelativePointerV1EventListener for GlobalMessaging {
         event_trace!();
 
         let state = self.pointer.as_mut().expect("no pointer state initialized");
-        let Some(ref enter_state) = state.enter_state else {
+        let Some(ref _enter_state) = state.enter_state else {
             return;
         };
 
-        self.event_dispatcher.dispatch(Event::PointerMoveRelative {
-            pointer_id: PointerID(state._wl_object.as_ptr()),
-            window: toplevel::Handle(enter_state.surface),
-            relative: Point::new_logical(dx.to_f32(), dy.to_f32()),
-        });
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_pointer_move_relative(
+            PointerID(state.wl_object.as_ptr()),
+            Point::new_logical(dx.to_f32(), dy.to_f32()),
+        );
+        self.coreloop().update_view_all();
     }
 }
-impl wl::DataDeviceEventListener for GlobalMessaging {
+impl wl::DataDeviceEventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "data_device::data_offer", skip(self, _sender, id))]
     fn data_offer(&mut self, _sender: &mut wl::DataDevice, mut id: wl::Owned<wl::DataOffer>) {
         event_trace!();
@@ -1538,7 +1491,7 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
 
         // query to views
         active_offer.is_dock_content = false;
-        self.event_dispatcher.dispatch(Event::OfferAcceptingDrop);
+        self.offer_accepting_drop();
     }
 
     #[tracing::instrument(name = "data_device::leave", skip(self, _sender))]
@@ -1569,14 +1522,12 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         };
         active_offer.client_pos = Point::new_logical(x.to_f32(), y.to_f32());
         if active_offer.is_dock_content {
-            self.event_dispatcher.dispatch(Event::DockMovePreview {
-                dest_window: toplevel::Handle(
-                    active_offer.entering_surface.expect("no entering surface?"),
-                ),
-                client_pos_in_dest: Point::new_logical(x.to_f32(), y.to_f32()),
-            });
+            unsafe { Pin::new_unchecked(&mut *self.coreloop) }.move_redock_preview(
+                toplevel::Handle(active_offer.entering_surface.expect("no entering surface?")),
+                Point::new_logical(x.to_f32(), y.to_f32()),
+            );
         } else {
-            self.event_dispatcher.dispatch(Event::OfferAcceptingDrop);
+            self.offer_accepting_drop();
         }
     }
 
@@ -1612,31 +1563,22 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
                 libc::close(pipe_fds[0]);
             }
 
-            self.event_dispatcher.dispatch(Event::DockConfirm {
-                pointer: PointerID(
-                    self.pointer
-                        .as_ref()
-                        .expect("no pointer")
-                        ._wl_object
-                        .as_ptr(),
-                ),
-                destination_window: toplevel::Handle(
-                    active_offer.entering_surface.expect("no entering surface?"),
-                ),
-                client_pos_in_dest: active_offer.client_pos,
-            });
+            unsafe { Pin::new_unchecked(&mut *self.coreloop) }.confirm_redock(
+                toplevel::Handle(active_offer.entering_surface.expect("no entering surface?")),
+                active_offer.client_pos,
+            );
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::PerformDrop {
-            data: active_offer.object.into(),
-            target_window: toplevel::Handle(
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }.perform_drop(
+            active_offer.object,
+            toplevel::Handle(
                 active_offer
                     .entering_surface
                     .expect("dropped but entering no window?"),
             ),
-            client_pos: active_offer.client_pos,
-        });
+            active_offer.client_pos,
+        );
     }
 
     #[tracing::instrument(name = "data_device::selection", skip(self, _sender, _id))]
@@ -1644,7 +1586,7 @@ impl wl::DataDeviceEventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::DataSourceEventListener for GlobalMessaging {
+impl wl::DataSourceEventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "data_source::target", skip(self, _sender))]
     fn target(&mut self, _sender: &mut wl::DataSource, mime_type: Option<&core::ffi::CStr>) {
         event_trace!();
@@ -1659,6 +1601,7 @@ impl wl::DataSourceEventListener for GlobalMessaging {
     ) {
         event_trace!();
 
+        // nothing data to be send
         let r = unsafe { libc::close(fd) };
         if r < 0 {
             panic!("libc.close: {}", std::io::Error::last_os_error());
@@ -1679,17 +1622,9 @@ impl wl::DataSourceEventListener for GlobalMessaging {
             return;
         };
 
-        self.event_dispatcher.dispatch(Event::DockConfirm {
-            pointer: PointerID(
-                self.pointer
-                    .as_ref()
-                    .expect("no pointer")
-                    ._wl_object
-                    .as_ptr(),
-            ),
-            destination_window: state.initiator,
-            client_pos_in_dest: Point::new_logical(-1.0, -1.0),
-        })
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+            .confirm_redock(state.initiator, Point::new_logical(0.0, 0.0));
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(name = "data_source::dnd_drop_performed", skip(self, _sender))]
@@ -1713,7 +1648,7 @@ impl wl::DataSourceEventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::DataOfferEventListener for GlobalMessaging {
+impl wl::DataOfferEventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "data_offer::offer", skip(self, sender))]
     fn offer(&mut self, sender: &mut wl::DataOffer, mime_type: &core::ffi::CStr) {
         event_trace!();
@@ -1759,7 +1694,7 @@ impl wl::DataOfferEventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::KeyboardEventListener for GlobalMessaging {
+impl wl::KeyboardEventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "keyboard::keymap", skip(self, _sender))]
     fn keymap(
         &mut self,
@@ -1828,10 +1763,9 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         state.enter_state = Some(KeyboardEnterState {
             surface: NonNull::from_mut(surface),
         });
-        self.event_dispatcher.dispatch(Event::WindowFocusChanged {
-            window: toplevel::Handle::from_mut(surface),
-            focused: true,
-        });
+        self.coreloop()
+            .handle_window_focus_changed(toplevel::Handle::from_mut(surface), true);
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(name = "keyboard::leave", skip(self, _sender, surface))]
@@ -1846,10 +1780,9 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = None;
         if let Some(s) = surface {
-            self.event_dispatcher.dispatch(Event::WindowFocusChanged {
-                window: toplevel::Handle::from_mut(s),
-                focused: false,
-            });
+            self.coreloop()
+                .handle_window_focus_changed(toplevel::Handle::from_mut(s), false);
+            self.coreloop().update_view_all();
         }
     }
 
@@ -1910,29 +1843,31 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         };
         match state {
             wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
-                self.event_dispatcher.dispatch(Event::KeyDown {
-                    window: toplevel::Handle(enter_state.surface),
+                unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_down(
+                    toplevel::Handle(enter_state.surface),
+                    code.clone(),
                     modifier,
-                    code: code.clone(),
-                });
+                );
 
                 if let KeyInputCode::Character(ch) = code {
-                    self.event_dispatcher.dispatch(Event::KeyChar {
-                        window: toplevel::Handle(enter_state.surface),
-                        modifier,
+                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_char(
+                        toplevel::Handle(enter_state.surface),
                         ch,
-                    });
+                        modifier,
+                    );
                 }
             }
             wl::KeyboardKeyState::Released => {
-                self.event_dispatcher.dispatch(Event::KeyUp {
-                    window: toplevel::Handle(enter_state.surface),
-                    modifier,
+                unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_up(
+                    toplevel::Handle(enter_state.surface),
                     code,
-                });
+                    modifier,
+                );
             }
             _ => unreachable!(),
         }
+
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(name = "keyboard::modifiers", skip(self, _sender))]
@@ -1965,7 +1900,7 @@ impl wl::KeyboardEventListener for GlobalMessaging {
         event_trace!();
     }
 }
-impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
+impl wl::ZwpTextInputV3EventListener for GlobalMessaging<'_> {
     #[tracing::instrument(name = "text_input_v3::enter", skip(self, sender, _surface))]
     fn enter(&mut self, sender: &mut wl::ZwpTextInputV3, _surface: Option<&mut wl::Surface>) {
         event_trace!();
@@ -2034,14 +1969,14 @@ impl wl::ZwpTextInputV3EventListener for GlobalMessaging {
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::IMEStateChanges {
-            window: toplevel::Handle(k_enter_state.surface),
-            committed_string,
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_ime_state_changes(
+            toplevel::Handle(k_enter_state.surface),
             preedit_string,
-        });
+            committed_string,
+        );
     }
 }
-impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging {
+impl wl::ZwlrLayerSurfaceV1EventListener for GlobalMessaging<'_> {
     #[tracing::instrument(skip(self, sender))]
     fn configure(
         &mut self,

@@ -221,10 +221,10 @@ struct ObjectTreePaneEventHandler {
     row_views: RefCell<Vec<TypedViewIdentifier<ObjectRowView>>>,
 }
 impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &ViewFeedbackPerformAtomic,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         let object_tree_changed = self.object_tree_changed.replace(false);
         let changed_object_ids = self
@@ -273,19 +273,19 @@ impl ViewFeedbackHandler<ViewFeedbackPerformAtomic> for ObjectTreePaneEventHandl
     }
 }
 impl ViewFeedbackHandler<model::ViewFeedbackObjectTreeChanged> for ObjectTreePaneEventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::ViewFeedbackObjectTreeChanged,
-        _context: &mut ViewFeedbackContext<'a, 'h>,
+        _context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         self.object_tree_changed.set(true);
     }
 }
 impl ViewFeedbackHandler<model::ViewFeedbackObjectNameChanged> for ObjectTreePaneEventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         feedback: &model::ViewFeedbackObjectNameChanged,
-        _context: &mut ViewFeedbackContext<'a, 'h>,
+        _context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         self.changed_object_ids.borrow_mut().insert(feedback.0);
     }
@@ -572,10 +572,10 @@ impl HitTestTreeActionHandler for ObjectRowEventHandler {
     }
 }
 impl ViewFeedbackHandler<model::ViewFeedbackObjectSelectionChanged> for ObjectRowEventHandler {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::ViewFeedbackObjectSelectionChanged,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         context.schedule_view_render(self.view_id);
     }

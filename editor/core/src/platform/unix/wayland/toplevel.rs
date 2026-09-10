@@ -8,11 +8,11 @@ use peridot_tp_wayland::{self as wl, ProxyObject};
 use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, WindowType,
-    graphics::{Graphics, VulkanSurface},
+    CoreLoop, Event, WindowType,
+    graphics::VulkanSurface,
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
-        hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+        KeyboardFocusGroupRef, PerWindowKeyboardFocusState,
+        hittest::{HitTestTreeData, HitTestTreeRef},
     },
     platform::unix::{
         APPMENU_OBJECT_PATH,
@@ -22,7 +22,7 @@ use crate::{
     },
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
-        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
+        composite::{CompositeRect, CompositeTreeRef},
     },
 };
 
@@ -38,7 +38,7 @@ impl Handle {
     }
 
     #[inline(always)]
-    fn event_listener(&self) -> &EventListener {
+    pub(super) fn event_listener<'a, 'sys>(&'a self) -> &'a EventListener<'sys> {
         unsafe { &*self.0.as_ref().user_data().cast::<EventListener>() }
     }
 
@@ -180,9 +180,7 @@ impl Handle {
                 termination_event.inc(1).expect("termination_event.inc");
             }
             WindowType::Sub => {
-                self.event_listener()
-                    .event_dispatcher
-                    .dispatch(Event::SubWindowClose { window: *self });
+                self.event_listener().coreloop().close_sub_window(*self);
             }
         }
     }
@@ -341,7 +339,7 @@ unsafe impl Sync for InstanceState {}
 unsafe impl Send for InstanceState {}
 
 #[repr(C)] // place state at 0 always: WindowEventListener can be reinterpreted as SurfaceState
-struct EventListener {
+pub(super) struct EventListener<'sys> {
     state: SurfaceState<InstanceState>,
     window_type: WindowType,
     scaling: SurfaceScaling,
@@ -352,9 +350,9 @@ struct EventListener {
     pending_activated_changes: Option<bool>,
     pending_maximized_changes: Option<bool>,
     pending_decoration_edge_changes: Option<DecorationEdge>,
-    event_dispatcher: LogicFiberEventDispatcher,
+    coreloop: *mut CoreLoop<'static, 'sys>,
 }
-impl wl::SurfaceEventListener for EventListener {
+impl wl::SurfaceEventListener for EventListener<'_> {
     #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, output))]
     fn enter(&mut self, _surface: &mut wl::Surface, output: &mut wl::Output) {
         super::event_trace!();
@@ -384,7 +382,7 @@ impl wl::SurfaceEventListener for EventListener {
         super::event_trace!();
     }
 }
-impl wl::XdgSurfaceEventListener for EventListener {
+impl wl::XdgSurfaceEventListener for EventListener<'_> {
     #[tracing::instrument(name = "xdg_surface::configure", skip(self, sender))]
     fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         super::event_trace!();
@@ -395,7 +393,7 @@ impl wl::XdgSurfaceEventListener for EventListener {
             .expect("xdg_surface.ack_configure");
     }
 }
-impl wl::XdgToplevelEventListener for EventListener {
+impl wl::XdgToplevelEventListener for EventListener<'_> {
     #[tracing::instrument(name = "xdg_toplevel::close", skip(self, _sender))]
     fn close(&mut self, _sender: &mut wl::XdgToplevel) {
         super::event_trace!();
@@ -407,9 +405,8 @@ impl wl::XdgToplevelEventListener for EventListener {
                 termination_event.inc(1).expect("termination_event.inc");
             }
             WindowType::Sub => {
-                self.event_dispatcher.dispatch(Event::SubWindowClose {
-                    window: Handle(self.state.data.surface_ptr),
-                });
+                self.coreloop()
+                    .close_sub_window(Handle(self.state.data.surface_ptr));
             }
         }
     }
@@ -475,7 +472,7 @@ impl wl::XdgToplevelEventListener for EventListener {
         super::event_trace!();
     }
 }
-impl wl::ZxdgToplevelDecorationV1EventListener for EventListener {
+impl wl::ZxdgToplevelDecorationV1EventListener for EventListener<'_> {
     #[tracing::instrument(name = "zxdg_toplevel_decoration_v1::configure", skip(self, _sender))]
     fn configure(
         &mut self,
@@ -494,7 +491,7 @@ impl wl::ZxdgToplevelDecorationV1EventListener for EventListener {
         }
     }
 }
-impl wl::WpFractionalScaleV1EventListener for EventListener {
+impl wl::WpFractionalScaleV1EventListener for EventListener<'_> {
     #[tracing::instrument(name = "wp_fractional_scale_v1::preferred_scale", skip(self, _sender))]
     fn preferred_scale(&mut self, _sender: &mut wl::WpFractionalScaleV1, scale: u32) {
         super::event_trace!();
@@ -502,7 +499,11 @@ impl wl::WpFractionalScaleV1EventListener for EventListener {
         self.pending_configure_buffer_scale = Some(scale as f32 / 120.0);
     }
 }
-impl EventListener {
+impl<'sys> EventListener<'sys> {
+    pub(super) const fn coreloop(&self) -> core::pin::Pin<&mut CoreLoop<'static, 'sys>> {
+        unsafe { core::pin::Pin::new_unchecked(&mut *self.coreloop) }
+    }
+
     fn commit(&mut self) {
         let mut delayed_event_queue = Vec::with_capacity(8);
 
@@ -616,8 +617,10 @@ impl EventListener {
         }
 
         for x in delayed_event_queue {
-            self.event_dispatcher.dispatch(x);
+            self.coreloop().on_event(x);
         }
+
+        self.coreloop().update_view_all();
     }
 }
 
@@ -656,7 +659,7 @@ impl NativeWindow {
         }
     }
 
-    pub fn new<E>(
+    pub fn new<'sys>(
         r#type: WindowType,
         target_output: Option<&wl::Output>,
         pos: Option<Point<LogicalUnit>>,
@@ -664,13 +667,7 @@ impl NativeWindow {
         maximized: bool,
         dpsv: &DisplayServerContext,
         dbus: &dbus::Connection,
-        event_dispatcher: LogicFiberEventDispatcher,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        deco_pixbuf: Option<&DecorationPixbuf>,
-        gfx: &Graphics,
-        delayed_render_messages: &mut Vec<RenderMessage>,
+        coreloop: core::pin::Pin<&mut CoreLoop<'static, 'sys>>,
     ) -> Self {
         // TODO: displaying surface at specific rectangle
         let size = Size::new_logical(
@@ -678,6 +675,7 @@ impl NativeWindow {
             size.as_ref().map_or(720.0, |r| r.height),
         );
 
+        let coreloop = unsafe { coreloop.get_unchecked_mut() };
         let mut surface = dpsv
             .global_interfaces
             .compositor
@@ -720,7 +718,8 @@ impl NativeWindow {
         // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
         // (将来的になおったら外す)
         let decoration = if !dpsv.global_interfaces.is_hyprland
-            && let Some(deco_pixbuf) = deco_pixbuf
+            && let Some(ref deco_pixbuf) =
+                unsafe { &*coreloop.syslink.display_server.static_pixbufs }.window_decoration
         {
             Some(Decoration::new(
                 &dpsv.global_interfaces,
@@ -780,17 +779,16 @@ impl NativeWindow {
                 .expect("xdg_toplevel.set_maximized");
         }
 
-        let composite_root = composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            ..Default::default()
-        });
-        let ht_root = ht_manager.create(HitTestTreeData {
+        let composite_root = CompositeRect::build()
+            .expand_full()
+            .create(&mut coreloop.composite_tree);
+        let ht_root = coreloop.ht_manager.create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
             root_of_window: Some(Handle::from_mut(&mut surface)),
             ..Default::default()
         });
-        let kf_root_group = keyboard_focus_registry.acquire_group();
+        let kf_root_group = coreloop.keyboard_focus_registry.acquire_group();
 
         let xdg_surface_ptr = xdg_surface.as_ptr();
         let xdg_toplevel_ptr = xdg_toplevel.as_ptr();
@@ -832,7 +830,7 @@ impl NativeWindow {
             pending_activated_changes: None,
             pending_maximized_changes: None,
             pending_decoration_edge_changes: None,
-            event_dispatcher,
+            coreloop,
         });
         surface
             .set_listener(event_listener.as_mut())
@@ -867,35 +865,37 @@ impl NativeWindow {
         surface.commit().expect("wl_surface.commit");
 
         // ready for rendering
-        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
-            key: Handle::from_mut(&mut surface),
-            vk_surface: NewWindowVulkanSurface(
-                VulkanSurface::new(gfx, unsafe {
-                    br::WaylandSurfaceCreateInfo::new(
-                        dpsv.dp.as_raw().cast(),
-                        surface.as_raw().cast(),
-                    )
-                    .execute(gfx.instance(), None)
-                    .expect("vk_surface.create")
-                })
-                .unbound()
-                .1,
-            ),
-        }));
+        coreloop
+            .delayed_render_messages
+            .push(RenderMessage::NewWindow(NewWindowData {
+                key: Handle::from_mut(&mut surface),
+                vk_surface: NewWindowVulkanSurface(
+                    VulkanSurface::new(unsafe { &*coreloop.syslink.gfx }, unsafe {
+                        br::WaylandSurfaceCreateInfo::new(
+                            dpsv.dp.as_raw().cast(),
+                            surface.as_raw().cast(),
+                        )
+                        .execute((*coreloop.syslink.gfx).instance(), None)
+                        .expect("vk_surface.create")
+                    })
+                    .unbound()
+                    .1,
+                ),
+            }));
 
         Self { surface }
     }
 
-    pub fn terminate<E>(
-        mut self,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
+    pub fn terminate(mut self) {
         let e = unsafe { Box::from_raw(self.surface.user_data().cast::<EventListener>()) };
-        keyboard_focus_registry.release_group(e.state.data.kf_root_group);
-        composite_tree.free_all(e.state.data.composite_root);
-        ht_manager.free_all(e.state.data.ht_root);
+        let coreloop = unsafe { &mut *e.coreloop };
+        coreloop
+            .keyboard_focus_registry
+            .release_group(e.state.data.kf_root_group);
+        coreloop
+            .composite_tree
+            .free_all(e.state.data.composite_root);
+        coreloop.ht_manager.free_all(e.state.data.ht_root);
         drop(e);
 
         unsafe {

@@ -163,10 +163,10 @@ struct EventHandler {
 impl ViewFeedbackHandler<model::asset_explorer::ViewFeedbackCurrentDirectoryChanged>
     for EventHandler
 {
-    fn accept_feedback<'a, 'h>(
+    fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::asset_explorer::ViewFeedbackCurrentDirectoryChanged,
-        context: &mut ViewFeedbackContext<'a, 'h>,
+        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
     ) {
         context
             .view_instance_mut(self.path_navigator_view)
