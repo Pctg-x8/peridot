@@ -1,0 +1,18 @@
+[workspace]
+members = ["gen-embedded-model"]
+
+[package]
+name = "peridot-tp-budoux"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+embedded = ["dep:phf"]
+embedded-ja_knbc = ["embedded"]
+
+[dependencies]
+phf = { version = "0.13.1", features = ["macros"], optional = true }
+
+[dev-dependencies]
+serde_json = { version = "1", feature = ["derive"] }

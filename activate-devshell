@@ -1,0 +1,8 @@
+#!/bin/sh
+
+if [[ $SHELL = */bin/fish ]]; then
+  exec nix develop .#fish
+else
+  exec nix develop
+fi
+

@@ -2,7 +2,7 @@
 
 use crate::{
     FFIOpaqueStruct,
-    raw::{CGPoint, CGRect},
+    raw::{CGAffineTransform, CGPoint, CGRect},
 };
 use core::ffi::*;
 
@@ -37,6 +37,7 @@ pub struct CGPathElement {
 pub type CGPathApplierFunction = extern "C" fn(info: *mut c_void, element: *const CGPathElement);
 
 unsafe extern "C" {
+    pub fn CGPathCreateWithRect(rect: CGRect, transform: *const CGAffineTransform) -> CGPathRef;
     pub fn CGPathGetBoundingBox(path: CGPathRef) -> CGRect;
     pub fn CGPathGetPathBoundingBox(path: CGPathRef) -> CGRect;
     pub fn CGPathApply(path: CGPathRef, info: *mut c_void, function: CGPathApplierFunction);

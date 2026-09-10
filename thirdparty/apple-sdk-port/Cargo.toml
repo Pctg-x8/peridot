@@ -9,3 +9,4 @@ cargo-clippy = [] # disable warning inside objc crate
 
 [dependencies]
 objc = "0.2"
+tracing = "0.1"

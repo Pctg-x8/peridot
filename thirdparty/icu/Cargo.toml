@@ -1,0 +1,6 @@
+[package]
+name = "peridot-tp-icu"
+version = "0.1.0-76.1"
+edition = "2024"
+
+[dependencies]

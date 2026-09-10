@@ -1,0 +1,10 @@
+[package]
+name = "peridot-tp-dbus"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitflags = "2.10.0"
+quick-xml = "0.39.0"
+thiserror = "2.0.17"
+tracing = "0.1.44"

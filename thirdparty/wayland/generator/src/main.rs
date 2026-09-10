@@ -56,6 +56,53 @@ fn enum_type_name(n: &str) -> String {
     sink
 }
 
+fn wrapper_enum_type_name(n: &str, callsite_type_name: &str) -> String {
+    if n.contains('.') {
+        // fully qualified
+        let mut sink = String::with_capacity(n.len());
+        let mut needs_upper = true;
+        for c in n.chars() {
+            if c == '_' {
+                needs_upper = true;
+                continue;
+            }
+            if c == '.' {
+                needs_upper = true;
+                continue;
+            }
+
+            if needs_upper {
+                sink.extend(c.to_uppercase());
+                needs_upper = false;
+            } else {
+                sink.push(c);
+            }
+        }
+
+        return sink;
+    }
+
+    // should prefixed with callsite_type_name
+    let mut sink = String::with_capacity(n.len() + callsite_type_name.len());
+    sink.push_str(callsite_type_name);
+    let mut needs_upper = true;
+    for c in n.chars() {
+        if c == '_' {
+            needs_upper = true;
+            continue;
+        }
+
+        if needs_upper {
+            sink.extend(c.to_uppercase());
+            needs_upper = false;
+        } else {
+            sink.push(c);
+        }
+    }
+
+    sink
+}
+
 fn enum_entry_name(n: &str) -> String {
     let mut needs_upper = true;
     let mut sink = String::with_capacity(n.len());
@@ -204,7 +251,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("");
     }
 
-    println!("use crate::{{ffi, Proxy, Interface}};");
+    println!("use crate::{{ffi, Proxy, ProxyObject, Interface}};");
     println!("");
 
     for x in proto.interfaces.iter() {
@@ -278,13 +325,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     (WlWireFormatType::UInt, None, Some(t), false) => {
                         let _ = write!(
                             wrapper_args,
-                            "{arg_name_ident}: {type_name}{},",
-                            enum_type_name(t)
+                            "{arg_name_ident}: {},",
+                            wrapper_enum_type_name(t, type_name.as_str())
                         );
-                        let _ = write!(
-                            marshal_args,
-                            "ffi::Argument {{ u: {arg_name_ident} as _ }},"
-                        );
+                        let _ = write!(marshal_args, "{arg_name_ident}.as_arg(),");
                     }
                     (WlWireFormatType::Int, None, None, false) => {
                         let _ = write!(wrapper_args, "{arg_name_ident}: i32,");
@@ -504,18 +548,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "unsafe {{ core::mem::transmute({arg_name}) }},"
                         );
                     }
-                    (Some(o), None, WlWireFormatType::Object, false) => {
-                        let _ = write!(
-                            listener_trait_args,
-                            "{arg_name}: &mut {},",
-                            if_name_to_typeref(o)
-                        );
-                        let _ = write!(
-                            listener_arg_conversions,
-                            "unsafe {{ &mut *({arg_name} as *mut _) }},"
-                        );
-                    }
-                    (Some(o), None, WlWireFormatType::Object, true) => {
+                    // EventのときはObject型はつねにnullableとして扱う(クライアント側で先にdestroyしたオブジェクトがきた場合にnullでわたってくるらしい)
+                    (Some(o), None, WlWireFormatType::Object, _) => {
                         let _ = write!(
                             listener_trait_args,
                             "{arg_name}: Option<&mut {}>,",
@@ -523,7 +557,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
                         let _ = write!(
                             listener_arg_conversions,
-                            "if {arg_name}.is_null() {{ None }} else {{ Some(unsafe {{ &mut *({arg_name} as *mut _) }}) }},",
+                            "unsafe {{ {arg_name}.cast::<{}>().as_mut() }},",
+                            if_name_to_typeref(o)
                         );
                     }
                     (Some(o), None, WlWireFormatType::NewID, false) => {
@@ -546,6 +581,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let _ = write!(
                             listener_arg_conversions,
                             "unsafe {{ core::ffi::CStr::from_ptr({arg_name}) }},"
+                        );
+                    }
+                    (None, None, WlWireFormatType::String, true) => {
+                        let _ =
+                            write!(listener_trait_args, "{arg_name}: Option<&core::ffi::CStr>,");
+                        let _ = write!(
+                            listener_arg_conversions,
+                            "if {arg_name}.is_null() {{ None }} else {{ Some(unsafe {{ core::ffi::CStr::from_ptr({arg_name}) }}) }},"
                         );
                     }
                     (None, None, WlWireFormatType::Fixed, false) => {
@@ -629,7 +672,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    }}");
         }
         println!("}}");
-        println!("");
+        println!(
+            "impl ProxyObject for {type_name} {{ #[inline(always)] fn as_proxy(&self) -> &Proxy {{ &self.0 }} }}"
+        );
         println!("impl {type_name} {{");
         if !listener_fn_table_member_defs.is_empty() {
             println!(
@@ -643,20 +688,48 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("    }}");
             println!("");
         }
+        println!(
+            "    #[inline(always)] pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {{ unsafe {{ self.0.set_user_data(user_data); }} }}"
+        );
+        println!(
+            "    #[inline(always)] pub fn user_data(&mut self) -> *mut core::ffi::c_void {{ unsafe {{ self.0.user_data() }} }}"
+        );
+        println!("");
         println!("{request_wrappers} }}\n");
         if !listener_trait_members.is_empty() {
             println!("pub trait {event_listener_trait_name} {{ {listener_trait_members} }}\n");
         }
 
         for e in x.enums.iter() {
-            println!(
-                "#[repr(u32)] #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum {type_name}{enum_name} {{",
-                enum_name = enum_type_name(&e.name)
-            );
-            for ee in e.entries.iter() {
-                println!("    {} = {},", enum_entry_name(&ee.name), ee.value);
+            let enum_name = enum_type_name(&e.name);
+
+            if e.bitfield
+                .as_ref()
+                .is_some_and(|x| x.eq_ignore_ascii_case("true"))
+            {
+                // bitfield
+                println!(
+                    "bitflags::bitflags! {{ #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub struct {type_name}{enum_name} : u32 {{",
+                );
+                for ee in e.entries.iter() {
+                    println!("    const {} = {};", enum_entry_name(&ee.name), ee.value);
+                }
+                println!("}} }}");
+                println!(
+                    "impl {type_name}{enum_name} {{ pub const fn as_arg(&self) -> ffi::Argument {{ ffi::Argument {{ u: self.bits() }} }} }}\n"
+                );
+            } else {
+                println!(
+                    "#[repr(u32)] #[derive(Debug, Clone, Copy, PartialEq, Eq)] pub enum {type_name}{enum_name} {{",
+                );
+                for ee in e.entries.iter() {
+                    println!("    {} = {},", enum_entry_name(&ee.name), ee.value);
+                }
+                println!("}}");
+                println!(
+                    "impl {type_name}{enum_name} {{ pub const fn as_arg(&self) -> ffi::Argument {{ ffi::Argument {{ u: *self as _ }} }} }}\n"
+                );
             }
-            println!("}}\n");
         }
     }
 
@@ -714,10 +787,13 @@ impl XmlProtocol {
                     copyright = Some(xml_copyright(reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"interface" => {
                     interfaces.push(XmlInterface::read(t, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Text(_) => (/* ignore */),
                 e => panic!("unexpected: {e:?}"),
@@ -739,6 +815,9 @@ fn xml_copyright<'a>(reader: &mut Reader<&'a [u8]>) -> Result<String, quick_xml:
         match reader.read_event()? {
             Event::End(e) if e.name().0 == b"copyright" => break Ok(content),
             Event::Text(t) => {
+                content.push_str(&t.decode()?);
+            }
+            Event::CData(t) => {
                 content.push_str(&t.decode()?);
             }
             Event::Comment(_) => (/* ignore */),
@@ -781,7 +860,7 @@ impl XmlInterface {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"interface" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"request" => {
                     requests.push(XmlRequest::read(t, reader)?);
@@ -791,6 +870,9 @@ impl XmlInterface {
                 }
                 Event::Start(t) if t.name().0 == b"enum" => {
                     enums.push(XmlEnum::read(t, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Text(_) => (/* ignore */),
                 Event::Comment(_) => (/* ignore */),
@@ -854,10 +936,13 @@ impl XmlRequest {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"request" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, false, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Empty(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, true, reader)?);
@@ -923,10 +1008,13 @@ impl XmlEvent {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"event" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, false, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Empty(t) if t.name().0 == b"arg" => {
                     args.push(XmlArg::read(t, true, reader)?);
@@ -984,10 +1072,13 @@ impl XmlEnum {
             match reader.read_event()? {
                 Event::End(e) if e.name().0 == b"enum" => break,
                 Event::Start(t) if t.name().0 == b"description" => {
-                    description = Some(XmlDescription::read(t, reader)?);
+                    description = Some(XmlDescription::read(t, false, reader)?);
                 }
                 Event::Start(t) if t.name().0 == b"entry" => {
                     entries.push(XmlEntry::read(t, false, reader)?);
+                }
+                Event::Empty(t) if t.name().0 == b"description" => {
+                    description = Some(XmlDescription::read(t, true, reader)?);
                 }
                 Event::Empty(t) if t.name().0 == b"entry" => {
                     entries.push(XmlEntry::read(t, true, reader)?);
@@ -1062,7 +1153,10 @@ impl XmlEntry {
                 match reader.read_event()? {
                     Event::End(e) if e.name().0 == b"entry" => break,
                     Event::Start(t) if t.name().0 == b"description" => {
-                        description = Some(XmlDescription::read(t, reader)?);
+                        description = Some(XmlDescription::read(t, false, reader)?);
+                    }
+                    Event::Empty(t) if t.name().0 == b"description" => {
+                        description = Some(XmlDescription::read(t, true, reader)?);
                     }
                     Event::Text(_) => (/* ignore */),
                     e => panic!("unexpected: {e:?}"),
@@ -1131,7 +1225,10 @@ impl XmlArg {
                 match reader.read_event()? {
                     Event::End(e) if e.name().0 == b"arg" => break,
                     Event::Start(t) if t.name().0 == b"description" => {
-                        description = Some(XmlDescription::read(t, reader)?);
+                        description = Some(XmlDescription::read(t, false, reader)?);
+                    }
+                    Event::Empty(t) if t.name().0 == b"description" => {
+                        description = Some(XmlDescription::read(t, true, reader)?);
                     }
                     Event::Text(_) => (/* ignore */),
                     e => panic!("unexpected: {e:?}"),
@@ -1159,6 +1256,7 @@ pub struct XmlDescription {
 impl XmlDescription {
     pub fn read<'a>(
         tag: BytesStart<'a>,
+        empty: bool,
         reader: &mut Reader<&'a [u8]>,
     ) -> Result<Self, quick_xml::Error> {
         let mut summary = None;
@@ -1170,14 +1268,16 @@ impl XmlDescription {
         }
 
         let mut content = String::new();
-        loop {
-            match reader.read_event()? {
-                Event::End(e) if e.name().0 == b"description" => break,
-                Event::Text(t) => {
-                    content.push_str(&t.decode()?);
+        if !empty {
+            loop {
+                match reader.read_event()? {
+                    Event::End(e) if e.name().0 == b"description" => break,
+                    Event::Text(t) => {
+                        content.push_str(&t.decode()?);
+                    }
+                    Event::Comment(_) => (/* ignore */),
+                    e => panic!("unexpected: {e:?}"),
                 }
-                Event::Comment(_) => (/* ignore */),
-                e => panic!("unexpected: {e:?}"),
             }
         }
 

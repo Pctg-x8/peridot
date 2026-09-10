@@ -57,11 +57,7 @@ impl FontProvider for CoreTextFontProvider {
             ))?;
         attrs.set(
             native_text::FontDescriptor::family_name_attribute(),
-            unsafe {
-                &*foundation::String::from_str_no_copy(None, family_name).ok_or(
-                    FontConstructionError::SysAPICallError("String::from_str_no_copy(family_name)"),
-                )?
-            },
+            unsafe { &*foundation::String::from_str_no_copy(None, family_name) },
         );
         attrs.set(native_text::FontDescriptor::traits_attribute(), &*traits);
 

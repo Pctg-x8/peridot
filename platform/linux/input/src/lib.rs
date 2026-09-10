@@ -42,6 +42,7 @@ impl Drop for EventDevice {
     }
 }
 
+#[derive(Debug)]
 #[repr(C)]
 pub struct InputEvent {
     pub time: libc::timeval,
@@ -113,13 +114,32 @@ pub enum AbsoluteAxes {
 /// Key
 #[repr(u16)]
 pub enum Key {
-    /// = Mouse
-    Left = 0x110,
-    Right = 0x111,
-    Middle = 0x112,
-    Side = 0x113,
-    Extra = 0x114,
-    Forward = 0x115,
-    Back = 0x116,
-    Task = 0x117,
+    Esc = 1,
+    Tab = 15,
+    LeftControl = 29,
+    LeftShift = 42,
+    RightShift = 54,
+    LeftAlt = 56,
+    RightControl = 97,
+    RightAlt = 100,
+    Home = 102,
+    Up = 103,
+    PageUp = 104,
+    Left = 105,
+    Right = 106,
+    End = 107,
+    Down = 108,
+    PageDown = 109,
+    Insert = 110,
+    LeftMeta = 125,
+    RightMeta = 126,
+    MouseLeft = 0x110,
+    MouseRight = 0x111,
+    MouseMiddle = 0x112,
+    MouseSide = 0x113,
+    MouseExtra = 0x114,
+    MouseForward = 0x115,
+    MouseBack = 0x116,
+    MouseTask = 0x117,
+    Joystick = 0x120,
 }
