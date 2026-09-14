@@ -194,9 +194,9 @@ struct CommittedState {
 struct InstanceData<'sys> {
     surface_ptr: *mut wl::Surface,
     scaling: SurfaceScaling,
-    xdg_surface: wl::Owned<wl::XdgSurface>,
-    xdg_popup: wl::Owned<wl::XdgPopup>,
     _blur: Option<wl::Owned<wl::OrgKdeKwinBlur>>,
+    xdg_popup: wl::Owned<wl::XdgPopup>,
+    xdg_surface: wl::Owned<wl::XdgSurface>,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     keyboard_focus_state: PerWindowKeyboardFocusState,
