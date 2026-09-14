@@ -1,4 +1,3 @@
-use core::pin::Pin;
 use std::{
     collections::{BTreeSet, HashMap},
     rc::{Rc, Weak},
@@ -9,7 +8,7 @@ use bitflags::bitflags;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    CoreLoop, DragData, DropdownMenuOpenRequest, FlyoutSurfaceHandle, MenuOpenRequest, PointerID,
+    CustomFlyoutViewOpenRequest, DragData, FlyoutSurfaceHandle, MenuOpenRequest, PointerID,
     SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, DragDropFlags, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
@@ -45,7 +44,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub view_render_queue: &'env mut ViewRenderQueue,
     pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
     pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
-    pub dropdown_menu_open_requests: &'env mut Vec<DropdownMenuOpenRequest>,
+    pub custom_flyout_view_open_request: &'env mut Option<CustomFlyoutViewOpenRequest>,
     pub popup_manager: &'env mut PopupManager,
 }
 impl InputEventContext<'_, '_, '_> {
@@ -72,8 +71,12 @@ impl InputEventContext<'_, '_, '_> {
     }
 
     #[inline(always)]
-    pub fn request_open_dropdown_menu(&mut self, req: DropdownMenuOpenRequest) {
-        self.dropdown_menu_open_requests.push(req);
+    pub fn request_open_custom_flyout_view(&mut self, req: CustomFlyoutViewOpenRequest) {
+        assert!(
+            self.custom_flyout_view_open_request.is_none(),
+            "custom flyout view open already requested in this event"
+        );
+        *self.custom_flyout_view_open_request = Some(req);
     }
 
     #[inline(always)]

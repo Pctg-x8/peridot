@@ -14,11 +14,11 @@ use crate::{
         FloatAnimationTemplate,
     },
     uicore::{
-        RenderContext, TeardownContext, View, ViewConstructor, ViewIdentifier,
-        ViewImmediateRenderable, ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut,
-        ViewInstanceStore, ViewLayoutStateStore, ViewRenderElements, ViewRenderStateStore,
-        ViewTreeRelationStore, render_view_with_base, teardown_view_recursive, view_instance,
-        view_instance_mut, view_layout_mut, view_set_visibility,
+        RenderContext, TeardownContext, View, ViewConstructor, ViewIdentifier, ViewInitContext,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore,
+        ViewRenderElements, ViewRenderStateStore, ViewTreeRelationStore, render_view_with_base,
+        teardown_view_recursive, view_instance, view_instance_mut, view_layout_mut,
+        view_set_visibility,
     },
 };
 
@@ -93,30 +93,34 @@ impl PopupManager {
         ctor: impl FnOnce(PopupID, &mut ViewInitContext) -> P,
     ) -> PopupID {
         let id = PopupID::new();
-        let popup_focus_group = ctx.keyboard_focus_registry.acquire_group();
-        let instance = ctor(id, ctx);
-        ctx.render_view_with_base(
-            instance.root_view_id(),
-            &window,
-            popup_focus_group,
-            Rect::from_lt_size(Point::new_logical(0.0, 0.0), window.client_size()),
+        self.instance_by_id.insert(
+            id,
+            (
+                Box::new(ctor(id, ctx)),
+                window,
+                ctx.keyboard_focus_registry.acquire_group(),
+            ),
         );
-        self.instance_by_id
-            .insert(id, (Box::new(instance), window, popup_focus_group));
+        self.pending_update.insert(id);
 
         id
     }
 
     pub fn post_open_action(
-        &mut self,
         target_popup_id: PopupID,
         action_context: &mut InputEventContext,
         kf_registry: &KeyboardFocusTokenRegistry,
     ) {
-        if let Some((_, w, g)) = self.instance_by_id.get_mut(&target_popup_id) {
-            w.keyboard_focus_state_mut()
-                .push_tab_stop_group(*g, action_context, kf_registry);
-        }
+        let Some(&mut (_, mut w, g)) = action_context
+            .popup_manager
+            .instance_by_id
+            .get_mut(&target_popup_id)
+        else {
+            return;
+        };
+
+        w.keyboard_focus_state_mut()
+            .push_tab_stop_group(g, action_context, kf_registry);
     }
 
     pub fn close(&mut self, id: PopupID, view_instance_store: &mut ViewInstanceStore) -> bool {

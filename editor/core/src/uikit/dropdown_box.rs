@@ -1,15 +1,16 @@
-use std::rc::{Rc, Weak};
+use core::cell::Cell;
+use std::rc::Rc;
 
 use peridot_math::Zero;
 use shared::{LogicalUnit, Point, Rect, SafeF32, Size};
 
 use crate::{
-    DropdownMenuOpenRequest, Event,
+    CustomFlyoutViewOpenRequest, Event, FlyoutSurfacePresenter, FlyoutSurfacePresenterConstructor,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
-            HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef, PointerActionArgs,
-            PointerButtonActionArgs,
+            HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+            PointerActionArgs, PointerButtonActionArgs,
         },
     },
     model::{Application, ApplicationMutation},
@@ -19,15 +20,15 @@ use crate::{
             AnimatableColor, AnimatableFloat, AnimationCurve, Border, ClipConfig, CompositeMode,
             CompositeRect, CompositeRectScaleFactor, CompositeRectText,
             CompositeRectTextHorizontalAlignment, CompositeRectTextRun,
-            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTreeRef, CornerRadius,
-            FloatAnimationTemplate, TextureMappingMode, TextureType,
+            CompositeRectTextVerticalAlignment, CompositeTexture, CompositeTree, CompositeTreeRef,
+            CornerRadius, FloatAnimationTemplate, TextureMappingMode, TextureType,
         },
         text::{FontID, FontSet, TextLayout},
     },
     uicore::{
-        MeasureContext, MountContext, MountTarget, RenderContext, TeardownContext,
-        TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut,
-        ViewLayoutStateStore, ViewRenderElements, ViewRenderer,
+        MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, ViewConstructor,
+        ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutStateStore,
+        ViewRegisterable, ViewRenderElements, ViewRenderer,
     },
 };
 
@@ -232,12 +233,15 @@ impl crate::uicore::View for View {
                     ht_root,
                     items: self.items.clone(),
                     current_selected: core::cell::Cell::new(0),
+                    control_width: Cell::new(128.0),
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
 
                 &*self.entity.insert(eh)
             }
         };
+
+        e.control_width.set(layout_rect.width);
 
         ViewRenderElements {
             composite_tree: Some(e.ct_root),
@@ -290,6 +294,7 @@ pub struct EventHandler {
     ht_root: HitTestTreeRef,
     items: Vec<String>,
     current_selected: core::cell::Cell<usize>,
+    control_width: Cell<f32>,
 }
 impl HitTestTreeActionHandler for EventHandler {
     fn on_pointer_enter(
@@ -382,20 +387,24 @@ impl HitTestTreeActionHandler for EventHandler {
             w.client_size().height,
         );
 
-        context.request_open_dropdown_menu(DropdownMenuOpenRequest {
+        context.request_open_custom_flyout_view(CustomFlyoutViewOpenRequest {
             parent: w,
-            surface_pos: Point::new_logical(x, y),
-            min_width: 128.0,
-            items: self
-                .items
-                .iter()
-                .enumerate()
-                .map(|(n, c)| MenuItem {
-                    content: c.into(),
-                    id: n,
-                })
-                .collect(),
-            selection_receiver: self.this_weakref.clone(),
+            pos: Point::new_logical(x, y),
+            content_ctor: Box::new(FlyoutContentPresenterInit {
+                layout: MenuLayout::new(
+                    self.items
+                        .iter()
+                        .enumerate()
+                        .map(|(n, c)| MenuItem {
+                            content: c.into(),
+                            id: n,
+                        })
+                        .collect(),
+                    context.system_link.font_set(),
+                    self.control_width.get(),
+                ),
+                event_handler: self.this_weakref.clone(),
+            }),
         });
 
         EventContinueControl::STOP_PROPAGATION
@@ -426,13 +435,14 @@ pub struct MenuItem {
     pub id: usize,
 }
 
+#[derive(Clone)]
 pub struct MenuLayout {
     items: Vec<MenuItem>,
     required_width: f32,
 }
 impl MenuLayout {
     #[inline(always)]
-    pub fn new(items: Vec<MenuItem>, font_set: &FontSet) -> Self {
+    pub fn new(items: Vec<MenuItem>, font_set: &FontSet, min_width: f32) -> Self {
         let mut width = 0.0f32;
         for v in items.iter() {
             width = width.max(
@@ -444,53 +454,242 @@ impl MenuLayout {
 
         Self {
             items,
-            required_width: width,
+            required_width: width.max(min_width),
         }
     }
 
     #[inline(always)]
     pub const fn height(&self) -> f32 {
-        self.items.len() as f32 * MenuItemView::ITEM_HEIGHT
+        self.items.len() as f32 * MenuItemSubView::ITEM_HEIGHT
     }
 
     #[inline(always)]
     pub const fn required_width(&self) -> f32 {
         self.required_width
     }
+}
 
-    #[inline(always)]
-    pub fn instantiate_all(
-        self,
-        view_init_context: &mut ViewInitContext,
-        selection_receiver: Weak<EventHandler>,
-        mut post_instantiate_action: impl FnMut(&mut MenuItemView, &mut ViewInitContext),
-    ) -> impl Iterator<Item = MenuItemView> {
-        self.items.into_iter().enumerate().map(move |(n, v)| {
-            let mut v = MenuItemView::new(
-                view_init_context,
-                selection_receiver.clone(),
-                v,
-                n as f32 * MenuItemView::ITEM_HEIGHT,
-            );
-            post_instantiate_action(&mut v, view_init_context);
-            v
-        })
+pub struct FlyoutContentPresenterInit {
+    pub layout: MenuLayout,
+    pub event_handler: std::rc::Weak<EventHandler>,
+}
+impl FlyoutSurfacePresenterConstructor for FlyoutContentPresenterInit {
+    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter> {
+        let root_view = view_init_context.construct_view(
+            MenuFlyoutViewInit {
+                layout: self.layout.clone(),
+                event_handler: self.event_handler.clone(),
+            },
+            |_| [],
+        );
+
+        Box::new(FlyoutContentPresenter { root_view })
+    }
+
+    fn size(&self) -> Size<LogicalUnit> {
+        Size::new_logical(self.layout.required_width(), self.layout.height())
     }
 }
 
-pub struct MenuItemView {
-    eh: Rc<MenuItemEventHandler>,
+pub struct FlyoutContentPresenter {
+    root_view: TypedViewIdentifier<MenuFlyoutView>,
 }
-impl MenuItemView {
+impl FlyoutSurfacePresenter for FlyoutContentPresenter {
+    fn root_view_id(&self) -> ViewIdentifier {
+        self.root_view.into_untyped()
+    }
+}
+
+struct MenuFlyoutViewInit {
+    layout: MenuLayout,
+    event_handler: std::rc::Weak<EventHandler>,
+}
+impl ViewConstructor for MenuFlyoutViewInit {
+    type ConcreteView = MenuFlyoutView;
+
+    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        MenuFlyoutView {
+            layout: self.layout,
+            event_handler: self.event_handler,
+            entity: None,
+        }
+    }
+}
+
+pub struct MenuFlyoutView {
+    layout: MenuLayout,
+    event_handler: std::rc::Weak<EventHandler>,
+    entity: Option<Rc<MenuFlyoutViewEntity>>,
+}
+impl crate::uicore::View for MenuFlyoutView {
+    fn render(
+        &mut self,
+        _layout_rect: Rect<LogicalUnit>,
+        ctx: &mut RenderContext,
+        _layout_state: &ViewLayoutStateStore,
+    ) -> ViewRenderElements {
+        let e = match self.entity {
+            Some(ref e) => e,
+            None => {
+                // first render
+                let ct_root = CompositeRect::build()
+                    .expand_full()
+                    .create(ctx.composite_tree);
+                let ht_root = HitTestTreeData::build()
+                    .expand_full()
+                    .create(ctx.ht_manager);
+
+                let mut items = Vec::with_capacity(self.layout.items.len());
+                for (n, x) in self.layout.items.iter().enumerate() {
+                    let v = MenuItemSubView::new(
+                        x.clone(),
+                        n as f32 * MenuItemSubView::ITEM_HEIGHT,
+                        ctx.composite_tree,
+                        ctx.ht_manager,
+                    );
+                    ctx.composite_tree.add_child(ct_root, v.ct_root);
+                    ctx.ht_manager.add_child(ht_root, v.ht_root);
+
+                    items.push(v);
+                }
+
+                let entity = Rc::new(MenuFlyoutViewEntity {
+                    ct_root,
+                    ht_root,
+                    items,
+                    receiver: self.event_handler.clone(),
+                });
+                for v in entity.items.iter() {
+                    ctx.ht_manager.set_action_handler(v.ht_root, &entity);
+                }
+
+                &*self.entity.insert(entity)
+            }
+        };
+
+        ViewRenderElements {
+            composite_tree: Some(e.ct_root),
+            hit_tree: Some(e.ht_root),
+            ..ViewRenderElements::EMPTY
+        }
+    }
+
+    fn teardown(&mut self, ctx: &mut TeardownContext) {
+        let Some(e) = self.entity.take() else {
+            return;
+        };
+
+        ctx.composite_tree.free_all(e.ct_root);
+        ctx.ht_manager.free_all(e.ht_root);
+    }
+
+    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
+        Size::new_logical(0.0, 0.0)
+    }
+}
+
+struct MenuFlyoutViewEntity {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    items: Vec<MenuItemSubView>,
+    receiver: std::rc::Weak<EventHandler>,
+}
+impl HitTestTreeActionHandler for MenuFlyoutViewEntity {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        for v in self.items.iter() {
+            if v.ht_root != sender {
+                continue;
+            }
+
+            context
+                .composite_tree
+                .begin_mod_chain(v.ct_root)
+                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, 0.0],
+                    to_value: [1.0, 1.0, 1.0, 0.125],
+                    sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                }))
+                .apply();
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_pointer_leave(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerActionArgs,
+    ) -> EventContinueControl {
+        for v in self.items.iter() {
+            if v.ht_root != sender {
+                continue;
+            }
+
+            context
+                .composite_tree
+                .begin_mod_chain(v.ct_root)
+                .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
+                    from_value: [1.0, 1.0, 1.0, 0.125],
+                    to_value: [1.0, 1.0, 1.0, 0.0],
+                    sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
+                    curve: AnimationCurve::Linear,
+                    event_on_complete: None,
+                }))
+                .apply();
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &PointerButtonActionArgs,
+    ) -> EventContinueControl {
+        for v in self.items.iter() {
+            if v.ht_root != sender {
+                continue;
+            }
+
+            context
+                .system_link
+                .dispatch_event(Event::DropdownMenuSelectItem {
+                    id: v.id,
+                    receiver: self.receiver.clone(),
+                });
+            return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        EventContinueControl::STOP_PROPAGATION
+    }
+}
+
+pub struct MenuItemSubView {
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    id: usize,
+}
+impl MenuItemSubView {
     const ITEM_HEIGHT: f32 = 24.0;
 
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        selection_receiver: Weak<EventHandler>,
+    pub fn new<E>(
         item: MenuItem,
         y_pos: f32,
+        composite_tree: &mut CompositeTree<E>,
+        ht_manager: &mut HitTestTreeManager,
     ) -> Self {
-        let ct_root = ctx.mount_context.composite_tree.create(CompositeRect {
+        let ct_root = composite_tree.create(CompositeRect {
             scale_factor: CompositeRectScaleFactor::UI,
             offset: [AnimatableFloat::Value(0.0), AnimatableFloat::Value(y_pos)],
             relative_size_adjustment: [1.0, 0.0],
@@ -512,93 +711,17 @@ impl MenuItemView {
             }),
             ..Default::default()
         });
-        let ht_root = ctx.mount_context.ht_manager.create(HitTestTreeData {
+        let ht_root = ht_manager.create(HitTestTreeData {
             top: y_pos,
             width_adjustment_factor: 1.0,
             height: Self::ITEM_HEIGHT,
             ..Default::default()
         });
 
-        let eh = Rc::new(MenuItemEventHandler {
+        Self {
             ct_root,
             ht_root,
             id: item.id,
-            receiver: selection_receiver,
-        });
-        ctx.ht_manager.set_action_handler(ht_root, &eh);
-
-        Self { eh }
-    }
-
-    pub fn mount(&self, ctx: &mut MountContext, target: &(impl MountTarget + ?Sized)) {
-        ctx.composite_tree
-            .add_child(target.ct_root(), self.eh.ct_root);
-        ctx.ht_manager.add_child(target.ht_root(), self.eh.ht_root);
-    }
-}
-
-pub struct MenuItemEventHandler {
-    ct_root: CompositeTreeRef,
-    ht_root: HitTestTreeRef,
-    id: usize,
-    receiver: std::rc::Weak<EventHandler>,
-}
-impl HitTestTreeActionHandler for MenuItemEventHandler {
-    fn on_pointer_enter(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        _args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context
-            .composite_tree
-            .begin_mod_chain(self.ct_root)
-            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.0],
-                to_value: [1.0, 1.0, 1.0, 0.125],
-                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            }))
-            .apply();
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_leave(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        _args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        context
-            .composite_tree
-            .begin_mod_chain(self.ct_root)
-            .composite_mode(CompositeMode::FillColor(AnimatableColor::Animated {
-                from_value: [1.0, 1.0, 1.0, 0.125],
-                to_value: [1.0, 1.0, 1.0, 0.0],
-                sec_duration: (context.current_sec..context.current_sec + 0.1).into(),
-                curve: AnimationCurve::Linear,
-                event_on_complete: None,
-            }))
-            .apply();
-
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_click(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        _args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        context
-            .system_link
-            .dispatch_event(Event::DropdownMenuSelectItem {
-                id: self.id,
-                receiver: self.receiver.clone(),
-            });
-
-        EventContinueControl::STOP_PROPAGATION
+        }
     }
 }
