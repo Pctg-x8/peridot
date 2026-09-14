@@ -1124,6 +1124,12 @@ impl<Event> CompositeRectBuilder<Event> {
         self.opacity(AnimatableFloat::from_template(template, start_sec))
     }
 
+    #[inline(always)]
+    pub fn scale_x_imm(mut self, x: f32) -> Self {
+        self.temp.scale_x = AnimatableFloat::Value(x);
+        self
+    }
+
     pub fn border(mut self, border: Border<Event>) -> Self {
         self.temp.has_bitmap = true; // Borderはbitmap生成しないと描画されない
         self.temp.border = Some(border);
@@ -1132,6 +1138,12 @@ impl<Event> CompositeRectBuilder<Event> {
 
     pub fn corner_radius(mut self, corner_radius: CornerRadius) -> Self {
         self.temp.corner_radius = corner_radius;
+        self
+    }
+
+    #[inline(always)]
+    pub const fn clip_child_hard(mut self) -> Self {
+        self.temp.clip_child = Some(ClipConfig::HARD);
         self
     }
 
