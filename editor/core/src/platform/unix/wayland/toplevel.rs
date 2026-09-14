@@ -321,10 +321,10 @@ struct CommittedState {
 
 pub(super) struct InstanceState {
     surface_ptr: NonNull<wl::Surface>,
-    pub(super) xdg_surface: wl::Owned<wl::XdgSurface>,
-    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
-    _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
     _appmenu: Option<wl::Owned<wl::OrgKdeKwinAppmenu>>,
+    _deco: Option<wl::Owned<wl::ZxdgToplevelDecorationV1>>,
+    xdg_toplevel: wl::Owned<wl::XdgToplevel>,
+    pub(super) xdg_surface: wl::Owned<wl::XdgSurface>,
     entering_output_ptr: *mut wl::Output,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
