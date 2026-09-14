@@ -4,7 +4,7 @@ use std::rc::Rc;
 use shared::{LogicalUnit, Rect, Size, range_from_len};
 
 use crate::{
-    Event, SyncEvent, SystemLink, WindowHandle,
+    Event, SyncEvent, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
         hittest::{
@@ -28,13 +28,23 @@ use crate::{
 };
 
 pub trait SimpleButtonEventHandler {
-    fn on_click_event(&self, window: WindowHandle) -> Event;
+    fn on_click(
+        &self,
+        sender: TypedViewIdentifier<SimpleButtonView>,
+        window: WindowHandle,
+        ctx: &mut InputEventContext,
+    );
 }
 
 pub struct SimpleButtonConstantEventHandler(pub Event);
 impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
-    fn on_click_event(&self, _window: WindowHandle) -> Event {
-        self.0.clone()
+    fn on_click(
+        &self,
+        _sender: TypedViewIdentifier<SimpleButtonView>,
+        _window: WindowHandle,
+        ctx: &mut InputEventContext,
+    ) {
+        ctx.system_link.dispatch_event(self.0.clone());
     }
 }
 
@@ -55,8 +65,9 @@ impl ViewConstructor for SimpleButtonViewInit {
     type ConcreteView = SimpleButtonView;
 
     #[inline(always)]
-    fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+    fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
         SimpleButtonView {
+            view_id: id,
             entity: None,
             label: self.label,
             event_handler: self.event_handler,
@@ -66,6 +77,7 @@ impl ViewConstructor for SimpleButtonViewInit {
 }
 
 pub struct SimpleButtonView {
+    view_id: TypedViewIdentifier<Self>,
     entity: Option<Rc<SimpleButtonActionHandler>>,
     label: String,
     event_handler: Option<Box<dyn SimpleButtonEventHandler>>,
@@ -171,6 +183,7 @@ impl View for SimpleButtonView {
                 ctx.composite_tree.add_child(ct_root, ct_focus);
 
                 let action_handler = Rc::new(SimpleButtonActionHandler {
+                    view_id: self.view_id,
                     kf_token,
                     ht_root,
                     ct_root,
@@ -228,6 +241,7 @@ impl View for SimpleButtonView {
 }
 
 struct SimpleButtonActionHandler {
+    view_id: TypedViewIdentifier<SimpleButtonView>,
     kf_token: FocusTargetToken,
     ht_root: HitTestTreeRef,
     ct_root: CompositeTreeRef,
@@ -260,13 +274,7 @@ impl KeyInputEventHandler for SimpleButtonActionHandler {
 
         if code == crate::input::KeyInputCode::Enter {
             // hit enter
-            self.perform_click_action(
-                context.system_link,
-                context
-                    .ht_manager
-                    .query_root_window(self.ht_root)
-                    .expect("not mounted"),
-            );
+            self.perform_click_action(context);
         }
     }
 }
@@ -333,19 +341,13 @@ impl HitTestTreeActionHandler for SimpleButtonActionHandler {
 
     fn on_click(
         &self,
-        sender: HitTestTreeRef,
+        _sender: HitTestTreeRef,
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        self.perform_click_action(
-            context.system_link,
-            context
-                .ht_manager
-                .query_root_window(sender)
-                .expect("not mounted"),
-        );
+        self.perform_click_action(context);
 
-        EventContinueControl::empty()
+        EventContinueControl::STOP_PROPAGATION
     }
 }
 impl SimpleButtonActionHandler {
@@ -382,9 +384,15 @@ impl SimpleButtonActionHandler {
         self.state.set(new_state);
     }
 
-    fn perform_click_action(&self, syslink: &SystemLink, window: WindowHandle) {
+    fn perform_click_action(&self, ctx: &mut InputEventContext) {
         if let Some(ref c) = self.event_handler {
-            syslink.dispatch_event(c.on_click_event(window));
+            c.on_click(
+                self.view_id,
+                ctx.ht_manager
+                    .query_root_window(self.ht_root)
+                    .expect("not mounted"),
+                ctx,
+            );
         }
     }
 }

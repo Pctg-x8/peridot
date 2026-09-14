@@ -649,9 +649,6 @@ pub enum Event {
         target_window: WindowHandle,
         message: String,
     },
-    PopupClose {
-        id: PopupID,
-    },
     OpenCustomViewFlyout {
         parent: WindowHandle,
         surface_pos: Point<LogicalUnit>,
@@ -715,7 +712,6 @@ impl Event {
             Self::Sync(e) => e.p_name(),
             Self::Quit => "Quit",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
-            Self::PopupClose { .. } => "PopupClose",
             Self::OpenCustomViewFlyout { .. } => "OpenCustomViewFlyout",
             Self::MenuSelectItem { .. } => "MenuSelectItem",
             Self::MenuDeselectItem { .. } => "MenuDeselectItem",
@@ -2226,11 +2222,16 @@ impl UIKitPreviewPanePresenter {
         struct AlertButtonEventHandler(String);
         impl SimpleButtonEventHandler for AlertButtonEventHandler {
             #[inline(always)]
-            fn on_click_event(&self, window: WindowHandle) -> Event {
-                Event::OpenAlertDialog {
+            fn on_click(
+                &self,
+                _sender: TypedViewIdentifier<uikit::SimpleButtonView>,
+                window: WindowHandle,
+                ctx: &mut InputEventContext,
+            ) {
+                ctx.system_link.dispatch_event(Event::OpenAlertDialog {
                     target_window: window,
                     message: self.0.clone(),
-                }
+                })
             }
         }
 
@@ -3367,6 +3368,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
             },
+            popup_manager: &mut this.popup_manager,
         };
 
         for &ht in wd.screen_reposition_interests.iter() {
@@ -3518,6 +3520,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
             },
+            popup_manager: &mut this.popup_manager,
         };
         let mgr = target.keyboard_focus_state_mut();
 
@@ -3679,6 +3682,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             button,
             key_modifier,
@@ -3717,6 +3721,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             target.ht_root(),
         );
@@ -3751,6 +3756,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
         );
     }
@@ -3782,6 +3788,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             button,
             key_modifier,
@@ -3810,6 +3817,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
         );
     }
@@ -3834,6 +3842,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             });
     }
 
@@ -3862,6 +3871,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
         );
     }
@@ -3902,6 +3912,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             &this.keyboard_focus_registry,
         );
@@ -3933,6 +3944,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             &this.keyboard_focus_registry,
         );
@@ -3964,6 +3976,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             &this.keyboard_focus_registry,
         );
@@ -3995,6 +4008,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             &this.keyboard_focus_registry,
         );
@@ -4027,6 +4041,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             &this.keyboard_focus_registry,
         );
@@ -4034,24 +4049,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
 
     fn close_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
         let this = unsafe { self.get_unchecked_mut() };
-        this.popup_manager.close(
-            id,
-            &mut RenderContext {
-                composite_tree: &mut this.composite_tree,
-                ht_manager: &mut this.ht_manager,
-                keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                system_link: &this.syslink,
-                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
-                application: &this.application,
-                view_feedback_subscription_delayed_ops: &mut this
-                    .view_feedback_registry_delayed_ops,
-            },
-            &mut this.view_instance_store,
-            &this.view_tree_relation_store,
-            &mut this.view_layout_state_store,
-            &mut this.view_render_state_store,
-        );
+        this.popup_manager.close(id, &mut this.view_instance_store);
     }
 
     fn destroy_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
@@ -4097,7 +4095,8 @@ impl<'sys> CoreLoop<'static, 'sys> {
             target_window,
             |id, ctx| uikit::AlertDialogPresenter::new(ctx, id, message, target_window),
         );
-        this.popup_manager.post_open_action(
+        // TODO: これあとでなんとかする post_open_action自体仕組みとして微妙......
+        unsafe { &mut *core::ptr::from_mut(&mut this.popup_manager) }.post_open_action(
             opened_id,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
@@ -4115,6 +4114,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             &this.keyboard_focus_registry,
         );
@@ -4235,6 +4235,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             button,
             key_modifier,
@@ -4273,6 +4274,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             target.ht_root(),
         );
@@ -4308,6 +4310,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
             button,
             key_modifier,
@@ -4336,6 +4339,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
                 },
+                popup_manager: &mut this.popup_manager,
             },
         );
     }
@@ -4815,7 +4819,25 @@ impl<'sys> CoreLoop<'static, 'sys> {
 
     fn update_view(self: core::pin::Pin<&mut Self>) {
         let this = unsafe { self.get_unchecked_mut() };
+
         this.view_render_queue.perform(
+            &mut RenderContext {
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &this.syslink,
+                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                application: &this.application,
+                view_feedback_subscription_delayed_ops: &mut this
+                    .view_feedback_registry_delayed_ops,
+            },
+            &mut this.view_instance_store,
+            &this.view_tree_relation_store,
+            &mut this.view_layout_state_store,
+            &mut this.view_render_state_store,
+        );
+        this.popup_manager.update_views(
             &mut RenderContext {
                 composite_tree: &mut this.composite_tree,
                 ht_manager: &mut this.ht_manager,
@@ -4912,7 +4934,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 target_window,
                 message,
             } => self.as_mut().open_alert_dialog(target_window, message),
-            Event::PopupClose { id } => self.as_mut().close_popup(id),
             Event::Sync(SyncEvent::PopupUnmount { id }) => self.as_mut().destroy_popup(id),
             Event::OpenCustomViewFlyout {
                 parent,

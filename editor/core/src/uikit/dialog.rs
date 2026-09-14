@@ -1,23 +1,19 @@
 use shared::Size;
 
 use crate::{
-    Event, SyncEvent, WindowHandle,
-    input::hittest::HitTestTreeManager,
+    SyncEvent, WindowHandle,
     rendering::{
-        composite::{CompositeRectTextHorizontalAlignment, CompositeTree},
+        composite::CompositeRectTextHorizontalAlignment,
         text::{FontID, TextLayout},
     },
     uicore::{
-        OverlayPopupBasicFrameView, OverlayPopupBasicMaskView, Popup, PopupCloseContext, PopupID,
-        TeardownContext, TypedViewIdentifier, ViewIdentifier, ViewInitContext,
-        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
-        ViewRelationControllable, ViewSize,
+        OverlayPopupBasicFrameView, OverlayPopupBasicFrameViewInit, OverlayPopupBasicMaskView,
+        OverlayPopupBasicMaskViewInit, Popup, PopupCloseContext, PopupID, TeardownContext,
+        TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut,
+        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
+        ViewLayoutOverflow, ViewRegisterable, ViewRelationControllable, ViewSize,
     },
-    uikit::{
-        SimpleButtonConstantEventHandler, SimpleButtonView, SimpleButtonViewInit,
-        StaticTextViewInit,
-    },
+    uikit::{SimpleButtonEventHandler, SimpleButtonView, SimpleButtonViewInit, StaticTextViewInit},
 };
 
 pub struct AlertDialogPresenter {
@@ -49,13 +45,16 @@ impl AlertDialogPresenter {
             .max(64.0)
             .min(owner_window.client_size().width * 0.8);
 
-        let mask = ctx.construct_view_direct(|_| Box::new(OverlayPopupBasicMaskView::new()));
-        let frame = ctx.construct_view_direct(|_| {
-            Box::new(OverlayPopupBasicFrameView::new(Size::new_logical(
-                text_width + Self::AROUND_PADDING * 2.0,
-                tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
-            )))
-        });
+        let mask = ctx.construct_view(OverlayPopupBasicMaskViewInit, |_| []);
+        let frame = ctx.construct_view(
+            OverlayPopupBasicFrameViewInit {
+                size: Size::new_logical(
+                    text_width + Self::AROUND_PADDING * 2.0,
+                    tl.height() + Self::MESSAGE_BUTTON_SPACING + 24.0 + Self::AROUND_PADDING * 2.0,
+                ),
+            },
+            |_| [],
+        );
         {
             let frame = ctx.view_layout_mut(frame).expect("query failed");
             frame.padding.set_all(16.0);
@@ -82,9 +81,7 @@ impl AlertDialogPresenter {
         let confirm_button = ctx.construct_view(
             SimpleButtonViewInit {
                 label: "OK".into(),
-                event_handler: Some(Box::new(SimpleButtonConstantEventHandler(
-                    Event::PopupClose { id: popup_id },
-                ))),
+                event_handler: Some(Box::new(EventHandler { popup_id })),
             },
             |_| [],
         );
@@ -111,13 +108,7 @@ impl Popup for AlertDialogPresenter {
         self.mask.into_untyped()
     }
 
-    fn close(
-        &mut self,
-        context: &mut PopupCloseContext,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        _ht_manager: &mut HitTestTreeManager,
-        current_sec: f32,
-    ) {
+    fn close(&mut self, context: &mut PopupCloseContext) {
         // disable button interaction while animating
         context
             .view_instance_mut(self.confirm_button)
@@ -125,19 +116,29 @@ impl Popup for AlertDialogPresenter {
             .set_interactive(false);
 
         context
-            .view_instance(self.mask)
+            .view_instance_mut(self.mask)
             .expect("query failed")
-            .play_close_animation(composite_tree, current_sec);
+            .play_close_animation();
         context
-            .view_instance(self.frame)
+            .view_instance_mut(self.frame)
             .expect("query failed")
-            .play_close_animation(
-                composite_tree,
-                current_sec,
-                SyncEvent::PopupUnmount { id: self.id },
-            );
+            .play_close_animation(SyncEvent::PopupUnmount { id: self.id });
     }
 
     #[allow(unused_variables)]
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
+}
+
+struct EventHandler {
+    popup_id: PopupID,
+}
+impl SimpleButtonEventHandler for EventHandler {
+    fn on_click(
+        &self,
+        _sender: TypedViewIdentifier<SimpleButtonView>,
+        _window: WindowHandle,
+        ctx: &mut crate::input::InputEventContext,
+    ) {
+        ctx.close_popup(self.popup_id);
+    }
 }

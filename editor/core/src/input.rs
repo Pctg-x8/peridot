@@ -1,3 +1,4 @@
+use core::pin::Pin;
 use std::{
     collections::{BTreeSet, HashMap},
     rc::{Rc, Weak},
@@ -8,8 +9,8 @@ use bitflags::bitflags;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    DragData, DropdownMenuOpenRequest, FlyoutSurfaceHandle, MenuOpenRequest, PointerID, SyncEvent,
-    SystemLink, WindowHandle,
+    CoreLoop, DragData, DropdownMenuOpenRequest, FlyoutSurfaceHandle, MenuOpenRequest, PointerID,
+    SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, DragDropFlags, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
@@ -18,7 +19,7 @@ use crate::{
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uicore::{
-        View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
+        PopupID, PopupManager, View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRenderQueue, ViewRenderer,
         view_iter_self_group_participants,
     },
@@ -45,6 +46,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
     pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
     pub dropdown_menu_open_requests: &'env mut Vec<DropdownMenuOpenRequest>,
+    pub popup_manager: &'env mut PopupManager,
 }
 impl InputEventContext<'_, '_, '_> {
     #[inline(always)]
@@ -72,6 +74,11 @@ impl InputEventContext<'_, '_, '_> {
     #[inline(always)]
     pub fn request_open_dropdown_menu(&mut self, req: DropdownMenuOpenRequest) {
         self.dropdown_menu_open_requests.push(req);
+    }
+
+    #[inline(always)]
+    pub fn close_popup(&mut self, id: PopupID) {
+        self.popup_manager.close(id, self.view_instance_store);
     }
 }
 impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {

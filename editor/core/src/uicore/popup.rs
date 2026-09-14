@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use shared::{LogicalUnit, Point, Rect, Size, range_from_len};
 
@@ -6,7 +6,7 @@ use crate::{
     SyncEvent, WindowHandle,
     input::{
         InputEventContext, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
-        hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
+        hittest::{HitTestTreeData, HitTestTreeRef},
     },
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
@@ -14,11 +14,11 @@ use crate::{
         FloatAnimationTemplate,
     },
     uicore::{
-        RenderContext, TeardownContext, View, ViewIdentifier, ViewImmediateRenderable,
-        ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayoutStateStore, ViewRenderElements, ViewRenderStateStore, ViewTreeRelationStore,
-        render_view_with_base, teardown_view_recursive, view_instance, view_instance_mut,
-        view_layout_mut, view_set_visibility,
+        RenderContext, TeardownContext, View, ViewConstructor, ViewIdentifier,
+        ViewImmediateRenderable, ViewInitContext, ViewInstanceQueryable, ViewInstanceQueryableMut,
+        ViewInstanceStore, ViewLayoutStateStore, ViewRenderElements, ViewRenderStateStore,
+        ViewTreeRelationStore, render_view_with_base, teardown_view_recursive, view_instance,
+        view_instance_mut, view_layout_mut, view_set_visibility,
     },
 };
 
@@ -41,13 +41,8 @@ pub trait Popup {
     fn rescale(&self, scale: f32, composite_tree: &mut CompositeTree<SyncEvent>) {}
 
     /// ポップアップが閉じられるときに呼ばれる
-    fn close(
-        &mut self,
-        context: &mut PopupCloseContext,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        current_sec: f32,
-    );
+    #[allow(unused_variables)]
+    fn close(&mut self, context: &mut PopupCloseContext) {}
 
     /// ポップアップのクローズアニメーションが終わって、インスタンスが破棄されるときに呼ばれる
     fn teardown(&mut self, ctx: &mut TeardownContext);
@@ -81,12 +76,13 @@ impl ViewInstanceQueryableMut for PopupCloseContext<'_> {
 
 pub struct PopupManager {
     instance_by_id: HashMap<PopupID, (Box<dyn Popup>, WindowHandle, KeyboardFocusGroupRef)>,
+    pending_update: HashSet<PopupID>,
 }
 impl PopupManager {
-    #[inline(always)]
     pub fn new() -> Self {
         Self {
             instance_by_id: HashMap::new(),
+            pending_update: HashSet::new(),
         }
     }
 
@@ -123,43 +119,19 @@ impl PopupManager {
         }
     }
 
-    #[inline(always)]
-    pub fn close(
-        &mut self,
-        id: PopupID,
-        ctx: &mut RenderContext,
-        view_instance_store: &mut ViewInstanceStore,
-        view_tree_relation_store: &ViewTreeRelationStore,
-        view_layout_state_store: &mut ViewLayoutStateStore,
-        view_render_state_store: &mut ViewRenderStateStore,
-    ) -> bool {
-        if let Some(&mut (ref mut instance, ref w, g)) = self.instance_by_id.get_mut(&id) {
-            instance.close(
-                &mut PopupCloseContext {
-                    view_instance_store,
-                },
-                ctx.composite_tree,
-                ctx.ht_manager,
-                ctx.current_sec,
-            );
-            render_view_with_base(
-                instance.root_view_id(),
-                ctx,
-                w,
-                g,
-                Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
-                view_instance_store,
-                view_tree_relation_store,
-                view_layout_state_store,
-                view_render_state_store,
-            );
-            true
-        } else {
-            false
-        }
+    pub fn close(&mut self, id: PopupID, view_instance_store: &mut ViewInstanceStore) -> bool {
+        let Some(&mut (ref mut instance, _, _)) = self.instance_by_id.get_mut(&id) else {
+            tracing::warn!(?id, "closing invalid popup");
+            return false;
+        };
+
+        instance.close(&mut PopupCloseContext {
+            view_instance_store,
+        });
+        self.pending_update.insert(id);
+        true
     }
 
-    #[inline(always)]
     pub fn teardown(
         &mut self,
         id: PopupID,
@@ -185,7 +157,34 @@ impl PopupManager {
         }
     }
 
-    #[inline(always)]
+    pub fn update_views(
+        &mut self,
+        ctx: &mut RenderContext,
+        view_instance_store: &mut ViewInstanceStore,
+        view_tree_relation_store: &ViewTreeRelationStore,
+        view_layout_state_store: &mut ViewLayoutStateStore,
+        view_render_state_store: &mut ViewRenderStateStore,
+    ) {
+        for id in self.pending_update.drain() {
+            let Some(&(ref instance, ref w, g)) = self.instance_by_id.get(&id) else {
+                tracing::warn!(?id, "updating invalid popup");
+                continue;
+            };
+
+            render_view_with_base(
+                instance.root_view_id(),
+                ctx,
+                w,
+                g,
+                Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                view_instance_store,
+                view_tree_relation_store,
+                view_layout_state_store,
+                view_render_state_store,
+            );
+        }
+    }
+
     pub fn rescale(
         &self,
         for_window: WindowHandle,
@@ -205,8 +204,29 @@ struct OverlayPopupBasicMaskViewRenderElements {
     ht_root: HitTestTreeRef,
 }
 
+pub struct OverlayPopupBasicMaskViewInit;
+impl ViewConstructor for OverlayPopupBasicMaskViewInit {
+    type ConcreteView = OverlayPopupBasicMaskView;
+
+    fn construct(self, _id: super::TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        OverlayPopupBasicMaskView {
+            render_elements: None,
+            active_state: OverlayPopupBasicMaskViewState::Opening,
+            pending_state: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum OverlayPopupBasicMaskViewState {
+    Opening,
+    Closing,
+}
+
 pub struct OverlayPopupBasicMaskView {
     render_elements: Option<OverlayPopupBasicMaskViewRenderElements>,
+    active_state: OverlayPopupBasicMaskViewState,
+    pending_state: Option<OverlayPopupBasicMaskViewState>,
 }
 impl OverlayPopupBasicMaskView {
     pub const ANIMATION_DURATION: f32 = 0.125;
@@ -219,55 +239,8 @@ impl OverlayPopupBasicMaskView {
     const CLOSE_BLUR_ANIM: FloatAnimationTemplate =
         Self::OPEN_BLUR_ANIM.flip(AnimationCurve::Linear);
 
-    pub fn new() -> Self {
-        Self {
-            render_elements: None,
-        }
-    }
-
-    fn play_open_animation(
-        ct_root: CompositeTreeRef,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-    ) {
-        composite_tree
-            .begin_mod_chain(ct_root)
-            .composite_mode(CompositeMode::FillColorBackdropBlur(
-                AnimatableColor::Animated {
-                    from_value: [0.0, 0.0, 0.0, 0.0],
-                    to_value: [0.0, 0.0, 0.0, 0.25],
-                    curve: AnimationCurve::Linear,
-                    sec_duration: (current_sec..current_sec + Self::ANIMATION_DURATION).into(),
-                    event_on_complete: None,
-                },
-                AnimatableFloat::from_template(&Self::OPEN_BLUR_ANIM, current_sec),
-            ))
-            .apply();
-    }
-
-    pub fn play_close_animation(
-        &self,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-    ) {
-        composite_tree
-            .begin_mod_chain(
-                self.render_elements
-                    .as_ref()
-                    .expect("still not rendered?")
-                    .ct_root,
-            )
-            .composite_mode(CompositeMode::FillColorBackdropBlur(
-                AnimatableColor::Animated {
-                    from_value: [0.0, 0.0, 0.0, 0.25],
-                    to_value: [0.0, 0.0, 0.0, 0.0],
-                    curve: AnimationCurve::Linear,
-                    sec_duration: (current_sec..current_sec + Self::ANIMATION_DURATION).into(),
-                    event_on_complete: None,
-                },
-                AnimatableFloat::from_template(&Self::CLOSE_BLUR_ANIM, current_sec),
-            ))
-            .apply();
+    pub fn play_close_animation(&mut self) {
+        self.pending_state = Some(OverlayPopupBasicMaskViewState::Closing);
     }
 }
 impl View for OverlayPopupBasicMaskView {
@@ -277,8 +250,8 @@ impl View for OverlayPopupBasicMaskView {
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
-        let e = match self.render_elements {
-            Some(ref e) => e,
+        let (e, retrigger_anim) = match self.render_elements {
+            Some(ref e) => (e, false),
             None => {
                 // first render
                 let ct_root = CompositeRect::build()
@@ -296,14 +269,57 @@ impl View for OverlayPopupBasicMaskView {
                     .top(crate::ui::window_header::View::THICKNESS)
                     .create(ctx.ht_manager);
 
-                // play open animation at first render
-                Self::play_open_animation(ct_root, ctx.composite_tree, ctx.current_sec);
-
-                &*self
-                    .render_elements
-                    .insert(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root })
+                (
+                    &*self
+                        .render_elements
+                        .insert(OverlayPopupBasicMaskViewRenderElements { ct_root, ht_root }),
+                    true,
+                )
             }
         };
+
+        let state_changed = match self.pending_state.take() {
+            None => false,
+            Some(st) => core::mem::replace(&mut self.active_state, st) != st,
+        };
+        if state_changed || retrigger_anim {
+            match self.active_state {
+                OverlayPopupBasicMaskViewState::Opening => {
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_root)
+                        .composite_mode(CompositeMode::FillColorBackdropBlur(
+                            AnimatableColor::Animated {
+                                from_value: [0.0, 0.0, 0.0, 0.0],
+                                to_value: [0.0, 0.0, 0.0, 0.25],
+                                curve: AnimationCurve::Linear,
+                                sec_duration: (ctx.current_sec
+                                    ..ctx.current_sec + Self::ANIMATION_DURATION)
+                                    .into(),
+                                event_on_complete: None,
+                            },
+                            AnimatableFloat::from_template(&Self::OPEN_BLUR_ANIM, ctx.current_sec),
+                        ))
+                        .apply();
+                }
+                OverlayPopupBasicMaskViewState::Closing => {
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_root)
+                        .composite_mode(CompositeMode::FillColorBackdropBlur(
+                            AnimatableColor::Animated {
+                                from_value: [0.0, 0.0, 0.0, 0.25],
+                                to_value: [0.0, 0.0, 0.0, 0.0],
+                                curve: AnimationCurve::Linear,
+                                sec_duration: (ctx.current_sec
+                                    ..ctx.current_sec + Self::ANIMATION_DURATION)
+                                    .into(),
+                                event_on_complete: None,
+                            },
+                            AnimatableFloat::from_template(&Self::CLOSE_BLUR_ANIM, ctx.current_sec),
+                        ))
+                        .apply();
+                }
+            }
+        }
 
         ViewRenderElements {
             composite_tree: Some(e.ct_root),
@@ -339,9 +355,35 @@ struct OverlayPopupBasicFrameViewRenderElements {
     ht_root: HitTestTreeRef,
 }
 
+pub struct OverlayPopupBasicFrameViewInit {
+    pub size: Size<LogicalUnit>,
+}
+impl ViewConstructor for OverlayPopupBasicFrameViewInit {
+    type ConcreteView = OverlayPopupBasicFrameView;
+
+    fn construct(self, _id: super::TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        OverlayPopupBasicFrameView {
+            render_elements: None,
+            size: self.size,
+            active_state: OverlayPopupBasicFrameViewState::Opening,
+            pending_state: None,
+            close_transition_done_event: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OverlayPopupBasicFrameViewState {
+    Opening,
+    Closing,
+}
+
 pub struct OverlayPopupBasicFrameView {
     render_elements: Option<OverlayPopupBasicFrameViewRenderElements>,
     size: Size<LogicalUnit>,
+    active_state: OverlayPopupBasicFrameViewState,
+    pending_state: Option<OverlayPopupBasicFrameViewState>,
+    close_transition_done_event: Option<SyncEvent>,
 }
 impl OverlayPopupBasicFrameView {
     pub const ANIMATION_DURATION: f32 = OverlayPopupBasicMaskView::ANIMATION_DURATION;
@@ -368,66 +410,9 @@ impl OverlayPopupBasicFrameView {
     const CLOSE_OPACITY_ANIM: FloatAnimationTemplate =
         Self::OPEN_OPACITY_ANIM.flip(AnimationCurve::Linear);
 
-    pub fn new(size: Size<LogicalUnit>) -> Self {
-        Self {
-            render_elements: None,
-            size,
-        }
-    }
-
-    fn play_open_animation(
-        ct_root: CompositeTreeRef,
-        size: &Size<LogicalUnit>,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-    ) {
-        composite_tree
-            .begin_mod_chain(ct_root)
-            .y(AnimatableFloat::Animated {
-                from_value: -size.height * 0.5 + 4.0,
-                to_value: -size.height * 0.5,
-                curve: AnimationCurve::CubicBezier {
-                    p1: (0.5, 0.5),
-                    p2: (0.5, 1.0),
-                },
-                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
-                event_on_complete: None,
-            })
-            .scale_animated_from_template(&Self::OPEN_SCALE_ANIM, current_sec)
-            .opacity_animated_from_template(&Self::OPEN_OPACITY_ANIM, current_sec)
-            .apply();
-    }
-
-    pub fn play_close_animation(
-        &self,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        current_sec: f32,
-        event_on_complete: SyncEvent,
-    ) {
-        composite_tree
-            .begin_mod_chain(
-                self.render_elements
-                    .as_ref()
-                    .expect("still not rendered?")
-                    .ct_root,
-            )
-            .y(AnimatableFloat::Animated {
-                from_value: -self.size.height * 0.5,
-                to_value: -self.size.height * 0.5 + 4.0,
-                curve: AnimationCurve::CubicBezier {
-                    p1: (0.5, 0.5),
-                    p2: (0.5, 1.0),
-                },
-                sec_duration: range_from_len(current_sec, Self::ANIMATION_DURATION),
-                event_on_complete: None,
-            })
-            .scale_animated_from_template(&Self::CLOSE_SCALE_ANIM, current_sec)
-            .opacity_animated_from_template_with_completion(
-                &Self::CLOSE_OPACITY_ANIM,
-                current_sec,
-                event_on_complete,
-            )
-            .apply();
+    pub fn play_close_animation(&mut self, event_on_complete: SyncEvent) {
+        self.pending_state = Some(OverlayPopupBasicFrameViewState::Closing);
+        self.close_transition_done_event = Some(event_on_complete);
     }
 }
 impl View for OverlayPopupBasicFrameView {
@@ -437,11 +422,11 @@ impl View for OverlayPopupBasicFrameView {
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
-        let e = match self.render_elements {
+        let (e, retrigger_anim) = match self.render_elements {
             Some(ref e) => {
                 // TODO: reflect changes
 
-                e
+                (e, false)
             }
             None => {
                 // first render
@@ -494,14 +479,63 @@ impl View for OverlayPopupBasicFrameView {
                 ctx.composite_tree.add_child(ct_root, ct_shadow);
                 ctx.composite_tree.add_child(ct_root, ct_visual);
 
-                // play animation on first render
-                Self::play_open_animation(ct_root, &self.size, ctx.composite_tree, ctx.current_sec);
-
-                &*self
-                    .render_elements
-                    .insert(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root })
+                (
+                    &*self
+                        .render_elements
+                        .insert(OverlayPopupBasicFrameViewRenderElements { ct_root, ht_root }),
+                    true,
+                )
             }
         };
+
+        let state_changed = match self.pending_state.take() {
+            None => false,
+            Some(st) => core::mem::replace(&mut self.active_state, st) != st,
+        };
+        if state_changed || retrigger_anim {
+            match self.active_state {
+                OverlayPopupBasicFrameViewState::Opening => {
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_root)
+                        .y(AnimatableFloat::Animated {
+                            from_value: -self.size.height * 0.5 + 4.0,
+                            to_value: -self.size.height * 0.5,
+                            curve: AnimationCurve::CubicBezier {
+                                p1: (0.5, 0.5),
+                                p2: (0.5, 1.0),
+                            },
+                            sec_duration: range_from_len(ctx.current_sec, Self::ANIMATION_DURATION),
+                            event_on_complete: None,
+                        })
+                        .scale_animated_from_template(&Self::OPEN_SCALE_ANIM, ctx.current_sec)
+                        .opacity_animated_from_template(&Self::OPEN_OPACITY_ANIM, ctx.current_sec)
+                        .apply();
+                }
+                OverlayPopupBasicFrameViewState::Closing => {
+                    ctx.composite_tree
+                        .begin_mod_chain(e.ct_root)
+                        .y(AnimatableFloat::Animated {
+                            from_value: -self.size.height * 0.5,
+                            to_value: -self.size.height * 0.5 + 4.0,
+                            curve: AnimationCurve::CubicBezier {
+                                p1: (0.5, 0.5),
+                                p2: (0.5, 1.0),
+                            },
+                            sec_duration: range_from_len(ctx.current_sec, Self::ANIMATION_DURATION),
+                            event_on_complete: None,
+                        })
+                        .scale_animated_from_template(&Self::CLOSE_SCALE_ANIM, ctx.current_sec)
+                        .opacity_animated_from_template_with_completion(
+                            &Self::CLOSE_OPACITY_ANIM,
+                            ctx.current_sec,
+                            self.close_transition_done_event
+                                .take()
+                                .expect("no close transition done event bound"),
+                        )
+                        .apply();
+                }
+            }
+        }
 
         ViewRenderElements {
             composite_tree: Some(e.ct_root),
