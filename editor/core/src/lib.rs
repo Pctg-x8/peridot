@@ -854,8 +854,26 @@ impl ColorPickerSharedResources {
 static COLOR_PICKER_SHARED_RES: UnsafeMainThreadOnlyOnceCell<ColorPickerSharedResources> =
     UnsafeMainThreadOnlyOnceCell(core::cell::OnceCell::new());
 
+pub struct ColorPickerViewInit<BackingStore: ColorPickerBackingStoreEvent + 'static> {
+    pub backing_store: std::rc::Weak<BackingStore>,
+}
+impl<BackingStore: ColorPickerBackingStoreEvent + 'static> uicore::ViewConstructor
+    for ColorPickerViewInit<BackingStore>
+{
+    type ConcreteView = ColorPickerView;
+
+    #[inline(always)]
+    fn construct(self, id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
+        ColorPickerView {
+            view_id: id,
+            backing_store: self.backing_store,
+            eh: None,
+        }
+    }
+}
+
 pub struct ColorPickerView {
-    hex_text_input_view_id: ViewIdentifier,
+    view_id: TypedViewIdentifier<Self>,
     backing_store: std::rc::Weak<dyn ColorPickerBackingStoreEvent>,
     eh: Option<Rc<ColorPickerEventHandler>>,
 }
@@ -871,17 +889,6 @@ impl ColorPickerView {
     const GRADIENT_BOX_MARGIN: f32 = 4.0;
     const POINTER_SIZE: f32 = 12.0;
     const ALPHA_SLIDER_THUMB_THICKNESS: f32 = 3.0;
-
-    pub fn new(
-        hex_text_input_view_id: ViewIdentifier,
-        backing_store: std::rc::Weak<impl ColorPickerBackingStoreEvent + 'static>,
-    ) -> Self {
-        Self {
-            hex_text_input_view_id,
-            backing_store: backing_store as _,
-            eh: None,
-        }
-    }
 }
 impl View for ColorPickerView {
     fn render(
@@ -1075,6 +1082,27 @@ impl View for ColorPickerView {
                     ..Default::default()
                 });
 
+                let hex_text_input_kf = ctx.keyboard_focus_registry.acquire_token();
+                let hex_text_input_ht = HitTestTreeData::build()
+                    .rect(Rect::from_lt_size(
+                        Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
+                        Size::new_logical(128.0 - 32.0, 20.0),
+                    ))
+                    .cursor_shape(CursorShape::IBeam)
+                    .keyboard_focus(hex_text_input_kf)
+                    .create(ctx.ht_manager);
+                let hex_text_input_view = uikit::TextInputViewCore::new(
+                    ctx,
+                    Rect::from_lt_size(
+                        Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
+                        Size::new_logical(128.0 - 32.0, 20.0),
+                    ),
+                    [0.0, 0.0],
+                    [0.0, 0.0],
+                    self.view_id.into_untyped(),
+                    hex_text_input_ht,
+                );
+
                 ctx.composite_tree.add_child(ct_root, ct_sat_light_box);
                 ctx.composite_tree.add_child(ct_pointer, ct_pointer_dark);
                 ctx.composite_tree.add_child(ct_sat_light_box, ct_pointer);
@@ -1084,10 +1112,13 @@ impl View for ColorPickerView {
                     .add_child(ct_alpha_slider_base, ct_alpha_slider_thumb);
                 ctx.composite_tree.add_child(ct_root, ct_alpha_slider_base);
                 ctx.composite_tree.add_child(ct_root, ct_hex_label);
+                ctx.composite_tree
+                    .add_child(ct_root, hex_text_input_view.entity().ct_root());
                 ctx.ht_manager.add_child(ht_root, ht_sat_light_box);
                 ctx.ht_manager.add_child(ht_root, ht_alpha_slider);
+                ctx.ht_manager.add_child(ht_root, hex_text_input_ht);
 
-                let eh = Rc::new_cyclic(|thisref| ColorPickerEventHandler {
+                let eh = Rc::new(ColorPickerEventHandler {
                     backing_store: self.backing_store.clone(),
                     ct_root,
                     ct_sat_light_box,
@@ -1109,42 +1140,43 @@ impl View for ColorPickerView {
                     current_light: Cell::new(1.0),
                     current_saturation: Cell::new(0.0),
                     current_alpha: Cell::new(1.0),
-                    hex_text_input_view: RefCell::new(ColorPickerHexTextInputView::new(
-                        self.hex_text_input_view_id,
-                        Rect::from_lt_size(
-                            Point::new_logical(32.0, 128.0 + 32.0 + 16.0),
-                            Size::new_logical(128.0 - 32.0, 20.0),
-                        ),
-                        thisref.clone(),
-                    )),
+                    hex_text_input_view,
+                    hex_text_input_ht,
+                    hex_text_input_kf,
                 });
                 ctx.ht_manager.set_action_handler(ht_root, &eh);
                 ctx.ht_manager.set_action_handler(ht_sat_light_box, &eh);
                 ctx.ht_manager.set_action_handler(ht_alpha_slider, &eh);
+                ctx.ht_manager.set_action_handler(hex_text_input_ht, &eh);
+                ctx.keyboard_focus_registry
+                    .set_event_handler(hex_text_input_kf, &eh);
 
                 if let Some(e) = self.backing_store.upgrade() {
                     let v = e.value();
 
                     eh.set_by_color(v, ctx.composite_tree);
-                    eh.hex_text_input_view.borrow().set_value(v);
+                    eh.hex_text_input_view
+                        .entity()
+                        .lazy_update(|e| e.set_content(ColorPickerEventHandler::fmt(v)));
                 }
 
                 &*self.eh.insert(eh)
             }
         };
-        // TODO: ViewがViewをもつパターン(これなしにしたほうがいいかも)
-        // self.eh.hex_text_input_view.borrow_mut().render(
-        //     ctx,
-        //     &uikit::RawMountTarget {
-        //         ht_root: self.eh.ht_root,
-        //         ct_root: self.eh.ct_root,
-        //     },
-        //     kf_group,
-        // );
+
+        e.hex_text_input_view
+            .entity()
+            .process_pending_updates_with_ht_mutation(
+                ctx.composite_tree,
+                ctx.system_link,
+                ctx.ht_manager,
+                ctx.current_sec,
+            );
 
         ViewRenderElements {
             composite_tree: Some(e.ct_root),
             hit_tree: Some(e.ht_root),
+            keyboard_focus: Some(e.hex_text_input_kf),
             ..ViewRenderElements::EMPTY
         }
     }
@@ -1188,7 +1220,63 @@ struct ColorPickerEventHandler {
     current_light: Cell<f32>,
     current_saturation: Cell<f32>,
     current_alpha: Cell<f32>,
-    hex_text_input_view: RefCell<ColorPickerHexTextInputView>,
+    hex_text_input_view: uikit::TextInputViewCore,
+    hex_text_input_ht: HitTestTreeRef,
+    hex_text_input_kf: FocusTargetToken,
+}
+impl KeyInputEventHandler for ColorPickerEventHandler {
+    fn focus_taken(&self, context: &mut InputEventContext) {
+        self.hex_text_input_view.entity().focus_taken(context);
+    }
+
+    fn focus_released(&self, context: &mut InputEventContext) {
+        self.hex_text_input_view.entity().focus_released(context);
+        self.confirm_direct_input(context.composite_tree, context.view_render_queue);
+    }
+
+    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        if code == KeyInputCode::Enter {
+            // 確定or入力開始
+            self.confirm_direct_input(context.composite_tree, context.view_render_queue);
+            return;
+        }
+
+        if code == KeyInputCode::Esc {
+            // 入力キャンセル
+            self.cancel_direct_input(context.view_render_queue);
+            return;
+        }
+
+        self.hex_text_input_view
+            .entity()
+            .keydown(context, code, modifier);
+    }
+
+    fn r#char(&self, context: &mut InputEventContext, ch: char, modifier: ModifierKey) {
+        self.hex_text_input_view
+            .entity()
+            .char(context, ch, modifier);
+    }
+
+    fn keyup(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
+        self.hex_text_input_view
+            .entity()
+            .keyup(context, code, modifier);
+    }
+
+    #[cfg(feature = "wayland")]
+    fn ime_state_changes(
+        &self,
+        context: &mut InputEventContext,
+        new_committed_string: Option<&str>,
+        new_preedit_string: Option<&str>,
+    ) {
+        self.hex_text_input_view.entity().ime_state_changes(
+            context,
+            new_committed_string,
+            new_preedit_string,
+        );
+    }
 }
 impl HitTestTreeActionHandler for ColorPickerEventHandler {
     fn hittest(&self, target: HitTestTreeRef, args: &HitTestArgs) -> bool {
@@ -1274,6 +1362,13 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             return EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT;
         }
 
+        if sender == self.hex_text_input_ht {
+            return self
+                .hex_text_input_view
+                .entity()
+                .on_pointer_down(sender, context, args);
+        }
+
         EventContinueControl::empty()
     }
 
@@ -1343,6 +1438,13 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
                 .mark_dirty(self.ct_alpha_slider_thumb);
 
             return EventContinueControl::STOP_PROPAGATION;
+        }
+
+        if sender == self.hex_text_input_ht {
+            return self
+                .hex_text_input_view
+                .entity()
+                .on_pointer_move(sender, context, args);
         }
 
         EventContinueControl::empty()
@@ -1416,14 +1518,21 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             return EventContinueControl::STOP_PROPAGATION;
         }
 
+        if sender == self.hex_text_input_ht {
+            return self
+                .hex_text_input_view
+                .entity()
+                .on_drag_move(sender, context, args);
+        }
+
         EventContinueControl::empty()
     }
 
     fn on_pointer_up(
         &self,
         sender: HitTestTreeRef,
-        _context: &mut InputEventContext,
-        _args: &PointerButtonActionArgs,
+        context: &mut InputEventContext,
+        args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
         if sender == self.ht_root {
             self.ring_selecting.set(false);
@@ -1441,6 +1550,13 @@ impl HitTestTreeActionHandler for ColorPickerEventHandler {
             self.alpha_sliding.set(false);
             return EventContinueControl::STOP_PROPAGATION
                 | EventContinueControl::RELEASE_CAPTURE_ELEMENT;
+        }
+
+        if sender == self.hex_text_input_ht {
+            return self
+                .hex_text_input_view
+                .entity()
+                .on_pointer_up(sender, context, args);
         }
 
         EventContinueControl::empty()
@@ -1517,7 +1633,9 @@ impl ColorPickerEventHandler {
             (self.current_alpha.get() * 255.0) as _,
         );
 
-        self.hex_text_input_view.borrow().set_value(rgba);
+        self.hex_text_input_view
+            .entity()
+            .lazy_update_and_schedule(view_render_queue, |e| e.set_content(Self::fmt(rgba)));
 
         composite_tree.set_gradient(
             self.alpha_slider_content_gradient,
@@ -1592,178 +1710,7 @@ impl ColorPickerEventHandler {
             },
         );
     }
-}
 
-const fn hue_to_rgb_wave(hue: f32) -> f32 {
-    // generate ／￣￣＼＿＿ wave
-    let phase = (hue / 60.0) % 6.0;
-    match phase {
-        0.0..1.0 => phase,
-        1.0..3.0 => 1.0,
-        3.0..4.0 => 4.0 - phase,
-        _ => 0.0,
-    }
-}
-
-const fn gen_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
-    r as u32 | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24)
-}
-
-struct ColorPickerHexTextInputView {
-    id: ViewIdentifier,
-    eh: Option<Rc<ColorPickerHexTextInputEventHandler>>,
-    rect: Rect<LogicalUnit>,
-    parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
-}
-impl ColorPickerHexTextInputView {
-    pub fn new(
-        id: ViewIdentifier,
-        rect: Rect<LogicalUnit>,
-        parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
-    ) -> Self {
-        Self {
-            id,
-            eh: None,
-            rect,
-            parent_view_handler,
-        }
-    }
-
-    fn set_value(&self, value: u32) {
-        // TODO: render内でやるようにする
-        tracing::warn!(value, "todo: set_value");
-    }
-}
-impl View for ColorPickerHexTextInputView {
-    fn render(
-        &mut self,
-        layout_rect: Rect<LogicalUnit>,
-        ctx: &mut RenderContext,
-        _layout_state: &ViewLayoutStateStore,
-    ) -> ViewRenderElements {
-        let e = match self.eh {
-            Some(ref e) => {
-                // TODO: reflect changes
-                e
-            }
-            None => {
-                let kf_token = ctx.keyboard_focus_registry.acquire_token();
-
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: self.rect.left,
-                    top: self.rect.top,
-                    width: self.rect.width,
-                    height: self.rect.height,
-                    cursor_shape: CursorShape::IBeam,
-                    ..Default::default()
-                });
-                let eh = Rc::new_cyclic(|eh| ColorPickerHexTextInputEventHandler {
-                    core: uikit::TextInputViewCore::new(
-                        ctx,
-                        self.rect.clone(),
-                        [0.0; 2],
-                        [0.0; 2],
-                        self.id,
-                        ht_root,
-                    ),
-                    value_edit: RefCell::new("00000000".into()),
-                    value: Cell::new(0),
-                    ht_root,
-                    token: kf_token,
-                    parent_view_handler: self.parent_view_handler.clone(),
-                });
-                ctx.keyboard_focus_registry.set_event_handler(kf_token, &eh);
-                ctx.ht_manager.set_action_handler(ht_root, eh.core.entity());
-
-                &*self.eh.insert(eh)
-            }
-        };
-
-        ViewRenderElements {
-            composite_tree: Some(e.core.entity().ct_root()),
-            hit_tree: Some(e.core.entity().ht_root()),
-            keyboard_focus: Some(e.token),
-            ..ViewRenderElements::EMPTY
-        }
-    }
-
-    fn teardown(&mut self, ctx: &mut TeardownContext) {
-        let Some(entity) = self.eh.take() else {
-            // not rendered
-            return;
-        };
-
-        ctx.keyboard_focus_registry.release_token(entity.token);
-        ctx.ht_manager.free_all(entity.ht_root);
-    }
-
-    fn measure_preferred_content_size(&self, ctx: &mut MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(0.0, 0.0)
-    }
-}
-
-struct ColorPickerHexTextInputEventHandler {
-    core: uikit::TextInputViewCore,
-    value_edit: RefCell<String>,
-    value: Cell<u32>,
-    ht_root: HitTestTreeRef,
-    token: FocusTargetToken,
-    parent_view_handler: std::rc::Weak<ColorPickerEventHandler>,
-}
-impl KeyInputEventHandler for ColorPickerHexTextInputEventHandler {
-    fn focus_taken(&self, context: &mut InputEventContext) {
-        self.core.entity().focus_taken(context)
-    }
-
-    fn focus_released(&self, context: &mut InputEventContext) {
-        self.core.entity().focus_released(context);
-        self.confirm_direct_input(context.composite_tree, context.view_render_queue);
-    }
-
-    fn keydown(&self, context: &mut InputEventContext, code: KeyInputCode, modifier: ModifierKey) {
-        if code == KeyInputCode::Enter {
-            // 確定or入力開始
-            self.confirm_direct_input(context.composite_tree, context.view_render_queue);
-            return;
-        }
-
-        if code == KeyInputCode::Esc {
-            // 入力キャンセル
-            self.cancel_direct_input(context.view_render_queue);
-            return;
-        }
-
-        self.core.entity().keydown(context, code, modifier);
-    }
-
-    #[inline(always)]
-    fn r#char(&self, context: &mut InputEventContext, ch: char, modifier: ModifierKey) {
-        self.core.entity().r#char(context, ch, modifier);
-    }
-
-    #[inline(always)]
-    #[cfg(feature = "wayland")]
-    fn ime_state_changes(
-        &self,
-        context: &mut InputEventContext,
-        new_committed_string: Option<&str>,
-        new_preedit_string: Option<&str>,
-    ) {
-        self.core
-            .entity()
-            .ime_state_changes(context, new_committed_string, new_preedit_string);
-    }
-}
-impl TextInputViewIO for ColorPickerHexTextInputEventHandler {
-    fn text(&self, _requester: ViewIdentifier, _app: &Application) -> String {
-        self.value_edit.borrow().clone()
-    }
-
-    fn set_text(&self, _sender: ViewIdentifier, _app: &mut ApplicationMutation, text: String) {
-        self.value_edit.replace(text);
-    }
-}
-impl ColorPickerHexTextInputEventHandler {
     fn parse(text: &str) -> Option<u32> {
         const fn parse_ascii_hexdigit(c: u8) -> Option<u8> {
             match c {
@@ -1828,12 +1775,17 @@ impl ColorPickerHexTextInputEventHandler {
         composite_tree: &mut CompositeTree<E>,
         view_render_queue: &mut ViewRenderQueue,
     ) {
-        let current_value = self.value.get();
-        let new_value = Self::parse(&self.value_edit.borrow()).unwrap_or(current_value);
-        self.value.set(new_value);
+        let backing_store = self
+            .backing_store
+            .upgrade()
+            .expect("ColorPickerView has defunct");
+
+        let current_value = backing_store.value();
+        let new_value =
+            Self::parse(&*self.hex_text_input_view.entity().content()).unwrap_or(current_value);
 
         // HitTestTreeへの変更がはいるので遅延させる
-        self.core
+        self.hex_text_input_view
             .entity()
             .lazy_update_and_schedule(view_render_queue, |e| {
                 e.perform_external_state_update(|st| st.set_content(Self::fmt(new_value)))
@@ -1841,23 +1793,39 @@ impl ColorPickerHexTextInputEventHandler {
 
         if current_value != new_value {
             // notify changed
-            if let Some(parent) = self.parent_view_handler.upgrade() {
-                parent.set_by_color(new_value, composite_tree);
-
-                if let Some(e) = parent.backing_store.upgrade() {
-                    e.new_value(new_value, view_render_queue);
-                }
-            }
+            self.set_by_color(new_value, composite_tree);
+            backing_store.new_value(new_value, view_render_queue);
         }
     }
 
     fn cancel_direct_input(&self, view_render_queue: &mut ViewRenderQueue) {
-        self.core
+        let backing_store = self
+            .backing_store
+            .upgrade()
+            .expect("ColorPickerView has defunct");
+        self.hex_text_input_view
             .entity()
             .lazy_update_and_schedule(view_render_queue, |e| {
-                e.perform_external_state_update(|st| st.set_content(Self::fmt(self.value.get())))
+                e.perform_external_state_update(|st| {
+                    st.set_content(Self::fmt(backing_store.value()))
+                })
             });
     }
+}
+
+const fn hue_to_rgb_wave(hue: f32) -> f32 {
+    // generate ／￣￣＼＿＿ wave
+    let phase = (hue / 60.0) % 6.0;
+    match phase {
+        0.0..1.0 => phase,
+        1.0..3.0 => 1.0,
+        3.0..4.0 => 4.0 - phase,
+        _ => 0.0,
+    }
+}
+
+const fn gen_rgba(r: u8, g: u8, b: u8, a: u8) -> u32 {
+    r as u32 | ((g as u32) << 8) | ((b as u32) << 16) | ((a as u32) << 24)
 }
 
 pub trait ColorPickerBackingStoreEvent {
@@ -2072,8 +2040,12 @@ impl EditableColorButtonPickerFlyoutView {
         ctx: &mut ViewInitContext,
         backing_store: &std::rc::Weak<EditableColorButtonEventHandler>,
     ) -> Self {
-        let v = ColorPickerView::new(ctx.alloc_view_id_without_instance(), backing_store.clone());
-        Self(ctx.construct_view_direct(|_| Box::new(v)))
+        Self(ctx.construct_view(
+            ColorPickerViewInit {
+                backing_store: backing_store.clone(),
+            },
+            |_| [],
+        ))
     }
 }
 impl uicore::FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
@@ -2383,11 +2355,12 @@ impl UIKitPreviewPanePresenter {
             |_| [],
         );
         ctx.view_set_parent(label, content_view);
-        let color_picker = ColorPickerView::new(
-            ctx.alloc_view_id_without_instance(),
-            Rc::downgrade(&color_picker_backing_store),
+        let color_picker = ctx.construct_view(
+            ColorPickerViewInit {
+                backing_store: Rc::downgrade(&color_picker_backing_store),
+            },
+            |_| [],
         );
-        let color_picker = ctx.construct_view_direct(|_| Box::new(color_picker));
         ctx.view_set_parent(color_picker, content_view);
 
         let toggle_button =
@@ -3487,11 +3460,7 @@ impl<'sys> CoreLoop<'sys> {
             );
     }
 
-    fn handle_window_focus_changed(
-        self: core::pin::Pin<&mut Self>,
-        mut target: WindowHandle,
-        focused: bool,
-    ) {
+    fn handle_window_focus_changed(self: Pin<&mut Self>, mut target: WindowHandle, focused: bool) {
         let this = unsafe { self.get_unchecked_mut() };
         let mut input_context = InputEventContext {
             composite_tree: &mut this.composite_tree,
@@ -3545,6 +3514,42 @@ impl<'sys> CoreLoop<'sys> {
                 &mut this.keyboard_focus_registry,
             );
         }
+    }
+
+    fn handle_flyout_focus_changed(
+        self: Pin<&mut Self>,
+        mut target: FlyoutSurfaceHandle,
+        focused: bool,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        let mut input_context = InputEventContext {
+            composite_tree: &mut this.composite_tree,
+            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+            system_link: &mut this.syslink,
+            ht_manager: &this.ht_manager,
+            dock_store: &mut this.dock_store,
+            view_instance_store: &mut this.view_instance_store,
+            view_tree_relation_store: &this.view_tree_relation_store,
+            view_group_relation_store: &this.view_group_relation_store,
+            view_render_queue: &mut this.view_render_queue,
+            menu_open_requests: &mut this.menu_open_requests,
+            menu_reopen_request: &mut this.menu_reopen_request,
+            custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            application: ApplicationMutation {
+                state: &mut this.application,
+                view_feedbacks: &mut this.view_feedback_store,
+            },
+            popup_manager: &mut this.popup_manager,
+        };
+        let mgr = target.keyboard_focus_state_mut();
+
+        if focused {
+            mgr.notify_window_focus(&mut input_context, &this.keyboard_focus_registry);
+        } else {
+            mgr.notify_window_lost_focus(&mut input_context, &this.keyboard_focus_registry);
+        }
+
+        // TODO: flyoutがContextMenuをもつことはあるか？(でもありそうな気がする TextInputもってたらそこから生える)
     }
 
     fn handle_window_activation_state_changed(
@@ -3918,6 +3923,39 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
+    fn dispatch_flyout_key_down(
+        self: core::pin::Pin<&mut Self>,
+        target: FlyoutSurfaceHandle,
+        code: KeyInputCode,
+        modifier: ModifierKey,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        target.keyboard_focus_state().handle_keydown(
+            code,
+            modifier,
+            &mut InputEventContext {
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                application: ApplicationMutation {
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
+                },
+                popup_manager: &mut this.popup_manager,
+            },
+            &this.keyboard_focus_registry,
+        );
+    }
+
     fn dispatch_key_up(
         self: core::pin::Pin<&mut Self>,
         target: WindowHandle,
@@ -3951,9 +3989,75 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
+    fn dispatch_flyout_key_up(
+        self: core::pin::Pin<&mut Self>,
+        target: FlyoutSurfaceHandle,
+        code: KeyInputCode,
+        modifier: ModifierKey,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        target.keyboard_focus_state().handle_keyup(
+            code,
+            modifier,
+            &mut InputEventContext {
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                application: ApplicationMutation {
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
+                },
+                popup_manager: &mut this.popup_manager,
+            },
+            &this.keyboard_focus_registry,
+        );
+    }
+
     fn dispatch_key_char(
         self: Pin<&mut Self>,
         target: WindowHandle,
+        ch: char,
+        modifier: ModifierKey,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+        target.keyboard_focus_state().handle_char(
+            ch,
+            modifier,
+            &mut InputEventContext {
+                composite_tree: &mut this.composite_tree,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                system_link: &mut this.syslink,
+                ht_manager: &this.ht_manager,
+                dock_store: &mut this.dock_store,
+                view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
+                view_group_relation_store: &this.view_group_relation_store,
+                view_render_queue: &mut this.view_render_queue,
+                menu_open_requests: &mut this.menu_open_requests,
+                menu_reopen_request: &mut this.menu_reopen_request,
+                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                application: ApplicationMutation {
+                    state: &mut this.application,
+                    view_feedbacks: &mut this.view_feedback_store,
+                },
+                popup_manager: &mut this.popup_manager,
+            },
+            &this.keyboard_focus_registry,
+        );
+    }
+
+    fn dispatch_flyout_key_char(
+        self: Pin<&mut Self>,
+        target: FlyoutSurfaceHandle,
         ch: char,
         modifier: ModifierKey,
     ) {

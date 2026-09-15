@@ -931,6 +931,11 @@ impl TextInputViewCoreEventHandler {
     }
 
     #[inline(always)]
+    pub fn content<'a>(&'a self) -> std::cell::Ref<'a, str> {
+        std::cell::Ref::map(self.text_edit_state.borrow(), |x| x.content.as_str())
+    }
+
+    #[inline(always)]
     pub fn set_content(&self, content: String) -> TextInputViewUpdateMask {
         TextInputViewUpdateMask::translate(self.text_edit_state.borrow_mut().set_content(content))
     }

@@ -1763,9 +1763,24 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
         state.enter_state = Some(KeyboardEnterState {
             surface: NonNull::from_mut(surface),
         });
-        self.coreloop()
-            .handle_window_focus_changed(toplevel::Handle::from_mut(surface), true);
-        self.coreloop().update_view_all();
+        // TODO: Flyoutがキー入力をうけとるためにはexplicit grabの対応が必要になる
+        match unsafe { &*surface.user_data().cast::<SurfaceStateUntyped>() }.tag {
+            SurfaceStateTag::ToplevelWindow => {
+                tracing::debug!("keyboard enter surface: toplevel");
+                self.coreloop()
+                    .handle_window_focus_changed(toplevel::Handle::from_mut(surface), true);
+                self.coreloop().update_view_all();
+            }
+            SurfaceStateTag::FlyoutSurface => {
+                tracing::debug!("keyboard enter surface: flyout");
+                self.coreloop().handle_flyout_focus_changed(
+                    flyout_surface::Handle(NonNull::from_mut(surface)),
+                    true,
+                );
+                self.coreloop().update_view_all();
+            }
+            SurfaceStateTag::ResizeEdge => { /* no key action for resize edge */ }
+        }
     }
 
     #[tracing::instrument(name = "keyboard::leave", skip(self, _sender, surface))]
@@ -1780,9 +1795,21 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
         let state = self.keyboard.as_mut().expect("no keyboard");
         state.enter_state = None;
         if let Some(s) = surface {
-            self.coreloop()
-                .handle_window_focus_changed(toplevel::Handle::from_mut(s), false);
-            self.coreloop().update_view_all();
+            match unsafe { &*s.user_data().cast::<SurfaceStateUntyped>() }.tag {
+                SurfaceStateTag::ToplevelWindow => {
+                    self.coreloop()
+                        .handle_window_focus_changed(toplevel::Handle::from_mut(s), false);
+                    self.coreloop().update_view_all();
+                }
+                SurfaceStateTag::FlyoutSurface => {
+                    self.coreloop().handle_flyout_focus_changed(
+                        flyout_surface::Handle(NonNull::from_mut(s)),
+                        false,
+                    );
+                    self.coreloop().update_view_all();
+                }
+                SurfaceStateTag::ResizeEdge => { /* no key action for resize edge */ }
+            }
         }
     }
 
@@ -1841,6 +1868,12 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
             '\x7f' => KeyInputCode::Delete,
             c => KeyInputCode::Character(c),
         };
+        let surface_tag = unsafe {
+            &*(&*enter_state.surface.as_ptr())
+                .user_data()
+                .cast::<SurfaceStateUntyped>()
+        }
+        .tag;
         match state {
             wl::KeyboardKeyState::Pressed | wl::KeyboardKeyState::Repeated => {
                 if code == KeyInputCode::Tab {
@@ -1848,27 +1881,65 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
                     unsafe { Pin::new_unchecked(&mut *self.coreloop) }
                         .switch_focus_by_key(toplevel::Handle(enter_state.surface), modifier);
                 } else {
-                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_down(
-                        toplevel::Handle(enter_state.surface),
-                        code.clone(),
-                        modifier,
-                    );
+                    match surface_tag {
+                        SurfaceStateTag::ToplevelWindow => {
+                            unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_down(
+                                toplevel::Handle(enter_state.surface),
+                                code.clone(),
+                                modifier,
+                            );
+                        }
+                        SurfaceStateTag::FlyoutSurface => {
+                            unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+                                .dispatch_flyout_key_down(
+                                    flyout_surface::Handle(enter_state.surface),
+                                    code.clone(),
+                                    modifier,
+                                );
+                        }
+                        SurfaceStateTag::ResizeEdge => { /* no key event for resize edge */ }
+                    }
                 }
 
                 if let KeyInputCode::Character(ch) = code {
-                    unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_char(
-                        toplevel::Handle(enter_state.surface),
-                        ch,
-                        modifier,
-                    );
+                    match surface_tag {
+                        SurfaceStateTag::ToplevelWindow => {
+                            unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_char(
+                                toplevel::Handle(enter_state.surface),
+                                ch,
+                                modifier,
+                            );
+                        }
+                        SurfaceStateTag::FlyoutSurface => {
+                            unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+                                .dispatch_flyout_key_char(
+                                    flyout_surface::Handle(enter_state.surface),
+                                    ch,
+                                    modifier,
+                                );
+                        }
+                        SurfaceStateTag::ResizeEdge => { /* no key event for resize edge */ }
+                    }
                 }
             }
             wl::KeyboardKeyState::Released => {
-                unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_up(
-                    toplevel::Handle(enter_state.surface),
-                    code,
-                    modifier,
-                );
+                match surface_tag {
+                    SurfaceStateTag::ToplevelWindow => {
+                        unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_key_up(
+                            toplevel::Handle(enter_state.surface),
+                            code,
+                            modifier,
+                        );
+                    }
+                    SurfaceStateTag::FlyoutSurface => {
+                        unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_flyout_key_up(
+                            flyout_surface::Handle(enter_state.surface),
+                            code,
+                            modifier,
+                        );
+                    }
+                    SurfaceStateTag::ResizeEdge => { /* no key event for resize edge */ }
+                }
             }
             _ => unreachable!(),
         }
