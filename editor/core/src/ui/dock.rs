@@ -4,14 +4,18 @@ use std::collections::BTreeSet;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    PointerID, SystemLink, WindowHandle, WindowRootView,
+    PointerID, SystemLink, WindowHandle,
     input::{
         InputEventContext,
         hittest::{HitTestTreeData, HitTestTreeRef},
     },
     rendering::composite::{CompositeRect, CompositeTreeRef},
-    ui::dock::tab::{
-        PaneGroupTabStripView, PaneGroupTabStripViewInit, PaneGroupTabView, PaneGroupTabViewInit,
+    ui::{
+        WindowRootView,
+        dock::tab::{
+            PaneGroupTabStripView, PaneGroupTabStripViewInit, PaneGroupTabView,
+            PaneGroupTabViewInit,
+        },
     },
     uicore::{
         DeriveTeardownContext, MeasureContext, RenderContext, SystemLinkAccess, TeardownContext,

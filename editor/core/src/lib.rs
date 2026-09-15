@@ -1350,65 +1350,6 @@ impl ui::dock::PaneContentPresenter for AssetPreviewPanePresenter {
     fn teardown(&mut self, ctx: &mut TeardownContext) {}
 }
 
-struct PerWindowData {
-    screen_reposition_interests: HashSet<HitTestTreeRef>,
-    root_view: TypedViewIdentifier<WindowRootView>,
-    header: ui::window_header::Component,
-    appmenu: Option<TypedViewIdentifier<ui::app_menu_bar::View>>,
-    footer: Option<TypedViewIdentifier<ui::window_footer::View>>,
-    docking_manager: ui::dock::WindowDockingManager,
-}
-impl PerWindowData {
-    fn compute_content_area(&self, surface_size: Size<LogicalUnit>) -> Rect<LogicalUnit> {
-        let top_offset = if self.appmenu.is_some() {
-            ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT
-        } else {
-            ui::window_header::View::THICKNESS
-        };
-        let bottom_offset = if self.footer.is_some() {
-            ui::window_footer::View::THICKNESS
-        } else {
-            0.0
-        };
-
-        Rect::from_lt_size(
-            Point::new_logical(0.0, top_offset),
-            Size::new_logical(
-                surface_size.width,
-                surface_size.height - top_offset - bottom_offset,
-            ),
-        )
-    }
-
-    fn compute_content_left_top(&self) -> Point<LogicalUnit> {
-        let top_offset = if self.appmenu.is_some() {
-            ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT
-        } else {
-            ui::window_header::View::THICKNESS
-        };
-
-        Point::new_logical(0.0, top_offset)
-    }
-}
-
-struct WindowRootView {}
-impl View for WindowRootView {
-    fn render(
-        &mut self,
-        _layout_rect: Rect<LogicalUnit>,
-        _ctx: &mut RenderContext,
-        _layout_state: &ViewLayoutStateStore,
-    ) -> ViewRenderElements {
-        ViewRenderElements::EMPTY
-    }
-
-    fn teardown(&mut self, _ctx: &mut TeardownContext) {}
-
-    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(0.0, 0.0)
-    }
-}
-
 profiler::section!(INITIALIZE = "LogicFiber.Initialize");
 profiler::section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
 profiler::section!(PROCESS_SYNC_EVENT = "CoreLoop.ProcessSyncEvent");
@@ -1602,8 +1543,7 @@ impl<'sys> CoreLoop<'sys> {
                 AnimatableColor::Value([0.0, 0.025, 0.05, 1.0]),
             ))
             .apply();
-        let main_window_root_view =
-            view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
+        let main_window_root_view = view_init_ctx.construct_view(ui::WindowRootViewInit, |_| []);
         let window_header = ui::window_header::Component::new(
             ui::window_header::Caption::Main,
             ui::window_header::ComponentInit {
@@ -1716,7 +1656,7 @@ impl<'sys> CoreLoop<'sys> {
             };
         let main_window_size = this.main_window.client_size();
         this.main_window
-            .associate_extra_data(Box::new(PerWindowData {
+            .associate_extra_data(Box::new(ui::PerWindowData {
                 screen_reposition_interests: HashSet::new(),
                 root_view: main_window_root_view,
                 header: window_header,
@@ -1832,7 +1772,7 @@ impl<'sys> CoreLoop<'sys> {
                             application: &this.application,
                         };
                         let root_view =
-                            view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
+                            view_init_ctx.construct_view(ui::WindowRootViewInit, |_| []);
                         let window_header_view = ui::window_header::Component::new(
                             ui::window_header::Caption::Sub,
                             ui::window_header::ComponentInit {
@@ -1852,7 +1792,7 @@ impl<'sys> CoreLoop<'sys> {
                             Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
                         );
 
-                        w.associate_extra_data(Box::new(PerWindowData {
+                        w.associate_extra_data(Box::new(ui::PerWindowData {
                             root_view,
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
@@ -1947,7 +1887,7 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn close_sub_window(mut self: core::pin::Pin<&mut Self>, mut target: WindowHandle) {
-        let wd = unsafe { target.take_extra_data::<PerWindowData>() };
+        let wd = unsafe { target.take_extra_data::<ui::PerWindowData>() };
         struct LocalContext<'a, 'sys>(ViewInitContext<'a, 'sys>);
         impl ViewDestructionContext for LocalContext<'_, '_> {
             fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
@@ -2007,7 +1947,7 @@ impl<'sys> CoreLoop<'sys> {
         size: Size<LogicalUnit>,
     ) {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
-        let wd = unsafe { target.extra_data_ref::<PerWindowData>() };
+        let wd = unsafe { target.extra_data_ref::<ui::PerWindowData>() };
         wd.docking_manager.resize(
             wd.compute_content_area(size),
             &mut this.dock_store,
@@ -2027,7 +1967,7 @@ impl<'sys> CoreLoop<'sys> {
         pos: Point<LogicalUnit>,
     ) {
         let this = unsafe { self.get_unchecked_mut() };
-        let wd = unsafe { target.extra_data_mut::<PerWindowData>() };
+        let wd = unsafe { target.extra_data_mut::<ui::PerWindowData>() };
         let mut input_context = InputEventContext {
             composite_tree: &mut this.composite_tree,
             current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -2060,7 +2000,7 @@ impl<'sys> CoreLoop<'sys> {
             .current_active_menu_session
             .take_if(|x| x.parent == target)
         {
-            if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+            if let Some(ref a) = unsafe { target.extra_data_ref::<ui::PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
                     &this.view_instance_store,
@@ -2153,7 +2093,7 @@ impl<'sys> CoreLoop<'sys> {
         }
 
         let this = unsafe { self.get_unchecked_mut() };
-        unsafe { target.extra_data_ref::<PerWindowData>() }
+        unsafe { target.extra_data_ref::<ui::PerWindowData>() }
             .header
             .set_maximize_state(
                 is_maximized,
@@ -2200,7 +2140,7 @@ impl<'sys> CoreLoop<'sys> {
                 .take_if(|x| x.parent == target)
         {
             // フォーカスロストした時もコンテキストメニューを閉じる
-            if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+            if let Some(ref a) = unsafe { target.extra_data_ref::<ui::PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
                     &this.view_instance_store,
@@ -2269,7 +2209,8 @@ impl<'sys> CoreLoop<'sys> {
                 .current_active_menu_session
                 .take_if(|x| x.parent == target)
             {
-                if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+                if let Some(ref a) = unsafe { target.extra_data_ref::<ui::PerWindowData>() }.appmenu
+                {
                     uicore::view_instance::<ui::app_menu_bar::View>(
                         a.into_untyped(),
                         &this.view_instance_store,
@@ -2302,7 +2243,7 @@ impl<'sys> CoreLoop<'sys> {
         // drag_preview_popover.bind_position_base_window_link(window);
 
         let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
+        if let Some(ref a) = unsafe { target.extra_data_ref::<ui::PerWindowData>() }.appmenu {
             uicore::view_instance::<ui::app_menu_bar::View>(
                 a.into_untyped(),
                 &this.view_instance_store,
@@ -2315,7 +2256,7 @@ impl<'sys> CoreLoop<'sys> {
         }
 
         if let Some(c) = this.current_active_menu_session.take() {
-            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
+            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
                     &this.view_instance_store,
@@ -2913,7 +2854,7 @@ impl<'sys> CoreLoop<'sys> {
     fn close_all_menus(self: Pin<&mut Self>) {
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(c) = this.current_active_menu_session.take() {
-            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
+            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
                     &this.view_instance_store,
@@ -3130,7 +3071,7 @@ impl<'sys> CoreLoop<'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         // コマンド選択したらとじる
         let ch = if let Some(c) = this.current_active_menu_session.take() {
-            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<PerWindowData>() }.appmenu {
+            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu {
                 uicore::view_instance::<ui::app_menu_bar::View>(
                     a.into_untyped(),
                     &this.view_instance_store,
@@ -3280,13 +3221,13 @@ impl<'sys> CoreLoop<'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(ref mut state) = this.docking_preview_state {
             let popover_rect = ui::dock::move_preview(
-                &unsafe { dest_window.extra_data_ref::<PerWindowData>() }.docking_manager,
+                &unsafe { dest_window.extra_data_ref::<ui::PerWindowData>() }.docking_manager,
                 &this.dock_store,
                 &client_pos_in_dest,
                 state,
             );
-            let dock_basepoint =
-                unsafe { dest_window.extra_data_ref::<PerWindowData>() }.compute_content_left_top();
+            let dock_basepoint = unsafe { dest_window.extra_data_ref::<ui::PerWindowData>() }
+                .compute_content_left_top();
             this.syslink
                 .update_pane_drag(dest_window, &popover_rect.ref_with_offset(dock_basepoint));
         }
@@ -3299,7 +3240,7 @@ impl<'sys> CoreLoop<'sys> {
     ) {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(state) = this.docking_preview_state.take() {
-            let dm = &mut unsafe { destination_window.extra_data_mut::<PerWindowData>() }
+            let dm = &mut unsafe { destination_window.extra_data_mut::<ui::PerWindowData>() }
                 .docking_manager;
 
             tracing::debug!(?client_pos_in_dest, "dock confirm");
@@ -3346,7 +3287,7 @@ impl<'sys> CoreLoop<'sys> {
                 ui::dock::UndockResult::Success => {}
                 ui::dock::UndockResult::ToBeEmpty => {
                     unsafe {
-                        drop(source_window.take_extra_data::<PerWindowData>());
+                        drop(source_window.take_extra_data::<ui::PerWindowData>());
                     }
                     this.sub_windows.remove(&source_window);
                     close_sub_window(source_window);
@@ -3399,8 +3340,8 @@ impl<'sys> CoreLoop<'sys> {
                             main_thread_texture_id_issuer: &mut this.texture_id_issuer,
                             application: &this.application,
                         };
-                        let root_view =
-                            view_init_ctx.construct_view_direct(|_| Box::new(WindowRootView {}));
+                        let root_view = view_init_ctx
+                            .construct_view_direct(|_| Box::new(ui::WindowRootView {}));
                         let window_header_view = ui::window_header::Component::new(
                             ui::window_header::Caption::Sub,
                             ui::window_header::ComponentInit {
@@ -3420,7 +3361,7 @@ impl<'sys> CoreLoop<'sys> {
                             Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
                         );
 
-                        w.associate_extra_data(Box::new(PerWindowData {
+                        w.associate_extra_data(Box::new(ui::PerWindowData {
                             root_view,
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
@@ -3657,7 +3598,7 @@ impl<'sys> CoreLoop<'sys> {
         let window_state_persist = PersistStateWindowData {
             main: WindowState {
                 geometry: self.main_window.geometry_state_snapshot(&self.syslink),
-                dock: unsafe { self.main_window.extra_data_ref::<PerWindowData>() }
+                dock: unsafe { self.main_window.extra_data_ref::<ui::PerWindowData>() }
                     .docking_manager
                     .state_snapshot(&self.dock_store),
             },
@@ -3666,7 +3607,7 @@ impl<'sys> CoreLoop<'sys> {
                 .iter()
                 .map(|w| WindowState {
                     geometry: w.geometry_state_snapshot(&self.syslink),
-                    dock: unsafe { w.extra_data_ref::<PerWindowData>() }
+                    dock: unsafe { w.extra_data_ref::<ui::PerWindowData>() }
                         .docking_manager
                         .state_snapshot(&self.dock_store),
                 })
