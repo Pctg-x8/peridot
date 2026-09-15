@@ -1,0 +1,11 @@
+[package]
+name = "peridot-marble-editor-mac"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["staticlib"]
+name = "peridot_marble_editor"
+
+[dependencies]
+peridot-marble-editor-core = { path = "../core", features = ["mac"] }

@@ -1,4 +1,4 @@
-use crate::{MutableObject, Object, Owned, raw::*};
+use crate::{AnyObject, MutableObject, Object, Owned, raw::*};
 
 pub type Boolean = crate::raw::Boolean;
 pub type UniChar = crate::raw::UniChar;
@@ -204,6 +204,11 @@ impl<T> Array<T> {
     pub fn len(&self) -> Index {
         unsafe { CFArrayGetCount(&self.0) }
     }
+
+    #[inline(always)]
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        (0..self.len()).map(move |n| &self[n])
+    }
 }
 
 #[repr(transparent)]
@@ -375,7 +380,7 @@ const fn dictionary_value_callbacks<T: DictionaryValue>() -> &'static CFDictiona
     }
 }
 
-#[repr(C)]
+#[repr(transparent)]
 pub struct Dictionary<K: ?Sized, V: ?Sized>(
     __CFDictionary,
     core::marker::PhantomData<(*const K, *const V)>,
@@ -386,12 +391,11 @@ impl<K: ?Sized, V: ?Sized> Object for Dictionary<K, V> {
         &self.0 as *const _ as _
     }
 }
-impl<K: ?Sized, V> core::ops::Index<&'_ K> for Dictionary<K, V> {
+impl<K, V> core::ops::Index<&'_ K> for Dictionary<K, V> {
     type Output = V;
 
-    #[inline(always)]
-    fn index(&self, index: &K) -> &Self::Output {
-        unsafe { &*CFDictionaryGetValue(&self.0, index as *const _ as _).cast() }
+    fn index(&self, index: &'_ K) -> &Self::Output {
+        self.get_value(index).expect("not found key")
     }
 }
 impl<K: ?Sized, V: ?Sized> Dictionary<K, V> {
@@ -440,9 +444,68 @@ impl<K: ?Sized, V: ?Sized> Dictionary<K, V> {
     pub fn len(&self) -> Index {
         unsafe { CFDictionaryGetCount(&self.0) }
     }
+
+    #[inline(always)]
+    pub fn get_value(&self, key: &K) -> Option<&V>
+    where
+        V: Sized,
+    {
+        match unsafe { CFDictionaryGetValue(&self.0, key as *const _ as _) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { &*p.cast::<V>() }),
+        }
+    }
+
+    #[inline(always)]
+    pub fn get_untyped_value(&self, key: &K) -> Option<core::ptr::NonNull<core::ffi::c_void>> {
+        core::ptr::NonNull::new(unsafe {
+            CFDictionaryGetValue(&self.0, key as *const _ as _).cast_mut()
+        })
+    }
+
+    #[inline(always)]
+    pub fn apply<F: FnMut(&K, &V)>(&self, mut cb: F)
+    where
+        K: Sized,
+        V: Sized,
+    {
+        extern "C" fn apply<K, V, F: FnMut(&K, &V)>(
+            key: *const core::ffi::c_void,
+            value: *const core::ffi::c_void,
+            context: *mut core::ffi::c_void,
+        ) {
+            unsafe {
+                (&mut *context.cast::<F>())(&*key.cast::<K>(), &*value.cast::<V>());
+            }
+        }
+
+        unsafe {
+            CFDictionaryApplyFunction(&self.0, apply::<K, V, F>, &mut cb as *mut _ as _);
+        }
+    }
+
+    #[inline(always)]
+    pub fn apply_untyped_value<F: FnMut(&K, *const core::ffi::c_void)>(&self, mut cb: F)
+    where
+        K: Sized,
+    {
+        extern "C" fn apply<K, F: FnMut(&K, *const core::ffi::c_void)>(
+            key: *const core::ffi::c_void,
+            value: *const core::ffi::c_void,
+            context: *mut core::ffi::c_void,
+        ) {
+            unsafe {
+                (&mut *context.cast::<F>())(&*key.cast::<K>(), value);
+            }
+        }
+
+        unsafe {
+            CFDictionaryApplyFunction(&self.0, apply::<K, F>, &mut cb as *mut _ as _);
+        }
+    }
 }
 
-#[repr(C)]
+#[repr(transparent)]
 pub struct MutableDictionary<K: ?Sized, V: ?Sized>(
     __CFDictionary,
     core::marker::PhantomData<(*mut K, *mut V)>,
@@ -528,6 +591,25 @@ impl<K: ?Sized, V: ?Sized> MutableDictionary<K, V> {
         unsafe { CFDictionarySetValue(&mut self.0, key as *const _ as _, value as *const _ as _) }
     }
 }
+impl<V: ?Sized> MutableDictionary<String, V> {
+    #[inline(always)]
+    pub fn new_copying_key_generic_value(
+        allocator: Option<&Allocator>,
+        capacity: Index,
+    ) -> Option<Owned<Self>>
+    where
+        V: Object,
+    {
+        unsafe {
+            Self::new_raw(
+                allocator,
+                capacity,
+                &kCFCopyStringDictionaryKeyCallBacks,
+                &kCFTypeDictionaryValueCallBacks,
+            )
+        }
+    }
+}
 
 #[repr(i64)]
 pub enum NumberType {
@@ -563,6 +645,11 @@ impl Number {
     pub const NAN: &Self = unsafe { &*kCFNumberNaN.cast::<Self>() };
 
     #[inline(always)]
+    pub const unsafe fn ref_from_untyped_ptr<'a>(p: *const core::ffi::c_void) -> &'a Self {
+        unsafe { &*p.cast::<Self>() }
+    }
+
+    #[inline(always)]
     pub unsafe fn new_raw(
         allocator: Option<&Allocator>,
         r#type: NumberType,
@@ -585,23 +672,32 @@ impl Number {
 
     #[inline(always)]
     pub fn new_i64(allocator: Option<&Allocator>, value: i64) -> Option<Owned<Self>> {
-        unsafe {
-            Self::new_raw(
-                allocator,
-                NumberType::SInt64,
-                value.to_ne_bytes().as_ptr().cast(),
-            )
-        }
+        unsafe { Self::new_raw(allocator, NumberType::SInt64, &value as *const _ as _) }
     }
 
     #[inline(always)]
     pub fn new_f32(allocator: Option<&Allocator>, value: f32) -> Option<Owned<Self>> {
-        unsafe {
-            Self::new_raw(
-                allocator,
-                NumberType::Float32,
-                value.to_ne_bytes().as_ptr().cast(),
-            )
+        unsafe { Self::new_raw(allocator, NumberType::Float32, &value as *const _ as _) }
+    }
+
+    #[inline(always)]
+    pub fn i64_value(&self) -> Option<i64> {
+        let mut buf = core::mem::MaybeUninit::<i64>::uninit();
+        match unsafe { CFNumberGetValue(&self.0, NumberType::SInt64 as _, buf.as_mut_ptr().cast()) }
+        {
+            v if v == 0 => None,
+            _ => Some(unsafe { buf.assume_init() }),
+        }
+    }
+
+    #[inline(always)]
+    pub fn f32_value(&self) -> Option<f32> {
+        let mut buf = core::mem::MaybeUninit::<f32>::uninit();
+        match unsafe {
+            CFNumberGetValue(&self.0, NumberType::Float32 as _, buf.as_mut_ptr().cast())
+        } {
+            v if v == 0 => None,
+            _ => Some(unsafe { buf.assume_init() }),
         }
     }
 }
@@ -626,14 +722,54 @@ pub enum StringEncoding {
 }
 
 #[repr(transparent)]
-pub struct String(__CFString);
+pub struct String(pub(crate) __CFString);
 impl Object for String {
     #[inline(always)]
     fn as_typeref(&self) -> CFTypeRef {
         &self.0 as *const _ as _
     }
 }
+impl core::fmt::Debug for String {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(cs) = self.cstring() {
+            // fast path for debug print
+            write!(f, "String({:p}: {cs:?})", &self.0 as *const _)
+        } else {
+            // convert to utf-8 into dynamically allocated buf
+            write!(f, "String({:p}, {self})", &self.0 as *const _)
+        }
+    }
+}
+impl core::fmt::Display for String {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let max_len =
+            unsafe { CFStringGetMaximumSizeForEncoding(self.len(), StringEncoding::UTF8 as _) };
+        let mut buf = Vec::with_capacity(max_len as _);
+        let mut buflen = core::mem::MaybeUninit::uninit();
+        self.get_bytes(
+            Range {
+                location: 0,
+                length: self.len(),
+            },
+            StringEncoding::UTF8,
+            0,
+            false,
+            buf.spare_capacity_mut(),
+            &mut buflen,
+        );
+        unsafe {
+            buf.set_len(buflen.assume_init() as _);
+        }
+        f.write_str(unsafe { core::str::from_utf8_unchecked(&buf) })
+    }
+}
 impl String {
+    #[inline(always)]
+    pub const unsafe fn from_internal_ref<'a>(r: &'a __CFString) -> &'a Self {
+        unsafe { core::mem::transmute(r) }
+    }
+
     #[inline(always)]
     pub fn from_cstring(
         allocator: Option<&Allocator>,
@@ -651,7 +787,7 @@ impl String {
     pub unsafe fn from_str_no_copy<'a>(
         allocator: Option<&Allocator>,
         r#str: &'a str,
-    ) -> Option<Owned<Self>> {
+    ) -> Owned<Self> {
         unsafe {
             Self::from_bytes_no_copy(allocator, r#str.as_bytes(), StringEncoding::UTF8, false)
         }
@@ -696,9 +832,9 @@ impl String {
         bytes: &[u8],
         encoding: StringEncoding,
         is_external_representation: bool,
-    ) -> Option<Owned<Self>> {
+    ) -> Owned<Self> {
         unsafe {
-            Owned::from_ptr(CFStringCreateWithBytesNoCopy(
+            Owned::from_ptr_unchecked(CFStringCreateWithBytesNoCopy(
                 allocator.map_or(kCFAllocatorDefault, |x| &x.0),
                 bytes.as_ptr(),
                 bytes.len() as _,
@@ -715,13 +851,16 @@ impl String {
     }
 
     #[inline(always)]
-    pub fn cstring(&self) -> &core::ffi::CStr {
+    pub fn cstring(&self) -> Option<&core::ffi::CStr> {
         self.cstring_with_encoding(StringEncoding::UTF8)
     }
 
     #[inline(always)]
-    pub fn cstring_with_encoding(&self, encoding: StringEncoding) -> &core::ffi::CStr {
-        unsafe { core::ffi::CStr::from_ptr(CFStringGetCStringPtr(&self.0, encoding as _)) }
+    pub fn cstring_with_encoding(&self, encoding: StringEncoding) -> Option<&core::ffi::CStr> {
+        match unsafe { CFStringGetCStringPtr(&self.0, encoding as _) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { core::ffi::CStr::from_ptr(p) }),
+        }
     }
 
     #[inline(always)]
@@ -746,5 +885,182 @@ impl String {
                 used_buf_len.as_mut_ptr(),
             )
         }
+    }
+}
+
+#[repr(transparent)]
+pub struct MutableString(__CFString);
+impl Object for MutableString {
+    #[inline(always)]
+    fn as_typeref(&self) -> CFTypeRef {
+        &self.0 as *const _ as _
+    }
+}
+impl MutableObject for MutableString {}
+
+#[repr(transparent)]
+pub struct AttributedString(__CFAttributedString);
+impl Object for AttributedString {
+    #[inline(always)]
+    fn as_typeref(&self) -> CFTypeRef {
+        &self.0 as *const _ as _
+    }
+}
+impl AttributedString {
+    #[inline(always)]
+    pub fn new(
+        allocator: Option<&Allocator>,
+        str: &String,
+        attributes: Option<&Dictionary<String, AnyObject>>,
+    ) -> Option<Owned<Self>> {
+        unsafe {
+            Owned::from_ptr(CFAttributedStringCreate(
+                allocator.map_or(kCFAllocatorDefault, |x| x as *const _ as _),
+                str as *const _ as _,
+                attributes.map_or(core::ptr::null(), |x| x as *const _ as _),
+            ) as *mut Self)
+        }
+    }
+
+    #[inline(always)]
+    pub fn to_mutable(
+        &self,
+        allocator: Option<&Allocator>,
+        max_length: CFIndex,
+    ) -> Owned<MutableAttributedString> {
+        unsafe {
+            Owned::from_ptr_unchecked(CFAttributedStringCreateMutableCopy(
+                allocator.map_or(kCFAllocatorDefault, |x| x as *const _ as _),
+                max_length,
+                self as *const _ as _,
+            ) as *mut MutableAttributedString)
+        }
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> CFIndex {
+        unsafe { CFAttributedStringGetLength(&self.0) }
+    }
+
+    #[inline(always)]
+    pub fn string(&self) -> &String {
+        unsafe { &*CFAttributedStringGetString(&self.0).cast::<String>() }
+    }
+
+    #[inline(always)]
+    pub fn attributes(
+        &self,
+        at: CFIndex,
+        effective_range: Option<&mut core::mem::MaybeUninit<CFRange>>,
+    ) -> &Dictionary<String, dyn Object> {
+        unsafe {
+            &*CFAttributedStringGetAttributes(
+                &self.0,
+                at,
+                effective_range.map_or(core::ptr::null_mut(), |x| x as *mut _ as _),
+            )
+            .cast::<Dictionary<String, dyn Object>>()
+        }
+    }
+}
+
+#[repr(transparent)]
+pub struct MutableAttributedString(__CFAttributedString);
+impl Object for MutableAttributedString {
+    #[inline(always)]
+    fn as_typeref(&self) -> CFTypeRef {
+        &self.0 as *const _ as _
+    }
+}
+impl MutableObject for MutableAttributedString {}
+impl core::ops::Deref for MutableAttributedString {
+    type Target = AttributedString;
+
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        unsafe { core::mem::transmute(self) }
+    }
+}
+impl MutableAttributedString {
+    #[inline(always)]
+    pub fn new(allocator: Option<&Allocator>, max_length: CFIndex) -> Option<Owned<Self>> {
+        unsafe {
+            Owned::from_ptr(CFAttributedStringCreateMutable(
+                allocator.map_or(kCFAllocatorDefault, |x| x as *const _ as _),
+                max_length,
+            ) as *mut Self)
+        }
+    }
+
+    #[inline(always)]
+    pub fn to_immutable(&self, allocator: Option<&Allocator>) -> Owned<AttributedString> {
+        unsafe {
+            Owned::from_ptr_unchecked(CFAttributedStringCreateCopy(
+                allocator.map_or(kCFAllocatorDefault, |x| x as *const _ as _),
+                self as *const _ as _,
+            ) as *mut AttributedString)
+        }
+    }
+
+    #[inline(always)]
+    pub fn begin_editing(&mut self) {
+        unsafe {
+            CFAttributedStringBeginEditing(&mut self.0);
+        }
+    }
+
+    #[inline(always)]
+    pub fn end_editing(&mut self) {
+        unsafe {
+            CFAttributedStringEndEditing(&mut self.0);
+        }
+    }
+
+    #[inline(always)]
+    pub fn replace_attributed_string(&mut self, range: CFRange, replacement: &AttributedString) {
+        unsafe {
+            CFAttributedStringReplaceAttributedString(
+                &mut self.0,
+                range,
+                replacement as *const _ as _,
+            );
+        }
+    }
+
+    #[inline(always)]
+    pub fn replace_string(&mut self, range: CFRange, replacement: &String) {
+        unsafe {
+            CFAttributedStringReplaceString(&mut self.0, range, replacement as *const _ as _);
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_attributes(
+        &mut self,
+        range: CFRange,
+        replacement: &Dictionary<String, AnyObject>,
+        clear_other_attributes: bool,
+    ) {
+        unsafe {
+            CFAttributedStringSetAttributes(
+                &mut self.0,
+                range,
+                replacement as *const _ as _,
+                if clear_other_attributes { 1 } else { 0 },
+            );
+        }
+    }
+}
+
+pub struct AttributedStringKey;
+impl AttributedStringKey {
+    #[inline(always)]
+    pub const fn font<'a>() -> &'a String {
+        unsafe { &*crate::raw::core_foundation::NSFontAttributeName.cast::<String>() }
+    }
+
+    #[inline(always)]
+    pub const fn paragraph_style<'a>() -> &'a String {
+        unsafe { &*crate::raw::core_foundation::NSParagraphStyleAttributeName.cast::<String>() }
     }
 }

@@ -64,6 +64,11 @@ impl Proxy {
     }
 
     #[inline(always)]
+    pub fn id(&self) -> u32 {
+        unsafe { ffi::wl_proxy_get_id(self.0.get()) }
+    }
+
+    #[inline(always)]
     pub fn version(&self) -> u32 {
         unsafe { ffi::wl_proxy_get_version(self.0.get()) }
     }
@@ -86,6 +91,20 @@ impl Proxy {
             -1 => SetListenerResult::Failure,
             _ => SetListenerResult::Success,
         }
+    }
+
+    /// Set the user data associated with a proxy
+    #[inline(always)]
+    pub unsafe fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            ffi::wl_proxy_set_user_data(self.0.get_mut() as _, user_data);
+        }
+    }
+
+    /// Get the user data associated with a proxy
+    #[inline(always)]
+    pub unsafe fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { ffi::wl_proxy_get_user_data(self.0.get() as _) }
     }
 
     #[inline]
@@ -173,6 +192,15 @@ impl Proxy {
     }
 }
 
+pub trait ProxyObject {
+    fn as_proxy(&self) -> &Proxy;
+
+    #[inline(always)]
+    fn id(&self) -> u32 {
+        self.as_proxy().id()
+    }
+}
+
 /// ## Safety
 ///
 /// must be transparent with ffi::Proxy(or Proxy wrapper newtype)
@@ -230,6 +258,11 @@ impl<T: Interface> Owned<T> {
         Self(p)
     }
 
+    #[inline(always)]
+    pub const fn as_ptr(&self) -> *mut T {
+        self.0.as_ptr()
+    }
+
     pub const unsafe fn copy_ptr(&self) -> NonNull<T> {
         self.0
     }
@@ -254,6 +287,9 @@ impl<T: Interface> Owned<T> {
 pub struct Display(NonNull<ffi::Display>);
 impl Drop for Display {
     fn drop(&mut self) {
+        #[cfg(feature = "tracing")]
+        tracing::trace!(target: "wl_drop_log", "drop wl display");
+
         unsafe { ffi::wl_display_disconnect(self.0.as_ptr()) }
     }
 }
@@ -404,6 +440,18 @@ impl Registry {
             )?)
         })
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait RegistryListener {
@@ -436,6 +484,18 @@ impl Callback {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait CallbackEventListener {
@@ -465,8 +525,8 @@ unsafe impl Interface for Surface {
     const DEF: *const ffi::Interface = unsafe { &wl_surface_interface };
 }
 impl Surface {
-    pub const fn as_raw(&mut self) -> *mut ffi::Proxy {
-        &mut self.0 as *mut _ as _
+    pub const fn as_raw(&self) -> *mut ffi::Proxy {
+        self.0.0.get()
     }
 
     #[inline]
@@ -522,6 +582,12 @@ impl Surface {
             .marshal_array_void(8, &mut [ffi::Argument { i: scale }])
     }
 
+    #[inline]
+    pub fn offset(&self, x: i32, y: i32) -> Result<()> {
+        self.0
+            .marshal_array_void(10, &mut [ffi::Argument { i: x }, ffi::Argument { i: y }])
+    }
+
     pub fn set_listener<'l, L: SurfaceEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
@@ -537,6 +603,18 @@ impl Surface {
                 listener as *mut _ as _,
             )
         }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -573,6 +651,18 @@ impl Subcompositor {
             )
         })
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 #[repr(transparent)]
@@ -599,6 +689,18 @@ impl Subsurface {
     pub fn place_below(&self, sibling: &Surface) -> Result<()> {
         self.0
             .marshal_array_flags_void(3, 0, &mut [sibling.0.as_arg()])
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -633,6 +735,18 @@ impl Shm {
     #[inline(always)]
     pub fn create_pool(&self, fd: &impl AsRawFd, size: i32) -> Result<Owned<ShmPool>> {
         self.create_pool_raw(fd.as_raw_fd(), size)
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -686,6 +800,18 @@ impl ShmPool {
         self.0
             .marshal_array_void(2, &mut [ffi::Argument { i: size }])
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 #[repr(transparent)]
@@ -699,6 +825,19 @@ unsafe impl Interface for Buffer {
     )]
     unsafe fn destruct(&mut self) {
         self.0.call_simple_dtor(0);
+    }
+}
+impl Buffer {
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
     }
 }
 
@@ -728,6 +867,18 @@ impl Region {
             ],
         )
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 #[repr(transparent)]
@@ -742,6 +893,9 @@ unsafe impl Interface for Seat {
     unsafe fn destruct(&mut self) {
         if self.0.version() < 5 {
             // no destruction method implemented
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
             return;
         }
 
@@ -758,6 +912,11 @@ impl Seat {
         Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(0, &mut [NEWID_ARG])?) })
     }
 
+    #[inline]
+    pub fn get_keyboard(&self) -> Result<Owned<Keyboard>> {
+        Ok(unsafe { Owned::wrap_unchecked(self.0.marshal_array_typed(1, &mut [NEWID_ARG])?) })
+    }
+
     pub fn set_listener<'l, L: SeatEventListener + 'l>(
         &'l mut self,
         listener: &'l mut L,
@@ -765,25 +924,61 @@ impl Seat {
         unsafe {
             self.0.set_listener(
                 EventFnTable!(for L: SeatEventListener {
-                    capabilities(capabilities: u32 => capabilities),
+                    capabilities(capabilities: u32 => SeatCapability::from_bits_retain(capabilities)),
                     name(name: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(name) })
                 }) as *const _ as _,
                 listener as *mut _ as _
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait SeatEventListener {
-    fn capabilities(&mut self, seat: &mut Seat, capabilities: u32);
+    fn capabilities(&mut self, seat: &mut Seat, capabilities: SeatCapability);
     // v2
     fn name(&mut self, seat: &mut Seat, name: &core::ffi::CStr);
+}
+
+bitflags! {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct SeatCapability : u32 {
+        const POINTER = 1;
+        const KEYBOARD = 2;
+        const TOUCH = 4;
+    }
 }
 
 #[repr(transparent)]
 pub struct Pointer(Proxy);
 unsafe impl Interface for Pointer {
     const DEF: *const ffi::Interface = unsafe { &wl_pointer_interface };
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Pointer as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() < 3 {
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
+            return;
+        }
+
+        self.0.call_simple_dtor(1);
+    }
 }
 impl Pointer {
     pub fn set_listener<'l, L: PointerEventListener + 'l>(
@@ -795,13 +990,13 @@ impl Pointer {
                 EventFnTable!(for L: PointerEventListener {
                     enter(
                         serial: u32 => serial,
-                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) },
+                        surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() },
                         surface_x: Fixed => surface_x,
                         surface_y: Fixed => surface_y
                     ),
                     leave(
                         serial: u32 => serial,
-                        surface: *mut ffi::Proxy => unsafe { core::mem::transmute(&mut *surface) }
+                        surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() }
                     ),
                     motion(time: u32 => time, surface_x: Fixed => surface_x, surface_y: Fixed => surface_y),
                     button(
@@ -822,6 +1017,18 @@ impl Pointer {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait PointerEventListener {
@@ -829,11 +1036,11 @@ pub trait PointerEventListener {
         &mut self,
         pointer: &mut Pointer,
         serial: u32,
-        surface: &mut Surface,
+        surface: Option<&mut Surface>,
         surface_x: Fixed,
         surface_y: Fixed,
     );
-    fn leave(&mut self, pointer: &mut Pointer, serial: u32, surface: &mut Surface);
+    fn leave(&mut self, pointer: &mut Pointer, serial: u32, surface: Option<&mut Surface>);
     fn motion(&mut self, pointer: &mut Pointer, time: u32, surface_x: Fixed, surface_y: Fixed);
     fn button(
         &mut self,
@@ -862,6 +1069,116 @@ pub enum PointerButtonState {
     Pressed = 1,
 }
 
+#[repr(transparent)]
+pub struct Keyboard(Proxy);
+unsafe impl Interface for Keyboard {
+    const DEF: *const ffi::Interface = unsafe { &wl_keyboard_interface };
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Keyboard as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() < 3 {
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
+            return;
+        }
+
+        self.0.call_simple_dtor(0);
+    }
+}
+impl Keyboard {
+    pub fn set_listener<'l, L: KeyboardEventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> SetListenerResult {
+        unsafe {
+            self.0.set_listener(
+                EventFnTable!(for L: KeyboardEventListener {
+                    keymap(format: KeyboardKeymapFormat => format, fd: i32 => fd, size: u32 => size),
+                    enter(
+                        serial: u32 => serial,
+                        surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() },
+                        keys: *mut ffi::Array => unsafe { (*keys).as_slice::<u32>() }
+                    ),
+                    leave(serial: u32 => serial, surface: *mut ffi::Proxy => unsafe { surface.cast::<Surface>().as_mut() }),
+                    key(serial: u32 => serial, time: u32 => time, key: u32 => key, state: KeyboardKeyState => state),
+                    modifiers(
+                        serial: u32 => serial,
+                        mods_depressed: u32 => mods_depressed,
+                        mods_latched: u32 => mods_latched,
+                        mods_locked: u32 => mods_locked,
+                        group: u32 => group
+                    ),
+                    repeat_info(delay: i32 => delay, rate: i32 => rate),
+                }) as *const _ as _,
+                listener as *mut _ as _
+            )
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
+}
+
+pub trait KeyboardEventListener {
+    fn keymap(&mut self, sender: &mut Keyboard, format: KeyboardKeymapFormat, fd: i32, size: u32);
+    fn enter(
+        &mut self,
+        sender: &mut Keyboard,
+        serial: u32,
+        surface: Option<&mut Surface>,
+        keys: &[u32],
+    );
+    fn leave(&mut self, sender: &mut Keyboard, serial: u32, surface: Option<&mut Surface>);
+    fn key(
+        &mut self,
+        sender: &mut Keyboard,
+        serial: u32,
+        time: u32,
+        key: u32,
+        state: KeyboardKeyState,
+    );
+    fn modifiers(
+        &mut self,
+        sender: &mut Keyboard,
+        serial: u32,
+        mods_depressed: u32,
+        mods_latched: u32,
+        mods_locked: u32,
+        group: u32,
+    );
+    // v4
+    fn repeat_info(&mut self, sender: &mut Keyboard, rate: i32, delay: i32);
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyboardKeymapFormat {
+    NoKeymap = 0,
+    XkbV1 = 1,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum KeyboardKeyState {
+    Released = 0,
+    Pressed = 1,
+    Repeated = 2,
+}
+
 #[repr(u32)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum OutputTransform {
@@ -879,15 +1196,116 @@ pub enum OutputTransform {
 pub struct Output(Proxy);
 unsafe impl Interface for Output {
     const DEF: *const ffi::Interface = unsafe { &wl_output_interface };
+
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "<Ouptut as Interface>::destruct", skip(self))
+    )]
+    unsafe fn destruct(&mut self) {
+        if self.0.version() >= 3 {
+            self.0.call_simple_dtor(0);
+        } else {
+            unsafe {
+                Interface::destruct(self);
+            }
+        }
+    }
+}
+impl Output {
+    pub fn set_listener<'l, L: OutputEventListener + 'l>(
+        &'l mut self,
+        listener: &'l mut L,
+    ) -> SetListenerResult {
+        unsafe {
+            self.0.set_listener(
+                    EventFnTable! {
+                        for L: OutputEventListener {
+                            geometry(x: i32 => x, y: i32 => y, physical_width: i32 => physical_width, physical_height: i32 => physical_height, subpixel: i32 => subpixel, make: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(make) }, model: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(model) }, transform: i32 => transform),
+                            mode(flags: u32 => flags, width: i32 => width, height: i32 => height, refresh: i32 => refresh),
+                            done(),
+                            scale(factor: i32 => factor),
+                            name(name: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(name) }),
+                            description(description: *const core::ffi::c_char => unsafe { core::ffi::CStr::from_ptr(description) }),
+                        }
+                    } as *const _ as _,
+                    listener as *mut _ as _
+                )
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_listener_impl_only(
+        &mut self,
+        listener: &'static OutputEventListenerImpl,
+    ) -> SetListenerResult {
+        unsafe {
+            self.0
+                .set_listener(core::ptr::from_ref(listener).cast(), core::ptr::null_mut())
+        }
+    }
+
+    pub fn set_user_data(&mut self, data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(data);
+        }
+    }
 }
 
-// pub trait OutputEventListener {
-//     fn geometry(&mut self, output: &mut Output, x: i32, y: i32, physical_width: i32, physical_height: i32, subpixel: i32, make: &core::ffi::CStr, model: &core::ffi::CStr, transform: i32);
-//     fn mode(&mut self, output: &mut Output, flags: u32, width: i32, height: i32, refresh: i32);
-//     // -- version 2 additions ---
-//     fn done(&mut self, output: &mut Output);
-//     fn scale(&mut self, output: &mut Output, factor: i32);
-// }
+pub trait OutputEventListener {
+    fn geometry(
+        &mut self,
+        sender: &mut Output,
+        x: i32,
+        y: i32,
+        physical_width: i32,
+        physical_height: i32,
+        subpixel: i32,
+        make: &core::ffi::CStr,
+        model: &core::ffi::CStr,
+        transform: i32,
+    );
+    fn mode(&mut self, sender: &mut Output, flags: u32, width: i32, height: i32, refresh: i32);
+    // -- version 2 additions ---
+    fn done(&mut self, sender: &mut Output);
+    fn scale(&mut self, sender: &mut Output, factor: i32);
+    // -- version 4 additions ---
+    fn name(&mut self, sender: &mut Output, name: &core::ffi::CStr);
+    fn description(&mut self, sender: &mut Output, description: &core::ffi::CStr);
+}
+pub struct OutputEventListenerImpl {
+    pub geometry: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        x: i32,
+        y: i32,
+        physical_width: i32,
+        physical_height: i32,
+        subpixel: i32,
+        make: *const core::ffi::c_char,
+        model: *const core::ffi::c_char,
+        transform: i32,
+    ),
+    pub mode: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        flags: u32,
+        width: i32,
+        height: i32,
+        refresh: i32,
+    ),
+    pub done: extern "C" fn(context: *mut core::ffi::c_void, sender: *mut Output),
+    pub scale: extern "C" fn(context: *mut core::ffi::c_void, sender: *mut Output, factor: i32),
+    pub name: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        name: *const core::ffi::c_char,
+    ),
+    pub description: extern "C" fn(
+        context: *mut core::ffi::c_void,
+        sender: *mut Output,
+        description: *const core::ffi::c_char,
+    ),
+}
 
 #[repr(transparent)]
 pub struct DataOffer(Proxy);
@@ -978,6 +1396,18 @@ impl DataOffer {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait DataOfferEventListener {
@@ -1059,6 +1489,18 @@ impl DataSource {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait DataSourceEventListener {
@@ -1090,6 +1532,9 @@ unsafe impl Interface for DataDevice {
     unsafe fn destruct(&mut self) {
         if self.0.version() < 2 {
             // no destructor
+            unsafe {
+                ffi::wl_proxy_destroy(self as *mut _ as _);
+            }
             return;
         }
 
@@ -1167,6 +1612,18 @@ impl DataDevice {
             )
         }
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 pub trait DataDeviceEventListener {
@@ -1206,6 +1663,18 @@ impl DataDeviceManager {
             )
         })
     }
+
+    #[inline(always)]
+    pub fn set_user_data(&mut self, user_data: *mut core::ffi::c_void) {
+        unsafe {
+            self.0.set_user_data(user_data);
+        }
+    }
+
+    #[inline(always)]
+    pub fn user_data(&self) -> *mut core::ffi::c_void {
+        unsafe { self.0.user_data() }
+    }
 }
 
 bitflags! {
@@ -1233,6 +1702,7 @@ unsafe extern "C" {
     static wl_output_interface: ffi::Interface;
     static wl_callback_interface: ffi::Interface;
     static wl_pointer_interface: ffi::Interface;
+    static wl_keyboard_interface: ffi::Interface;
     static wl_data_device_manager_interface: ffi::Interface;
     static wl_data_device_interface: ffi::Interface;
     static wl_data_source_interface: ffi::Interface;
@@ -1287,10 +1757,20 @@ Ext!("tablet-v2", tablet);
 Ext!("fractional-scale-v1", fractional_scale);
 Ext!("cursor-shape-v1", cursor_shape);
 Ext!("content-type-v1", content_type);
+Ext!("single-pixel-buffer-v1", single_pixel_buffer);
+Ext!("alpha-modifier-v1", alpha_modifier);
 
 // unstable
 Ext!("xdg-decoration-unstable-v1", xdg_decoration);
 Ext!("xdg-foreign-unstable-v2", xdg_foreign);
+Ext!("text-input-unstable-v3", text_input);
+Ext!("pointer-constraints-unstable-v1", pointer_constraints);
+Ext!("relative-pointer-unstable-v1", relative_pointer);
+Ext!("wlr-layer-shell-unstable-v1", layer_shell);
+Ext!("kde-blur", kde_blur);
+Ext!("kde-appmenu", kde_appmenu);
+Ext!("kde-shadow", kde_shadow);
+Ext!("kde-plasma-shell", kde_plasma_shell);
 
 // external
 Ext!("gtk-shell", gtk_shell);
