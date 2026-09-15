@@ -19,7 +19,7 @@ use crate::{
     uicore::{
         CustomFlyoutViewOpenRequest, PopupID, PopupManager, View, ViewGroupRelationStore,
         ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayout, ViewRenderQueue, ViewRenderer, ViewTreeRelationStore,
+        ViewLayout, ViewRelationQueryable, ViewRenderQueue, ViewRenderer, ViewTreeRelationStore,
         view_iter_self_group_participants,
     },
 };
@@ -47,6 +47,7 @@ pub struct InputEventContext<'env, 'sys> {
     pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
     pub custom_flyout_view_open_request: &'env mut Option<CustomFlyoutViewOpenRequest>,
     pub popup_manager: &'env mut PopupManager,
+    pub docking_preview_state: &'env mut Option<crate::ui::dock::DockingPreviewState>,
 }
 impl InputEventContext<'_, '_> {
     #[inline(always)]
@@ -83,6 +84,10 @@ impl InputEventContext<'_, '_> {
     #[inline(always)]
     pub fn close_popup(&mut self, id: PopupID) {
         self.popup_manager.close(id, self.view_instance_store);
+    }
+
+    pub fn store_docking_preview_state(&mut self, state: crate::ui::dock::DockingPreviewState) {
+        *self.docking_preview_state = Some(state);
     }
 }
 impl ViewInstanceQueryable for InputEventContext<'_, '_> {
@@ -133,6 +138,12 @@ impl ApplicationMutableAccess for InputEventContext<'_, '_> {
     #[inline(always)]
     fn dispatch_view_feedback<T: 'static>(&mut self, feedback: T) {
         self.application.dispatch_view_feedback(feedback);
+    }
+}
+impl ViewRelationQueryable for InputEventContext<'_, '_> {
+    #[inline(always)]
+    fn view_get_parent_untyped(&self, id: ViewIdentifier) -> Option<ViewIdentifier> {
+        crate::uicore::view_get_parent(id, self.view_tree_relation_store)
     }
 }
 

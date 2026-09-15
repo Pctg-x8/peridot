@@ -6,7 +6,7 @@ use std::rc::Rc;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    Event, SystemLink,
+    SystemLink,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -26,7 +26,8 @@ use crate::{
     uicore::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
         ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayout, ViewLayoutStateStore, ViewRenderElements, ViewRenderQueue, ViewRenderer,
+        ViewLayout, ViewLayoutStateStore, ViewRelationQueryable, ViewRenderElements,
+        ViewRenderQueue, ViewRenderer,
     },
     utils::UnsafeMainThreadOnlyOnceCell,
 };
@@ -529,18 +530,34 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             .as_ref()
             .expect("not rendered")
             .ht_root;
-        context.system_link.dispatch_event(Event::DockBeginPreview {
-            initiator: context
-                .ht_manager
-                .query_root_window(content_ht_root)
-                .expect("not mounted"),
-            pointer: args.pointer_id,
-            pane_rect: preview_rect,
-            tab_size: self.size.clone(),
-            client_pos: args.client_pos,
-            source_dock: dock,
+        let initiator = context
+            .ht_manager
+            .query_root_window(content_ht_root)
+            .expect("not mounted");
+
+        let (state, popover_rect) = super::begin_preview(
+            preview_rect,
+            self.size.clone(),
+            &args.client_pos,
+            initiator,
+            dock,
             tab_index,
-        });
+        );
+        let root_layout = context
+            .view_layout_untyped(
+                context
+                    .view_get_parent(tab_strip_view)
+                    .expect("view not mounted?"),
+            )
+            .expect("query failed");
+        let dock_basepoint = Point::new_logical(root_layout.left_offset, root_layout.top_offset);
+        context.system_link.begin_pane_drag(
+            initiator,
+            &args.pointer_id,
+            state.offset,
+            &popover_rect.ref_with_offset(dock_basepoint),
+        );
+        context.store_docking_preview_state(state);
 
         EventContinueControl::STOP_PROPAGATION
     }

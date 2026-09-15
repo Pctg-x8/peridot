@@ -650,15 +650,6 @@ pub enum Event {
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     },
-    DockBeginPreview {
-        initiator: WindowHandle,
-        pointer: PointerID,
-        source_dock: ui::dock::DockID,
-        tab_index: usize,
-        pane_rect: Rect<LogicalUnit>,
-        tab_size: Size<LogicalUnit>,
-        client_pos: Point<LogicalUnit>,
-    },
     // TODO: これあんまりいい設計じゃないので使わない形にしたい（macOSでのIME入力によるView更新のためだけに必要）
     ScheduleViewRenderExt {
         id: ViewIdentifier,
@@ -694,7 +685,6 @@ impl Event {
             Self::MenuDeselectItem { .. } => "MenuDeselectItem",
             Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
-            Self::DockBeginPreview { .. } => "DockBeginPreview",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
             #[cfg(not(target_os = "macos"))]
             #[cfg(windows)]
@@ -2068,6 +2058,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_feedbacks: &mut this.view_feedback_store,
             },
             popup_manager: &mut this.popup_manager,
+            docking_preview_state: &mut this.docking_preview_state,
         };
 
         for &ht in wd.screen_reposition_interests.iter() {
@@ -2205,6 +2196,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_feedbacks: &mut this.view_feedback_store,
             },
             popup_manager: &mut this.popup_manager,
+            docking_preview_state: &mut this.docking_preview_state,
         };
         let mgr = target.keyboard_focus_state_mut();
 
@@ -2265,6 +2257,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_feedbacks: &mut this.view_feedback_store,
             },
             popup_manager: &mut this.popup_manager,
+            docking_preview_state: &mut this.docking_preview_state,
         };
         let mgr = target.keyboard_focus_state_mut();
 
@@ -2377,6 +2370,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             button,
             key_modifier,
@@ -2416,6 +2410,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             target.ht_root(),
         );
@@ -2451,6 +2446,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
         );
     }
@@ -2483,6 +2479,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             button,
             key_modifier,
@@ -2512,6 +2509,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
         );
     }
@@ -2538,6 +2536,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             });
     }
 
@@ -2568,6 +2567,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
         );
     }
@@ -2610,6 +2610,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2643,6 +2644,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2676,6 +2678,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2709,6 +2712,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2742,6 +2746,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2775,6 +2780,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2808,6 +2814,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2842,6 +2849,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -2908,6 +2916,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             &this.keyboard_focus_registry,
         );
@@ -3017,6 +3026,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             button,
             key_modifier,
@@ -3056,6 +3066,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             target.ht_root(),
         );
@@ -3092,6 +3103,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
             button,
             key_modifier,
@@ -3121,6 +3133,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_feedbacks: &mut this.view_feedback_store,
                 },
                 popup_manager: &mut this.popup_manager,
+                docking_preview_state: &mut this.docking_preview_state,
             },
         );
     }
@@ -3269,37 +3282,6 @@ impl<'sys> CoreLoop<'sys> {
                     .view_feedback_registry_delayed_ops,
             },
         });
-    }
-
-    fn begin_redock_preview(
-        self: Pin<&mut Self>,
-        initiator: WindowHandle,
-        pointer: PointerID,
-        source_dock: ui::dock::DockID,
-        tab_index: usize,
-        pane_rect: Rect<LogicalUnit>,
-        tab_size: Size<LogicalUnit>,
-        client_pos: Point<LogicalUnit>,
-    ) {
-        let (state, popover_rect) = ui::dock::begin_preview(
-            pane_rect,
-            tab_size,
-            &client_pos,
-            initiator,
-            source_dock,
-            tab_index,
-        );
-
-        let dock_basepoint =
-            unsafe { initiator.extra_data_ref::<PerWindowData>() }.compute_content_left_top();
-        let this = unsafe { self.get_unchecked_mut() };
-        this.syslink.begin_pane_drag(
-            initiator,
-            &pointer,
-            state.offset,
-            &popover_rect.ref_with_offset(dock_basepoint),
-        );
-        this.docking_preview_state = Some(state);
     }
 
     fn move_redock_preview(
@@ -3737,23 +3719,6 @@ impl<'sys> CoreLoop<'sys> {
             Event::DropdownMenuSelectItem { id, receiver } => self
                 .as_mut()
                 .perform_dropdown_menu_select_item(id, receiver),
-            Event::DockBeginPreview {
-                initiator,
-                pointer,
-                source_dock,
-                tab_index,
-                pane_rect,
-                tab_size,
-                client_pos,
-            } => self.as_mut().begin_redock_preview(
-                initiator,
-                pointer,
-                source_dock,
-                tab_index,
-                pane_rect,
-                tab_size,
-                client_pos,
-            ),
             Event::Sync(SyncEvent::NewPresentID { .. }) => self.as_mut().update_preview(),
             Event::ScheduleViewRenderExt { id } => self.as_mut().schedule_view_render(id),
             #[cfg(windows)]
