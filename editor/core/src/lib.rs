@@ -3319,9 +3319,13 @@ impl<'sys> CoreLoop<'sys> {
             let mut source_window = state.source_window;
             let source_dock = state.source_dock;
             let tab_index = state.tab_index;
-            this.syslink.end_pane_drag();
-            let (op, suggested_rect) =
-                ui::dock::end_preview(dm, &mut this.dock_store, &client_pos_in_dest, state);
+            let (op, suggested_rect) = ui::dock::end_preview(
+                dm,
+                &mut this.dock_store,
+                &client_pos_in_dest,
+                state,
+                &mut this.syslink,
+            );
             let (diverged_content, undock_result) = dm.redock(
                 source_dock,
                 &mut this.dock_store,

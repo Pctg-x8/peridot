@@ -1333,12 +1333,15 @@ pub fn move_preview(
 }
 
 /// Previewを終了し、確定したRedocking操作を返す
-pub fn end_preview(
+pub fn end_preview<'sys>(
     root_manager: &WindowDockingManager,
     store: &DockStore,
     client_pos: &Point<LogicalUnit>,
     state: DockingPreviewState,
+    env: &mut (impl SystemLinkAccess<'sys> + ?Sized),
 ) -> (DockingOperation, Rect<LogicalUnit>) {
+    env.system_link().end_pane_drag();
+
     compute_recommended_operation(
         root_manager.root_id,
         store,

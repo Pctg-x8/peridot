@@ -23,6 +23,12 @@ use crate::{
 pub trait SystemLinkAccess<'sys> {
     fn system_link<'a>(&'a self) -> &'a SystemLink<'sys>;
 }
+impl<'sys> SystemLinkAccess<'sys> for SystemLink<'sys> {
+    #[inline(always)]
+    fn system_link<'a>(&'a self) -> &'a SystemLink<'sys> {
+        self
+    }
+}
 
 pub struct MeasureContext<'env, 'sys> {
     pub system_link: &'env SystemLink<'sys>,
