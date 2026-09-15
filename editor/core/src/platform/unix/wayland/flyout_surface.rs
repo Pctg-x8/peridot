@@ -140,27 +140,6 @@ impl Handle {
             )
             == Ok(true)
     }
-
-    pub fn update_manual_scaling(&self) {
-        let el = self.data();
-        if let SurfaceScaling::Manual { ref viewport, .. } = el.scaling {
-            let committed_state = el.committed_state.lock().expect("poisoned");
-            viewport
-                .set_source(
-                    wl::Fixed::from_f32_lossy(0.0),
-                    wl::Fixed::from_f32_lossy(0.0),
-                    wl::Fixed::from_f32_lossy(committed_state.size_pixels.width as _),
-                    wl::Fixed::from_f32_lossy(committed_state.size_pixels.height as _),
-                )
-                .expect("viewport.set_source");
-            viewport
-                .set_destination(
-                    committed_state.size.width as _,
-                    committed_state.size.height as _,
-                )
-                .expect("viewport.set_destination");
-        }
-    }
 }
 impl MountTarget for Handle {
     #[inline(always)]
@@ -300,18 +279,21 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
             );
             let pixels_size = logical_size.to_pixels_ceil(committed_state_ref.buffer_scale);
             if pixels_size != committed_state_ref.size_pixels {
-                self.0
-                    .data
-                    .xdg_surface
-                    .set_window_geometry(0, 0, logical_size.width as _, logical_size.height as _)
-                    .expect("xdg_surface.set_window_geometry");
-
                 committed_state_ref.size_pixels = pixels_size;
                 committed_state_ref.size = logical_size;
                 self.0
                     .data
                     .swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
+
+                if let SurfaceScaling::Manual { ref viewport, .. } = self.0.data.scaling {
+                    viewport
+                        .set_destination(
+                            committed_state_ref.size.width as _,
+                            committed_state_ref.size.height as _,
+                        )
+                        .expect("viewport.set_destination");
+                }
             }
         }
 
@@ -410,6 +392,9 @@ pub fn new_surface<'sys>(
             .viewporter
             .get_viewport(&surface)
             .expect("viewporter.get_viewport");
+
+        vp.set_destination(size.width as _, size.height as _)
+            .expect("viewport.set_destination");
 
         SurfaceScaling::Manual {
             fractional_scale: f,

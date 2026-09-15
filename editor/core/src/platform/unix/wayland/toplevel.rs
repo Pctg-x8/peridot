@@ -724,6 +724,9 @@ impl NativeWindow {
                     .get_viewport(&surface)
                     .expect("viewporter.get_viewport");
 
+                vp.set_destination(size.width as _, size.height as _)
+                    .expect("viewport.set_destination");
+
                 SurfaceScaling::Manual {
                     fractional_scale: f,
                     viewport: vp,

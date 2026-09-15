@@ -611,16 +611,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 #[derive(Clone, Debug, PartialEq)]
 pub enum SyncEvent {
     NewPresentID { id: u64 },
-    FlyoutSurfacePostCreateRenderBuffer { target: FlyoutSurfaceHandle },
     PopupUnmount { id: PopupID },
 }
 impl SyncEvent {
     pub const fn p_name(&self) -> &'static str {
         match self {
             Self::NewPresentID { .. } => "Sync(NewPresentID)",
-            Self::FlyoutSurfacePostCreateRenderBuffer { .. } => {
-                "Sync(ContextMenuPostResizeRenderBuffer)"
-            }
             Self::PopupUnmount { .. } => "Sync(PopupUnmount)",
         }
     }
@@ -3698,10 +3694,6 @@ impl<'sys> CoreLoop<'sys> {
         profiler::scope!(PROCESS_SYNC_EVENT, str e.p_name());
 
         match e {
-            SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target } => {
-                #[cfg(feature = "wayland")]
-                target.update_manual_scaling();
-            }
             SyncEvent::PopupUnmount { id } => self.destroy_popup(id),
             SyncEvent::NewPresentID { .. } => self.update_preview(),
         }

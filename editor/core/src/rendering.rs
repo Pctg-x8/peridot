@@ -422,7 +422,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 window_glyph_atlas.color_manager.atlas(),
-                                self.event_bus,
                                 #[cfg(windows)]
                                 self.dx_context,
                             ),
@@ -523,7 +522,7 @@ impl<'main> RenderThread<'main> {
                     x.validate_swapchain(&mut descriptor_writes);
                 }
                 for x in context_menus.values_mut() {
-                    x.validate_swapchain(&mut descriptor_writes, self.event_bus);
+                    x.validate_swapchain(&mut descriptor_writes);
                 }
                 self.gfx.update_descriptor_sets(&descriptor_writes, &[]);
 
@@ -1229,7 +1228,6 @@ impl<'d> ContextMenuRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         color_atlas: &ColorTextureAtlas,
-        event_bus: &SyncEventBus,
         #[cfg(windows)] dx_context: &crate::platform::windows::DxContext,
     ) -> Self {
         #[cfg(not(windows))]
@@ -1422,10 +1420,6 @@ impl<'d> ContextMenuRenderer<'d> {
                 .map(|b| unsafe { br::VkHandleRef::dangling(b.vk_image_view) }),
         );
 
-        event_bus.push(SyncEvent::FlyoutSurfacePostCreateRenderBuffer {
-            target: create_data.w,
-        });
-
         Self {
             w: create_data.w,
             active_scale: init_scale,
@@ -1573,7 +1567,6 @@ impl<'d> ContextMenuRenderer<'d> {
     pub fn validate_swapchain<'s>(
         &'s mut self,
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
-        event_bus: &SyncEventBus,
     ) {
         if !self.swapchain_invalidated {
             // already valid
@@ -1600,7 +1593,6 @@ impl<'d> ContextMenuRenderer<'d> {
         #[cfg(windows)]
         todo!("revalidate composition swapchain");
 
-        event_bus.push(SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target: self.w });
         self.swapchain_invalidated = false;
     }
 
