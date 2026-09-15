@@ -9,3 +9,4 @@ pub mod asset_explorer;
 pub mod inspector;
 pub mod logs;
 pub mod object_tree;
+pub mod preview;
