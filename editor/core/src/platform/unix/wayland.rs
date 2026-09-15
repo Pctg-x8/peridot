@@ -144,7 +144,7 @@ pub struct DisplayServerLink<'sys> {
 
 pub fn create_main_window<'sys, 'cl>(
     mode: MainWindowOpenMode,
-    coreloop: Pin<&'cl mut CoreLoop<'static, 'sys>>,
+    coreloop: Pin<&'cl mut CoreLoop<'sys>>,
 ) -> toplevel::Handle {
     let (target_output, pos, size, initial_maximize);
     match mode {
@@ -199,8 +199,8 @@ pub fn create_main_window<'sys, 'cl>(
 
 pub fn open_sub_window<'sys, 'cl>(
     mode: SubWindowOpenMode,
-    mut coreloop: Pin<&'cl mut CoreLoop<'static, 'sys>>,
-    setup_contents: impl FnOnce(toplevel::Handle, core::pin::Pin<&'cl mut CoreLoop<'static, 'sys>>),
+    mut coreloop: Pin<&'cl mut CoreLoop<'sys>>,
+    setup_contents: impl FnOnce(toplevel::Handle, core::pin::Pin<&'cl mut CoreLoop<'sys>>),
 ) -> toplevel::Handle {
     let (target_output, pos, size, initial_maximize);
     match mode {
@@ -274,7 +274,7 @@ pub fn create_flyout_surface<'sys>(
     parent: toplevel::Handle,
     pos: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
-    coreloop: Pin<&mut CoreLoop<'static, 'sys>>,
+    coreloop: Pin<&mut CoreLoop<'sys>>,
 ) -> flyout_surface::Handle {
     flyout_surface::new_surface(parent, pos, size, coreloop, parent.ui_scale_factor())
 }
@@ -842,7 +842,7 @@ struct DataDeviceState {
 }
 
 pub struct GlobalMessaging<'sys> {
-    coreloop: *mut CoreLoop<'static, 'sys>,
+    coreloop: *mut CoreLoop<'sys>,
     dp: *mut wl::Display,
     global_interfaces: *const GlobalInterfaces,
     text_input_manager: NonNull<wl::ZwpTextInputManagerV3>,
@@ -895,13 +895,13 @@ impl<'sys> GlobalMessaging<'sys> {
         }
     }
 
-    pub fn bind_coreloop(self: Pin<&mut Self>, cl: Pin<&mut CoreLoop<'static, 'sys>>) {
+    pub fn bind_coreloop(self: Pin<&mut Self>, cl: Pin<&mut CoreLoop<'sys>>) {
         unsafe {
             self.get_unchecked_mut().coreloop = cl.get_unchecked_mut();
         }
     }
 
-    const fn coreloop(&self) -> Pin<&mut CoreLoop<'static, 'sys>> {
+    const fn coreloop(&self) -> Pin<&mut CoreLoop<'sys>> {
         unsafe { Pin::new_unchecked(&mut *self.coreloop) }
     }
 

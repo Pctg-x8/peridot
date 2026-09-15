@@ -350,7 +350,7 @@ pub(super) struct EventListener<'sys> {
     pending_activated_changes: Option<bool>,
     pending_maximized_changes: Option<bool>,
     pending_decoration_edge_changes: Option<DecorationEdge>,
-    coreloop: *mut CoreLoop<'static, 'sys>,
+    coreloop: *mut CoreLoop<'sys>,
 }
 impl wl::SurfaceEventListener for EventListener<'_> {
     #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, output))]
@@ -500,7 +500,7 @@ impl wl::WpFractionalScaleV1EventListener for EventListener<'_> {
     }
 }
 impl<'sys> EventListener<'sys> {
-    pub(super) const fn coreloop(&self) -> core::pin::Pin<&mut CoreLoop<'static, 'sys>> {
+    pub(super) const fn coreloop(&self) -> core::pin::Pin<&mut CoreLoop<'sys>> {
         unsafe { core::pin::Pin::new_unchecked(&mut *self.coreloop) }
     }
 
@@ -666,7 +666,7 @@ impl NativeWindow {
         maximized: bool,
         dpsv: &DisplayServerContext,
         dbus: &dbus::Connection,
-        coreloop: core::pin::Pin<&mut CoreLoop<'static, 'sys>>,
+        coreloop: core::pin::Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
         // TODO: displaying surface at specific rectangle
         let size = Size::new_logical(

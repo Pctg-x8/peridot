@@ -330,9 +330,9 @@ pub fn launch() {
 }
 
 fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(Pin<&'sys mut CoreLoop<'static, 'sys>>, EventQueue) -> AppFuture,
+    run_app: impl FnOnce(Pin<&'sys mut CoreLoop<'sys>>, EventQueue) -> AppFuture,
     app_event_dispatcher: &mut LogicFiberEventDispatcher,
-    mut coreloop: Pin<&'sys mut CoreLoop<'static, 'sys>>,
+    mut coreloop: Pin<&'sys mut CoreLoop<'sys>>,
     event_store: &mut VecDeque<Event>,
     global_time_base: &'sys std::time::Instant,
     renderer_sync: &'sys Mutex<RendererSync>,
@@ -2730,7 +2730,7 @@ profiler::section!(INITIALIZE = "LogicFiber.Initialize");
 profiler::section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
 profiler::section!(LOCK_WAIT = "Mutex.LockWait");
 
-pub struct CoreLoop<'h, 'sys> {
+pub struct CoreLoop<'sys> {
     syslink: SystemLink<'sys>,
     fs: &'sys FileSystem,
     global_time_base: &'sys std::time::Instant,
@@ -2740,7 +2740,7 @@ pub struct CoreLoop<'h, 'sys> {
     application: Application,
     // base functionalities
     composite_tree: CompositeTree<SyncEvent>,
-    ht_manager: HitTestTreeManager<'h>,
+    ht_manager: HitTestTreeManager,
     keyboard_focus_registry: KeyboardFocusTokenRegistry,
     pointer_input_manager: PointerInputManager,
     texture_id_issuer: MainThreadTextureIDIssuer,
@@ -2778,7 +2778,7 @@ pub struct CoreLoop<'h, 'sys> {
     // should be pinned
     _marker: core::marker::PhantomPinned,
 }
-impl<'sys> CoreLoop<'static, 'sys> {
+impl<'sys> CoreLoop<'sys> {
     pub fn new(
         syslink: SystemLink<'sys>,
         fs: &'sys FileSystem,
@@ -2843,7 +2843,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
     }
 
     #[profiler::instrument("CoreLoop.Initialize")]
-    pub fn init(mut self: core::pin::Pin<&mut Self>) {
+    pub fn init(mut self: Pin<&mut Self>) {
         // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
         #[cfg(windows)]
         unsafe {
@@ -3260,8 +3260,8 @@ impl<'sys> CoreLoop<'static, 'sys> {
 
     fn close_sub_window(mut self: core::pin::Pin<&mut Self>, mut target: WindowHandle) {
         let wd = unsafe { target.take_extra_data::<PerWindowData>() };
-        struct LocalContext<'a, 'h, 'sys>(ViewInitContext<'a, 'h, 'sys>);
-        impl ViewDestructionContext for LocalContext<'_, '_, '_> {
+        struct LocalContext<'a, 'sys>(ViewInitContext<'a, 'sys>);
+        impl ViewDestructionContext for LocalContext<'_, '_> {
             fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
                 uicore::destruct_view_recursive(
                     target,
@@ -3571,7 +3571,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
     }
 
     fn handle_pointer_down(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
@@ -3580,7 +3580,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
         // #[cfg(target_os = "macos")]
         // drag_preview_popover.bind_position_base_window_link(window);
 
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(ref a) = unsafe { target.extra_data_ref::<PerWindowData>() }.appmenu {
             uicore::view_instance::<ui::app_menu_bar::View>(
                 a.into_untyped(),
@@ -3614,38 +3614,11 @@ impl<'sys> CoreLoop<'static, 'sys> {
             );
         }
 
-        // if let Some(mut c) = this.current_active_dropdown_menu_session.take() {
-        //     c.close_all(
-        //         &this.syslink,
-        //         &mut this.composite_tree,
-        //         &mut this.ht_manager,
-        //         &mut this.keyboard_focus_registry,
-        //     );
-        // }
+        self.as_mut().terminate_flyout_session();
 
-        if let Some(c) = this.custom_view_flyout_session.take() {
-            c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
-                syslink: &this.syslink,
-                view_allocator: &mut this.view_allocator,
-                view_instance_store: &mut this.view_instance_store,
-                view_tree_relation_store: &mut this.view_tree_relation_store,
-                view_group_relation_store: &mut this.view_group_relation_store,
-                view_layout_state_store: &mut this.view_layout_state_store,
-                view_render_state_store: &mut this.view_render_state_store,
-                teardown_context: TeardownContext {
-                    composite_tree: &mut this.composite_tree,
-                    ht_manager: &mut this.ht_manager,
-                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                    view_feedback_subscription_delayed_ops: &mut this
-                        .view_feedback_registry_delayed_ops,
-                },
-            });
-        }
-
+        let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_down(
             pointer_id,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -3685,7 +3658,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
             pointer_id,
             client_pos,
             key_modifier,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -3721,7 +3693,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         this.pointer_input_manager.handle_mouse_move_relative(
             pointer_id,
             relative,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -3754,7 +3725,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_up(
             pointer_id,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -3784,7 +3754,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_leave(
             pointer_id,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -4039,11 +4008,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         );
     }
 
-    fn close_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
-        let this = unsafe { self.get_unchecked_mut() };
-        this.popup_manager.close(id, &mut this.view_instance_store);
-    }
-
     fn destroy_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
         let this = unsafe { self.get_unchecked_mut() };
         this.popup_manager.teardown(
@@ -4110,18 +4074,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
             },
             &this.keyboard_focus_registry,
         );
-    }
-
-    fn open_custom_flyout(
-        mut self: Pin<&mut Self>,
-        parent: WindowHandle,
-        surface_pos: Point<LogicalUnit>,
-        view_constructor: Box<dyn FlyoutSurfacePresenterConstructor>,
-    ) {
-        let custom_view_flyout_session =
-            CustomViewFlyoutSession::begin(parent, surface_pos, view_constructor, self.as_mut());
-        unsafe { self.get_unchecked_mut() }.custom_view_flyout_session =
-            Some(custom_view_flyout_session);
     }
 
     fn close_all_menus(self: Pin<&mut Self>) {
@@ -4210,7 +4162,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_down(
             pointer_id,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -4250,7 +4201,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
             pointer_id,
             client_pos,
             key_modifier,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -4287,7 +4237,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_up(
             pointer_id,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -4317,7 +4266,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_leave(
             pointer_id,
-            &this.ht_manager,
             &mut InputEventContext {
                 composite_tree: &mut this.composite_tree,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
@@ -4388,11 +4336,11 @@ impl<'sys> CoreLoop<'static, 'sys> {
     }
 
     fn perform_dropdown_menu_select_item(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(r) = receiver.upgrade() {
             struct LocalContext<'env> {
                 view_instance_store: &'env mut ViewInstanceStore,
@@ -4440,33 +4388,43 @@ impl<'sys> CoreLoop<'static, 'sys> {
         }
 
         // 選択したら閉じる
-        // if let Some(mut c) = this.current_active_dropdown_menu_session.take() {
-        //     c.close_all(
-        //         &this.syslink,
-        //         &mut this.composite_tree,
-        //         &mut this.ht_manager,
-        //         &mut this.keyboard_focus_registry,
-        //     );
-        // }
-        if let Some(c) = this.custom_view_flyout_session.take() {
-            c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
-                syslink: &this.syslink,
-                view_allocator: &mut this.view_allocator,
-                view_instance_store: &mut this.view_instance_store,
-                view_tree_relation_store: &mut this.view_tree_relation_store,
-                view_group_relation_store: &mut this.view_group_relation_store,
-                view_layout_state_store: &mut this.view_layout_state_store,
-                view_render_state_store: &mut this.view_render_state_store,
-                teardown_context: TeardownContext {
-                    composite_tree: &mut this.composite_tree,
-                    ht_manager: &mut this.ht_manager,
-                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                    view_feedback_subscription_delayed_ops: &mut this
-                        .view_feedback_registry_delayed_ops,
-                },
-            });
-        }
+        self.terminate_flyout_session();
+    }
+
+    fn begin_new_flyout_session(mut self: Pin<&mut Self>, req: CustomFlyoutViewOpenRequest) {
+        // terminate previous
+        self.as_mut().terminate_flyout_session();
+
+        let custom_view_flyout_session =
+            CustomViewFlyoutSession::begin(req.parent, req.pos, req.content_ctor, self.as_mut());
+        unsafe { self.get_unchecked_mut() }.custom_view_flyout_session =
+            Some(custom_view_flyout_session);
+    }
+
+    fn terminate_flyout_session(self: Pin<&mut Self>) {
+        let this = unsafe { self.get_unchecked_mut() };
+        let Some(c) = this.custom_view_flyout_session.take() else {
+            // no active session
+            return;
+        };
+
+        c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+            syslink: &this.syslink,
+            view_allocator: &mut this.view_allocator,
+            view_instance_store: &mut this.view_instance_store,
+            view_tree_relation_store: &mut this.view_tree_relation_store,
+            view_group_relation_store: &mut this.view_group_relation_store,
+            view_layout_state_store: &mut this.view_layout_state_store,
+            view_render_state_store: &mut this.view_render_state_store,
+            teardown_context: TeardownContext {
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                view_feedback_subscription_delayed_ops: &mut this
+                    .view_feedback_registry_delayed_ops,
+            },
+        });
     }
 
     fn begin_redock_preview(
@@ -4761,16 +4719,11 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 Some(session);
         }
 
-        let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if let Some(req) = this.custom_view_flyout_open_request.take() {
-            let custom_view_flyout_session = CustomViewFlyoutSession::begin(
-                req.parent,
-                req.pos,
-                req.content_ctor,
-                self.as_mut(),
-            );
-            unsafe { self.get_unchecked_mut() }.custom_view_flyout_session =
-                Some(custom_view_flyout_session);
+        if let Some(req) = unsafe { self.as_mut().get_unchecked_mut() }
+            .custom_view_flyout_open_request
+            .take()
+        {
+            self.begin_new_flyout_session(req);
         }
     }
 
@@ -5226,7 +5179,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
-async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'static, 'sys>>, event_queue: EventQueue) {
+async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) {
     tracing::info!("app start");
 
     loop {
@@ -5270,7 +5223,7 @@ pub trait FlyoutSurfacePresenterConstructor {
     fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter>;
 }
 
-pub struct FlyoutSurfaceSessionTerminateContext<'a, 'h, 'sys> {
+pub struct FlyoutSurfaceSessionTerminateContext<'a, 'sys> {
     pub syslink: &'a SystemLink<'sys>,
     pub view_allocator: &'a mut ViewIdentifierAllocator,
     pub view_instance_store: &'a mut ViewInstanceStore,
@@ -5278,9 +5231,9 @@ pub struct FlyoutSurfaceSessionTerminateContext<'a, 'h, 'sys> {
     pub view_group_relation_store: &'a mut ViewGroupRelationStore,
     pub view_layout_state_store: &'a mut ViewLayoutStateStore,
     pub view_render_state_store: &'a mut ViewRenderStateStore,
-    pub teardown_context: TeardownContext<'a, 'h>,
+    pub teardown_context: TeardownContext<'a>,
 }
-impl ViewDestructionContext for FlyoutSurfaceSessionTerminateContext<'_, '_, '_> {
+impl ViewDestructionContext for FlyoutSurfaceSessionTerminateContext<'_, '_> {
     #[inline(always)]
     fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
         uicore::destruct_view_recursive(
@@ -5315,7 +5268,7 @@ impl CustomViewFlyoutSession {
         parent: WindowHandle,
         pos: Point<LogicalUnit>,
         content_ctor: Box<dyn FlyoutSurfacePresenterConstructor>,
-        mut cl: Pin<&mut CoreLoop<'static, '_>>,
+        mut cl: Pin<&mut CoreLoop<'_>>,
     ) -> Self {
         let surface = create_flyout_surface(parent, pos, content_ctor.size(), cl.as_mut());
 
@@ -5397,7 +5350,7 @@ pub struct MenuSurface {
 }
 impl MenuSurface {
     fn new(
-        mut cl: Pin<&mut CoreLoop<'static, '_>>,
+        mut cl: Pin<&mut CoreLoop<'_>>,
         initiator_window: WindowHandle,
         display_pos: Point<LogicalUnit>,
         depth: usize,
@@ -5501,7 +5454,7 @@ impl MenuSession {
         items: Vec<MenuItem>,
         command_handler: Box<dyn MenuCommandSelectionHandler>,
         surface_pos: Point<LogicalUnit>,
-        cl: Pin<&mut CoreLoop<'static, '_>>,
+        cl: Pin<&mut CoreLoop<'_>>,
     ) -> Self {
         #[cfg(target_os = "macos")]
         view_init_context
@@ -5550,7 +5503,7 @@ impl MenuSession {
         })
     }
 
-    pub fn perform_delayed_action(&mut self, mut cl: *mut CoreLoop<'static, '_>) {
+    pub fn perform_delayed_action(&mut self, mut cl: *mut CoreLoop<'_>) {
         match self.active_selection {
             Some((depth, index)) => {
                 let cl_ref = unsafe { &mut *cl };
@@ -7766,7 +7719,7 @@ impl ViewFeedbackHandler<model::ViewFeedbackPreviewEditToolTypeChanged>
     fn accept_feedback<'a, 'h, 'sys>(
         &self,
         _feedback: &model::ViewFeedbackPreviewEditToolTypeChanged,
-        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
+        context: &mut ViewFeedbackContext<'a, 'sys>,
     ) {
         let is_selecting = model::preview_edit_tool_type(context) == PreviewEditToolType::Translate;
         context

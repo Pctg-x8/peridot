@@ -14,11 +14,7 @@ use crate::{
 };
 
 pub trait ViewFeedbackHandler<T> {
-    fn accept_feedback<'a, 'h, 'sys>(
-        &self,
-        feedback: &T,
-        context: &mut ViewFeedbackContext<'a, 'h, 'sys>,
-    );
+    fn accept_feedback<'a, 'sys>(&self, feedback: &T, context: &mut ViewFeedbackContext<'a, 'sys>);
 }
 
 pub trait ViewFeedbackRegisterable {
@@ -129,7 +125,7 @@ impl ViewFeedbackRegistry {
         }
     }
 
-    pub fn perform_atomic<'a, 'h>(&self, context: &mut ViewFeedbackContext<'a, 'h, '_>) {
+    pub fn perform_atomic<'a>(&self, context: &mut ViewFeedbackContext<'a, '_>) {
         for x in &self.perform_atomic_feedback_receivers {
             let Some(x) = x.upgrade() else {
                 continue;
@@ -139,11 +135,11 @@ impl ViewFeedbackRegistry {
         }
     }
 
-    pub unsafe fn dispatch_dynamic_unchecked<'a, 'h>(
+    pub unsafe fn dispatch_dynamic_unchecked<'a>(
         &self,
         feedback: *const (),
         feedback_type: &core::any::TypeId,
-        context: &mut ViewFeedbackContext<'a, 'h, '_>,
+        context: &mut ViewFeedbackContext<'a, '_>,
     ) {
         let Some(subscribers) = self.feedback_receivers.get(feedback_type) else {
             // no subscribers
@@ -158,10 +154,10 @@ impl ViewFeedbackRegistry {
     }
 }
 
-pub struct ViewFeedbackContext<'a, 'h, 'sys> {
+pub struct ViewFeedbackContext<'a, 'sys> {
     pub application: &'a model::Application,
     pub composite_tree: &'a mut CompositeTree<SyncEvent>,
-    pub ht_manager: &'a mut HitTestTreeManager<'h>,
+    pub ht_manager: &'a mut HitTestTreeManager,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
     pub view_allocator: &'a mut super::ViewIdentifierAllocator,
@@ -175,13 +171,13 @@ pub struct ViewFeedbackContext<'a, 'h, 'sys> {
     pub main_thread_texture_id_issuer: &'a mut MainThreadTextureIDIssuer,
     pub view_render_queue: &'a mut super::ViewRenderQueue,
 }
-impl model::ApplicationAccess for ViewFeedbackContext<'_, '_, '_> {
+impl model::ApplicationAccess for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn application(&self) -> &model::Application {
         self.application
     }
 }
-impl super::ViewRegisterable for ViewFeedbackContext<'_, '_, '_> {
+impl super::ViewRegisterable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn construct_view_direct<T: super::View + 'static>(
         &mut self,
@@ -211,7 +207,7 @@ impl super::ViewRegisterable for ViewFeedbackContext<'_, '_, '_> {
         )
     }
 }
-impl super::ViewInstanceQueryable for ViewFeedbackContext<'_, '_, '_> {
+impl super::ViewInstanceQueryable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: super::View + 'static>(&self, id: super::ViewIdentifier) -> Option<&T> {
         super::view_instance(id, self.view_instance_store)
@@ -222,7 +218,7 @@ impl super::ViewInstanceQueryable for ViewFeedbackContext<'_, '_, '_> {
         super::view_layout(id, self.view_instance_store)
     }
 }
-impl super::ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_, '_> {
+impl super::ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: super::View + 'static>(
         &mut self,
@@ -244,7 +240,7 @@ impl super::ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_, '_> {
         super::view_layout_mut(id, self.view_instance_store)
     }
 }
-impl super::ViewRelationControllable for ViewFeedbackContext<'_, '_, '_> {
+impl super::ViewRelationControllable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(
         &mut self,
@@ -259,7 +255,7 @@ impl super::ViewRelationControllable for ViewFeedbackContext<'_, '_, '_> {
         super::view_detach_parent(id, self.view_tree_relation_store);
     }
 }
-impl super::ViewImmediateTeardownable for ViewFeedbackContext<'_, '_, '_> {
+impl super::ViewImmediateTeardownable for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn teardown_view_recursive_untyped(&mut self, target: super::ViewIdentifier) {
         super::teardown_view_recursive(
@@ -277,7 +273,7 @@ impl super::ViewImmediateTeardownable for ViewFeedbackContext<'_, '_, '_> {
         );
     }
 }
-impl super::ViewRenderer for ViewFeedbackContext<'_, '_, '_> {
+impl super::ViewRenderer for ViewFeedbackContext<'_, '_> {
     #[inline(always)]
     fn schedule_view_render_untyped(&mut self, view: super::ViewIdentifier) {
         self.view_render_queue.schedule(view);
@@ -290,7 +286,7 @@ pub struct ViewFeedbackPerformAtomic;
 struct ViewFeedbackHandlerUntyped {
     target: Weak<dyn core::any::Any>,
     accept_feedback_fn:
-        fn(this: *const (), feedback: *const (), context: &mut ViewFeedbackContext<'_, '_, '_>),
+        fn(this: *const (), feedback: *const (), context: &mut ViewFeedbackContext<'_, '_>),
 }
 impl ViewFeedbackHandlerUntyped {
     fn from_typed<T, E: ViewFeedbackHandler<T> + 'static>(target: Weak<E>) -> Self {
@@ -300,10 +296,10 @@ impl ViewFeedbackHandlerUntyped {
         }
     }
 
-    unsafe fn try_invoke_untyped<'a, 'h>(
+    unsafe fn try_invoke_untyped<'a>(
         &self,
         feedback: *const (),
-        context: &mut ViewFeedbackContext<'a, 'h, '_>,
+        context: &mut ViewFeedbackContext<'a, '_>,
     ) -> bool {
         let Some(target) = self.target.upgrade() else {
             return false;

@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-pub struct HitTestTreeData<'h> {
+pub struct HitTestTreeData {
     pub active: bool,
     pub opaque: bool,
     pub left: f32,
@@ -27,16 +27,17 @@ pub struct HitTestTreeData<'h> {
     pub cursor_shape: CursorShape,
     pub keyboard_focus: Option<FocusTargetToken>,
     pub root_of_window: Option<WindowHandle>,
-    pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>>,
+    pub action_handler: Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'static>>,
     /// 子要素以降をこのRectでクリップする
     pub clip_children: bool,
     #[cfg(windows)]
-    pub native_text_deferrable_event_handler:
-        Option<std::rc::Weak<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'h>>,
+    pub native_text_deferrable_event_handler: Option<
+        std::rc::Weak<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'static>,
+    >,
     pub screen_reposition_handler:
-        Option<std::rc::Weak<dyn HitTestTreeScreenRepositionHandler + 'h>>,
+        Option<std::rc::Weak<dyn HitTestTreeScreenRepositionHandler + 'static>>,
 }
-impl Default for HitTestTreeData<'_> {
+impl Default for HitTestTreeData {
     #[inline]
     fn default() -> Self {
         Self {
@@ -62,14 +63,14 @@ impl Default for HitTestTreeData<'_> {
         }
     }
 }
-impl<'h> HitTestTreeData<'h> {
+impl HitTestTreeData {
     #[inline(always)]
-    pub fn build() -> HitTestTreeBuilder<'h> {
+    pub fn build() -> HitTestTreeBuilder {
         HitTestTreeBuilder(Default::default())
     }
 
     #[inline]
-    pub fn action_handler(&self) -> Option<std::rc::Rc<dyn HitTestTreeActionHandler + 'h>> {
+    pub fn action_handler(&self) -> Option<std::rc::Rc<dyn HitTestTreeActionHandler + 'static>> {
         self.action_handler
             .as_ref()
             .and_then(std::rc::Weak::upgrade)
@@ -79,7 +80,7 @@ impl<'h> HitTestTreeData<'h> {
     #[inline]
     pub fn native_text_deferrable_event_handler(
         &self,
-    ) -> Option<std::rc::Rc<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'h>>
+    ) -> Option<std::rc::Rc<dyn crate::platform::windows::CoreTextDeferrableEventHandler + 'static>>
     {
         self.native_text_deferrable_event_handler
             .as_ref()
@@ -89,7 +90,7 @@ impl<'h> HitTestTreeData<'h> {
     #[inline]
     pub fn screen_reposition_handler(
         &self,
-    ) -> Option<std::rc::Rc<dyn HitTestTreeScreenRepositionHandler + 'h>> {
+    ) -> Option<std::rc::Rc<dyn HitTestTreeScreenRepositionHandler + 'static>> {
         self.screen_reposition_handler
             .as_ref()
             .and_then(std::rc::Weak::upgrade)
@@ -98,10 +99,10 @@ impl<'h> HitTestTreeData<'h> {
 
 #[must_use = "builder should be consumed explicitly via calling `create`"]
 #[repr(transparent)]
-pub struct HitTestTreeBuilder<'h>(HitTestTreeData<'h>);
-impl<'h> HitTestTreeBuilder<'h> {
+pub struct HitTestTreeBuilder(HitTestTreeData);
+impl HitTestTreeBuilder {
     #[inline(always)]
-    pub fn create(self, manager: &mut HitTestTreeManager<'h>) -> HitTestTreeRef {
+    pub fn create(self, manager: &mut HitTestTreeManager) -> HitTestTreeRef {
         manager.create(self.0)
     }
 
@@ -178,8 +179,8 @@ impl<'h> HitTestTreeBuilder<'h> {
 }
 
 #[repr(transparent)]
-pub struct HitTestTreeDataChainedModifier<'a, 'h>(&'a mut HitTestTreeData<'h>);
-impl<'a, 'h> HitTestTreeDataChainedModifier<'a, 'h> {
+pub struct HitTestTreeDataChainedModifier<'a>(&'a mut HitTestTreeData);
+impl<'a> HitTestTreeDataChainedModifier<'a> {
     pub const fn left(self, left: f32) -> Self {
         self.0.left = left;
         self
@@ -213,12 +214,12 @@ struct HitTestTreeRelationData {
     children: Vec<HitTestTreeRef>,
 }
 
-pub struct HitTestTreeManager<'h> {
-    data: Vec<HitTestTreeData<'h>>,
+pub struct HitTestTreeManager {
+    data: Vec<HitTestTreeData>,
     relations: Vec<HitTestTreeRelationData>,
     free_index: BTreeSet<usize>,
 }
-impl<'h> HitTestTreeManager<'h> {
+impl HitTestTreeManager {
     pub fn new() -> Self {
         Self {
             data: Vec::new(),
@@ -227,7 +228,7 @@ impl<'h> HitTestTreeManager<'h> {
         }
     }
 
-    pub fn create(&mut self, data: HitTestTreeData<'h>) -> HitTestTreeRef {
+    pub fn create(&mut self, data: HitTestTreeData) -> HitTestTreeRef {
         if let Some(x) = self.free_index.pop_first() {
             self.data[x] = data;
             self.relations[x].parent = None;
@@ -260,20 +261,17 @@ impl<'h> HitTestTreeManager<'h> {
     }
 
     #[inline]
-    pub fn get_data<'d>(&'d self, r: HitTestTreeRef) -> &'d HitTestTreeData<'h> {
+    pub fn get_data<'d>(&'d self, r: HitTestTreeRef) -> &'d HitTestTreeData {
         &self.data[r.0]
     }
 
     #[inline]
-    pub fn get_data_mut<'d>(&'d mut self, r: HitTestTreeRef) -> &'d mut HitTestTreeData<'h> {
+    pub fn get_data_mut<'d>(&'d mut self, r: HitTestTreeRef) -> &'d mut HitTestTreeData {
         &mut self.data[r.0]
     }
 
     #[inline(always)]
-    pub fn mod_chain<'a>(
-        &'a mut self,
-        r: HitTestTreeRef,
-    ) -> HitTestTreeDataChainedModifier<'a, 'h> {
+    pub fn mod_chain<'a>(&'a mut self, r: HitTestTreeRef) -> HitTestTreeDataChainedModifier<'a> {
         HitTestTreeDataChainedModifier(&mut self.data[r.0])
     }
 
@@ -281,7 +279,7 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn set_action_handler(
         &mut self,
         r: HitTestTreeRef,
-        h: &std::rc::Rc<impl HitTestTreeActionHandler + 'h>,
+        h: &std::rc::Rc<impl HitTestTreeActionHandler + 'static>,
     ) {
         self.data[r.0].action_handler = Some(std::rc::Rc::downgrade(h) as _);
     }
@@ -290,7 +288,7 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn set_action_handler_weak(
         &mut self,
         r: HitTestTreeRef,
-        h: std::rc::Weak<impl HitTestTreeActionHandler + 'h>,
+        h: std::rc::Weak<impl HitTestTreeActionHandler + 'static>,
     ) {
         self.data[r.0].action_handler = Some(h as _);
     }
@@ -299,8 +297,8 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn replace_action_handler(
         &mut self,
         r: HitTestTreeRef,
-        h: &std::rc::Rc<impl HitTestTreeActionHandler + 'h>,
-    ) -> Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>> {
+        h: &std::rc::Rc<impl HitTestTreeActionHandler + 'static>,
+    ) -> Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'static>> {
         self.data[r.0]
             .action_handler
             .replace(std::rc::Rc::downgrade(h) as _)
@@ -310,8 +308,8 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn replace_action_handler_weak(
         &mut self,
         r: HitTestTreeRef,
-        h: std::rc::Weak<impl HitTestTreeActionHandler + 'h>,
-    ) -> Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'h>> {
+        h: std::rc::Weak<impl HitTestTreeActionHandler + 'static>,
+    ) -> Option<std::rc::Weak<dyn HitTestTreeActionHandler + 'static>> {
         self.data[r.0].action_handler.replace(h as _)
     }
 
@@ -320,7 +318,7 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn set_native_text_deferrable_event_handler(
         &mut self,
         r: HitTestTreeRef,
-        h: &std::rc::Rc<impl crate::platform::windows::CoreTextDeferrableEventHandler + 'h>,
+        h: &std::rc::Rc<impl crate::platform::windows::CoreTextDeferrableEventHandler + 'static>,
     ) {
         self.data[r.0].native_text_deferrable_event_handler = Some(std::rc::Rc::downgrade(h) as _);
     }
@@ -329,7 +327,7 @@ impl<'h> HitTestTreeManager<'h> {
     pub fn set_screen_reposition_handler(
         &mut self,
         r: HitTestTreeRef,
-        h: &std::rc::Rc<impl HitTestTreeScreenRepositionHandler + 'h>,
+        h: &std::rc::Rc<impl HitTestTreeScreenRepositionHandler + 'static>,
     ) {
         self.data[r.0].screen_reposition_handler = Some(std::rc::Rc::downgrade(h) as _);
     }
@@ -726,11 +724,11 @@ impl<'h> HitTestTreeManager<'h> {
     }
 }
 
-pub struct AscendingIterator<'ht, 'h> {
-    ht_manager: &'ht HitTestTreeManager<'h>,
+pub struct AscendingIterator<'ht> {
+    ht_manager: &'ht HitTestTreeManager,
     pointing: Option<HitTestTreeRef>,
 }
-impl<'ht, 'h> Iterator for AscendingIterator<'ht, 'h> {
+impl<'ht, 'h> Iterator for AscendingIterator<'ht> {
     type Item = HitTestTreeRef;
 
     fn next(&mut self) -> Option<Self::Item> {

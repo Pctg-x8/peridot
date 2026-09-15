@@ -32,11 +32,11 @@ const DOUBLE_CLICK_DETECTION_MAX_DISTANCE: f32 = 4.0;
 const DOUBLE_CLICK_DETECTION_MAX_TIME: Duration = Duration::from_millis(500);
 pub const POINTER_HOVER_TIMEOUT_MS: u32 = 400;
 
-pub struct InputEventContext<'env, 'sys, 'h> {
+pub struct InputEventContext<'env, 'sys> {
     pub current_sec: f32,
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub system_link: &'env mut SystemLink<'sys>,
-    pub ht_manager: &'env HitTestTreeManager<'h>,
+    pub ht_manager: &'env HitTestTreeManager,
     pub dock_store: &'env mut DockStore,
     pub application: ApplicationMutation<'env>,
     pub view_instance_store: &'env mut ViewInstanceStore,
@@ -48,7 +48,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub custom_flyout_view_open_request: &'env mut Option<CustomFlyoutViewOpenRequest>,
     pub popup_manager: &'env mut PopupManager,
 }
-impl InputEventContext<'_, '_, '_> {
+impl InputEventContext<'_, '_> {
     #[inline(always)]
     pub fn view_iter_self_group_parcitipants(
         &self,
@@ -85,7 +85,7 @@ impl InputEventContext<'_, '_, '_> {
         self.popup_manager.close(id, self.view_instance_store);
     }
 }
-impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {
+impl ViewInstanceQueryable for InputEventContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uicore::view_instance(id, self.view_instance_store)
@@ -96,7 +96,7 @@ impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {
         crate::uicore::view_layout(id, self.view_instance_store)
     }
 }
-impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
+impl ViewInstanceQueryableMut for InputEventContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         crate::uicore::view_instance_mut(id, self.view_instance_store)
@@ -112,19 +112,19 @@ impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
         crate::uicore::view_layout_mut(id, self.view_instance_store)
     }
 }
-impl ViewRenderer for InputEventContext<'_, '_, '_> {
+impl ViewRenderer for InputEventContext<'_, '_> {
     #[inline(always)]
     fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
     }
 }
-impl ApplicationAccess for InputEventContext<'_, '_, '_> {
+impl ApplicationAccess for InputEventContext<'_, '_> {
     #[inline(always)]
     fn application(&self) -> &Application {
         self.application.application()
     }
 }
-impl ApplicationMutableAccess for InputEventContext<'_, '_, '_> {
+impl ApplicationMutableAccess for InputEventContext<'_, '_> {
     #[inline(always)]
     fn application_mut(&mut self) -> &mut Application {
         self.application.application_mut()
@@ -273,12 +273,11 @@ impl PointerInputManager {
 
     fn dispatch_pointer_enter(
         action_args: &PointerActionArgs,
-        ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) {
-        for ht_ref in ht.iter_ascending_from(ht_target) {
-            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+        for ht_ref in action_context.ht_manager.iter_ascending_from(ht_target) {
+            let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler() else {
                 continue;
             };
 
@@ -291,12 +290,11 @@ impl PointerInputManager {
 
     fn dispatch_pointer_leave(
         action_args: &PointerActionArgs,
-        ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) {
-        for ht_ref in ht.iter_ascending_from(ht_target) {
-            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+        for ht_ref in action_context.ht_manager.iter_ascending_from(ht_target) {
+            let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler() else {
                 continue;
             };
 
@@ -311,7 +309,6 @@ impl PointerInputManager {
         surface: &mut NativeDesktopSurface,
         pointer: PointerID,
         action_args: &PointerButtonActionArgs,
-        ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
@@ -322,8 +319,9 @@ impl PointerInputManager {
         let mut needs_recompute_pointer_enter = false;
         let mut new_captured = None;
 
-        for ht_ref in ht.iter_ascending_from(ht_target) {
-            let flags = ht
+        for ht_ref in action_context.ht_manager.iter_ascending_from(ht_target) {
+            let flags = action_context
+                .ht_manager
                 .get_data(ht_ref)
                 .action_handler()
                 .map_or(EventContinueControl::empty(), |h| {
@@ -332,7 +330,7 @@ impl PointerInputManager {
 
             Self::update_keyboard_focus(
                 surface,
-                ht.get_data(ht_ref).keyboard_focus,
+                action_context.ht_manager.get_data(ht_ref).keyboard_focus,
                 action_context,
                 kf_registry,
             );
@@ -372,14 +370,13 @@ impl PointerInputManager {
 
     fn dispatch_pointer_move(
         action_args: &PointerActionArgs,
-        ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> bool {
         let mut needs_recompute_pointer_enter = false;
 
-        for ht_ref in ht.iter_ascending_from(ht_target) {
-            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+        for ht_ref in action_context.ht_manager.iter_ascending_from(ht_target) {
+            let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler() else {
                 continue;
             };
 
@@ -398,15 +395,14 @@ impl PointerInputManager {
     fn dispatch_pointer_up(
         sh: &(impl ShellPointerActions + ?Sized),
         action_args: &PointerButtonActionArgs,
-        ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
     ) -> (bool, bool) {
         let mut needs_recompute_pointer_enter = false;
         let mut capture_released = false;
 
-        for ht_ref in ht.iter_ascending_from(ht_target) {
-            let Some(a) = ht.get_data(ht_ref).action_handler() else {
+        for ht_ref in action_context.ht_manager.iter_ascending_from(ht_target) {
+            let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler() else {
                 continue;
             };
 
@@ -428,7 +424,6 @@ impl PointerInputManager {
 
     fn begin_drag(
         &mut self,
-        ht: &HitTestTreeManager,
         action_context: &mut InputEventContext,
         action_args: &PointerButtonActionArgs,
         surface: NativeDesktopSurface,
@@ -443,13 +438,14 @@ impl PointerInputManager {
                 // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
                 // TODO: Flyout系へは必要になったら実装
                 #[cfg(feature = "wayland")]
-                if ht.get_data(e).role == Some(Role::TitleBar)
+                if action_context.ht_manager.get_data(e).role == Some(Role::TitleBar)
                     && let NativeDesktopSurface::Window(window) = surface
                 {
                     window.begin_drag(&pointer);
                 }
 
-                let _ = ht
+                let _ = action_context
+                    .ht_manager
                     .get_data(e)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -462,15 +458,19 @@ impl PointerInputManager {
                 // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
                 // TODO: Flyout系へは必要になったら実装
                 #[cfg(feature = "wayland")]
-                if ht.iter_ascending_from(e).find_map(|x| ht.get_data(x).role)
+                if action_context
+                    .ht_manager
+                    .iter_ascending_from(e)
+                    .find_map(|x| action_context.ht_manager.get_data(x).role)
                     == Some(Role::TitleBar)
                     && let NativeDesktopSurface::Window(window) = surface
                 {
                     window.begin_drag(&pointer);
                 }
 
-                for ht_ref in ht.iter_ascending_from(e) {
-                    let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                for ht_ref in action_context.ht_manager.iter_ascending_from(e) {
+                    let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler()
+                    else {
                         continue;
                     };
 
@@ -505,7 +505,6 @@ impl PointerInputManager {
     fn end_drag(
         &mut self,
         surface: NativeDesktopSurface,
-        ht: &HitTestTreeManager,
         ht_root: HitTestTreeRef,
         action_context: &mut InputEventContext,
         button: PointerButton,
@@ -525,7 +524,8 @@ impl PointerInputManager {
         };
         match self.pointer_focus {
             PointerFocusState::Grabbing { target: ht_ref, .. } => {
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -549,7 +549,8 @@ impl PointerInputManager {
                 needs_recompute_pointer_enter = flags.needs_recompute_pointer_enter();
             }
             PointerFocusState::Capturing(ht_ref) => {
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -565,8 +566,9 @@ impl PointerInputManager {
             PointerFocusState::Entering(ht_ref) => {
                 let mut capture_released = false;
 
-                for ht_ref in ht.iter_ascending_from(ht_ref) {
-                    let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                for ht_ref in action_context.ht_manager.iter_ascending_from(ht_ref) {
+                    let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler()
+                    else {
                         continue;
                     };
 
@@ -595,23 +597,21 @@ impl PointerInputManager {
                 &window_size,
                 pointer_id,
                 client_pos,
-                ht,
                 action_context,
                 ht_root,
             );
         }
     }
 
-    fn update_pointer_enter<'env, 'sys, 'h>(
+    fn update_pointer_enter<'env, 'sys>(
         &mut self,
         window_size: &Size<PointerInputUnit>,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
-        ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+        action_context: &mut InputEventContext<'env, 'sys>,
         ht_root: HitTestTreeRef,
     ) {
-        let new_hit = ht.test(
+        let new_hit = action_context.ht_manager.test(
             ht_root,
             &client_pos,
             &Rect::from_lt_size(Point::new_logical(0.0, 0.0), *window_size),
@@ -640,7 +640,6 @@ impl PointerInputManager {
                     client_pos,
                     client_size: *window_size,
                 },
-                ht,
                 action_context,
                 ht_ref,
             );
@@ -658,7 +657,6 @@ impl PointerInputManager {
                     client_pos,
                     client_size: *window_size,
                 },
-                ht,
                 action_context,
                 ht_ref,
             );
@@ -666,11 +664,10 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_mouse_leave<'env, 'sys, 'h>(
+    pub fn handle_mouse_leave<'env, 'sys>(
         &mut self,
         pointer_id: PointerID,
-        ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+        action_context: &mut InputEventContext<'env, 'sys>,
     ) {
         let Some((entering_window, client_pos)) = self.last_client_pointer_pos.remove(&pointer_id)
         else {
@@ -701,7 +698,6 @@ impl PointerInputManager {
                     client_pos,
                     client_size: entering_window.size(),
                 },
-                ht,
                 action_context,
                 ht_ref,
             );
@@ -717,14 +713,13 @@ impl PointerInputManager {
         matches!(self.pointer_focus, PointerFocusState::Grabbing { .. })
     }
 
-    pub fn handle_mouse_move<'env, 'sys, 'h>(
+    pub fn handle_mouse_move<'env, 'sys>(
         &mut self,
         surface: NativeDesktopSurface,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
-        ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+        action_context: &mut InputEventContext<'env, 'sys>,
         ht_root: HitTestTreeRef,
     ) {
         self.last_client_pointer_pos
@@ -740,7 +735,6 @@ impl PointerInputManager {
         {
             // 動きすぎたのでクリック状態をドラッグ化
             self.begin_drag(
-                ht,
                 action_context,
                 &PointerButtonActionArgs {
                     button: initiator_button,
@@ -757,7 +751,7 @@ impl PointerInputManager {
         // キャプチャ中の要素があればそれにだけ流す
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref) => {
-                if let Some(h) = ht.get_data(ht_ref).action_handler() {
+                if let Some(h) = action_context.ht_manager.get_data(ht_ref).action_handler() {
                     let args = PointerActionArgs {
                         pointer_id,
                         client_pos,
@@ -774,7 +768,7 @@ impl PointerInputManager {
                 return;
             }
             PointerFocusState::Grabbing { target, pos } => {
-                if let Some(h) = ht.get_data(target).action_handler() {
+                if let Some(h) = action_context.ht_manager.get_data(target).action_handler() {
                     let args = GrabDeltaMoveActionArgs {
                         pointer_id,
                         delta: Point::new_logical(client_pos.x - pos.x, client_pos.y - pos.y),
@@ -796,7 +790,7 @@ impl PointerInputManager {
             PointerFocusState::None | PointerFocusState::Entering(_) => (),
         }
 
-        self.update_pointer_enter(&ws, pointer_id, client_pos, ht, action_context, ht_root);
+        self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
 
         if let PointerFocusState::Entering(ht_ref) = self.pointer_focus {
             let args = PointerActionArgs {
@@ -807,8 +801,9 @@ impl PointerInputManager {
 
             let mut needs_recompute_pointer_enter = false;
             if self.down_gesture.is_dragging() {
-                for ht_ref in ht.iter_ascending_from(ht_ref) {
-                    let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                for ht_ref in action_context.ht_manager.iter_ascending_from(ht_ref) {
+                    let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler()
+                    else {
                         continue;
                     };
 
@@ -822,26 +817,25 @@ impl PointerInputManager {
                 }
             } else {
                 needs_recompute_pointer_enter =
-                    Self::dispatch_pointer_move(&args, ht, action_context, ht_ref);
+                    Self::dispatch_pointer_move(&args, action_context, ht_ref);
             }
 
             if needs_recompute_pointer_enter {
-                self.update_pointer_enter(&ws, pointer_id, client_pos, ht, action_context, ht_root);
+                self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
             }
         }
     }
 
-    pub fn handle_mouse_move_relative<'env, 'sys, 'h>(
+    pub fn handle_mouse_move_relative<'env, 'sys>(
         &mut self,
         pointer_id: PointerID,
         relative: Point<PointerInputUnit>,
-        ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+        action_context: &mut InputEventContext<'env, 'sys>,
     ) {
         match self.pointer_focus {
             PointerFocusState::Grabbing { target, .. } => {
                 // grab中のみくる
-                if let Some(h) = ht.get_data(target).action_handler() {
+                if let Some(h) = action_context.ht_manager.get_data(target).action_handler() {
                     let args = GrabDeltaMoveActionArgs {
                         pointer_id,
                         delta: relative,
@@ -912,11 +906,10 @@ impl PointerInputManager {
         }
     }
 
-    pub fn handle_mouse_down<'env, 'sys, 'h>(
+    pub fn handle_mouse_down<'env, 'sys>(
         &mut self,
         pointer_id: PointerID,
-        ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+        action_context: &mut InputEventContext<'env, 'sys>,
         button: PointerButton,
         key_modifier: ModifierKey,
         ht_root: HitTestTreeRef,
@@ -945,7 +938,8 @@ impl PointerInputManager {
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref)
             | PointerFocusState::Grabbing { target: ht_ref, .. } => {
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -953,7 +947,7 @@ impl PointerInputManager {
                     });
                 Self::update_keyboard_focus(
                     &mut entering_surface,
-                    ht.get_data(ht_ref).keyboard_focus,
+                    action_context.ht_manager.get_data(ht_ref).keyboard_focus,
                     action_context,
                     kf_registry,
                 );
@@ -963,14 +957,7 @@ impl PointerInputManager {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
-                    self.update_pointer_enter(
-                        &ws,
-                        pointer_id,
-                        client_pos,
-                        ht,
-                        action_context,
-                        ht_root,
-                    );
+                    self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
                 }
             }
             PointerFocusState::Entering(ht_ref) => {
@@ -978,7 +965,6 @@ impl PointerInputManager {
                     &mut entering_surface,
                     pointer_id,
                     &args,
-                    ht,
                     action_context,
                     ht_ref,
                     kf_registry,
@@ -994,25 +980,17 @@ impl PointerInputManager {
                     None => (),
                 }
                 if needs_recompute_pointer_enter {
-                    self.update_pointer_enter(
-                        &ws,
-                        pointer_id,
-                        client_pos,
-                        ht,
-                        action_context,
-                        ht_root,
-                    );
+                    self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
                 }
             }
             PointerFocusState::None => (),
         }
     }
 
-    pub fn handle_mouse_up<'env, 'sys, 'h>(
+    pub fn handle_mouse_up<'env, 'sys>(
         &mut self,
         pointer_id: PointerID,
-        ht: &HitTestTreeManager,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
+        action_context: &mut InputEventContext<'env, 'sys>,
         button: PointerButton,
         key_modifier: ModifierKey,
         ht_root: HitTestTreeRef,
@@ -1028,7 +1006,6 @@ impl PointerInputManager {
             // ドラッグ状態だった
             self.end_drag(
                 entering_surface,
-                ht,
                 ht_root,
                 action_context,
                 button,
@@ -1049,7 +1026,8 @@ impl PointerInputManager {
         };
         match self.pointer_focus {
             PointerFocusState::Grabbing { target: ht_ref, .. } => {
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -1071,18 +1049,12 @@ impl PointerInputManager {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
-                    self.update_pointer_enter(
-                        &ws,
-                        pointer_id,
-                        client_pos,
-                        ht,
-                        action_context,
-                        ht_root,
-                    );
+                    self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
                 }
             }
             PointerFocusState::Capturing(ht_ref) => {
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -1094,33 +1066,19 @@ impl PointerInputManager {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if flags.needs_recompute_pointer_enter() {
-                    self.update_pointer_enter(
-                        &ws,
-                        pointer_id,
-                        client_pos,
-                        ht,
-                        action_context,
-                        ht_root,
-                    );
+                    self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
                 }
             }
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, capture_released) =
-                    Self::dispatch_pointer_up(&entering_surface, &args, ht, action_context, ht_ref);
+                    Self::dispatch_pointer_up(&entering_surface, &args, action_context, ht_ref);
 
                 if capture_released {
                     self.pointer_focus = PointerFocusState::Entering(ht_ref);
                 }
                 if capture_released || needs_recompute_pointer_enter {
                     // PointerCaptureを解除したときもEnter/Leaveの再計算をさせる
-                    self.update_pointer_enter(
-                        &ws,
-                        pointer_id,
-                        client_pos,
-                        ht,
-                        action_context,
-                        ht_root,
-                    );
+                    self.update_pointer_enter(&ws, pointer_id, client_pos, action_context, ht_root);
                 }
             }
             PointerFocusState::None => (),
@@ -1147,7 +1105,6 @@ impl PointerInputManager {
                         client_pos,
                         key_modifier,
                         action_context,
-                        ht,
                         ht_root,
                     )
                 }
@@ -1159,7 +1116,6 @@ impl PointerInputManager {
                     client_pos,
                     key_modifier,
                     action_context,
-                    ht,
                     ht_root,
                 ),
             }
@@ -1168,7 +1124,7 @@ impl PointerInputManager {
         self.down_gesture = PointerDownGestureState::None;
     }
 
-    fn perform_single_click<'env, 'sys, 'h>(
+    fn perform_single_click<'env, 'sys>(
         &mut self,
         surface: NativeDesktopSurface,
         surface_size: Size<PointerInputUnit>,
@@ -1176,8 +1132,7 @@ impl PointerInputManager {
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
-        ht: &HitTestTreeManager,
+        action_context: &mut InputEventContext<'env, 'sys>,
         ht_root: HitTestTreeRef,
     ) {
         self.last_click = Some(LastClickState {
@@ -1198,7 +1153,8 @@ impl PointerInputManager {
         match self.pointer_focus {
             PointerFocusState::Capturing(ht_ref)
             | PointerFocusState::Grabbing { target: ht_ref, .. } => {
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -1214,7 +1170,6 @@ impl PointerInputManager {
                         &surface_size,
                         pointer_id,
                         client_pos,
-                        ht,
                         action_context,
                         ht_root,
                     );
@@ -1224,8 +1179,9 @@ impl PointerInputManager {
                 let mut needs_recompute_pointer_enter = false;
                 let mut new_captured = None;
 
-                for ht_ref in ht.iter_ascending_from(ht_ref) {
-                    let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                for ht_ref in action_context.ht_manager.iter_ascending_from(ht_ref) {
+                    let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler()
+                    else {
                         continue;
                     };
 
@@ -1250,7 +1206,6 @@ impl PointerInputManager {
                         &surface_size,
                         pointer_id,
                         client_pos,
-                        ht,
                         action_context,
                         ht_root,
                     );
@@ -1260,7 +1215,7 @@ impl PointerInputManager {
         }
     }
 
-    fn perform_double_click<'env, 'sys, 'h>(
+    fn perform_double_click<'env, 'sys>(
         &mut self,
         surface: NativeDesktopSurface,
         surface_size: Size<PointerInputUnit>,
@@ -1268,8 +1223,7 @@ impl PointerInputManager {
         button: PointerButton,
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
-        action_context: &mut InputEventContext<'env, 'sys, 'h>,
-        ht: &HitTestTreeManager,
+        action_context: &mut InputEventContext<'env, 'sys>,
         ht_root: HitTestTreeRef,
     ) {
         self.last_click = Some(LastClickState {
@@ -1294,13 +1248,14 @@ impl PointerInputManager {
                 // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
                 // TODO: Flyout系へは必要になったら実装
                 #[cfg(feature = "wayland")]
-                if ht.get_data(ht_ref).role == Some(Role::TitleBar)
+                if action_context.ht_manager.get_data(ht_ref).role == Some(Role::TitleBar)
                     && let NativeDesktopSurface::Window(window) = surface
                 {
                     window.toggle_maximized();
                 }
 
-                let flags = ht
+                let flags = action_context
+                    .ht_manager
                     .get_data(ht_ref)
                     .action_handler()
                     .map_or(EventContinueControl::empty(), |h| {
@@ -1316,7 +1271,6 @@ impl PointerInputManager {
                         &surface_size,
                         pointer_id,
                         client_pos,
-                        ht,
                         action_context,
                         ht_root,
                     );
@@ -1327,9 +1281,10 @@ impl PointerInputManager {
                 // 他PFではシステム側でやってくれる/ウィンドウコールバック内でないといけない
                 // TODO: Flyout系へは必要になったら実装
                 #[cfg(feature = "wayland")]
-                if ht
+                if action_context
+                    .ht_manager
                     .iter_ascending_from(ht_ref)
-                    .find_map(|x| ht.get_data(x).role)
+                    .find_map(|x| action_context.ht_manager.get_data(x).role)
                     == Some(Role::TitleBar)
                     && let NativeDesktopSurface::Window(window) = surface
                 {
@@ -1339,8 +1294,9 @@ impl PointerInputManager {
                 let mut needs_recompute_pointer_enter = false;
                 let mut new_captured = None;
 
-                for ht_ref in ht.iter_ascending_from(ht_ref) {
-                    let Some(a) = ht.get_data(ht_ref).action_handler() else {
+                for ht_ref in action_context.ht_manager.iter_ascending_from(ht_ref) {
+                    let Some(a) = action_context.ht_manager.get_data(ht_ref).action_handler()
+                    else {
                         continue;
                     };
 
@@ -1365,7 +1321,6 @@ impl PointerInputManager {
                         &surface_size,
                         pointer_id,
                         client_pos,
-                        ht,
                         action_context,
                         ht_root,
                     );

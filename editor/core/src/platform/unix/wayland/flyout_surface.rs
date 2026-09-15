@@ -207,7 +207,7 @@ struct InstanceData<'sys> {
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pending_configure_size: (Option<i32>, Option<i32>),
     pending_configure_buffer_scale: Option<f32>,
-    coreloop: *mut CoreLoop<'static, 'sys>,
+    coreloop: *mut CoreLoop<'sys>,
     _pinned: core::marker::PhantomPinned,
 }
 
@@ -384,7 +384,7 @@ pub fn new_surface<'sys>(
     parent: super::toplevel::Handle,
     pos: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
-    coreloop: Pin<&mut CoreLoop<'static, 'sys>>,
+    coreloop: Pin<&mut CoreLoop<'sys>>,
     ref_scale_factor: f32,
 ) -> Handle {
     let cl = unsafe { coreloop.get_unchecked_mut() };
