@@ -663,10 +663,6 @@ pub enum Event {
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     },
-    DockMoveSplitter {
-        controlling_dock: ui::dock::DockID,
-        pos_client: f32,
-    },
     DockBeginPreview {
         initiator: WindowHandle,
         pointer: PointerID,
@@ -711,7 +707,6 @@ impl Event {
             Self::MenuDeselectItem { .. } => "MenuDeselectItem",
             Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
-            Self::DockMoveSplitter { .. } => "DockMoveSplitter",
             Self::DockBeginPreview { .. } => "DockBeginPreview",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
             #[cfg(not(target_os = "macos"))]
@@ -3334,8 +3329,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 view_instance_store: &mut this.view_instance_store,
                 view_render_queue: &mut this.view_render_queue,
                 view_tree_relation_store: &this.view_tree_relation_store,
-                composite_tree: &mut this.composite_tree,
-                ht_manager: &mut this.ht_manager,
             },
         );
 
@@ -3356,6 +3349,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
             ht_manager: &this.ht_manager,
             dock_store: &mut this.dock_store,
             view_instance_store: &mut this.view_instance_store,
+            view_tree_relation_store: &this.view_tree_relation_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
             menu_open_requests: &mut this.menu_open_requests,
@@ -3496,6 +3490,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
             ht_manager: &this.ht_manager,
             dock_store: &mut this.dock_store,
             view_instance_store: &mut this.view_instance_store,
+            view_tree_relation_store: &this.view_tree_relation_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
             menu_open_requests: &mut this.menu_open_requests,
@@ -3658,6 +3653,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3697,6 +3693,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3732,6 +3729,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3764,6 +3762,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3793,6 +3792,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3818,6 +3818,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3847,6 +3848,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3888,6 +3890,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3920,6 +3923,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3952,6 +3956,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -3984,6 +3989,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4017,6 +4023,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4089,6 +4096,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4210,6 +4218,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4249,6 +4258,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4285,6 +4295,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4314,6 +4325,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 ht_manager: &this.ht_manager,
                 dock_store: &mut this.dock_store,
                 view_instance_store: &mut this.view_instance_store,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
@@ -4455,22 +4467,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 },
             });
         }
-    }
-
-    fn move_dock_splitter(self: Pin<&mut Self>, target: ui::dock::DockID, pos: f32) {
-        let this = unsafe { self.get_unchecked_mut() };
-        ui::dock::move_splitter(
-            target,
-            &mut this.dock_store,
-            pos,
-            &mut PaneContentResizeContext {
-                view_instance_store: &mut this.view_instance_store,
-                view_render_queue: &mut this.view_render_queue,
-                view_tree_relation_store: &this.view_tree_relation_store,
-                composite_tree: &mut this.composite_tree,
-                ht_manager: &mut this.ht_manager,
-            },
-        );
     }
 
     fn begin_redock_preview(
@@ -4765,28 +4761,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 Some(session);
         }
 
-        /*let this = unsafe { self.as_mut().get_unchecked_mut() };
-        assert!(
-            this.dropdown_menu_open_requests.len() <= 1,
-            "more dropdown open request in one event?"
-        );
-        if let Some(req) = this.dropdown_menu_open_requests.pop() {
-            assert!(
-                this.current_active_dropdown_menu_session.is_none(),
-                "another dropdown menu still active"
-            );
-            let session = DropdownMenuSession::new(
-                req.selection_receiver,
-                req.parent,
-                self.as_mut(),
-                req.surface_pos,
-                req.min_width,
-                req.items,
-            );
-            unsafe { self.as_mut().get_unchecked_mut() }.current_active_dropdown_menu_session =
-                Some(session);
-        }*/
-
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(req) = this.custom_view_flyout_open_request.take() {
             let custom_view_flyout_session = CustomViewFlyoutSession::begin(
@@ -4961,12 +4935,6 @@ impl<'sys> CoreLoop<'static, 'sys> {
             Event::DropdownMenuSelectItem { id, receiver } => self
                 .as_mut()
                 .perform_dropdown_menu_select_item(id, receiver),
-            Event::DockMoveSplitter {
-                controlling_dock,
-                pos_client,
-            } => self
-                .as_mut()
-                .move_dock_splitter(controlling_dock, pos_client),
             Event::DockBeginPreview {
                 initiator,
                 pointer,
@@ -5951,21 +5919,22 @@ fn construct_dock_from_state(
                 content,
                 rest,
             } => store.alloc_recurse(|parent1, store| {
-                let splitter = create_context.construct_view_direct(|_| {
-                    Box::new(ui::dock::DockedPaneSplitterView::new(
-                        match direction {
+                let splitter = create_context.construct_view(
+                    ui::dock::splitter::ViewInit {
+                        dir: match direction {
                             persistence::DockDirection::Left(_)
                             | persistence::DockDirection::Right(_) => {
-                                ui::dock::DockedPaneSplitDirection::Horizontal
+                                ui::dock::splitter::Direction::Horizontal
                             }
                             persistence::DockDirection::Top(_)
                             | persistence::DockDirection::Bottom(_) => {
-                                ui::dock::DockedPaneSplitDirection::Vertical
+                                ui::dock::splitter::Direction::Vertical
                             }
                         },
-                        parent1,
-                    ))
-                });
+                        controlling_dock: parent1,
+                    },
+                    |_| [],
+                );
                 let docked = rec(
                     content,
                     root_keyboard_focus_group,

@@ -1,18 +1,12 @@
 use core::cell::Cell;
-use std::{collections::BTreeSet, rc::Rc};
+use std::collections::BTreeSet;
 
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    Event, SyncEvent, SystemLink, WindowHandle, WindowRootView,
-    input::{
-        EventContinueControl, InputEventContext, PointerInputUnit,
-        hittest::{
-            CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager,
-            HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
-        },
-    },
-    rendering::composite::{CompositeRect, CompositeTree, CompositeTreeRef},
+    SystemLink, WindowHandle, WindowRootView,
+    input::hittest::{HitTestTreeData, HitTestTreeRef},
+    rendering::composite::{CompositeRect, CompositeTreeRef},
     ui::dock::tab::{
         PaneGroupTabStripView, PaneGroupTabStripViewInit, PaneGroupTabView, PaneGroupTabViewInit,
     },
@@ -55,6 +49,7 @@ const DESIGN_METRICS: DesignMetrics = DesignMetrics {
     tab_rounding: 8.0,
 };
 
+pub mod splitter;
 mod tab;
 
 /// Paneの表示内容
@@ -77,14 +72,12 @@ pub trait PaneContentPresenter {
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {}
 }
 
-pub struct PaneContentResizeContext<'env, 'h> {
+pub struct PaneContentResizeContext<'env> {
     pub view_instance_store: &'env mut ViewInstanceStore,
     pub view_render_queue: &'env mut ViewRenderQueue,
     pub view_tree_relation_store: &'env ViewTreeRelationStore,
-    pub composite_tree: &'env mut CompositeTree<SyncEvent>,
-    pub ht_manager: &'env mut HitTestTreeManager<'h>,
 }
-impl ViewInstanceQueryable for PaneContentResizeContext<'_, '_> {
+impl ViewInstanceQueryable for PaneContentResizeContext<'_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uicore::view_instance(id, self.view_instance_store)
@@ -95,7 +88,7 @@ impl ViewInstanceQueryable for PaneContentResizeContext<'_, '_> {
         crate::uicore::view_layout(id, self.view_instance_store)
     }
 }
-impl ViewInstanceQueryableMut for PaneContentResizeContext<'_, '_> {
+impl ViewInstanceQueryableMut for PaneContentResizeContext<'_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
         crate::uicore::view_instance_mut(id, self.view_instance_store)
@@ -111,23 +104,23 @@ impl ViewInstanceQueryableMut for PaneContentResizeContext<'_, '_> {
         crate::uicore::view_layout_mut(id, self.view_instance_store)
     }
 }
-impl ViewRenderer for PaneContentResizeContext<'_, '_> {
+impl ViewRenderer for PaneContentResizeContext<'_> {
     #[inline(always)]
     fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
     }
 }
-impl ViewRelationQueryable for PaneContentResizeContext<'_, '_> {
+impl ViewRelationQueryable for PaneContentResizeContext<'_> {
     #[inline(always)]
     fn view_get_parent_untyped(&self, id: ViewIdentifier) -> Option<ViewIdentifier> {
         crate::uicore::view_get_parent(id, self.view_tree_relation_store)
     }
 }
 
-pub trait DerivePaneContentResizeContext<'h> {
+pub trait DerivePaneContentResizeContext {
     fn derive_pane_content_resize_context<'env2>(
         &'env2 mut self,
-    ) -> PaneContentResizeContext<'env2, 'h>;
+    ) -> PaneContentResizeContext<'env2>;
 }
 
 #[repr(transparent)]
@@ -309,10 +302,10 @@ pub enum DockDirection {
     ToBottom(Cell<f32>),
 }
 impl DockDirection {
-    const fn splitter_direction(&self) -> DockedPaneSplitDirection {
+    const fn splitter_direction(&self) -> splitter::Direction {
         match self {
-            Self::ToLeft(_) | Self::ToRight(_) => DockedPaneSplitDirection::Horizontal,
-            Self::ToTop(_) | Self::ToBottom(_) => DockedPaneSplitDirection::Vertical,
+            Self::ToLeft(_) | Self::ToRight(_) => splitter::Direction::Horizontal,
+            Self::ToTop(_) | Self::ToBottom(_) => splitter::Direction::Vertical,
         }
     }
 
@@ -386,7 +379,7 @@ pub enum Dock {
         parent: DockID,
         docked: DockID,
         rest: DockID,
-        splitter: TypedViewIdentifier<DockedPaneSplitterView>,
+        splitter: TypedViewIdentifier<splitter::View>,
         direction: DockDirection,
     },
 }
@@ -611,16 +604,14 @@ impl ViewInstanceQueryableMut for RedockingContext<'_, '_, '_> {
         crate::uicore::view_layout_mut(id, self.view_init_ctx.view_instance_store)
     }
 }
-impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h, '_> {
+impl<'h> DerivePaneContentResizeContext for RedockingContext<'_, 'h, '_> {
     fn derive_pane_content_resize_context<'env2>(
         &'env2 mut self,
-    ) -> PaneContentResizeContext<'env2, 'h> {
+    ) -> PaneContentResizeContext<'env2> {
         PaneContentResizeContext {
             view_instance_store: self.view_init_ctx.view_instance_store,
             view_render_queue: self.view_render_queue,
             view_tree_relation_store: self.view_init_ctx.view_tree_relation_store,
-            composite_tree: self.view_init_ctx.mount_context.composite_tree,
-            ht_manager: self.view_init_ctx.mount_context.ht_manager,
         }
     }
 }
@@ -726,8 +717,6 @@ impl WindowDockingManager {
                 view_instance_store: ctx.view_instance_store,
                 view_render_queue,
                 view_tree_relation_store: ctx.view_tree_relation_store,
-                composite_tree: ctx.mount_context.composite_tree,
-                ht_manager: ctx.mount_context.ht_manager,
             },
         );
 
@@ -848,12 +837,13 @@ fn split_new(
 ) {
     let onto = store.get(new_rest).parent().expect("no parent?");
     let new_dock = store.alloc_recurse(|parent_id, store| {
-        let splitter = view_init_ctx.construct_view_direct(|_| {
-            Box::new(DockedPaneSplitterView::new(
-                direction.splitter_direction(),
-                parent_id,
-            ))
-        });
+        let splitter = view_init_ctx.construct_view(
+            splitter::ViewInit {
+                dir: direction.splitter_direction(),
+                controlling_dock: parent_id,
+            },
+            |_| [],
+        );
         view_init_ctx.view_set_parent(splitter, manager.root_view_id);
 
         Dock::Splitted {
@@ -895,8 +885,6 @@ fn split_new(
             view_instance_store: view_init_ctx.view_instance_store,
             view_render_queue,
             view_tree_relation_store: view_init_ctx.view_tree_relation_store,
-            composite_tree: view_init_ctx.mount_context.composite_tree,
-            ht_manager: view_init_ctx.mount_context.ht_manager,
         },
     );
 }
@@ -912,7 +900,7 @@ fn undock<'h>(
              + ViewImmediateTeardownable
              + ViewDestructionContext
              + DeriveTeardownContext<'h>
-             + DerivePaneContentResizeContext<'h>
+             + DerivePaneContentResizeContext
              + ViewInstanceQueryableMut
              + ?Sized
          ),
@@ -1031,8 +1019,6 @@ fn redock(
                     view_instance_store: ctx.view_init_ctx.view_instance_store,
                     view_render_queue: ctx.view_render_queue,
                     view_tree_relation_store: ctx.view_init_ctx.view_tree_relation_store,
-                    composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
-                    ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
                 },
             );
             None
@@ -1067,8 +1053,6 @@ fn redock(
                     view_instance_store: ctx.view_init_ctx.view_instance_store,
                     view_render_queue: ctx.view_render_queue,
                     view_tree_relation_store: ctx.view_init_ctx.view_tree_relation_store,
-                    composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
-                    ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
                 },
             );
             None
@@ -1617,206 +1601,6 @@ fn compute_recommended_operation(
         DockingOperation::Diverge,
         source_rect.ref_relocate(&pos.with_offset(drag_offset.clone())),
     )
-}
-
-/// Pane分割方向
-#[derive(Clone, Copy)]
-pub enum DockedPaneSplitDirection {
-    /// 横
-    Horizontal,
-    /// 縦
-    Vertical,
-}
-impl DockedPaneSplitDirection {
-    /// Splitterに適切なカーソル形状を得る
-    const fn cursor_shape(&self) -> CursorShape {
-        match self {
-            Self::Horizontal => CursorShape::ResizeHorizontal,
-            Self::Vertical => CursorShape::ResizeVertical,
-        }
-    }
-
-    /// Splitterが制御する方向の値を得る
-    const fn dominant_coordinate(&self, p: &Point<LogicalUnit>) -> f32 {
-        match self {
-            Self::Horizontal => p.x,
-            Self::Vertical => p.y,
-        }
-    }
-}
-
-/// Dock間のSplitter
-pub struct DockedPaneSplitterView {
-    dir: DockedPaneSplitDirection,
-    controlling_dock: DockID,
-    entity: Option<Rc<DockedPaneSplitterEventHandler>>,
-}
-impl DockedPaneSplitterView {
-    /// 生成
-    pub fn new(dir: DockedPaneSplitDirection, controlling_dock: DockID) -> Self {
-        Self {
-            dir,
-            controlling_dock,
-            entity: None,
-        }
-    }
-
-    /// 制御対象のDockを変更
-    #[inline(always)]
-    fn rebind_controlling_dock(&mut self, dock: DockID) {
-        self.controlling_dock = dock;
-        if let Some(ref entity) = self.entity {
-            entity.controlling_dock.set(dock);
-        }
-    }
-}
-impl View for DockedPaneSplitterView {
-    fn render(
-        &mut self,
-        layout_rect: Rect<LogicalUnit>,
-        ctx: &mut RenderContext,
-        _layout_state: &ViewLayoutStateStore,
-    ) -> ViewRenderElements {
-        let e = match self.entity {
-            Some(ref e) => {
-                // relayout
-                ctx.composite_tree
-                    .begin_mod_chain(e.ct_root)
-                    .rect_imm(layout_rect.clone())
-                    .apply();
-                ctx.ht_manager.mod_chain(e.ht_root).rect(layout_rect);
-
-                e
-            }
-            None => {
-                // first render
-                let ct_root = CompositeRect::build()
-                    .rect_imm(layout_rect.clone())
-                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.125])
-                    .opacity_imm(0.0)
-                    .create(ctx.composite_tree);
-                let ht_root = HitTestTreeData::build()
-                    .rect(layout_rect)
-                    .cursor_shape(self.dir.cursor_shape())
-                    .create(ctx.ht_manager);
-
-                let eh = Rc::new(DockedPaneSplitterEventHandler {
-                    dir: self.dir,
-                    controlling_dock: Cell::new(self.controlling_dock),
-                    ct_root,
-                    ht_root,
-                    pressing: Cell::new(false),
-                    drag_delta: Cell::new(0.0),
-                });
-                ctx.ht_manager.set_action_handler(eh.ht_root, &eh);
-
-                &*self.entity.insert(eh)
-            }
-        };
-
-        ViewRenderElements {
-            composite_tree: Some(e.ct_root),
-            hit_tree: Some(e.ht_root),
-            ..ViewRenderElements::EMPTY
-        }
-    }
-
-    fn teardown(&mut self, ctx: &mut TeardownContext) {
-        let Some(entity) = self.entity.take() else {
-            // not rendered
-            return;
-        };
-
-        ctx.composite_tree.free_all(entity.ct_root);
-        ctx.ht_manager.free_all(entity.ht_root);
-    }
-
-    fn measure_preferred_content_size(&self, _ctx: &mut MeasureContext) -> Size<LogicalUnit> {
-        Size::new_logical(
-            DESIGN_METRICS.splitter_thickness,
-            DESIGN_METRICS.splitter_thickness,
-        )
-    }
-}
-
-/// Splitterのイベントハンドラ
-struct DockedPaneSplitterEventHandler {
-    /// 分割方向
-    dir: DockedPaneSplitDirection,
-    /// 制御対象のDock
-    controlling_dock: Cell<DockID>,
-    /// ビジュアルツリー
-    ct_root: CompositeTreeRef,
-    /// 入力ツリー
-    ht_root: HitTestTreeRef,
-    /// ポインタ押下中か？
-    pressing: Cell<bool>,
-    /// ドラッグ操作のオフセット
-    drag_delta: Cell<f32>,
-}
-impl HitTestTreeActionHandler for DockedPaneSplitterEventHandler {
-    fn on_pointer_down(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        self.drag_delta.set(match self.dir {
-            DockedPaneSplitDirection::Horizontal => {
-                args.client_pos.x - context.ht_manager.compute_global_rect_autoroot(sender).0
-            }
-            DockedPaneSplitDirection::Vertical => {
-                args.client_pos.y - context.ht_manager.compute_global_rect_autoroot(sender).1
-            }
-        });
-        self.pressing.set(true);
-
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::CAPTURE_ELEMENT
-    }
-
-    fn on_pointer_move(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        if !self.pressing.get() {
-            return EventContinueControl::empty();
-        }
-
-        self.r#move(&args.client_pos, context.system_link);
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_drag_move(
-        &self,
-        _sender: HitTestTreeRef,
-        context: &mut InputEventContext,
-        args: &PointerActionArgs,
-    ) -> EventContinueControl {
-        self.r#move(&args.client_pos, context.system_link);
-        EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_pointer_up(
-        &self,
-        _sender: HitTestTreeRef,
-        _context: &mut InputEventContext,
-        _args: &PointerButtonActionArgs,
-    ) -> EventContinueControl {
-        self.pressing.set(false);
-
-        EventContinueControl::STOP_PROPAGATION | EventContinueControl::RELEASE_CAPTURE_ELEMENT
-    }
-}
-impl DockedPaneSplitterEventHandler {
-    /// 動かす
-    fn r#move(&self, client_pos: &Point<PointerInputUnit>, syslink: &SystemLink) {
-        syslink.dispatch_event(Event::DockMoveSplitter {
-            controlling_dock: self.controlling_dock.get(),
-            pos_client: self.dir.dominant_coordinate(client_pos) + self.drag_delta.get(),
-        });
-    }
 }
 
 pub struct PaneGroupCreateContext<'env, 'a, 'h, 'sys> {

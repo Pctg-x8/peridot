@@ -20,7 +20,7 @@ use crate::{
     uicore::{
         PopupID, PopupManager, View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRenderQueue, ViewRenderer,
-        view_iter_self_group_participants,
+        ViewTreeRelationStore, view_iter_self_group_participants,
     },
 };
 
@@ -40,6 +40,7 @@ pub struct InputEventContext<'env, 'sys, 'h> {
     pub dock_store: &'env mut DockStore,
     pub application: ApplicationMutation<'env>,
     pub view_instance_store: &'env mut ViewInstanceStore,
+    pub view_tree_relation_store: &'env ViewTreeRelationStore,
     pub view_group_relation_store: &'env ViewGroupRelationStore,
     pub view_render_queue: &'env mut ViewRenderQueue,
     pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
