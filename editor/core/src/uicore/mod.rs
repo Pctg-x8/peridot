@@ -150,6 +150,11 @@ impl ViewInstanceQueryable for ViewInitContext<'_, '_, '_> {
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         view_instance(id, self.view_instance_store)
     }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
+        view_layout(id, self.view_instance_store)
+    }
 }
 impl ViewInstanceQueryableMut for ViewInitContext<'_, '_, '_> {
     #[inline(always)]
@@ -566,7 +571,6 @@ impl ViewRenderQueue {
                 instance_store,
                 tree_relation_store,
                 layout_state_store,
-                |_| {},
             );
             let mut scheduled_renders = VecDeque::new();
             scheduled_renders.push_back((mount_target, target));
@@ -810,6 +814,14 @@ pub fn free_view(
     instance_store.instances[id.into_array_index()].instance = None;
 }
 
+#[inline(always)]
+pub fn view_get_parent(
+    id: ViewIdentifier,
+    tree_relation_store: &ViewTreeRelationStore,
+) -> Option<ViewIdentifier> {
+    tree_relation_store.relations[id.into_array_index()].parent
+}
+
 pub fn view_set_parent(
     id: ViewIdentifier,
     parent: ViewIdentifier,
@@ -946,7 +958,6 @@ pub fn render_view_with_base(
         instance_store,
         tree_relation_store,
         layout_state_store,
-        &mut |_| {},
     );
 
     let mut scheduled_renders = VecDeque::new();
@@ -1231,6 +1242,11 @@ pub fn view_set_visibility(
     instance.active = visible;
 }
 
+#[inline(always)]
+pub fn view_layout(id: ViewIdentifier, instance_store: &ViewInstanceStore) -> Option<&ViewLayout> {
+    Some(&instance_store.instances.get(id.into_array_index())?.layout)
+}
+
 pub fn view_layout_mut(
     id: ViewIdentifier,
     instance_store: &mut ViewInstanceStore,
@@ -1303,10 +1319,16 @@ pub trait ViewGroupRelationControllable {
 
 pub trait ViewInstanceQueryable {
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T>;
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout>;
 
     #[inline(always)]
     fn view_instance<T: View + 'static>(&self, id: TypedViewIdentifier<T>) -> Option<&T> {
         self.view_instance_of::<T>(id.into_untyped())
+    }
+
+    #[inline(always)]
+    fn view_layout<T>(&self, id: TypedViewIdentifier<T>) -> Option<&ViewLayout> {
+        self.view_layout_untyped(id.into_untyped())
     }
 }
 pub trait ViewInstanceQueryableMut {
@@ -1333,6 +1355,14 @@ pub trait ViewInstanceQueryableMut {
     }
 }
 
+pub trait ViewRelationQueryable {
+    fn view_get_parent_untyped(&self, id: ViewIdentifier) -> Option<ViewIdentifier>;
+
+    #[inline(always)]
+    fn view_get_parent<T>(&self, id: TypedViewIdentifier<T>) -> Option<ViewIdentifier> {
+        self.view_get_parent_untyped(id.into_untyped())
+    }
+}
 pub trait ViewRelationControllable {
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier);
     fn view_detach_parent_untyped(&mut self, id: ViewIdentifier);

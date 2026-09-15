@@ -4,7 +4,7 @@ use std::{collections::BTreeSet, rc::Rc};
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    Event, SyncEvent, SystemLink, WindowHandle,
+    Event, SyncEvent, SystemLink, WindowHandle, WindowRootView,
     input::{
         EventContinueControl, InputEventContext, PointerInputUnit,
         hittest::{
@@ -12,20 +12,17 @@ use crate::{
             HitTestTreeRef, PointerActionArgs, PointerButtonActionArgs,
         },
     },
-    rendering::composite::{
-        AnimatableColor, AnimatableFloat, ClipConfig, CompositeMode, CompositeRect,
-        CompositeRectScaleFactor, CompositeTree, CompositeTreeRef,
-    },
+    rendering::composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     ui::dock::tab::{
         PaneGroupTabStripView, PaneGroupTabStripViewInit, PaneGroupTabView, PaneGroupTabViewInit,
     },
     uicore::{
         DeriveTeardownContext, MeasureContext, MountContext, RenderContext, SystemLinkAccess,
         TeardownContext, TypedViewIdentifier, View, ViewConstructor, ViewDestructionContext,
-        ViewIdentifier, ViewImmediateRenderable, ViewImmediateTeardownable, ViewInitContext,
-        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout,
-        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderElements,
-        ViewRenderQueue, ViewRenderer,
+        ViewIdentifier, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewLayoutStateStore,
+        ViewRegisterable, ViewRelationControllable, ViewRelationQueryable, ViewRenderElements,
+        ViewRenderQueue, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
 };
 
@@ -83,6 +80,7 @@ pub trait PaneContentPresenter {
 pub struct PaneContentResizeContext<'env, 'h> {
     pub view_instance_store: &'env mut ViewInstanceStore,
     pub view_render_queue: &'env mut ViewRenderQueue,
+    pub view_tree_relation_store: &'env ViewTreeRelationStore,
     pub composite_tree: &'env mut CompositeTree<SyncEvent>,
     pub ht_manager: &'env mut HitTestTreeManager<'h>,
 }
@@ -90,6 +88,11 @@ impl ViewInstanceQueryable for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uicore::view_instance(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
+        crate::uicore::view_layout(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for PaneContentResizeContext<'_, '_> {
@@ -112,6 +115,12 @@ impl ViewRenderer for PaneContentResizeContext<'_, '_> {
     #[inline(always)]
     fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
         self.view_render_queue.schedule(target);
+    }
+}
+impl ViewRelationQueryable for PaneContentResizeContext<'_, '_> {
+    #[inline(always)]
+    fn view_get_parent_untyped(&self, id: ViewIdentifier) -> Option<ViewIdentifier> {
+        crate::uicore::view_get_parent(id, self.view_tree_relation_store)
     }
 }
 
@@ -235,6 +244,7 @@ impl DockStore {
 
     pub fn alloc_fill(
         &mut self,
+        root_view: TypedViewIdentifier<WindowDockRootView>,
         parent: DockID,
         init_ctx: &mut PaneGroupCreateContext,
         contents: impl FnOnce(&mut ViewInitContext) -> Vec<Box<dyn PaneContentPresenter>>,
@@ -246,6 +256,7 @@ impl DockStore {
             Dock::Fill {
                 group_view_controller: PaneGroupViewController::new(
                     init_ctx,
+                    root_view,
                     contents,
                     id,
                     initial_active_index,
@@ -578,6 +589,11 @@ impl ViewInstanceQueryable for RedockingContext<'_, '_, '_> {
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uicore::view_instance(id, self.view_init_ctx.view_instance_store)
     }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
+        crate::uicore::view_layout(id, self.view_init_ctx.view_instance_store)
+    }
 }
 impl ViewInstanceQueryableMut for RedockingContext<'_, '_, '_> {
     #[inline(always)]
@@ -602,6 +618,7 @@ impl<'h> DerivePaneContentResizeContext<'h> for RedockingContext<'_, 'h, '_> {
         PaneContentResizeContext {
             view_instance_store: self.view_init_ctx.view_instance_store,
             view_render_queue: self.view_render_queue,
+            view_tree_relation_store: self.view_init_ctx.view_tree_relation_store,
             composite_tree: self.view_init_ctx.mount_context.composite_tree,
             ht_manager: self.view_init_ctx.mount_context.ht_manager,
         }
@@ -641,7 +658,7 @@ impl<'a, 'h> core::ops::DerefMut for RedockingContext<'a, 'h, '_> {
     }
 }
 
-struct WindowDockRootView {
+pub struct WindowDockRootView {
     window: WindowHandle,
 }
 impl View for WindowDockRootView {
@@ -666,64 +683,49 @@ pub struct WindowDockingManager {
     root_view_id: TypedViewIdentifier<WindowDockRootView>,
 }
 impl WindowDockingManager {
-    #[tracing::instrument(skip(bound_window, ctx, view_render_queue, store, dock_ctor))]
+    #[tracing::instrument(skip(
+        bound_window,
+        window_root_view,
+        ctx,
+        view_render_queue,
+        store,
+        dock_ctor
+    ))]
     pub fn new(
         bound_window: WindowHandle,
+        window_root_view: TypedViewIdentifier<WindowRootView>,
         ctx: &mut ViewInitContext,
         view_render_queue: &mut ViewRenderQueue,
         max_rect: Rect<LogicalUnit>,
         store: &mut DockStore,
-        dock_ctor: impl FnOnce(&mut ViewInitContext, &mut ViewRenderQueue, &mut DockStore) -> DockID,
+        dock_ctor: impl FnOnce(
+            TypedViewIdentifier<WindowDockRootView>,
+            &mut ViewInitContext,
+            &mut ViewRenderQueue,
+            &mut DockStore,
+        ) -> DockID,
     ) -> Self {
         let root_view_id = ctx.construct_view_direct(|_| {
             Box::new(WindowDockRootView {
                 window: bound_window,
             })
         });
-        let root_id = dock_ctor(ctx, view_render_queue, store);
+        let l = ctx.view_layout_mut(root_view_id).expect("query failed");
+        l.left_offset = max_rect.left;
+        l.top_offset = max_rect.top;
+        l.width = ViewSize::Fixed(max_rect.width);
+        l.height = ViewSize::Fixed(max_rect.height);
+        ctx.view_set_parent(root_view_id, window_root_view);
 
-        // set all as children of the window
-        let mut process_stack = Vec::new();
-        process_stack.push(root_id);
-        while let Some(id) = process_stack.pop() {
-            match store.get(id) {
-                &Dock::RootContainer { content } => {
-                    process_stack.push(content);
-                }
-                &Dock::Fill {
-                    ref group_view_controller,
-                    ..
-                } => {
-                    ctx.view_set_parent(group_view_controller.tab_strip_view, root_view_id);
-                    for x in group_view_controller.contents.iter() {
-                        ctx.view_set_parent(x.container, root_view_id);
-                    }
-                }
-                &Dock::Splitted {
-                    docked,
-                    rest,
-                    splitter,
-                    ..
-                } => {
-                    ctx.view_set_parent(splitter, root_view_id);
-                    process_stack.extend([docked, rest]);
-                }
-            }
-        }
-        ctx.render_view_with_base(
-            root_view_id.into_untyped(),
-            &bound_window,
-            bound_window.keyboard_focus_group(),
-            Rect::from_lt_size(Point::new_logical(0.0, 0.0), bound_window.client_size()),
-        );
-
+        let root_id = dock_ctor(root_view_id, ctx, view_render_queue, store);
         relayout_dock(
             root_id,
             store,
-            max_rect,
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), max_rect.size()),
             &mut PaneContentResizeContext {
                 view_instance_store: ctx.view_instance_store,
                 view_render_queue,
+                view_tree_relation_store: ctx.view_tree_relation_store,
                 composite_tree: ctx.mount_context.composite_tree,
                 ht_manager: ctx.mount_context.ht_manager,
             },
@@ -747,7 +749,20 @@ impl WindowDockingManager {
         store: &mut DockStore,
         context: &mut PaneContentResizeContext,
     ) {
-        relayout_dock(self.root_id, store, new_rect, context);
+        let l = context
+            .view_layout_mut(self.root_view_id)
+            .expect("query failed");
+        l.left_offset = new_rect.left;
+        l.top_offset = new_rect.top;
+        l.width = ViewSize::Fixed(new_rect.width);
+        l.height = ViewSize::Fixed(new_rect.height);
+        relayout_dock(
+            self.root_id,
+            store,
+            Rect::from_lt_size(Point::new_logical(0.0, 0.0), new_rect.size()),
+            context,
+        );
+        context.schedule_view_render(self.root_view_id);
     }
 
     #[tracing::instrument(skip(self, store, ctx))]
@@ -849,14 +864,11 @@ fn split_new(
                         view_init_context: view_init_ctx,
                         view_render_queue,
                     },
+                    manager.root_view_id,
                     vec![content],
                     id,
                     0,
                 );
-                view_init_ctx.view_set_parent(vc.tab_strip_view, manager.root_view_id);
-                for x in vc.contents.iter() {
-                    view_init_ctx.view_set_parent(x.container, manager.root_view_id);
-                }
 
                 Dock::Fill {
                     parent: parent_id,
@@ -882,6 +894,7 @@ fn split_new(
         &mut PaneContentResizeContext {
             view_instance_store: view_init_ctx.view_instance_store,
             view_render_queue,
+            view_tree_relation_store: view_init_ctx.view_tree_relation_store,
             composite_tree: view_init_ctx.mount_context.composite_tree,
             ht_manager: view_init_ctx.mount_context.ht_manager,
         },
@@ -1017,6 +1030,7 @@ fn redock(
                 &mut PaneContentResizeContext {
                     view_instance_store: ctx.view_init_ctx.view_instance_store,
                     view_render_queue: ctx.view_render_queue,
+                    view_tree_relation_store: ctx.view_init_ctx.view_tree_relation_store,
                     composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
                     ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
                 },
@@ -1052,6 +1066,7 @@ fn redock(
                 &mut PaneContentResizeContext {
                     view_instance_store: ctx.view_init_ctx.view_instance_store,
                     view_render_queue: ctx.view_render_queue,
+                    view_tree_relation_store: ctx.view_init_ctx.view_tree_relation_store,
                     composite_tree: ctx.view_init_ctx.mount_context.composite_tree,
                     ht_manager: ctx.view_init_ctx.mount_context.ht_manager,
                 },
@@ -1130,37 +1145,77 @@ pub fn move_splitter(
             unreachable!("root container does not have any splitters!")
         }
         Dock::Fill { .. } => unreachable!("fill does not have any splitters!"),
-        Dock::Splitted {
-            direction: DockDirection::ToLeft(width),
+        &Dock::Splitted {
+            direction: DockDirection::ToLeft(ref width),
+            splitter,
             ..
         } => {
+            let root_view_offset = context
+                .view_layout_untyped(
+                    context
+                        .view_get_parent(splitter)
+                        .expect("splitter root view?"),
+                )
+                .expect("query failed")
+                .left_offset;
+            let new_splitter_pos = new_splitter_client_pos - root_view_offset;
             let new_fixed_size =
-                (new_splitter_client_pos - self_rect.left).clamp(10.0, self_rect.width - 10.0);
+                (new_splitter_pos - self_rect.left).clamp(10.0, self_rect.width - 10.0);
             width.set(new_fixed_size);
         }
-        Dock::Splitted {
-            direction: DockDirection::ToRight(width),
+        &Dock::Splitted {
+            direction: DockDirection::ToRight(ref width),
+            splitter,
             ..
         } => {
+            let root_view_offset = context
+                .view_layout_untyped(
+                    context
+                        .view_get_parent(splitter)
+                        .expect("splitter root view?"),
+                )
+                .expect("query failed")
+                .left_offset;
+            let new_splitter_pos = new_splitter_client_pos - root_view_offset;
             let new_fixed_size = (self_rect.right()
-                - (new_splitter_client_pos + DESIGN_METRICS.splitter_thickness))
+                - (new_splitter_pos + DESIGN_METRICS.splitter_thickness))
                 .clamp(10.0, self_rect.width - 10.0);
             width.set(new_fixed_size);
         }
-        Dock::Splitted {
-            direction: DockDirection::ToTop(height),
+        &Dock::Splitted {
+            direction: DockDirection::ToTop(ref height),
+            splitter,
             ..
         } => {
+            let root_view_offset = context
+                .view_layout_untyped(
+                    context
+                        .view_get_parent(splitter)
+                        .expect("splitter root view?"),
+                )
+                .expect("query failed")
+                .top_offset;
+            let new_splitter_pos = new_splitter_client_pos - root_view_offset;
             let new_fixed_size =
-                (new_splitter_client_pos - self_rect.top).clamp(10.0, self_rect.height - 10.0);
+                (new_splitter_pos - self_rect.top).clamp(10.0, self_rect.height - 10.0);
             height.set(new_fixed_size);
         }
-        Dock::Splitted {
-            direction: DockDirection::ToBottom(height),
+        &Dock::Splitted {
+            direction: DockDirection::ToBottom(ref height),
+            splitter,
             ..
         } => {
+            let root_view_offset = context
+                .view_layout_untyped(
+                    context
+                        .view_get_parent(splitter)
+                        .expect("splitter root view?"),
+                )
+                .expect("query failed")
+                .top_offset;
+            let new_splitter_pos = new_splitter_client_pos - root_view_offset;
             let new_fixed_size = (self_rect.bottom()
-                - (new_splitter_client_pos + DESIGN_METRICS.splitter_thickness))
+                - (new_splitter_pos + DESIGN_METRICS.splitter_thickness))
                 .clamp(10.0, self_rect.height - 10.0);
             height.set(new_fixed_size);
         }
@@ -1194,10 +1249,11 @@ fn relayout_dock(
         } => {
             let (docked_rect, rest_rect, splitter_rect) = direction.split_rect(&available_rect);
 
-            context
-                .view_instance_mut(splitter)
-                .expect("query failed")
-                .resize(splitter_rect);
+            let l = context.view_layout_mut(splitter).expect("query failed");
+            l.left_offset = splitter_rect.left;
+            l.top_offset = splitter_rect.top;
+            l.width = ViewSize::Fixed(splitter_rect.width);
+            l.height = ViewSize::Fixed(splitter_rect.height);
             context.schedule_view_render(splitter);
             relayout_dock(docked, store, docked_rect, context);
             relayout_dock(rest, store, rest_rect, context);
@@ -1594,7 +1650,6 @@ pub struct DockedPaneSplitterView {
     dir: DockedPaneSplitDirection,
     controlling_dock: DockID,
     entity: Option<Rc<DockedPaneSplitterEventHandler>>,
-    rect: Option<Rect<LogicalUnit>>,
 }
 impl DockedPaneSplitterView {
     /// 生成
@@ -1603,14 +1658,7 @@ impl DockedPaneSplitterView {
             dir,
             controlling_dock,
             entity: None,
-            rect: None,
         }
-    }
-
-    /// サイズ調整
-    #[inline(always)]
-    fn resize(&mut self, rect: Rect<LogicalUnit>) {
-        self.rect = Some(rect);
     }
 
     /// 制御対象のDockを変更
@@ -1625,58 +1673,32 @@ impl DockedPaneSplitterView {
 impl View for DockedPaneSplitterView {
     fn render(
         &mut self,
-        _layout_rect: Rect<LogicalUnit>,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
-                if let Some(rect) = self.rect.take() {
-                    // relayout
-                    ctx.composite_tree
-                        .begin_mod_chain(e.ct_root)
-                        .offset_imm(rect.left, rect.top)
-                        .size_imm(rect.width, rect.height)
-                        .apply();
-                    ctx.ht_manager.get_data_mut(e.ht_root).left = rect.left;
-                    ctx.ht_manager.get_data_mut(e.ht_root).top = rect.top;
-                    ctx.ht_manager.get_data_mut(e.ht_root).width = rect.width;
-                    ctx.ht_manager.get_data_mut(e.ht_root).height = rect.height;
-                }
+                // relayout
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager.mod_chain(e.ht_root).rect(layout_rect);
 
                 e
             }
             None => {
                 // first render
-                let rect = self.rect.take().unwrap_or_else(|| {
-                    Rect::from_lt_size(Point::new_logical(0.0, 0.0), Size::new_logical(0.0, 0.0))
-                });
-
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(rect.left),
-                        AnimatableFloat::Value(rect.top),
-                    ],
-                    size: [
-                        AnimatableFloat::Value(rect.width),
-                        AnimatableFloat::Value(rect.height),
-                    ],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                        1.0, 1.0, 1.0, 0.125,
-                    ])),
-                    opacity: AnimatableFloat::Value(0.0),
-                    ..Default::default()
-                });
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: rect.left,
-                    top: rect.top,
-                    width: rect.width,
-                    height: rect.height,
-                    cursor_shape: self.dir.cursor_shape(),
-                    ..Default::default()
-                });
+                let ct_root = CompositeRect::build()
+                    .rect_imm(layout_rect.clone())
+                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.125])
+                    .opacity_imm(0.0)
+                    .create(ctx.composite_tree);
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect)
+                    .cursor_shape(self.dir.cursor_shape())
+                    .create(ctx.ht_manager);
 
                 let eh = Rc::new(DockedPaneSplitterEventHandler {
                     dir: self.dir,
@@ -1837,6 +1859,11 @@ impl ViewInstanceQueryable for PaneGroupCreateContext<'_, '_, '_, '_> {
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         self.view_init_context.view_instance_of(id)
     }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
+        crate::uicore::view_layout(id, self.view_init_context.view_instance_store)
+    }
 }
 impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_, '_> {
     #[inline(always)]
@@ -1881,20 +1908,13 @@ impl ViewConstructor for PaneGroupContainerViewInit {
     type ConcreteView = PaneGroupContainerView;
 
     fn construct(self, _id: TypedViewIdentifier<Self::ConcreteView>) -> Self::ConcreteView {
-        PaneGroupContainerView {
-            entity: None,
-            rect: Some(Rect::from_lt_size(
-                Point::new_logical(0.0, DESIGN_METRICS.tab_height()),
-                Size::new_logical(0.0, 0.0),
-            )),
-        }
+        PaneGroupContainerView { entity: None }
     }
 }
 
 /// Paneの内容が乗るContainerとしてのView
 struct PaneGroupContainerView {
     entity: Option<PaneGroupContainerViewEntity>,
-    rect: Option<Rect<LogicalUnit>>,
 }
 impl Drop for PaneGroupContainerView {
     fn drop(&mut self) {
@@ -1903,63 +1923,34 @@ impl Drop for PaneGroupContainerView {
         }
     }
 }
-impl PaneGroupContainerView {
-    pub fn set_rect(&mut self, rect: Rect<LogicalUnit>) {
-        self.rect = Some(rect);
-    }
-}
 impl View for PaneGroupContainerView {
     fn render(
         &mut self,
-        _layout_rect: Rect<LogicalUnit>,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
-                if let Some(rect) = self.rect.take() {
-                    // placement changed
-                    ctx.composite_tree
-                        .begin_mod_chain(e.ct_root)
-                        .offset_imm(rect.left, rect.top)
-                        .size_imm(rect.width, rect.height)
-                        .apply();
-                    ctx.ht_manager.get_data_mut(e.ht_root).left = rect.left;
-                    ctx.ht_manager.get_data_mut(e.ht_root).top = rect.top;
-                    ctx.ht_manager.get_data_mut(e.ht_root).width = rect.width;
-                    ctx.ht_manager.get_data_mut(e.ht_root).height = rect.height;
-                }
+                // placement changed
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager.mod_chain(e.ht_root).rect(layout_rect);
 
                 e
             }
             None => {
                 // first render
-                let rect = self.rect.take().expect("not initialized");
-
-                let ct_root = ctx.composite_tree.create(CompositeRect {
-                    scale_factor: CompositeRectScaleFactor::UI,
-                    offset: [
-                        AnimatableFloat::Value(rect.left),
-                        AnimatableFloat::Value(rect.top),
-                    ],
-                    size: [
-                        AnimatableFloat::Value(rect.width),
-                        AnimatableFloat::Value(rect.height),
-                    ],
-                    has_bitmap: true,
-                    composite_mode: CompositeMode::FillColor(AnimatableColor::Value([
-                        1.0, 1.0, 1.0, 0.0625,
-                    ])),
-                    clip_child: Some(ClipConfig::HARD),
-                    ..Default::default()
-                });
-                let ht_root = ctx.ht_manager.create(HitTestTreeData {
-                    left: rect.left,
-                    top: rect.top,
-                    width: rect.width,
-                    height: rect.height,
-                    ..Default::default()
-                });
+                let ct_root = CompositeRect::build()
+                    .rect_imm(layout_rect.clone())
+                    .composite_fill_color_imm([1.0, 1.0, 1.0, 0.0625])
+                    .clip_child_hard()
+                    .create(ctx.composite_tree);
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect)
+                    .create(ctx.ht_manager);
 
                 &*self
                     .entity
@@ -2021,11 +2012,13 @@ impl PaneGroupViewController {
     /// 生成
     pub fn new(
         ctx: &mut PaneGroupCreateContext,
+        parent_view: TypedViewIdentifier<WindowDockRootView>,
         contents: Vec<Box<dyn PaneContentPresenter>>,
         dock: DockID,
         initial_active_index: usize,
     ) -> Self {
         let tab_strip_view = ctx.construct_view(PaneGroupTabStripViewInit, |_| []);
+        ctx.view_set_parent(tab_strip_view, parent_view);
 
         let initial_active_index = initial_active_index.clamp(0, contents.len() - 1);
         let contents = contents
@@ -2048,6 +2041,7 @@ impl PaneGroupViewController {
 
                 ctx.view_set_visibility(container, is_active_tab);
                 ctx.view_set_parent(tab_view, tab_strip_view);
+                ctx.view_set_parent(container, parent_view);
 
                 PaneGroupContent {
                     container,
@@ -2089,17 +2083,20 @@ impl PaneGroupViewController {
         let content_rect = rect.slice_bottom(rect.height - DESIGN_METRICS.tab_height());
         let content_size = content_rect.size();
 
-        context
-            .view_instance_mut::<PaneGroupTabStripView>(self.tab_strip_view)
-            .expect("query failed")
-            .set_rect(tab_strip_rect);
+        let l = context
+            .view_layout_mut(self.tab_strip_view)
+            .expect("query failed");
+        l.left_offset = tab_strip_rect.left;
+        l.top_offset = tab_strip_rect.top;
+        l.width = ViewSize::Fixed(tab_strip_rect.width);
         context.schedule_view_render(self.tab_strip_view);
 
         for x in self.contents.iter() {
-            context
-                .view_instance_mut::<PaneGroupContainerView>(x.container)
-                .expect("query failed")
-                .set_rect(content_rect.clone());
+            let l = context.view_layout_mut(x.container).expect("query failed");
+            l.left_offset = content_rect.left;
+            l.top_offset = content_rect.top;
+            l.width = ViewSize::Fixed(content_rect.width);
+            l.height = ViewSize::Fixed(content_rect.height);
             context.schedule_view_render(x.container);
             x.presenter.resize(&content_size, context);
         }

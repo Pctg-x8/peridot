@@ -39,20 +39,13 @@ impl ViewConstructor for PaneGroupTabStripViewInit {
         self,
         _id: crate::uicore::TypedViewIdentifier<Self::ConcreteView>,
     ) -> Self::ConcreteView {
-        PaneGroupTabStripView {
-            entity: None,
-            rect: Some(Rect::from_lt_size(
-                Point::new_logical(0.0, 0.0),
-                Size::new_logical(0.0, DESIGN_METRICS.tab_height()),
-            )),
-        }
+        PaneGroupTabStripView { entity: None }
     }
 }
 
 /// Paneのグループのタブ部分を管理するView
 pub(super) struct PaneGroupTabStripView {
     entity: Option<PaneGroupTabStripViewEntity>,
-    rect: Option<Rect<LogicalUnit>>,
 }
 impl Drop for PaneGroupTabStripView {
     fn drop(&mut self) {
@@ -61,40 +54,33 @@ impl Drop for PaneGroupTabStripView {
         }
     }
 }
-impl PaneGroupTabStripView {
-    pub fn set_rect(&mut self, rect: Rect<LogicalUnit>) {
-        self.rect = Some(rect);
-    }
-}
 impl View for PaneGroupTabStripView {
     fn render(
         &mut self,
-        _layout_rect: Rect<LogicalUnit>,
+        layout_rect: Rect<LogicalUnit>,
         ctx: &mut RenderContext,
         _layout_state: &ViewLayoutStateStore,
     ) -> ViewRenderElements {
         let e = match self.entity {
             Some(ref e) => {
-                if let Some(rect) = self.rect.take() {
-                    // placement changed
-                    ctx.composite_tree
-                        .begin_mod_chain(e.ct_root)
-                        .rect_imm(rect.clone())
-                        .apply();
-                    ctx.ht_manager.mod_chain(e.ht_root).rect(rect);
-                }
+                // placement changed
+                ctx.composite_tree
+                    .begin_mod_chain(e.ct_root)
+                    .rect_imm(layout_rect.clone())
+                    .apply();
+                ctx.ht_manager.mod_chain(e.ht_root).rect(layout_rect);
 
                 e
             }
             None => {
                 // first render
-                let rect = self.rect.take().expect("not initialized");
-
                 let ct_root = CompositeRect::build()
-                    .rect_imm(rect.clone())
+                    .rect_imm(layout_rect.clone())
                     .clip_child_hard()
                     .create(ctx.composite_tree);
-                let ht_root = HitTestTreeData::build().rect(rect).create(ctx.ht_manager);
+                let ht_root = HitTestTreeData::build()
+                    .rect(layout_rect)
+                    .create(ctx.ht_manager);
 
                 &*self
                     .entity

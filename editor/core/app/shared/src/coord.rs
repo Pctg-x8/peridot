@@ -300,6 +300,20 @@ impl<U: Unit> Rect<U> {
     }
 
     #[inline(always)]
+    pub fn right_bottom(&self) -> Point<U>
+    where
+        U::SignedValueType:
+            Copy + core::ops::Add<U::UnsignedValueType, Output = U::SignedValueType>,
+        U::UnsignedValueType: Copy,
+    {
+        Point {
+            x: self.right(),
+            y: self.bottom(),
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
     pub fn size(&self) -> Size<U>
     where
         U::UnsignedValueType: Copy,

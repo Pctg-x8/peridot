@@ -89,6 +89,11 @@ impl ViewInstanceQueryable for InputEventContext<'_, '_, '_> {
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         crate::uicore::view_instance(id, self.view_instance_store)
     }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
+        crate::uicore::view_layout(id, self.view_instance_store)
+    }
 }
 impl ViewInstanceQueryableMut for InputEventContext<'_, '_, '_> {
     #[inline(always)]

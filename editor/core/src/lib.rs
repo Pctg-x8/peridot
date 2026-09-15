@@ -3047,6 +3047,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                 footer: Some(window_footer_view),
                 docking_manager: ui::dock::WindowDockingManager::new(
                     this.main_window,
+                    main_window_root_view,
                     &mut view_init_ctx,
                     &mut this.view_render_queue,
                     Rect::from_lt_size(
@@ -3059,7 +3060,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                         ),
                     ),
                     &mut this.dock_store,
-                    |view_init_ctx, view_render_queue, store| {
+                    |root_view, view_init_ctx, view_render_queue, store| {
                         construct_dock_from_state(
                             match last_window_state {
                                 None => &initial_dock_state,
@@ -3071,6 +3072,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                                 view_render_queue,
                             },
                             store,
+                            root_view,
                             |id, view_init_ctx| match id {
                                 // TODO: このへんうまい具合にRegistryつくりたい
                                 UIKitPreviewPanePresenter::ID => {
@@ -3171,13 +3173,14 @@ impl<'sys> CoreLoop<'static, 'sys> {
                         );
 
                         w.associate_extra_data(Box::new(PerWindowData {
-                            root_view: root_view,
+                            root_view,
                             screen_reposition_interests: HashSet::new(),
                             header: window_header_view,
                             appmenu: None,
                             footer: None,
                             docking_manager: ui::dock::WindowDockingManager::new(
                                 w,
+                                root_view,
                                 &mut view_init_ctx,
                                 &mut this.view_render_queue,
                                 Rect::from_lt_size(
@@ -3185,7 +3188,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                                     Size::new_logical(320.0, 240.0),
                                 ),
                                 &mut this.dock_store,
-                                |view_init_ctx, view_render_queue, store| {
+                                |root_view, view_init_ctx, view_render_queue, store| {
                                     construct_dock_from_state(
                                         &sub.dock,
                                         w.keyboard_focus_group(),
@@ -3194,6 +3197,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                                             view_render_queue,
                                         },
                                         store,
+                                        root_view,
                                         |id, view_init_ctx| match id {
                                             // TODO: このへんうまい具合にRegistryつくりたい
                                             UIKitPreviewPanePresenter::ID => Box::new(
@@ -3329,6 +3333,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
             &mut PaneContentResizeContext {
                 view_instance_store: &mut this.view_instance_store,
                 view_render_queue: &mut this.view_render_queue,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 composite_tree: &mut this.composite_tree,
                 ht_manager: &mut this.ht_manager,
             },
@@ -4452,15 +4457,16 @@ impl<'sys> CoreLoop<'static, 'sys> {
         }
     }
 
-    fn move_dock_splitter(self: Pin<&mut Self>, target: ui::dock::DockID, pos_client: f32) {
+    fn move_dock_splitter(self: Pin<&mut Self>, target: ui::dock::DockID, pos: f32) {
         let this = unsafe { self.get_unchecked_mut() };
         ui::dock::move_splitter(
             target,
             &mut this.dock_store,
-            pos_client,
+            pos,
             &mut PaneContentResizeContext {
                 view_instance_store: &mut this.view_instance_store,
                 view_render_queue: &mut this.view_render_queue,
+                view_tree_relation_store: &this.view_tree_relation_store,
                 composite_tree: &mut this.composite_tree,
                 ht_manager: &mut this.ht_manager,
             },
@@ -4645,6 +4651,7 @@ impl<'sys> CoreLoop<'static, 'sys> {
                             footer: None,
                             docking_manager: ui::dock::WindowDockingManager::new(
                                 w,
+                                root_view,
                                 &mut view_init_ctx,
                                 &mut this.view_render_queue,
                                 Rect::from_lt_size(
@@ -4652,9 +4659,10 @@ impl<'sys> CoreLoop<'static, 'sys> {
                                     suggested_rect.size(),
                                 ),
                                 &mut this.dock_store,
-                                |view_init_ctx, view_render_queue, store| {
+                                |root_view, view_init_ctx, view_render_queue, store| {
                                     store.alloc_root(|root_id, store| {
                                         store.alloc_fill(
+                                            root_view,
                                             root_id,
                                             &mut PaneGroupCreateContext {
                                                 view_init_context: view_init_ctx,
@@ -5904,6 +5912,7 @@ fn construct_dock_from_state(
     root_keyboard_focus_group: KeyboardFocusGroupRef,
     create_context: &mut PaneGroupCreateContext,
     store: &mut ui::dock::DockStore,
+    root_view: TypedViewIdentifier<ui::dock::WindowDockRootView>,
     mut pane_constructor: impl FnMut(
         &str,
         &mut ViewInitContext,
@@ -5914,6 +5923,7 @@ fn construct_dock_from_state(
         root_keyboard_focus_group: KeyboardFocusGroupRef,
         create_context: &mut PaneGroupCreateContext,
         store: &mut ui::dock::DockStore,
+        root_view: TypedViewIdentifier<ui::dock::WindowDockRootView>,
         parent: ui::dock::DockID,
         pane_constructor: &mut impl FnMut(
             &str,
@@ -5925,6 +5935,7 @@ fn construct_dock_from_state(
                 ref content_ids,
                 active_index,
             } => store.alloc_fill(
+                root_view,
                 parent,
                 create_context,
                 |view_init_ctx| {
@@ -5939,23 +5950,8 @@ fn construct_dock_from_state(
                 direction,
                 content,
                 rest,
-            } => store.alloc_recurse(|parent1, store| ui::dock::Dock::Splitted {
-                parent,
-                direction: match direction {
-                    &persistence::DockDirection::Left(w) => {
-                        ui::dock::DockDirection::ToLeft(Cell::new(w))
-                    }
-                    &persistence::DockDirection::Right(w) => {
-                        ui::dock::DockDirection::ToRight(Cell::new(w))
-                    }
-                    &persistence::DockDirection::Top(w) => {
-                        ui::dock::DockDirection::ToTop(Cell::new(w))
-                    }
-                    &persistence::DockDirection::Bottom(w) => {
-                        ui::dock::DockDirection::ToBottom(Cell::new(w))
-                    }
-                },
-                splitter: create_context.construct_view_direct(|_| {
+            } => store.alloc_recurse(|parent1, store| {
+                let splitter = create_context.construct_view_direct(|_| {
                     Box::new(ui::dock::DockedPaneSplitterView::new(
                         match direction {
                             persistence::DockDirection::Left(_)
@@ -5969,23 +5965,47 @@ fn construct_dock_from_state(
                         },
                         parent1,
                     ))
-                }),
-                docked: rec(
+                });
+                let docked = rec(
                     content,
                     root_keyboard_focus_group,
                     create_context,
                     store,
+                    root_view,
                     parent1,
                     pane_constructor,
-                ),
-                rest: rec(
+                );
+                let rest = rec(
                     rest,
                     root_keyboard_focus_group,
                     create_context,
                     store,
+                    root_view,
                     parent1,
                     pane_constructor,
-                ),
+                );
+                create_context.view_set_parent(splitter, root_view);
+
+                ui::dock::Dock::Splitted {
+                    parent,
+                    direction: match direction {
+                        &persistence::DockDirection::Left(w) => {
+                            ui::dock::DockDirection::ToLeft(Cell::new(w))
+                        }
+                        &persistence::DockDirection::Right(w) => {
+                            ui::dock::DockDirection::ToRight(Cell::new(w))
+                        }
+                        &persistence::DockDirection::Top(w) => {
+                            ui::dock::DockDirection::ToTop(Cell::new(w))
+                        }
+                        &persistence::DockDirection::Bottom(w) => {
+                            ui::dock::DockDirection::ToBottom(Cell::new(w))
+                        }
+                    },
+                    splitter,
+                    docked,
+                    rest,
+                }
             }),
         }
     }
@@ -5996,6 +6016,7 @@ fn construct_dock_from_state(
             root_keyboard_focus_group,
             create_context,
             store,
+            root_view,
             parent,
             &mut pane_constructor,
         )

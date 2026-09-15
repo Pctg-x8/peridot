@@ -15,10 +15,10 @@ use crate::{
     },
     uicore::{
         RenderContext, TeardownContext, View, ViewConstructor, ViewIdentifier, ViewInitContext,
-        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutStateStore,
-        ViewRenderElements, ViewRenderStateStore, ViewTreeRelationStore, render_view_with_base,
-        teardown_view_recursive, view_instance, view_instance_mut, view_layout_mut,
-        view_set_visibility,
+        ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderStateStore, ViewTreeRelationStore,
+        render_view_with_base, teardown_view_recursive, view_instance, view_instance_mut,
+        view_layout, view_layout_mut, view_set_visibility,
     },
 };
 
@@ -55,6 +55,11 @@ impl ViewInstanceQueryable for PopupCloseContext<'_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
         view_instance(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
+        view_layout(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for PopupCloseContext<'_> {

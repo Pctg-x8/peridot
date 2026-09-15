@@ -10,6 +10,7 @@ use crate::{
     SyncEvent, SystemLink,
     input::{KeyboardFocusTokenRegistry, hittest::HitTestTreeManager},
     rendering::{MainThreadTextureIDIssuer, composite::CompositeTree},
+    uicore::ViewLayout,
 };
 
 pub trait ViewFeedbackHandler<T> {
@@ -214,6 +215,11 @@ impl super::ViewInstanceQueryable for ViewFeedbackContext<'_, '_, '_> {
     #[inline(always)]
     fn view_instance_of<T: super::View + 'static>(&self, id: super::ViewIdentifier) -> Option<&T> {
         super::view_instance(id, self.view_instance_store)
+    }
+
+    #[inline(always)]
+    fn view_layout_untyped(&self, id: super::ViewIdentifier) -> Option<&ViewLayout> {
+        super::view_layout(id, self.view_instance_store)
     }
 }
 impl super::ViewInstanceQueryableMut for ViewFeedbackContext<'_, '_, '_> {

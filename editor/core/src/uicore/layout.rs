@@ -24,6 +24,8 @@ impl RectEdge {
 pub struct ViewLayout {
     pub width: ViewSize,
     pub height: ViewSize,
+    pub left_offset: f32,
+    pub top_offset: f32,
     pub padding: RectEdge,
     pub child: ViewLayoutChild,
     pub flow_basis: ViewLayoutFlowBasis,
@@ -116,11 +118,16 @@ impl Default for ViewLayoutGridCell {
 }
 
 pub struct ViewLayoutState {
+    pub(super) available_rect: Rect<LogicalUnit>,
     pub(super) layout_rect: Rect<LogicalUnit>,
 }
 impl ViewLayoutState {
     pub(super) fn init() -> Self {
         Self {
+            available_rect: Rect::from_lt_size(
+                Point::new_logical(0.0, 0.0),
+                Size::new_logical(0.0, 0.0),
+            ),
             layout_rect: Rect::from_lt_size(
                 Point::new_logical(0.0, 0.0),
                 Size::new_logical(0.0, 0.0),
@@ -165,9 +172,8 @@ pub fn layout_view_partial_recursive(
     instance_store: &ViewInstanceStore,
     tree_relation_store: &ViewTreeRelationStore,
     layout_state_store: &mut ViewLayoutStateStore,
-    mut cb_perform_target_relayout: impl FnMut(ViewIdentifier),
 ) {
-    let available_rect = layout_state_store.get(target).layout_rect.clone();
+    let available_rect = layout_state_store.get(target).available_rect.clone();
 
     layout_view_recursive(
         target,
@@ -176,18 +182,11 @@ pub fn layout_view_partial_recursive(
         instance_store,
         tree_relation_store,
         layout_state_store,
-        &mut cb_perform_target_relayout,
     )
 }
 
 #[profiler::instrument("View.Layout")]
-#[tracing::instrument(skip(
-    ctx,
-    instance_store,
-    tree_relation_store,
-    layout_state_store,
-    cb_perform_target_relayout
-))]
+#[tracing::instrument(skip(ctx, instance_store, tree_relation_store, layout_state_store,))]
 pub fn layout_view_recursive(
     target: ViewIdentifier,
     ctx: &mut MeasureContext,
@@ -195,7 +194,6 @@ pub fn layout_view_recursive(
     instance_store: &ViewInstanceStore,
     tree_relation_store: &ViewTreeRelationStore,
     layout_state_store: &mut ViewLayoutStateStore,
-    cb_perform_target_relayout: &mut impl FnMut(ViewIdentifier),
 ) {
     let content_size = compute_actual_content_size(
         target,
@@ -204,11 +202,17 @@ pub fn layout_view_recursive(
         instance_store,
         tree_relation_store,
     );
-    layout_state_store.0[target.into_array_index()].layout_rect =
-        Rect::from_lt_size(available_rect.left_top(), content_size);
-    cb_perform_target_relayout(target);
-
     let target_inst = instance_store.get(target);
+    let target_layout_rect = Rect::from_lt_size(
+        available_rect.left_top().with_offset(Point::new_logical(
+            target_inst.layout.left_offset,
+            target_inst.layout.top_offset,
+        )),
+        content_size,
+    );
+    layout_state_store.0[target.into_array_index()].available_rect = available_rect.clone();
+    layout_state_store.0[target.into_array_index()].layout_rect = target_layout_rect.clone();
+
     if !target_inst.active {
         // skip children layout
         return;
@@ -216,12 +220,11 @@ pub fn layout_view_recursive(
     let base_point = if target_inst
         .instance
         .as_ref()
-        .expect("no instance")
-        .create_new_layout_layer()
+        .is_some_and(|x| x.create_new_layout_layer())
     {
         Point::new_logical(0.0, 0.0)
     } else {
-        available_rect.left_top()
+        target_layout_rect.left_top()
     };
     let child_available_rect = Rect::from_lt_size(
         base_point.with_offset(Point::new_logical(
@@ -229,8 +232,10 @@ pub fn layout_view_recursive(
             target_inst.layout.padding.top,
         )),
         Size::new_logical(
-            content_size.width - target_inst.layout.padding.left - target_inst.layout.padding.right,
-            content_size.height
+            target_layout_rect.width
+                - target_inst.layout.padding.left
+                - target_inst.layout.padding.right,
+            target_layout_rect.height
                 - target_inst.layout.padding.top
                 - target_inst.layout.padding.bottom,
         ),
@@ -248,7 +253,6 @@ pub fn layout_view_recursive(
                     instance_store,
                     tree_relation_store,
                     layout_state_store,
-                    cb_perform_target_relayout,
                 );
             }
         }
@@ -338,7 +342,6 @@ pub fn layout_view_recursive(
                     instance_store,
                     tree_relation_store,
                     layout_state_store,
-                    cb_perform_target_relayout,
                 );
 
                 size.width = size.width.max(left_placement + cw);
@@ -470,7 +473,6 @@ pub fn layout_view_recursive(
                     instance_store,
                     tree_relation_store,
                     layout_state_store,
-                    cb_perform_target_relayout,
                 );
 
                 size.width = size.width.max(left_placement + content_size.width);
@@ -595,7 +597,6 @@ pub fn layout_view_recursive(
                     instance_store,
                     tree_relation_store,
                     layout_state_store,
-                    cb_perform_target_relayout,
                 );
 
                 left_placement += col_widths[col_index] + gap_cols;
@@ -626,8 +627,20 @@ fn compute_actual_content_size(
         || matches!(target_inst.layout.height, ViewSize::FitContent)
     {
         // サイズ計算で参照されるので計算する
-        let child_available_rect = Rect::from_lt_size(
+        let base_point = if target_inst
+            .instance
+            .as_ref()
+            .is_some_and(|x| x.create_new_layout_layer())
+        {
+            Point::new_logical(0.0, 0.0)
+        } else {
             available_rect.left_top().with_offset(Point::new_logical(
+                target_inst.layout.left_offset,
+                target_inst.layout.top_offset,
+            ))
+        };
+        let child_available_rect = Rect::from_lt_size(
+            base_point.with_offset(Point::new_logical(
                 target_inst.layout.padding.left,
                 target_inst.layout.padding.top,
             )),
