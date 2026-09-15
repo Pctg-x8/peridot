@@ -503,7 +503,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             }
 
             if events_signal {
-                sync_event_bus.redispatch(&app_event_dispatcher);
+                sync_event_bus.redispatch(coreloop.as_mut());
             }
 
             if pointer_hovering_timer_signal {
@@ -628,7 +628,6 @@ impl SyncEvent {
 
 #[derive(Clone, Debug)]
 pub enum Event {
-    Sync(SyncEvent),
     Quit,
     OpenAlertDialog {
         target_window: WindowHandle,
@@ -676,7 +675,6 @@ impl Event {
     #[cfg(feature = "enable-profiling")]
     pub const fn p_name(&self) -> &'static str {
         match self {
-            Self::Sync(e) => e.p_name(),
             Self::Quit => "Quit",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::MenuSelectItem { .. } => "MenuSelectItem",
@@ -1422,6 +1420,7 @@ impl View for WindowRootView {
 
 profiler::section!(INITIALIZE = "LogicFiber.Initialize");
 profiler::section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
+profiler::section!(PROCESS_SYNC_EVENT = "CoreLoop.ProcessSyncEvent");
 profiler::section!(LOCK_WAIT = "Mutex.LockWait");
 
 pub struct CoreLoop<'sys> {
@@ -3695,20 +3694,28 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
+    pub fn on_sync_event(self: Pin<&mut Self>, e: SyncEvent) {
+        profiler::scope!(PROCESS_SYNC_EVENT, str e.p_name());
+
+        match e {
+            SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target } => {
+                #[cfg(feature = "wayland")]
+                target.update_manual_scaling();
+            }
+            SyncEvent::PopupUnmount { id } => self.destroy_popup(id),
+            SyncEvent::NewPresentID { .. } => self.update_preview(),
+        }
+    }
+
     pub fn on_event(mut self: Pin<&mut Self>, e: Event) {
         profiler::scope!(PROCESS_EVENT, str e.p_name());
 
         match e {
             Event::Quit => unreachable!("could not exit by calling on_event"),
-            Event::Sync(SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target }) => {
-                #[cfg(feature = "wayland")]
-                target.update_manual_scaling();
-            }
             Event::OpenAlertDialog {
                 target_window,
                 message,
             } => self.as_mut().open_alert_dialog(target_window, message),
-            Event::Sync(SyncEvent::PopupUnmount { id }) => self.as_mut().destroy_popup(id),
             Event::MenuSelectItem { depth, index } => {
                 self.as_mut().handle_menu_item_selection(depth, index)
             }
@@ -3717,7 +3724,6 @@ impl<'sys> CoreLoop<'sys> {
             Event::DropdownMenuSelectItem { id, receiver } => self
                 .as_mut()
                 .perform_dropdown_menu_select_item(id, receiver),
-            Event::Sync(SyncEvent::NewPresentID { .. }) => self.as_mut().update_preview(),
             Event::ScheduleViewRenderExt { id } => self.as_mut().schedule_view_render(id),
             #[cfg(windows)]
             Event::CoreTextLayoutRequested {
@@ -4444,10 +4450,10 @@ impl SyncEventBus {
         }
     }
 
-    fn redispatch(&self, dispatcher: &LogicFiberEventDispatcher) {
+    fn redispatch(&self, mut coreloop: Pin<&mut CoreLoop<'_>>) {
         let mut queue = self.queue.lock().expect("poisoned");
         while let Some(event) = queue.pop_front() {
-            dispatcher.dispatch(Event::Sync(event));
+            coreloop.as_mut().on_sync_event(event);
         }
         if let Err(e) = self.notify_clear() {
             tracing::error!(reason = ?e, "notify_clear");
