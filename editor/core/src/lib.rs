@@ -3093,6 +3093,9 @@ impl<'sys> CoreLoop<'sys> {
                                     view_init_ctx,
                                     this.preview_input_state.as_mut().get_mut(),
                                 )),
+                                ui::pane::logs::Presenter::ID => {
+                                    Box::new(ui::pane::logs::Presenter::new(view_init_ctx))
+                                }
                                 id => todo!("generic pane id handling: {id:?}"),
                             },
                         )
@@ -3222,6 +3225,9 @@ impl<'sys> CoreLoop<'sys> {
                                                     this.preview_input_state.as_mut().get_mut(),
                                                 ))
                                             }
+                                            ui::pane::logs::Presenter::ID => Box::new(
+                                                ui::pane::logs::Presenter::new(view_init_ctx),
+                                            ),
                                             id => todo!("generic pane id handling: {id:?}"),
                                         },
                                     )
@@ -5660,7 +5666,10 @@ fn initial_dock_state() -> DockState {
     DockState::Splitted {
         direction: persistence::DockDirection::Bottom(320.0),
         content: Box::new(DockState::Filled {
-            content_ids: vec![ui::pane::asset_explorer::Presenter::ID.into()],
+            content_ids: vec![
+                ui::pane::asset_explorer::Presenter::ID.into(),
+                ui::pane::logs::Presenter::ID.into(),
+            ],
             active_index: 0,
         }),
         rest: Box::new(DockState::Splitted {
