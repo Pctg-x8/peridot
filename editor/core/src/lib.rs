@@ -2698,6 +2698,16 @@ impl PerWindowData {
             ),
         )
     }
+
+    fn compute_content_left_top(&self) -> Point<LogicalUnit> {
+        let top_offset = if self.appmenu.is_some() {
+            ui::window_header::View::THICKNESS + ui::app_menu_bar::View::HEIGHT
+        } else {
+            ui::window_header::View::THICKNESS
+        };
+
+        Point::new_logical(0.0, top_offset)
+    }
 }
 
 struct WindowRootView {}
@@ -4451,9 +4461,15 @@ impl<'sys> CoreLoop<'sys> {
             tab_index,
         );
 
+        let dock_basepoint =
+            unsafe { initiator.extra_data_ref::<PerWindowData>() }.compute_content_left_top();
         let this = unsafe { self.get_unchecked_mut() };
-        this.syslink
-            .begin_pane_drag(initiator, &pointer, state.offset, &popover_rect);
+        this.syslink.begin_pane_drag(
+            initiator,
+            &pointer,
+            state.offset,
+            &popover_rect.ref_with_offset(dock_basepoint),
+        );
         this.docking_preview_state = Some(state);
     }
 
@@ -4470,7 +4486,10 @@ impl<'sys> CoreLoop<'sys> {
                 &client_pos_in_dest,
                 state,
             );
-            this.syslink.update_pane_drag(dest_window, &popover_rect);
+            let dock_basepoint =
+                unsafe { dest_window.extra_data_ref::<PerWindowData>() }.compute_content_left_top();
+            this.syslink
+                .update_pane_drag(dest_window, &popover_rect.ref_with_offset(dock_basepoint));
         }
     }
 

@@ -414,6 +414,35 @@ impl<U: Unit> Rect<U> {
             _marker: PhantomData,
         }
     }
+
+    #[inline(always)]
+    pub fn with_offset(self, offset: Point<U>) -> Self
+    where
+        U::SignedValueType: core::ops::Add<U::SignedValueType, Output = U::SignedValueType>,
+    {
+        Self {
+            left: self.left + offset.x,
+            top: self.top + offset.y,
+            width: self.width,
+            height: self.height,
+            _marker: PhantomData,
+        }
+    }
+
+    #[inline(always)]
+    pub fn ref_with_offset(&self, offset: Point<U>) -> Self
+    where
+        U::SignedValueType: Copy + core::ops::Add<U::SignedValueType, Output = U::SignedValueType>,
+        U::UnsignedValueType: Copy,
+    {
+        Self {
+            left: self.left + offset.x,
+            top: self.top + offset.y,
+            width: self.width,
+            height: self.height,
+            _marker: PhantomData,
+        }
+    }
 }
 impl<U: Unit<SignedValueType: Zero>> From<Size<U>> for Rect<U> {
     #[inline(always)]
