@@ -378,7 +378,6 @@ impl<'main> RenderThread<'main> {
                                 init_scale,
                                 window_glyph_atlas.manager.atlas(),
                                 window_glyph_atlas.color_manager.atlas(),
-                                self.event_bus,
                             ),
                         );
                     }
@@ -521,7 +520,7 @@ impl<'main> RenderThread<'main> {
 
                 let mut descriptor_writes = Vec::new();
                 for x in windows.values_mut() {
-                    x.validate_swapchain(&mut descriptor_writes, self.event_bus);
+                    x.validate_swapchain(&mut descriptor_writes);
                 }
                 for x in context_menus.values_mut() {
                     x.validate_swapchain(&mut descriptor_writes, self.event_bus);
@@ -1757,6 +1756,7 @@ impl<'d> ContextMenuRenderer<'d> {
 struct WindowRenderer<'d> {
     w: crate::WindowHandle,
     active_scale: SafeF32,
+    #[cfg(not(feature = "wayland"))]
     latest_ui_scale_changes: *const Mutex<Option<f32>>,
     vk_device: &'d Graphics<'d>,
     swapchain_invalidated: bool,
@@ -1786,7 +1786,6 @@ impl<'d> WindowRenderer<'d> {
         init_scale: SafeF32,
         glyph_atlas: &TextureAtlas,
         color_atlas: &ColorTextureAtlas,
-        event_bus: &SyncEventBus,
     ) -> Self {
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
         let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.pixels_client_size());
@@ -1853,13 +1852,10 @@ impl<'d> WindowRenderer<'d> {
             None
         };
 
-        event_bus.push(SyncEvent::WindowPostCreateRenderBuffer {
-            window: create_data.key,
-        });
-
         Self {
             w: create_data.key,
             active_scale: init_scale,
+            #[cfg(not(feature = "wayland"))]
             latest_ui_scale_changes: create_data.key.latest_ui_scale_changes(),
             vk_device: device,
             composite_root: create_data.key.ct_root(),
@@ -1898,10 +1894,14 @@ impl<'d> WindowRenderer<'d> {
     }
 
     pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
-        unsafe { &(*self.latest_ui_scale_changes) }
+        #[cfg(feature = "wayland")]
+        return self.w.take_latest_ui_scale_changes();
+
+        #[cfg(not(feature = "wayland"))]
+        return unsafe { &(*self.latest_ui_scale_changes) }
             .lock()
             .expect("poisoned")
-            .take()
+            .take();
     }
 
     pub fn update(
@@ -1989,7 +1989,6 @@ impl<'d> WindowRenderer<'d> {
     pub fn validate_swapchain<'s>(
         &'s mut self,
         descriptor_writes: &mut Vec<br::DescriptorSetWriteInfo<'s>>,
-        event_bus: &SyncEventBus,
     ) {
         if !self.swapchain_invalidated {
             // already valid
@@ -2011,7 +2010,6 @@ impl<'d> WindowRenderer<'d> {
             descriptor_writes,
         );
 
-        event_bus.push(SyncEvent::WindowPostCreateRenderBuffer { window: self.w });
         self.swapchain_invalidated = false;
     }
 

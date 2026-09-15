@@ -611,7 +611,6 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 #[derive(Clone, Debug, PartialEq)]
 pub enum SyncEvent {
     NewPresentID { id: u64 },
-    WindowPostCreateRenderBuffer { window: WindowHandle },
     FlyoutSurfacePostCreateRenderBuffer { target: FlyoutSurfaceHandle },
     PopupUnmount { id: PopupID },
 }
@@ -619,7 +618,6 @@ impl SyncEvent {
     pub const fn p_name(&self) -> &'static str {
         match self {
             Self::NewPresentID { .. } => "Sync(NewPresentID)",
-            Self::WindowPostCreateRenderBuffer { .. } => "Sync(WindowPostResizeRenderBuffer)",
             Self::FlyoutSurfacePostCreateRenderBuffer { .. } => {
                 "Sync(ContextMenuPostResizeRenderBuffer)"
             }
@@ -3702,10 +3700,6 @@ impl<'sys> CoreLoop<'sys> {
 
         match e {
             Event::Quit => unreachable!("could not exit by calling on_event"),
-            Event::Sync(SyncEvent::WindowPostCreateRenderBuffer { window }) => {
-                #[cfg(feature = "wayland")]
-                window.update_manual_scaling();
-            }
             Event::Sync(SyncEvent::FlyoutSurfacePostCreateRenderBuffer { target }) => {
                 #[cfg(feature = "wayland")]
                 target.update_manual_scaling();

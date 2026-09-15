@@ -1,5 +1,5 @@
-use core::{pin::Pin, ptr::NonNull, sync::atomic::AtomicBool};
-use std::sync::Mutex;
+use core::{pin::Pin, ptr::NonNull};
+use std::sync::{Mutex, atomic::AtomicBool};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use bitflags::bitflags;
@@ -155,9 +155,13 @@ impl Handle {
         &self.event_listener().state.data.xdg_surface
     }
 
-    #[inline(always)]
-    pub fn latest_ui_scale_changes(&self) -> &Mutex<Option<f32>> {
-        &self.event_listener().state.data.latest_ui_scale_changes
+    pub fn take_latest_ui_scale_changes(&self) -> Option<f32> {
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .latest_ui_scale_changes
+            .take()
     }
 
     pub fn take_swapchain_externally_invalidation_signal(&self) -> bool {
@@ -215,27 +219,6 @@ impl Handle {
             .xdg_toplevel
             .r#move(pointer.seat(), serial)
             .expect("xdg_toplevel.move");
-    }
-
-    pub fn update_manual_scaling(&self) {
-        let el = self.event_listener();
-        if let SurfaceScaling::Manual { ref viewport, .. } = el.scaling {
-            let committed_state = el.state.data.committed_state.lock().expect("poisoned");
-            viewport
-                .set_source(
-                    wl::Fixed::from_f32_lossy(0.0),
-                    wl::Fixed::from_f32_lossy(0.0),
-                    wl::Fixed::from_f32_lossy(committed_state.active_size.width as _),
-                    wl::Fixed::from_f32_lossy(committed_state.active_size.height as _),
-                )
-                .expect("viewport.set_source");
-            viewport
-                .set_destination(
-                    committed_state.active_size_logical.width as _,
-                    committed_state.active_size_logical.height as _,
-                )
-                .expect("viewport.set_destination");
-        }
     }
 
     pub fn toggle_maximized(&self) {
@@ -317,6 +300,7 @@ struct CommittedState {
     active_size_logical: Size<LogicalUnit>,
     decoration_edge: DecorationEdge,
     maximized: bool,
+    latest_ui_scale_changes: Option<f32>,
 }
 
 pub(super) struct InstanceState {
@@ -331,7 +315,6 @@ pub(super) struct InstanceState {
     extra_data: *mut core::ffi::c_void,
     committed_state: Mutex<CommittedState>,
     swapchain_externally_invalidation_signal: AtomicBool,
-    latest_ui_scale_changes: Mutex<Option<f32>>,
     keyboard_focus_state: PerWindowKeyboardFocusState,
     kf_root_group: KeyboardFocusGroupRef,
 }
@@ -524,12 +507,7 @@ impl<'sys> EventListener<'sys> {
             }
 
             committed_state_ref.active_buffer_scale = s;
-            *self
-                .state
-                .data
-                .latest_ui_scale_changes
-                .lock()
-                .expect("poisoned") = Some(s);
+            committed_state_ref.latest_ui_scale_changes = Some(s);
             rescaled = Some(s);
         }
 
@@ -551,21 +529,23 @@ impl<'sys> EventListener<'sys> {
             );
             let pixels_size = logical_size.to_pixels_ceil(committed_state_ref.active_buffer_scale);
             if pixels_size != committed_state_ref.active_size {
-                self.state
-                    .data
-                    .xdg_surface
-                    .set_window_geometry(0, 0, logical_size.width as _, logical_size.height as _)
-                    .expect("xdg_surface.set_window_geometry");
-
                 committed_state_ref.active_size = pixels_size;
                 committed_state_ref.active_size_logical = logical_size;
                 self.state
                     .data
                     .swapchain_externally_invalidation_signal
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-
                 resized = Some(logical_size);
                 should_update_decoration = true;
+
+                if let SurfaceScaling::Manual { ref viewport, .. } = self.scaling {
+                    viewport
+                        .set_destination(
+                            committed_state_ref.active_size_logical.width as _,
+                            committed_state_ref.active_size_logical.height as _,
+                        )
+                        .expect("viewport.set_destination");
+                }
             }
         }
 
@@ -597,6 +577,9 @@ impl<'sys> EventListener<'sys> {
 
         drop(committed_state_ref);
 
+        unsafe { &*self.state.data.surface_ptr.as_ptr() }
+            .commit()
+            .expect("surface.commit");
         if let Some(ref d) = self.decoration {
             d.commit_all();
         }
@@ -811,11 +794,9 @@ impl NativeWindow {
                         active_size_logical: size,
                         decoration_edge: DecorationEdge::all(),
                         maximized: false,
+                        latest_ui_scale_changes: None,
                     }),
-                    swapchain_externally_invalidation_signal: std::sync::atomic::AtomicBool::new(
-                        false,
-                    ),
-                    latest_ui_scale_changes: Mutex::new(None),
+                    swapchain_externally_invalidation_signal: AtomicBool::new(false),
                     keyboard_focus_state: PerWindowKeyboardFocusState::new(kf_root_group),
                     kf_root_group,
                 },
