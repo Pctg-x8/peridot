@@ -4,8 +4,11 @@ use std::collections::BTreeSet;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    SystemLink, WindowHandle, WindowRootView,
-    input::hittest::{HitTestTreeData, HitTestTreeRef},
+    PointerID, SystemLink, WindowHandle, WindowRootView,
+    input::{
+        InputEventContext,
+        hittest::{HitTestTreeData, HitTestTreeRef},
+    },
     rendering::composite::{CompositeRect, CompositeTreeRef},
     ui::dock::tab::{
         PaneGroupTabStripView, PaneGroupTabStripViewInit, PaneGroupTabView, PaneGroupTabViewInit,
@@ -291,7 +294,23 @@ impl DockStore {
     }
 }
 
-struct ComputedDockState {
+pub trait DockQueryable {
+    fn get_dock(&self, id: DockID) -> &Dock;
+    fn get_computed_state(&self, id: DockID) -> &ComputedDockState;
+}
+impl DockQueryable for InputEventContext<'_, '_> {
+    #[inline(always)]
+    fn get_dock(&self, id: DockID) -> &Dock {
+        self.dock_store.get(id)
+    }
+
+    #[inline(always)]
+    fn get_computed_state(&self, id: DockID) -> &ComputedDockState {
+        self.dock_store.get_computed_state(id)
+    }
+}
+
+pub struct ComputedDockState {
     rect: Rect<LogicalUnit>,
 }
 
@@ -1241,30 +1260,58 @@ pub struct DockingPreviewState {
 }
 
 /// RedockingのPreviewを開始する
-pub fn begin_preview(
-    pane_rect: Rect<LogicalUnit>,
+pub(self) fn begin_preview<'sys>(
+    initiator_tab: TypedViewIdentifier<PaneGroupTabView>,
+    target_dock: DockID,
     tab_size: Size<LogicalUnit>,
     client_pos: &Point<LogicalUnit>,
-    source_window: WindowHandle,
-    source_dock: DockID,
-    tab_index: usize,
-) -> (DockingPreviewState, Rect<LogicalUnit>) {
-    let popover_rect = Rect::from_lt_size(
-        Point::new_logical(pane_rect.left, pane_rect.top),
-        Size::new_logical(pane_rect.width, pane_rect.height),
+    pointer_id: PointerID,
+    env: &mut (
+             impl SystemLinkAccess<'sys>
+             + ViewInstanceQueryable
+             + ViewRelationQueryable
+             + DockQueryable
+             + ?Sized
+         ),
+) -> DockingPreviewState {
+    let Dock::Fill {
+        group_view_controller,
+        ..
+    } = env.get_dock(target_dock)
+    else {
+        unreachable!("redocking initiated from non-fill dock?");
+    };
+    let root_view_id = env
+        .view_get_parent(group_view_controller.tab_strip_view)
+        .expect("dock not mounted?");
+    let initiator = env
+        .view_instance_of::<WindowDockRootView>(root_view_id)
+        .expect("query failed")
+        .window;
+    let tab_index = group_view_controller
+        .tab_index(initiator_tab)
+        .expect("invalid tab");
+
+    let pane_rect = env.get_computed_state(target_dock).rect.clone();
+    let state = DockingPreviewState {
+        offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
+        tab_size,
+        original_rect: pane_rect.clone(),
+        source_window: initiator,
+        source_dock: target_dock,
+        tab_index,
+    };
+
+    let root_layout = env.view_layout_untyped(root_view_id).expect("query failed");
+    let dock_basepoint = Point::new_logical(root_layout.left_offset, root_layout.top_offset);
+    env.system_link().begin_pane_drag(
+        initiator,
+        &pointer_id,
+        state.offset,
+        &pane_rect.ref_with_offset(dock_basepoint),
     );
 
-    (
-        DockingPreviewState {
-            offset: Point::new_logical(pane_rect.left - client_pos.x, pane_rect.top - client_pos.y),
-            tab_size,
-            original_rect: pane_rect,
-            source_window,
-            source_dock,
-            tab_index,
-        },
-        popover_rect,
-    )
+    state
 }
 
 /// Previewを移動する

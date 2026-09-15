@@ -25,9 +25,8 @@ use crate::{
     ui::dock::{DESIGN_METRICS, Dock, DockID},
     uicore::{
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, View, ViewConstructor,
-        ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayout, ViewLayoutStateStore, ViewRelationQueryable, ViewRenderElements,
-        ViewRenderQueue, ViewRenderer,
+        ViewIdentifier, ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout,
+        ViewLayoutStateStore, ViewRenderElements, ViewRenderQueue, ViewRenderer,
     },
     utils::UnsafeMainThreadOnlyOnceCell,
 };
@@ -509,53 +508,13 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return EventContinueControl::empty();
         }
 
-        let dock = self.dock.get();
-        let preview_rect = context.dock_store.get_computed_state(dock).rect.clone();
-        let Dock::Fill {
-            group_view_controller,
-            ..
-        } = context.dock_store.get_mut(dock)
-        else {
-            unreachable!("tab on non-fill dock?");
-        };
-
-        let tab_index = group_view_controller
-            .tab_index(self.view_id)
-            .expect("not in any group");
-        let tab_strip_view = group_view_controller.tab_strip_view;
-        let content_ht_root = context
-            .view_instance(tab_strip_view)
-            .expect("query failed")
-            .entity
-            .as_ref()
-            .expect("not rendered")
-            .ht_root;
-        let initiator = context
-            .ht_manager
-            .query_root_window(content_ht_root)
-            .expect("not mounted");
-
-        let (state, popover_rect) = super::begin_preview(
-            preview_rect,
+        let state = super::begin_preview(
+            self.view_id,
+            self.dock.get(),
             self.size.clone(),
             &args.client_pos,
-            initiator,
-            dock,
-            tab_index,
-        );
-        let root_layout = context
-            .view_layout_untyped(
-                context
-                    .view_get_parent(tab_strip_view)
-                    .expect("view not mounted?"),
-            )
-            .expect("query failed");
-        let dock_basepoint = Point::new_logical(root_layout.left_offset, root_layout.top_offset);
-        context.system_link.begin_pane_drag(
-            initiator,
-            &args.pointer_id,
-            state.offset,
-            &popover_rect.ref_with_offset(dock_basepoint),
+            args.pointer_id,
+            context,
         );
         context.store_docking_preview_state(state);
 

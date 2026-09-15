@@ -17,10 +17,10 @@ use crate::{
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uicore::{
-        CustomFlyoutViewOpenRequest, PopupID, PopupManager, View, ViewGroupRelationStore,
-        ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
-        ViewLayout, ViewRelationQueryable, ViewRenderQueue, ViewRenderer, ViewTreeRelationStore,
-        view_iter_self_group_participants,
+        CustomFlyoutViewOpenRequest, PopupID, PopupManager, SystemLinkAccess, View,
+        ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut,
+        ViewInstanceStore, ViewLayout, ViewRelationQueryable, ViewRenderQueue, ViewRenderer,
+        ViewTreeRelationStore, view_iter_self_group_participants,
     },
 };
 
@@ -88,6 +88,12 @@ impl InputEventContext<'_, '_> {
 
     pub fn store_docking_preview_state(&mut self, state: crate::ui::dock::DockingPreviewState) {
         *self.docking_preview_state = Some(state);
+    }
+}
+impl<'sys> SystemLinkAccess<'sys> for InputEventContext<'_, 'sys> {
+    #[inline(always)]
+    fn system_link<'a>(&'a self) -> &'a SystemLink<'sys> {
+        self.system_link
     }
 }
 impl ViewInstanceQueryable for InputEventContext<'_, '_> {
