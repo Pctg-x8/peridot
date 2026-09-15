@@ -53,29 +53,31 @@ impl Presenter {
             let fill_container_view =
                 ctx.construct_view(FillContainerViewInit { eh: eh.clone() }, |_| []);
 
-            let path_navigator_view = ctx.construct_view(PathNavigatorViewInit, |_| []);
-            let file_list_view = ctx.construct_view(FileListViewInit, |_| []);
-
-            let l = ctx
-                .view_layout_mut(path_navigator_view)
-                .expect("query failed");
-            l.width = ViewSize::FillAvailable;
-            l.height = ViewSize::Fixed(24.0);
-
-            let l = ctx.view_layout_mut(file_list_view).expect("query failed");
-            l.width = ViewSize::FillAvailable;
-            l.height = ViewSize::FillAvailable;
-
-            let file_list_container_view = ctx
-                .construct_view(ScrollContainerInit::new(file_list_view), |_| {
-                    [file_list_view.into_untyped()]
-                });
-            let l = ctx
-                .view_layout_mut(file_list_container_view)
-                .expect("query failed");
-            l.width = ViewSize::FillAvailable;
-            l.height = ViewSize::FillAvailable;
-            l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+            let path_navigator_view = ctx.construct_view_with_layout(
+                PathNavigatorViewInit,
+                |l| {
+                    l.width = ViewSize::FillAvailable;
+                    l.height = ViewSize::Fixed(24.0);
+                },
+                |_| [],
+            );
+            let file_list_view = ctx.construct_view_with_layout(
+                FileListViewInit,
+                |l| {
+                    l.width = ViewSize::FillAvailable;
+                    l.height = ViewSize::FillAvailable;
+                },
+                |_| [],
+            );
+            let file_list_container_view = ctx.construct_view_with_layout(
+                ScrollContainerInit::new(file_list_view),
+                |l| {
+                    l.width = ViewSize::FillAvailable;
+                    l.height = ViewSize::FillAvailable;
+                    l.flow_basis = ViewLayoutFlowBasis::Flexible(1.0);
+                },
+                |_| [file_list_view.into_untyped()],
+            );
 
             EventHandler {
                 fill_container_view,

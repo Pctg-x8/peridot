@@ -1264,6 +1264,24 @@ pub trait ViewRegisterable {
     }
 
     #[inline(always)]
+    fn construct_view_with_layout<
+        Ctor: ViewConstructor,
+        Children: IntoIterator<Item = ViewIdentifier>,
+    >(
+        &mut self,
+        ctor: Ctor,
+        layout: impl FnOnce(&mut ViewLayout),
+        children: impl FnOnce(&mut Self) -> Children,
+    ) -> TypedViewIdentifier<Ctor::ConcreteView>
+    where
+        Self: ViewInstanceQueryableMut + ViewRelationControllable,
+    {
+        let id = self.construct_view(ctor, children);
+        layout(self.view_layout_mut(id).expect("must be queried"));
+        id
+    }
+
+    #[inline(always)]
     fn free_view<T>(&mut self, id: TypedViewIdentifier<T>) {
         self.free_view_untyped(id.into_untyped());
     }
