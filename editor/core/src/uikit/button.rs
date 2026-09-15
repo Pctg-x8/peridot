@@ -4,7 +4,7 @@ use std::rc::Rc;
 use shared::{LogicalUnit, Rect, Size, range_from_len};
 
 use crate::{
-    Event, SyncEvent, WindowHandle,
+    SyncEvent, WindowHandle,
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, KeyInputEventHandler,
         hittest::{
@@ -34,18 +34,6 @@ pub trait SimpleButtonEventHandler {
         window: WindowHandle,
         ctx: &mut InputEventContext,
     );
-}
-
-pub struct SimpleButtonConstantEventHandler(pub Event);
-impl SimpleButtonEventHandler for SimpleButtonConstantEventHandler {
-    fn on_click(
-        &self,
-        _sender: TypedViewIdentifier<SimpleButtonView>,
-        _window: WindowHandle,
-        ctx: &mut InputEventContext,
-    ) {
-        ctx.system_link.dispatch_event(self.0.clone());
-    }
 }
 
 pub struct SimpleButtonViewInit {
