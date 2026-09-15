@@ -24,13 +24,6 @@ pub trait SystemLinkAccess<'sys> {
     fn system_link<'a>(&'a self) -> &'a SystemLink<'sys>;
 }
 
-pub struct MountContext<'a> {
-    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
-    pub ht_manager: &'a mut HitTestTreeManager,
-    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
-    pub current_sec: f32,
-}
-
 pub struct MeasureContext<'env, 'sys> {
     pub system_link: &'env SystemLink<'sys>,
 }
@@ -70,19 +63,12 @@ impl ViewFeedbackRegisterable for RenderContext<'_, '_> {
             .push_back(ViewFeedbackRegistryDelayedOps::make_unsubscribe(handler));
     }
 }
-impl<'h> RenderContext<'_, '_> {
-    pub const fn make_mount_context<'env>(&'env mut self) -> MountContext<'env> {
-        MountContext {
-            composite_tree: self.composite_tree,
-            ht_manager: self.ht_manager,
-            keyboard_focus_registry: self.keyboard_focus_registry,
-            current_sec: self.current_sec,
-        }
-    }
-}
 
 pub struct ViewInitContext<'a, 'sys> {
-    pub mount_context: MountContext<'a>,
+    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'a mut HitTestTreeManager,
+    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
+    pub current_sec: f32,
     pub view_allocator: &'a mut ViewIdentifierAllocator,
     pub view_instance_store: &'a mut ViewInstanceStore,
     pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
@@ -93,20 +79,6 @@ pub struct ViewInitContext<'a, 'sys> {
     pub system_link: &'a SystemLink<'sys>,
     pub main_thread_texture_id_issuer: &'a mut MainThreadTextureIDIssuer,
     pub application: &'a model::Application,
-}
-impl<'a> core::ops::Deref for ViewInitContext<'a, '_> {
-    type Target = MountContext<'a>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.mount_context
-    }
-}
-impl<'a, 'h> core::ops::DerefMut for ViewInitContext<'a, '_> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.mount_context
-    }
 }
 impl ViewRegisterable for ViewInitContext<'_, '_> {
     fn construct_view_direct<T: View + 'static>(
@@ -183,10 +155,10 @@ impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
         render_view_with_base(
             id,
             &mut RenderContext {
-                composite_tree: &mut self.mount_context.composite_tree,
-                ht_manager: &mut self.mount_context.ht_manager,
-                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-                current_sec: self.mount_context.current_sec,
+                composite_tree: &mut self.composite_tree,
+                ht_manager: &mut self.ht_manager,
+                keyboard_focus_registry: &mut self.keyboard_focus_registry,
+                current_sec: self.current_sec,
                 system_link: self.system_link,
                 main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
                 application: self.application,
@@ -256,10 +228,10 @@ impl<'a, 'sys> ViewInitContext<'a, 'sys> {
 
     pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2> {
         TeardownContext {
-            composite_tree: &mut self.mount_context.composite_tree,
-            ht_manager: &mut self.mount_context.ht_manager,
-            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-            current_sec: self.mount_context.current_sec,
+            composite_tree: &mut self.composite_tree,
+            ht_manager: &mut self.ht_manager,
+            keyboard_focus_registry: &mut self.keyboard_focus_registry,
+            current_sec: self.current_sec,
             view_feedback_subscription_delayed_ops: &mut self
                 .view_feedback_subscription_delayed_ops,
         }
@@ -267,10 +239,10 @@ impl<'a, 'sys> ViewInitContext<'a, 'sys> {
 
     pub const fn make_render_context<'env>(&'env mut self) -> RenderContext<'env, 'sys> {
         RenderContext {
-            composite_tree: &mut self.mount_context.composite_tree,
-            ht_manager: &mut self.mount_context.ht_manager,
-            keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-            current_sec: self.mount_context.current_sec,
+            composite_tree: &mut self.composite_tree,
+            ht_manager: &mut self.ht_manager,
+            keyboard_focus_registry: &mut self.keyboard_focus_registry,
+            current_sec: self.current_sec,
             system_link: self.system_link,
             main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
             application: self.application,
@@ -280,12 +252,10 @@ impl<'a, 'sys> ViewInitContext<'a, 'sys> {
 
     pub const fn derive<'a2>(&'a2 mut self) -> ViewInitContext<'a2, 'sys> {
         ViewInitContext {
-            mount_context: MountContext {
-                composite_tree: &mut self.mount_context.composite_tree,
-                ht_manager: &mut self.mount_context.ht_manager,
-                keyboard_focus_registry: &mut self.mount_context.keyboard_focus_registry,
-                current_sec: self.mount_context.current_sec,
-            },
+            composite_tree: &mut self.composite_tree,
+            ht_manager: &mut self.ht_manager,
+            keyboard_focus_registry: &mut self.keyboard_focus_registry,
+            current_sec: self.current_sec,
             view_allocator: &mut self.view_allocator,
             view_instance_store: &mut self.view_instance_store,
             view_tree_relation_store: &mut self.view_tree_relation_store,

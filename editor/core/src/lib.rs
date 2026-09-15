@@ -55,8 +55,8 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uicore::{
-        MeasureContext, MountContext, MountTarget, PopupID, PopupManager, RenderContext,
-        TeardownContext, TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
+        MeasureContext, MountTarget, PopupID, PopupManager, RenderContext, TeardownContext,
+        TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
         ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry,
         ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
@@ -2893,12 +2893,10 @@ impl<'sys> CoreLoop<'sys> {
         this.main_window = main_window;
 
         let mut view_init_ctx = ViewInitContext {
-            mount_context: MountContext {
-                composite_tree: &mut this.composite_tree,
-                ht_manager: &mut this.ht_manager,
-                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut this.keyboard_focus_registry,
-            },
+            composite_tree: &mut this.composite_tree,
+            ht_manager: &mut this.ht_manager,
+            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+            keyboard_focus_registry: &mut this.keyboard_focus_registry,
             view_allocator: &mut this.view_allocator,
             view_instance_store: &mut this.view_instance_store,
             view_tree_relation_store: &mut this.view_tree_relation_store,
@@ -3128,12 +3126,10 @@ impl<'sys> CoreLoop<'sys> {
                             .apply();
 
                         let mut view_init_ctx = ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut this.composite_tree,
-                                ht_manager: &mut this.ht_manager,
-                                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                            },
+                            composite_tree: &mut this.composite_tree,
+                            ht_manager: &mut this.ht_manager,
+                            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut this.keyboard_focus_registry,
                             view_allocator: &mut this.view_allocator,
                             view_instance_store: &mut this.view_instance_store,
                             view_tree_relation_store: &mut this.view_tree_relation_store,
@@ -3266,10 +3262,10 @@ impl<'sys> CoreLoop<'sys> {
                 uicore::destruct_view_recursive(
                     target,
                     &mut TeardownContext {
-                        composite_tree: &mut self.0.mount_context.composite_tree,
-                        ht_manager: &mut self.0.mount_context.ht_manager,
-                        keyboard_focus_registry: &mut self.0.mount_context.keyboard_focus_registry,
-                        current_sec: self.0.mount_context.current_sec,
+                        composite_tree: &mut self.0.composite_tree,
+                        ht_manager: &mut self.0.ht_manager,
+                        keyboard_focus_registry: &mut self.0.keyboard_focus_registry,
+                        current_sec: self.0.current_sec,
                         view_feedback_subscription_delayed_ops: &mut self
                             .0
                             .view_feedback_subscription_delayed_ops,
@@ -3288,12 +3284,10 @@ impl<'sys> CoreLoop<'sys> {
         wd.docking_manager.teardown(
             &mut this.dock_store,
             &mut LocalContext(ViewInitContext {
-                mount_context: MountContext {
-                    composite_tree: &mut this.composite_tree,
-                    ht_manager: &mut this.ht_manager,
-                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                },
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 view_allocator: &mut this.view_allocator,
                 view_instance_store: &mut this.view_instance_store,
                 view_tree_relation_store: &mut this.view_tree_relation_store,
@@ -4030,12 +4024,10 @@ impl<'sys> CoreLoop<'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         let opened_id = this.popup_manager.open(
             &mut ViewInitContext {
-                mount_context: MountContext {
-                    composite_tree: &mut this.composite_tree,
-                    ht_manager: &mut this.ht_manager,
-                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                },
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 view_allocator: &mut this.view_allocator,
                 view_instance_store: &mut this.view_instance_store,
                 view_tree_relation_store: &mut this.view_tree_relation_store,
@@ -4495,12 +4487,10 @@ impl<'sys> CoreLoop<'sys> {
                 &suggested_rect,
                 &mut ui::dock::RedockingContext {
                     view_init_ctx: ViewInitContext {
-                        mount_context: MountContext {
-                            composite_tree: &mut this.composite_tree,
-                            ht_manager: &mut this.ht_manager,
-                            current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                            keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                        },
+                        composite_tree: &mut this.composite_tree,
+                        ht_manager: &mut this.ht_manager,
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut this.keyboard_focus_registry,
                         view_allocator: &mut this.view_allocator,
                         view_instance_store: &mut this.view_instance_store,
                         view_tree_relation_store: &mut this.view_tree_relation_store,
@@ -4558,12 +4548,10 @@ impl<'sys> CoreLoop<'sys> {
                             .apply();
 
                         let mut view_init_ctx = ViewInitContext {
-                            mount_context: MountContext {
-                                composite_tree: &mut this.composite_tree,
-                                ht_manager: &mut this.ht_manager,
-                                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                                keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                            },
+                            composite_tree: &mut this.composite_tree,
+                            ht_manager: &mut this.ht_manager,
+                            current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                            keyboard_focus_registry: &mut this.keyboard_focus_registry,
                             view_allocator: &mut this.view_allocator,
                             view_instance_store: &mut this.view_instance_store,
                             view_tree_relation_store: &mut this.view_tree_relation_store,
@@ -5274,12 +5262,10 @@ impl CustomViewFlyoutSession {
 
         let cl = unsafe { cl.get_unchecked_mut() };
         let mut view_init_ctx = ViewInitContext {
-            mount_context: MountContext {
-                composite_tree: &mut cl.composite_tree,
-                ht_manager: &mut cl.ht_manager,
-                current_sec: cl.global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut cl.keyboard_focus_registry,
-            },
+            composite_tree: &mut cl.composite_tree,
+            ht_manager: &mut cl.ht_manager,
+            current_sec: cl.global_time_base.elapsed().as_secs_f32(),
+            keyboard_focus_registry: &mut cl.keyboard_focus_registry,
             view_allocator: &mut cl.view_allocator,
             view_instance_store: &mut cl.view_instance_store,
             view_tree_relation_store: &mut cl.view_tree_relation_store,
@@ -5373,12 +5359,10 @@ impl MenuSurface {
             layouted_items.into_iter(),
             depth,
             &mut ViewInitContext {
-                mount_context: MountContext {
-                    composite_tree: &mut cl.composite_tree,
-                    ht_manager: &mut cl.ht_manager,
-                    current_sec: cl.global_time_base.elapsed().as_secs_f32(),
-                    keyboard_focus_registry: &mut cl.keyboard_focus_registry,
-                },
+                composite_tree: &mut cl.composite_tree,
+                ht_manager: &mut cl.ht_manager,
+                current_sec: cl.global_time_base.elapsed().as_secs_f32(),
+                keyboard_focus_registry: &mut cl.keyboard_focus_registry,
                 view_allocator: &mut cl.view_allocator,
                 view_instance_store: &mut cl.view_instance_store,
                 view_tree_relation_store: &mut cl.view_tree_relation_store,
@@ -5503,7 +5487,7 @@ impl MenuSession {
         })
     }
 
-    pub fn perform_delayed_action(&mut self, mut cl: *mut CoreLoop<'_>) {
+    pub fn perform_delayed_action(&mut self, cl: *mut CoreLoop<'_>) {
         match self.active_selection {
             Some((depth, index)) => {
                 let cl_ref = unsafe { &mut *cl };

@@ -11,9 +11,9 @@ use crate::{
         PaneGroupTabStripView, PaneGroupTabStripViewInit, PaneGroupTabView, PaneGroupTabViewInit,
     },
     uicore::{
-        DeriveTeardownContext, MeasureContext, MountContext, RenderContext, SystemLinkAccess,
-        TeardownContext, TypedViewIdentifier, View, ViewConstructor, ViewDestructionContext,
-        ViewIdentifier, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        DeriveTeardownContext, MeasureContext, RenderContext, SystemLinkAccess, TeardownContext,
+        TypedViewIdentifier, View, ViewConstructor, ViewDestructionContext, ViewIdentifier,
+        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewLayoutStateStore,
         ViewRegisterable, ViewRelationControllable, ViewRelationQueryable, ViewRenderElements,
         ViewRenderQueue, ViewRenderer, ViewSize, ViewTreeRelationStore,
@@ -540,10 +540,10 @@ impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
         crate::uicore::teardown_view_recursive(
             target,
             &mut TeardownContext {
-                composite_tree: self.view_init_ctx.mount_context.composite_tree,
-                ht_manager: self.view_init_ctx.mount_context.ht_manager,
-                keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
-                current_sec: self.view_init_ctx.mount_context.current_sec,
+                composite_tree: self.view_init_ctx.composite_tree,
+                ht_manager: self.view_init_ctx.ht_manager,
+                keyboard_focus_registry: self.view_init_ctx.keyboard_focus_registry,
+                current_sec: self.view_init_ctx.current_sec,
                 view_feedback_subscription_delayed_ops: self
                     .view_init_ctx
                     .view_feedback_subscription_delayed_ops,
@@ -560,10 +560,10 @@ impl ViewDestructionContext for RedockingContext<'_, '_> {
         crate::uicore::destruct_view_recursive(
             target,
             &mut TeardownContext {
-                composite_tree: self.view_init_ctx.mount_context.composite_tree,
-                ht_manager: self.view_init_ctx.mount_context.ht_manager,
-                keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
-                current_sec: self.view_init_ctx.mount_context.current_sec,
+                composite_tree: self.view_init_ctx.composite_tree,
+                ht_manager: self.view_init_ctx.ht_manager,
+                keyboard_focus_registry: self.view_init_ctx.keyboard_focus_registry,
+                current_sec: self.view_init_ctx.current_sec,
                 view_feedback_subscription_delayed_ops: self
                     .view_init_ctx
                     .view_feedback_subscription_delayed_ops,
@@ -618,10 +618,10 @@ impl DerivePaneContentResizeContext for RedockingContext<'_, '_> {
 impl DeriveTeardownContext for RedockingContext<'_, '_> {
     fn derive_teardown_context<'env>(&'env mut self) -> TeardownContext<'env> {
         TeardownContext {
-            composite_tree: self.view_init_ctx.mount_context.composite_tree,
-            ht_manager: self.view_init_ctx.mount_context.ht_manager,
-            keyboard_focus_registry: self.view_init_ctx.mount_context.keyboard_focus_registry,
-            current_sec: self.view_init_ctx.mount_context.current_sec,
+            composite_tree: self.view_init_ctx.composite_tree,
+            ht_manager: self.view_init_ctx.ht_manager,
+            keyboard_focus_registry: self.view_init_ctx.keyboard_focus_registry,
+            current_sec: self.view_init_ctx.current_sec,
             view_feedback_subscription_delayed_ops: self
                 .view_init_ctx
                 .view_feedback_subscription_delayed_ops,
@@ -632,20 +632,6 @@ impl<'sys> SystemLinkAccess<'sys> for RedockingContext<'_, 'sys> {
     #[inline(always)]
     fn system_link<'a>(&'a self) -> &'a SystemLink<'sys> {
         self.view_init_ctx.system_link
-    }
-}
-impl<'a> core::ops::Deref for RedockingContext<'a, '_> {
-    type Target = MountContext<'a>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.view_init_ctx.mount_context
-    }
-}
-impl<'a> core::ops::DerefMut for RedockingContext<'a, '_> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.view_init_ctx.mount_context
     }
 }
 
@@ -1663,20 +1649,6 @@ impl ViewInstanceQueryableMut for PaneGroupCreateContext<'_, '_, '_> {
     #[inline(always)]
     fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
         crate::uicore::view_layout_mut(id, self.view_init_context.view_instance_store)
-    }
-}
-impl<'a> core::ops::Deref for PaneGroupCreateContext<'_, 'a, '_> {
-    type Target = MountContext<'a>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        &self.view_init_context.mount_context
-    }
-}
-impl<'a> core::ops::DerefMut for PaneGroupCreateContext<'_, 'a, '_> {
-    #[inline(always)]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.view_init_context.mount_context
     }
 }
 impl<'sys> SystemLinkAccess<'sys> for PaneGroupCreateContext<'_, '_, 'sys> {
