@@ -67,3 +67,9 @@ pub use self::checkbox::*;
 
 mod radio;
 pub use self::radio::*;
+
+mod color_picker;
+pub use self::color_picker::*;
+
+mod color_button;
+pub use self::color_button::*;

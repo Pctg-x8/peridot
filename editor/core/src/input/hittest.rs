@@ -176,6 +176,15 @@ impl HitTestTreeBuilder {
     pub const fn interactive_defaults(self) -> Self {
         self.cursor_shape(CursorShape::Pointer)
     }
+
+    pub const fn centering(mut self) -> Self {
+        self.0.left = -self.0.width * 0.5;
+        self.0.top = -self.0.height * 0.5;
+        self.0.left_adjustment_factor = 0.5;
+        self.0.top_adjustment_factor = 0.5;
+
+        self
+    }
 }
 
 #[repr(transparent)]
