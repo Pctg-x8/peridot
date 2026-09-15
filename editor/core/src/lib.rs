@@ -55,9 +55,9 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uicore::{
-        MeasureContext, MountTarget, PopupID, PopupManager, RenderContext, TeardownContext,
-        TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
-        ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry,
+        FlyoutSurfacePresenterConstructor, MeasureContext, MountTarget, PopupID, PopupManager,
+        RenderContext, TeardownContext, TypedViewIdentifier, View, ViewDestructionContext,
+        ViewFeedbackContext, ViewFeedbackHandler, ViewFeedbackRegisterable, ViewFeedbackRegistry,
         ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
         ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
@@ -2043,7 +2043,7 @@ impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
             backing_store: self.thisref.clone(),
         });
         let (gl, gt, gw, gh, _) = context.ht_manager.compute_global_rect_autoroot(sender);
-        context.request_open_custom_flyout_view(CustomFlyoutViewOpenRequest {
+        context.request_open_custom_flyout_view(uicore::CustomFlyoutViewOpenRequest {
             parent: context
                 .ht_manager
                 .query_root_window(sender)
@@ -2076,7 +2076,7 @@ impl EditableColorButtonPickerFlyoutView {
         Self(ctx.construct_view_direct(|_| Box::new(v)))
     }
 }
-impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
+impl uicore::FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
     fn root_view_id(&self) -> ViewIdentifier {
         self.0.into_untyped()
     }
@@ -2085,12 +2085,12 @@ impl FlyoutSurfacePresenter for EditableColorButtonPickerFlyoutView {
 pub struct EditableColorButtonPickerFlyoutViewConstructor {
     backing_store: std::rc::Weak<EditableColorButtonEventHandler>,
 }
-impl FlyoutSurfacePresenterConstructor for EditableColorButtonPickerFlyoutViewConstructor {
+impl uicore::FlyoutSurfacePresenterConstructor for EditableColorButtonPickerFlyoutViewConstructor {
     fn size(&self) -> Size<LogicalUnit> {
         Size::new_logical(128.0 + 16.0, 128.0 + 32.0 + 16.0 + 20.0 + 16.0)
     }
 
-    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter> {
+    fn create(&self, ctx: &mut ViewInitContext) -> Box<dyn uicore::FlyoutSurfacePresenter> {
         Box::new(EditableColorButtonPickerFlyoutView::new(
             ctx,
             &self.backing_store,
@@ -2769,8 +2769,8 @@ pub struct CoreLoop<'sys> {
     menu_reopen_request: Option<MenuOpenRequest>,
     current_active_menu_session: Option<MenuSession>,
     // current_active_dropdown_menu_session: Option<DropdownMenuSession>,
-    custom_view_flyout_open_request: Option<CustomFlyoutViewOpenRequest>,
-    custom_view_flyout_session: Option<CustomViewFlyoutSession>,
+    custom_view_flyout_open_request: Option<uicore::CustomFlyoutViewOpenRequest>,
+    custom_view_flyout_session: Option<uicore::CustomViewFlyoutSession>,
     docking_preview_state: Option<ui::dock::DockingPreviewState>,
     // preview
     preview_input_state: core::pin::Pin<Box<PreviewInputState>>,
@@ -3389,9 +3389,9 @@ impl<'sys> CoreLoop<'sys> {
 
         if let Some(c) = this
             .custom_view_flyout_session
-            .take_if(|x| x.parent == target)
+            .take_if(|x| x.is_child_of(target))
         {
-            c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+            c.terminate(&mut uicore::FlyoutSurfaceSessionTerminateContext {
                 syslink: &this.syslink,
                 view_allocator: &mut this.view_allocator,
                 view_instance_store: &mut this.view_instance_store,
@@ -4383,12 +4383,19 @@ impl<'sys> CoreLoop<'sys> {
         self.terminate_flyout_session();
     }
 
-    fn begin_new_flyout_session(mut self: Pin<&mut Self>, req: CustomFlyoutViewOpenRequest) {
+    fn begin_new_flyout_session(
+        mut self: Pin<&mut Self>,
+        req: uicore::CustomFlyoutViewOpenRequest,
+    ) {
         // terminate previous
         self.as_mut().terminate_flyout_session();
 
-        let custom_view_flyout_session =
-            CustomViewFlyoutSession::begin(req.parent, req.pos, req.content_ctor, self.as_mut());
+        let custom_view_flyout_session = uicore::CustomViewFlyoutSession::begin(
+            req.parent,
+            req.pos,
+            req.content_ctor,
+            self.as_mut(),
+        );
         unsafe { self.get_unchecked_mut() }.custom_view_flyout_session =
             Some(custom_view_flyout_session);
     }
@@ -4400,7 +4407,7 @@ impl<'sys> CoreLoop<'sys> {
             return;
         };
 
-        c.terminate(&mut FlyoutSurfaceSessionTerminateContext {
+        c.terminate(&mut uicore::FlyoutSurfaceSessionTerminateContext {
             syslink: &this.syslink,
             view_allocator: &mut this.view_allocator,
             view_instance_store: &mut this.view_instance_store,
@@ -5040,129 +5047,138 @@ impl<'sys> CoreLoop<'sys> {
     fn handle_dbus_message(self: Pin<&mut Self>, msg: dbus::Message) {
         match msg.r#type() {
             dbus::MessageType::MethodCall
-                if msg
-                    .path()
-                    .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                if msg.path() == Some(platform::unix::APPMENU_OBJECT_PATH)
                     && msg.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                     && msg.member() == Some(c"GetLayout") =>
             {
-                let args = proto::dbus_menu::GetLayoutRequest::deserialize(&mut msg.iter());
-
-                tracing::debug!(?args, "com.canonical.dbusmenu.GetLayout");
-
-                // toriaezu
-                assert_eq!(args.recursion_depth, 1);
-
-                if args.parent_id == 1 {
-                    let mut reply = dbus::Message::new_method_return(&msg)
-                        .expect("dbus.message.new_method_return");
-                    proto::dbus_menu::GetLayoutReply {
-                        revision: 1,
-                        layout: proto::dbus_menu::Layout {
-                            id: 1,
-                            properties: Default::default(),
-                            children: &[proto::dbus_menu::Layout {
-                                id: 100,
-                                properties: proto::dbus_menu::LayoutProperties {
-                                    label: Some(c"終了"),
-                                    enabled: Some(true),
-                                    visible: Some(true),
-                                    icon_name: Some(c"window-close"),
-                                    shortcut: Some(&[&[c"Alt", c"F4"], &[c"Meta", c"Q"]]),
-                                    ..Default::default()
-                                },
-                                children: &[],
-                            }],
-                        },
-                    }
-                    .serialize(&mut reply.iter_append())
-                    .expect("dbus_menu.get_layout.serialize_reply");
-                    unsafe { &*self.syslink.dbus }
-                        .send(&mut reply)
-                        .expect("dbus.send");
-                } else if args.parent_id == 0 {
-                    let mut reply = dbus::Message::new_method_return(&msg)
-                        .expect("dbus.message.new_method_return");
-                    proto::dbus_menu::GetLayoutReply {
-                        revision: 1,
-                        layout: proto::dbus_menu::Layout {
-                            id: 0,
-                            properties: proto::dbus_menu::LayoutProperties {
-                                children_display: Some(c"submenu"),
-                                ..Default::default()
-                            },
-                            children: &[proto::dbus_menu::Layout {
-                                id: 1,
-                                properties: proto::dbus_menu::LayoutProperties {
-                                    label: Some(c"ファイル"),
-                                    enabled: Some(true),
-                                    visible: Some(true),
-                                    children_display: Some(c"submenu"),
-                                    ..Default::default()
-                                },
-                                children: &[],
-                            }],
-                        },
-                    }
-                    .serialize(&mut reply.iter_append())
-                    .expect("dbus_menu.get_layout.serialize_reply");
-                    unsafe { &*self.syslink.dbus }
-                        .send(&mut reply)
-                        .expect("dbus.send");
-                } else {
-                    unreachable!("unknown menu id");
-                }
+                self.dbusmenu_get_layout(msg)
             }
             dbus::MessageType::MethodCall
-                if msg
-                    .path()
-                    .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                if msg.path() == Some(platform::unix::APPMENU_OBJECT_PATH)
                     && msg.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                     && msg.member() == Some(c"Event") =>
             {
-                let mut args_iter = msg.iter();
-                let id = args_iter.try_get_i32().expect("id:i");
-                args_iter.next();
-                let event_id = args_iter.try_get_cstr().expect("event_id:s").to_owned();
-                args_iter.next();
-                let data_container = args_iter.try_begin_iter_variant_content().expect("data:v");
-                args_iter.next();
-                let timestamp = args_iter.try_get_u32().expect("timestamp:u");
-
-                tracing::trace!(
-                    id,
-                    ?event_id,
-                    data.signature = ?data_container.signature(),
-                    timestamp,
-                    "menu event"
-                );
-
-                if id == 100 && event_id == c"clicked" {
-                    // clicked quit menu item
-                    return;
-                }
+                self.dbusmenu_event(msg)
             }
             dbus::MessageType::MethodCall
-                if msg
-                    .path()
-                    .is_some_and(|x| x == platform::unix::APPMENU_OBJECT_PATH)
+                if msg.path() == Some(platform::unix::APPMENU_OBJECT_PATH)
                     && msg.interface() == Some(proto::dbus_menu::INTERFACE_NAME)
                     && msg.member() == Some(c"AboutToShow") =>
             {
-                let mut args_iter = msg.iter();
-                let id = args_iter.try_get_i32().expect("id:i");
-
-                let mut reply =
-                    dbus::Message::new_method_return(&msg).expect("dbus.message.new_method_return");
-                proto::dbus_menu::AboutToShowReply { need_update: false }
-                    .serialize(&mut reply.iter_append())
-                    .expect("dbus_menu.about_to_show.serialize_reply");
-                unsafe { &*self.syslink.dbus }
-                    .send(&mut reply)
-                    .expect("dbus.send");
+                self.dbusmenu_about_to_show(msg)
             }
             _ => tracing::trace!(target: "dbus::loop", "unknown dbus message"),
         }
+    }
+
+    #[cfg(unix)]
+    fn dbusmenu_get_layout(self: Pin<&mut Self>, msg: dbus::Message) {
+        let args = proto::dbus_menu::GetLayoutRequest::deserialize(&mut msg.iter());
+        tracing::debug!(?args, "com.canonical.dbusmenu.GetLayout");
+
+        // toriaezu
+        assert_eq!(args.recursion_depth, 1);
+
+        if args.parent_id == 1 {
+            let mut reply =
+                dbus::Message::new_method_return(&msg).expect("dbus.message.new_method_return");
+            proto::dbus_menu::GetLayoutReply {
+                revision: 1,
+                layout: proto::dbus_menu::Layout {
+                    id: 1,
+                    properties: Default::default(),
+                    children: &[proto::dbus_menu::Layout {
+                        id: 100,
+                        properties: proto::dbus_menu::LayoutProperties {
+                            label: Some(c"終了"),
+                            enabled: Some(true),
+                            visible: Some(true),
+                            icon_name: Some(c"window-close"),
+                            shortcut: Some(&[&[c"Alt", c"F4"], &[c"Meta", c"Q"]]),
+                            ..Default::default()
+                        },
+                        children: &[],
+                    }],
+                },
+            }
+            .serialize(&mut reply.iter_append())
+            .expect("dbus_menu.get_layout.serialize_reply");
+            unsafe { &*self.syslink.dbus }
+                .send(&mut reply)
+                .expect("dbus.send");
+        } else if args.parent_id == 0 {
+            let mut reply =
+                dbus::Message::new_method_return(&msg).expect("dbus.message.new_method_return");
+            proto::dbus_menu::GetLayoutReply {
+                revision: 1,
+                layout: proto::dbus_menu::Layout {
+                    id: 0,
+                    properties: proto::dbus_menu::LayoutProperties {
+                        children_display: Some(c"submenu"),
+                        ..Default::default()
+                    },
+                    children: &[proto::dbus_menu::Layout {
+                        id: 1,
+                        properties: proto::dbus_menu::LayoutProperties {
+                            label: Some(c"ファイル"),
+                            enabled: Some(true),
+                            visible: Some(true),
+                            children_display: Some(c"submenu"),
+                            ..Default::default()
+                        },
+                        children: &[],
+                    }],
+                },
+            }
+            .serialize(&mut reply.iter_append())
+            .expect("dbus_menu.get_layout.serialize_reply");
+            unsafe { &*self.syslink.dbus }
+                .send(&mut reply)
+                .expect("dbus.send");
+        } else {
+            unreachable!("unknown menu id");
+        }
+    }
+
+    #[cfg(unix)]
+    fn dbusmenu_event(self: Pin<&mut Self>, msg: dbus::Message) {
+        let mut args_iter = msg.iter();
+        let id = args_iter.try_get_i32().expect("id:i");
+        args_iter.next();
+        let event_id = args_iter.try_get_cstr().expect("event_id:s").to_owned();
+        args_iter.next();
+        let data_container = args_iter.try_begin_iter_variant_content().expect("data:v");
+        args_iter.next();
+        let timestamp = args_iter.try_get_u32().expect("timestamp:u");
+
+        tracing::trace!(
+            id,
+            ?event_id,
+            data.signature = ?data_container.signature(),
+            timestamp,
+            "menu event"
+        );
+
+        if id == 100 && event_id == c"clicked" {
+            // clicked quit menu item
+            return;
+        }
+    }
+
+    #[cfg(unix)]
+    fn dbusmenu_about_to_show(self: Pin<&mut Self>, msg: dbus::Message) {
+        let args_iter = msg.iter();
+        let id = args_iter.try_get_i32().expect("id:i");
+        tracing::debug!(id, "dbusmenu::about_to_show");
+
+        let mut reply =
+            dbus::Message::new_method_return(&msg).expect("dbus.message.new_method_return");
+        proto::dbus_menu::AboutToShowReply { need_update: false }
+            .serialize(&mut reply.iter_append())
+            .expect("dbus_menu.about_to_show.serialize_reply");
+        unsafe { &*self.syslink.dbus }
+            .send(&mut reply)
+            .expect("dbus.send");
     }
 }
 
@@ -5187,136 +5203,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
     #[cfg(windows)]
     unsafe {
         platform::windows::unlocate_non_client_hittest_managers();
-    }
-}
-
-pub trait FlyoutSurfacePresenter {
-    fn root_view_id(&self) -> ViewIdentifier;
-
-    #[allow(unused_variables)]
-    fn rescale(
-        &self,
-        new_scale: f32,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &HitTestTreeManager,
-        system_link: &SystemLink,
-    ) {
-    }
-
-    #[allow(unused_variables)]
-    fn teardown(&self, ctx: &mut TeardownContext) {}
-}
-pub trait FlyoutSurfacePresenterConstructor {
-    fn size(&self) -> Size<LogicalUnit>;
-    fn create(&self, view_init_context: &mut ViewInitContext) -> Box<dyn FlyoutSurfacePresenter>;
-}
-
-pub struct FlyoutSurfaceSessionTerminateContext<'a, 'sys> {
-    pub syslink: &'a SystemLink<'sys>,
-    pub view_allocator: &'a mut ViewIdentifierAllocator,
-    pub view_instance_store: &'a mut ViewInstanceStore,
-    pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
-    pub view_group_relation_store: &'a mut ViewGroupRelationStore,
-    pub view_layout_state_store: &'a mut ViewLayoutStateStore,
-    pub view_render_state_store: &'a mut ViewRenderStateStore,
-    pub teardown_context: TeardownContext<'a>,
-}
-impl ViewDestructionContext for FlyoutSurfaceSessionTerminateContext<'_, '_> {
-    #[inline(always)]
-    fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
-        uicore::destruct_view_recursive(
-            target,
-            &mut self.teardown_context,
-            self.view_allocator,
-            self.view_instance_store,
-            self.view_tree_relation_store,
-            self.view_group_relation_store,
-            self.view_layout_state_store,
-            self.view_render_state_store,
-        );
-    }
-}
-
-pub struct CustomFlyoutViewOpenRequest {
-    pub parent: WindowHandle,
-    pub pos: Point<LogicalUnit>,
-    pub content_ctor: Box<dyn FlyoutSurfacePresenterConstructor>,
-}
-
-pub struct CustomViewFlyoutSurface {
-    native_surface: FlyoutSurfaceHandle,
-    content: Box<dyn FlyoutSurfacePresenter>,
-}
-pub struct CustomViewFlyoutSession {
-    parent: WindowHandle,
-    opening_surface: CustomViewFlyoutSurface,
-}
-impl CustomViewFlyoutSession {
-    pub fn begin(
-        parent: WindowHandle,
-        pos: Point<LogicalUnit>,
-        content_ctor: Box<dyn FlyoutSurfacePresenterConstructor>,
-        mut cl: Pin<&mut CoreLoop<'_>>,
-    ) -> Self {
-        let surface = create_flyout_surface(parent, pos, content_ctor.size(), cl.as_mut());
-
-        let cl = unsafe { cl.get_unchecked_mut() };
-        let mut view_init_ctx = ViewInitContext {
-            composite_tree: &mut cl.composite_tree,
-            ht_manager: &mut cl.ht_manager,
-            current_sec: cl.global_time_base.elapsed().as_secs_f32(),
-            keyboard_focus_registry: &mut cl.keyboard_focus_registry,
-            view_allocator: &mut cl.view_allocator,
-            view_instance_store: &mut cl.view_instance_store,
-            view_tree_relation_store: &mut cl.view_tree_relation_store,
-            view_group_relation_store: &mut cl.view_group_relation_store,
-            view_layout_state_store: &mut cl.view_layout_state_store,
-            view_render_state_store: &mut cl.view_render_state_store,
-            view_feedback_subscription_delayed_ops: &mut cl.view_feedback_registry_delayed_ops,
-            system_link: &cl.syslink,
-            main_thread_texture_id_issuer: &mut cl.texture_id_issuer,
-            application: &cl.application,
-        };
-        let content = content_ctor.create(&mut view_init_ctx);
-        view_init_ctx.render_view_with_base(
-            content.root_view_id(),
-            &surface,
-            surface.keyboard_focus_state().root_group(),
-            Rect::from_lt_size(Point::new_logical(0.0, 0.0), content_ctor.size()),
-        );
-
-        Self {
-            parent,
-            opening_surface: CustomViewFlyoutSurface {
-                native_surface: surface,
-                content,
-            },
-        }
-    }
-
-    pub fn rescale(
-        &self,
-        new_scale: f32,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &HitTestTreeManager,
-        system_link: &SystemLink,
-    ) {
-        self.opening_surface
-            .content
-            .rescale(new_scale, composite_tree, ht_manager, system_link);
-    }
-
-    pub fn terminate<'a, 'h: 'a>(self, env: &mut FlyoutSurfaceSessionTerminateContext) {
-        self.opening_surface
-            .content
-            .teardown(&mut env.teardown_context);
-        env.destruct_view_recursive_untyped(self.opening_surface.content.root_view_id());
-        self.opening_surface.native_surface.close(
-            env.syslink,
-            env.teardown_context.composite_tree,
-            env.teardown_context.ht_manager,
-            env.teardown_context.keyboard_focus_registry,
-        );
     }
 }
 

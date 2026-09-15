@@ -8,8 +8,7 @@ use bitflags::bitflags;
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    CustomFlyoutViewOpenRequest, DragData, FlyoutSurfaceHandle, MenuOpenRequest, PointerID,
-    SyncEvent, SystemLink, WindowHandle,
+    DragData, FlyoutSurfaceHandle, MenuOpenRequest, PointerID, SyncEvent, SystemLink, WindowHandle,
     input::hittest::{
         CursorShape, DragDropFlags, GrabDeltaMoveActionArgs, HitTestTreeManager, HitTestTreeRef,
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
@@ -18,9 +17,10 @@ use crate::{
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uicore::{
-        PopupID, PopupManager, View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRenderQueue, ViewRenderer,
-        ViewTreeRelationStore, view_iter_self_group_participants,
+        CustomFlyoutViewOpenRequest, PopupID, PopupManager, View, ViewGroupRelationStore,
+        ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut, ViewInstanceStore,
+        ViewLayout, ViewRenderQueue, ViewRenderer, ViewTreeRelationStore,
+        view_iter_self_group_participants,
     },
 };
 

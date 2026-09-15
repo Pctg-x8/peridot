@@ -5,7 +5,7 @@ use peridot_math::Zero;
 use shared::{LogicalUnit, Point, Rect, SafeF32, Size};
 
 use crate::{
-    CustomFlyoutViewOpenRequest, Event, FlyoutSurfacePresenter, FlyoutSurfacePresenterConstructor,
+    Event,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -26,6 +26,7 @@ use crate::{
         text::{FontID, FontSet, TextLayout},
     },
     uicore::{
+        CustomFlyoutViewOpenRequest, FlyoutSurfacePresenter, FlyoutSurfacePresenterConstructor,
         MeasureContext, RenderContext, TeardownContext, TypedViewIdentifier, ViewConstructor,
         ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut, ViewLayoutStateStore,
         ViewRegisterable, ViewRenderElements, ViewRenderer,
