@@ -1,0 +1,15 @@
+[package]
+name = "peridot-mesh"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+with-rendering-configuration = ["dep:peridot-rendering-configuration"]
+
+[dependencies]
+bedrock.workspace = true
+
+peridot-rendering-configuration = { path = "../rendering-configuration", optional = true }
+
+[lints]
+workspace = true

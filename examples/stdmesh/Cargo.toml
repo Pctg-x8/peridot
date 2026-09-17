@@ -1,0 +1,11 @@
+[package]
+name = "stdmesh"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot = { path = "../../base", features = ["mt"] }
+peridot-mesh = { path = "../../modules/mesh", features = ["with-rendering-configuration"] }
+peridot-memory-manager = { path = "../../modules/memory-manager" }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = ["with-loader-impl"] }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Implements", "Presentation"] }
