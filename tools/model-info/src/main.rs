@@ -130,10 +130,15 @@ fn main() {
                             BufferElementType::Ushort => IndexType::UInt16,
                             _ => unreachable!("invalid index buffer element type"),
                         },
-                        content_location: 0, // compute later
-                        byte_length: (accessor.count * buffer_element_type.default_byte_stride())
+                        buffer: StreamBuffer {
+                            content_location: 0, // compute later
+                            byte_length: (accessor.count
+                                * buffer_element_type.default_byte_stride())
                             .try_into()
                             .expect("too large index buffer"),
+                            device_alignment_requirement: buffer_element_type
+                                .device_alignment_requirement(),
+                        },
                     },
                     Some(SourceBufferData {
                         buffer_index: buffer_view.buffer,
@@ -251,6 +256,7 @@ fn main() {
 
                     let mut attribute_data = Vec::with_capacity(attributes.len());
                     let mut offset = 0;
+                    let mut device_alignment_requirement = 1;
                     for (a, x) in attributes {
                         attribute_data.push((
                             a,
@@ -261,12 +267,18 @@ fn main() {
                             x.source,
                         ));
                         offset += x.element_type.default_byte_stride() as u16;
+                        // Note: 2^n想定 想定が崩れたら直す必要がある
+                        device_alignment_requirement = device_alignment_requirement
+                            .max(x.element_type.device_alignment_requirement());
                     }
 
                     (
                         MeshVertexStream {
-                            content_location: 0,
-                            byte_length: (attribute_count as usize * offset as usize) as _,
+                            buffer: StreamBuffer {
+                                content_location: 0,
+                                byte_length: (attribute_count as usize * offset as usize) as _,
+                                device_alignment_requirement,
+                            },
                             attribute_count: attribute_data
                                 .len()
                                 .try_into()
@@ -311,21 +323,16 @@ fn main() {
                                 * (Attribute::serialize_size() + AttributeData::serialize_size())
                     })
                     .sum::<usize>();
-            if let MeshIndexStream::Stream {
-                ref mut content_location,
-                byte_length,
-                ..
-            } = index_stream
-            {
-                *content_location = content_offset as _;
-                content_offset += byte_length as usize;
+            if let MeshIndexStream::Stream { ref mut buffer, .. } = index_stream {
+                buffer.content_location = content_offset as _;
+                content_offset += buffer.byte_length as usize;
             }
             index_stream
                 .serialize(&mut mesh_out)
                 .expect("mesh_out.write.index_stream");
             for (stream, attrs) in stream_attributes.iter_mut() {
-                stream.content_location = content_offset as _;
-                content_offset += stream.byte_length as usize;
+                stream.buffer.content_location = content_offset as _;
+                content_offset += stream.buffer.byte_length as usize;
 
                 stream
                     .serialize(&mut mesh_out)
@@ -444,19 +451,35 @@ impl MeshHeader {
 }
 
 #[derive(Debug)]
-pub struct MeshVertexStream {
+pub struct StreamBuffer {
     pub content_location: u64,
     pub byte_length: u32,
-    pub attribute_count: u8,
+    pub device_alignment_requirement: u32,
 }
-impl MeshVertexStream {
+impl StreamBuffer {
     pub const fn serialize_size() -> usize {
-        8 + 4 + 1
+        8 + 4 + 4
     }
 
     pub fn serialize(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&self.content_location.to_ne_bytes())?;
         w.write_all(&self.byte_length.to_ne_bytes())?;
+        w.write_all(&self.device_alignment_requirement.to_ne_bytes())
+    }
+}
+
+#[derive(Debug)]
+pub struct MeshVertexStream {
+    pub buffer: StreamBuffer,
+    pub attribute_count: u8,
+}
+impl MeshVertexStream {
+    pub const fn serialize_size() -> usize {
+        StreamBuffer::serialize_size() + 1
+    }
+
+    pub fn serialize(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        self.buffer.serialize(w)?;
         w.write_all(&[self.attribute_count])
     }
 }
@@ -466,29 +489,23 @@ pub enum MeshIndexStream {
     None,
     Stream {
         index_type: IndexType,
-        content_location: u64,
-        byte_length: u32,
+        buffer: StreamBuffer,
     },
 }
 impl MeshIndexStream {
     pub const fn serialize_size(&self) -> usize {
         match self {
             Self::None => 1,
-            Self::Stream { .. } => 1 + 8 + 4,
+            Self::Stream { .. } => 1 + StreamBuffer::serialize_size(),
         }
     }
 
     pub fn serialize(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         match self {
             Self::None => w.write_all(&[0]),
-            Self::Stream {
-                index_type,
-                content_location,
-                byte_length,
-            } => {
+            Self::Stream { index_type, buffer } => {
                 w.write_all(&[*index_type as u8])?;
-                w.write_all(&content_location.to_ne_bytes())?;
-                w.write_all(&byte_length.to_ne_bytes())
+                buffer.serialize(w)
             }
         }
     }
@@ -660,6 +677,15 @@ impl BufferElementType {
             BufferElementType::Float2 => 2 * 4,
             BufferElementType::Float3 => 3 * 4,
             BufferElementType::Float4 => 4 * 4,
+        }
+    }
+
+    pub const fn device_alignment_requirement(&self) -> u32 {
+        match self {
+            BufferElementType::Ushort => 2,
+            BufferElementType::Float2 => 4,
+            BufferElementType::Float3 => 4,
+            BufferElementType::Float4 => 4,
         }
     }
 }

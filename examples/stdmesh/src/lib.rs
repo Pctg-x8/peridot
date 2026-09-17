@@ -4,8 +4,8 @@ use std::{
 };
 
 use bedrock::{
-    self as br, CommandBufferMut, CommandPoolMut, DescriptorPoolMut, Device, RenderPass,
-    ShaderModule, TypedVulkanStructure, VkHandle,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, RenderPass, ShaderModule,
+    TypedVulkanStructure, VkHandle,
 };
 use peridot::math::One;
 
@@ -83,7 +83,7 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
 
     // println!("{:?}", std::env::current_dir());
     let mut r = BufReader::new(
-        File::open("../../examples/stdmesh/assets/mesh0.1.pa1-mesh").expect("file.open"),
+        File::open("../../examples/stdmesh/assets/mesh0.0.pa1-mesh").expect("file.open"),
     );
     let mut sig_buf = [0u8; 4];
     r.read_exact(&mut sig_buf).expect("r.read.sig");
@@ -100,33 +100,37 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
     let index_stream =
         MeshIndexStream::deserialize(&mut r, needs_swap).expect("index_stream.deserialize");
     println!("{index_stream:?}");
-    let (index_type_vk, index_count) = if let MeshIndexStream::Stream {
-        index_type,
-        byte_length,
-        content_location,
-    } = index_stream
-    {
-        let index_count = match index_type {
-            IndexType::UInt16 => {
-                device_buffer_contents.push(peridot::BufferContent::indices::<u16>(
-                    (byte_length / 2) as _,
-                ));
-                upload_buffer_ranges.push((0..byte_length, content_location, byte_length));
-                (byte_length / 2) as _
-            }
-            IndexType::UInt32 => {
-                device_buffer_contents.push(peridot::BufferContent::indices::<u32>(
-                    (byte_length / 4) as _,
-                ));
-                upload_buffer_ranges.push((0..byte_length, content_location, byte_length));
-                (byte_length / 4) as _
-            }
-        };
+    let (index_type_vk, index_count) =
+        if let MeshIndexStream::Stream { index_type, buffer } = index_stream {
+            let index_count = match index_type {
+                IndexType::UInt16 => {
+                    device_buffer_contents.push(peridot::BufferContent::indices::<u16>(
+                        (buffer.byte_length / 2) as _,
+                    ));
+                    upload_buffer_ranges.push((
+                        0..buffer.byte_length,
+                        buffer.content_location,
+                        buffer.byte_length,
+                    ));
+                    (buffer.byte_length / 2) as _
+                }
+                IndexType::UInt32 => {
+                    device_buffer_contents.push(peridot::BufferContent::indices::<u32>(
+                        (buffer.byte_length / 4) as _,
+                    ));
+                    upload_buffer_ranges.push((
+                        0..buffer.byte_length,
+                        buffer.content_location,
+                        buffer.byte_length,
+                    ));
+                    (buffer.byte_length / 4) as _
+                }
+            };
 
-        (Some(index_type.into_vk()), index_count)
-    } else {
-        (None, 0)
-    };
+            (Some(index_type.into_vk()), index_count)
+        } else {
+            (None, 0)
+        };
     let mut v_streams = Vec::with_capacity(hdr.vertex_stream_count as _);
     for binding in 0..hdr.vertex_stream_count {
         let vst =
@@ -156,15 +160,18 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
             }
             attributes.push((attr, attr_data));
         }
-        // TODO: とりあえずalign16あれば大抵のデータは大丈夫なはず だけど無駄が大きいのでconvert時にalignmentも計算して保存したほうがいいかも
-        device_buffer_contents.push(peridot::BufferContent::Vertex(vst.byte_length as _, 16));
-        let upload_buffer_base = upload_buffer_ranges
-            .last()
-            .map_or(0, |x| (x.0.end + 15) & !15);
+        device_buffer_contents.push(peridot::BufferContent::Vertex(
+            vst.buffer.byte_length as _,
+            vst.buffer.device_alignment_requirement as _,
+        ));
+        let upload_buffer_base = upload_buffer_ranges.last().map_or(0, |x| {
+            (x.0.end + (vst.buffer.device_alignment_requirement - 1))
+                & !(vst.buffer.device_alignment_requirement - 1)
+        });
         upload_buffer_ranges.push((
-            upload_buffer_base..upload_buffer_base + vst.byte_length,
-            vst.content_location,
-            vst.byte_length,
+            upload_buffer_base..upload_buffer_base + vst.buffer.byte_length,
+            vst.buffer.content_location,
+            vst.buffer.byte_length,
         ));
         v_streams.push((vst, attributes));
         v_bindings.push(br::VertexInputBindingDescription(
@@ -644,12 +651,47 @@ impl MeshPrimitiveTopology {
 }
 
 #[derive(Debug)]
+pub struct StreamBuffer {
+    pub content_location: u64,
+    pub byte_length: u32,
+    pub device_alignment_requirement: u32,
+}
+impl StreamBuffer {
+    pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
+        let mut content_location_buf = [0u8; 8];
+        let mut byte_length_buf = [0u8; 4];
+        let mut device_alignment_requirement_buf = [0u8; 4];
+        readva(
+            r,
+            &mut [
+                std::io::IoSliceMut::new(&mut content_location_buf),
+                std::io::IoSliceMut::new(&mut byte_length_buf),
+                std::io::IoSliceMut::new(&mut device_alignment_requirement_buf),
+            ],
+        )?;
+        let mut content_location = u64::from_ne_bytes(content_location_buf);
+        let mut byte_length = u32::from_ne_bytes(byte_length_buf);
+        let mut device_alignment_requirement = u32::from_ne_bytes(device_alignment_requirement_buf);
+        if needs_swap {
+            content_location = content_location.swap_bytes();
+            byte_length = byte_length.swap_bytes();
+            device_alignment_requirement = device_alignment_requirement.swap_bytes();
+        }
+
+        Ok(Self {
+            content_location,
+            byte_length,
+            device_alignment_requirement,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub enum MeshIndexStream {
     None,
     Stream {
         index_type: IndexType,
-        content_location: u64,
-        byte_length: u32,
+        buffer: StreamBuffer,
     },
 }
 impl MeshIndexStream {
@@ -661,27 +703,8 @@ impl MeshIndexStream {
         }
 
         let index_type = IndexType::try_from(index_type_buf[0]).expect("invalid index type");
-        let mut content_location_buf = [0u8; 8];
-        let mut byte_length_buf = [0u8; 4];
-        readva(
-            r,
-            &mut [
-                std::io::IoSliceMut::new(&mut content_location_buf),
-                std::io::IoSliceMut::new(&mut byte_length_buf),
-            ],
-        )?;
-        let mut content_location = u64::from_ne_bytes(content_location_buf);
-        let mut byte_length = u32::from_ne_bytes(byte_length_buf);
-        if needs_swap {
-            content_location = content_location.swap_bytes();
-            byte_length = byte_length.swap_bytes();
-        }
-
-        Ok(Self::Stream {
-            index_type,
-            content_location,
-            byte_length,
-        })
+        let buffer = StreamBuffer::deserialize(r, needs_swap)?;
+        Ok(Self::Stream { index_type, buffer })
     }
 }
 
@@ -713,33 +736,17 @@ impl IndexType {
 
 #[derive(Debug)]
 pub struct MeshVertexStream {
-    pub content_location: u64,
-    pub byte_length: u32,
+    pub buffer: StreamBuffer,
     pub attribute_count: u8,
 }
 impl MeshVertexStream {
     pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let mut content_location_buf = [0u8; 8];
-        let mut byte_length_buf = [0u8; 4];
+        let buffer = StreamBuffer::deserialize(r, needs_swap)?;
         let mut attribute_count_buf = [0u8];
-        readva(
-            r,
-            &mut [
-                std::io::IoSliceMut::new(&mut content_location_buf),
-                std::io::IoSliceMut::new(&mut byte_length_buf),
-                std::io::IoSliceMut::new(&mut attribute_count_buf),
-            ],
-        )?;
-        let mut content_location = u64::from_ne_bytes(content_location_buf);
-        let mut byte_length = u32::from_ne_bytes(byte_length_buf);
-        if needs_swap {
-            content_location = content_location.swap_bytes();
-            byte_length = byte_length.swap_bytes();
-        }
+        readva(r, &mut [std::io::IoSliceMut::new(&mut attribute_count_buf)])?;
 
         Ok(Self {
-            content_location,
-            byte_length,
+            buffer,
             attribute_count: attribute_count_buf[0],
         })
     }
