@@ -83,46 +83,38 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
 
     // println!("{:?}", std::env::current_dir());
     let mut r = BufReader::new(
-        File::open("../../examples/stdmesh/assets/mesh0.0.pa1-mesh").expect("file.open"),
+        File::open("../../examples/stdmesh/assets/mesh0.1.pa1-mesh").expect("file.open"),
     );
     let mut sig_buf = [0u8; 4];
     r.read_exact(&mut sig_buf).expect("r.read.sig");
     let sig = u32::from_ne_bytes(sig_buf);
-    let needs_swap = if sig == PA1M_SIGNATURE {
+    let needs_swap = if sig == peridot_mesh::SIGNATURE {
         false
-    } else if sig.swap_bytes() == PA1M_SIGNATURE {
+    } else if sig.swap_bytes() == peridot_mesh::SIGNATURE {
         true
     } else {
         panic!("invalid pa1m signature");
     };
-    let hdr = MeshHeader::deserialize(&mut r).expect("mesh_header.deserialize");
+    let hdr = peridot_mesh::Header::deserialize(&mut r).expect("mesh_header.deserialize");
     println!("{needs_swap} {hdr:?}");
-    let index_stream =
-        MeshIndexStream::deserialize(&mut r, needs_swap).expect("index_stream.deserialize");
+    let index_stream = peridot_mesh::IndexStream::deserialize(&mut r, needs_swap)
+        .expect("index_stream.deserialize");
     println!("{index_stream:?}");
     let (index_type_vk, index_count) =
-        if let MeshIndexStream::Stream { index_type, buffer } = index_stream {
+        if let peridot_mesh::IndexStream::Stream { index_type, buffer } = index_stream {
             let index_count = match index_type {
-                IndexType::UInt16 => {
+                peridot_mesh::IndexType::UInt16 => {
                     device_buffer_contents.push(peridot::BufferContent::indices::<u16>(
                         (buffer.byte_length / 2) as _,
                     ));
-                    upload_buffer_ranges.push((
-                        0..buffer.byte_length,
-                        buffer.content_location,
-                        buffer.byte_length,
-                    ));
+                    upload_buffer_ranges.push((0..buffer.byte_length, buffer.content_location));
                     (buffer.byte_length / 2) as _
                 }
-                IndexType::UInt32 => {
+                peridot_mesh::IndexType::UInt32 => {
                     device_buffer_contents.push(peridot::BufferContent::indices::<u32>(
                         (buffer.byte_length / 4) as _,
                     ));
-                    upload_buffer_ranges.push((
-                        0..buffer.byte_length,
-                        buffer.content_location,
-                        buffer.byte_length,
-                    ));
+                    upload_buffer_ranges.push((0..buffer.byte_length, buffer.content_location));
                     (buffer.byte_length / 4) as _
                 }
             };
@@ -133,16 +125,16 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
         };
     let mut v_streams = Vec::with_capacity(hdr.vertex_stream_count as _);
     for binding in 0..hdr.vertex_stream_count {
-        let vst =
-            MeshVertexStream::deserialize(&mut r, needs_swap).expect("vertex_stream.deserialize");
+        let vst = peridot_mesh::VertexStream::deserialize(&mut r, needs_swap)
+            .expect("vertex_stream.deserialize");
         let mut attributes = Vec::with_capacity(vst.attribute_count as _);
         let mut buffer_stride = 0;
         for _ in 0..vst.attribute_count {
-            let attr = Attribute::deserialize(&mut r).expect("attribute.deserialize");
-            let attr_data =
-                AttributeData::deserialize(&mut r, needs_swap).expect("attribute_data.deserialize");
-            buffer_stride = buffer_stride
-                .max(attr_data.offset as u32 + attr_data.element_type.default_byte_stride() as u32);
+            let attr = peridot_mesh::Attribute::deserialize(&mut r).expect("attribute.deserialize");
+            let attr_data = peridot_mesh::AttributeData::deserialize(&mut r, needs_swap)
+                .expect("attribute_data.deserialize");
+            buffer_stride =
+                buffer_stride.max(attr_data.offset as u32 + attr_data.element_type.size() as u32);
             if let Some(&loc) = shading_variant
                 .vertex_semantic_to_location
                 .get(&attr.into_semantic())
@@ -171,7 +163,6 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
         upload_buffer_ranges.push((
             upload_buffer_base..upload_buffer_base + vst.buffer.byte_length,
             vst.buffer.content_location,
-            vst.buffer.byte_length,
         ));
         v_streams.push((vst, attributes));
         v_bindings.push(br::VertexInputBindingDescription(
@@ -227,7 +218,7 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
         .expect("upload_buffer.alloc");
     upload_buffer
         .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
-            for &(ref br, co, bl) in upload_buffer_ranges.iter() {
+            for &(ref br, co) in upload_buffer_ranges.iter() {
                 r.seek(SeekFrom::Start(co)).expect("reader.seek");
                 r.read_exact(core::slice::from_raw_parts_mut(
                     p.ptr().byte_add(br.start as _).cast::<u8>().as_ptr(),
@@ -271,7 +262,7 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
             &upload_buffer_ranges
                 .iter()
                 .zip(device_buffer_offsets.iter())
-                .map(|((br, _, _), &dbo)| {
+                .map(|((br, _), &dbo)| {
                     br::BufferCopy(br::vk::VkBufferCopy {
                         srcOffset: br.start as _,
                         dstOffset: dbo as _,
@@ -585,297 +576,4 @@ impl br::VkHandle for BackbufferImageView {
     fn native_ptr(&self) -> Self::Handle {
         self.view
     }
-}
-
-const PA1M_SIGNATURE: u32 = u32::from_be_bytes(*b"pa1m");
-
-#[derive(Debug)]
-struct MeshHeader {
-    pub primitive_topology: MeshPrimitiveTopology,
-    pub vertex_stream_count: u8,
-}
-impl MeshHeader {
-    pub fn deserialize(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
-        let mut primitive_topology_buf = [0u8];
-        let mut vertex_stream_count_buf = [0u8];
-        readva(
-            r,
-            &mut [
-                std::io::IoSliceMut::new(&mut primitive_topology_buf),
-                std::io::IoSliceMut::new(&mut vertex_stream_count_buf),
-            ],
-        )?;
-
-        Ok(Self {
-            primitive_topology: MeshPrimitiveTopology::try_from(primitive_topology_buf[0])
-                .expect("invalid topology value"),
-            vertex_stream_count: vertex_stream_count_buf[0],
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum MeshPrimitiveTopology {
-    Points = 0,
-    Lines = 1,
-    LineLoop = 2,
-    LineStrip = 3,
-    Triangles = 4,
-    TriangleStrip = 5,
-    TriangleFan = 6,
-}
-impl TryFrom<u8> for MeshPrimitiveTopology {
-    type Error = u8;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if Self::Points as u8 <= value && value <= Self::TriangleFan as u8 {
-            Ok(unsafe { core::mem::transmute(value) })
-        } else {
-            Err(value)
-        }
-    }
-}
-impl MeshPrimitiveTopology {
-    pub fn into_vk(self) -> br::PrimitiveTopology {
-        match self {
-            Self::Points => br::PrimitiveTopology::PointList,
-            Self::Lines => br::PrimitiveTopology::LineList,
-            Self::LineLoop => todo!("line loop support?"),
-            Self::LineStrip => br::PrimitiveTopology::LineStrip,
-            Self::Triangles => br::PrimitiveTopology::TriangleList,
-            Self::TriangleStrip => br::PrimitiveTopology::TriangleStrip,
-            Self::TriangleFan => br::PrimitiveTopology::TriangleFan,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct StreamBuffer {
-    pub content_location: u64,
-    pub byte_length: u32,
-    pub device_alignment_requirement: u32,
-}
-impl StreamBuffer {
-    pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let mut content_location_buf = [0u8; 8];
-        let mut byte_length_buf = [0u8; 4];
-        let mut device_alignment_requirement_buf = [0u8; 4];
-        readva(
-            r,
-            &mut [
-                std::io::IoSliceMut::new(&mut content_location_buf),
-                std::io::IoSliceMut::new(&mut byte_length_buf),
-                std::io::IoSliceMut::new(&mut device_alignment_requirement_buf),
-            ],
-        )?;
-        let mut content_location = u64::from_ne_bytes(content_location_buf);
-        let mut byte_length = u32::from_ne_bytes(byte_length_buf);
-        let mut device_alignment_requirement = u32::from_ne_bytes(device_alignment_requirement_buf);
-        if needs_swap {
-            content_location = content_location.swap_bytes();
-            byte_length = byte_length.swap_bytes();
-            device_alignment_requirement = device_alignment_requirement.swap_bytes();
-        }
-
-        Ok(Self {
-            content_location,
-            byte_length,
-            device_alignment_requirement,
-        })
-    }
-}
-
-#[derive(Debug)]
-pub enum MeshIndexStream {
-    None,
-    Stream {
-        index_type: IndexType,
-        buffer: StreamBuffer,
-    },
-}
-impl MeshIndexStream {
-    pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let mut index_type_buf = [0u8];
-        r.read_exact(&mut index_type_buf)?;
-        if index_type_buf[0] == 0 {
-            return Ok(Self::None);
-        }
-
-        let index_type = IndexType::try_from(index_type_buf[0]).expect("invalid index type");
-        let buffer = StreamBuffer::deserialize(r, needs_swap)?;
-        Ok(Self::Stream { index_type, buffer })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum IndexType {
-    UInt16 = 1,
-    UInt32 = 2,
-}
-impl TryFrom<u8> for IndexType {
-    type Error = u8;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        if Self::UInt16 as u8 <= value && value <= Self::UInt32 as u8 {
-            Ok(unsafe { core::mem::transmute(value) })
-        } else {
-            Err(value)
-        }
-    }
-}
-impl IndexType {
-    pub const fn into_vk(self) -> br::IndexType {
-        match self {
-            IndexType::UInt16 => br::IndexType::U16,
-            IndexType::UInt32 => br::IndexType::U32,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct MeshVertexStream {
-    pub buffer: StreamBuffer,
-    pub attribute_count: u8,
-}
-impl MeshVertexStream {
-    pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let buffer = StreamBuffer::deserialize(r, needs_swap)?;
-        let mut attribute_count_buf = [0u8];
-        readva(r, &mut [std::io::IoSliceMut::new(&mut attribute_count_buf)])?;
-
-        Ok(Self {
-            buffer,
-            attribute_count: attribute_count_buf[0],
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Attribute {
-    Position,
-    Normal,
-    Tangent,
-    Texcoord(u8),
-    Color(u8),
-    Joints(u8),
-    Weights(u8),
-}
-impl Attribute {
-    pub fn deserialize(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
-        let mut buf = [0u8];
-        r.read_exact(&mut buf)?;
-
-        match buf[0] {
-            0 => Ok(Self::Position),
-            1 => Ok(Self::Normal),
-            2 => Ok(Self::Tangent),
-            0x08..0x10 => Ok(Self::Texcoord(buf[0] - 0x08)),
-            0x10..0x18 => Ok(Self::Color(buf[0] - 0x10)),
-            0x18..0x20 => Ok(Self::Joints(buf[0] - 0x18)),
-            0x20..0x28 => Ok(Self::Weights(buf[0] - 0x20)),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid attribute",
-            )),
-        }
-    }
-
-    pub fn into_semantic(&self) -> peridot_rendering_configuration::VertexInputSemantic {
-        match self {
-            Self::Position => peridot_rendering_configuration::VertexInputSemantic::Position(0),
-            Self::Normal => peridot_rendering_configuration::VertexInputSemantic::Normal(0),
-            Self::Tangent => peridot_rendering_configuration::VertexInputSemantic::Tangent(0),
-            &Self::Texcoord(n) => peridot_rendering_configuration::VertexInputSemantic::Texcoord(n),
-            &Self::Color(n) => peridot_rendering_configuration::VertexInputSemantic::Color(n),
-            &Self::Joints(n) => todo!("joints"),
-            &Self::Weights(n) => todo!("weights"),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct AttributeData {
-    pub offset: u16,
-    pub element_type: BufferElementType,
-}
-impl AttributeData {
-    pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let mut offset_buf = [0u8; 2];
-        let mut element_type_buf = [0u8; 2];
-        readva(
-            r,
-            &mut [
-                std::io::IoSliceMut::new(&mut offset_buf),
-                std::io::IoSliceMut::new(&mut element_type_buf),
-            ],
-        )?;
-        let mut offset = u16::from_ne_bytes(offset_buf);
-        let mut element_type_v = u16::from_ne_bytes(element_type_buf);
-        if needs_swap {
-            offset = offset.swap_bytes();
-            element_type_v = element_type_v.swap_bytes();
-        }
-        let element_type =
-            BufferElementType::try_from(element_type_v).expect("invalid buffer element type");
-
-        Ok(Self {
-            offset,
-            element_type,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum BufferElementType {
-    Ushort = 0,
-    Float2 = 1,
-    Float3 = 2,
-    Float4 = 3,
-}
-impl TryFrom<u16> for BufferElementType {
-    type Error = u16;
-
-    fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if Self::Ushort as u16 <= value && value <= Self::Float4 as u16 {
-            Ok(unsafe { std::mem::transmute(value) })
-        } else {
-            Err(value)
-        }
-    }
-}
-impl BufferElementType {
-    pub const fn default_byte_stride(&self) -> usize {
-        match self {
-            Self::Ushort => 2,
-            Self::Float2 => 2 * 4,
-            Self::Float3 => 3 * 4,
-            Self::Float4 => 4 * 4,
-        }
-    }
-
-    pub const fn into_vk_format(&self) -> br::Format {
-        match self {
-            Self::Ushort => br::vk::VK_FORMAT_R16_UINT,
-            Self::Float2 => br::vk::VK_FORMAT_R32G32_SFLOAT,
-            Self::Float3 => br::vk::VK_FORMAT_R32G32B32_SFLOAT,
-            Self::Float4 => br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-        }
-    }
-}
-
-fn readva(
-    r: &mut (impl Read + ?Sized),
-    mut vec: &mut [std::io::IoSliceMut],
-) -> std::io::Result<()> {
-    std::io::IoSliceMut::advance_slices(&mut vec, 0);
-
-    while !vec.is_empty() {
-        let b = r.read_vectored(vec)?;
-        std::io::IoSliceMut::advance_slices(&mut vec, b);
-    }
-
-    Ok(())
 }
