@@ -25,20 +25,20 @@ impl Header {
     }
 
     pub fn deserialize(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
-        let mut primitive_topology_buf = [0u8];
-        let mut vertex_stream_count_buf = [0u8];
+        let mut primitive_topology = 0u8;
+        let mut vertex_stream_count = 0u8;
         readva(
             r,
             &mut [
-                std::io::IoSliceMut::new(&mut primitive_topology_buf),
-                std::io::IoSliceMut::new(&mut vertex_stream_count_buf),
+                io_slice_mut_u8(&mut primitive_topology),
+                io_slice_mut_u8(&mut vertex_stream_count),
             ],
         )?;
 
         Ok(Self {
-            primitive_topology: PrimitiveTopology::try_from(primitive_topology_buf[0])
+            primitive_topology: PrimitiveTopology::try_from(primitive_topology)
                 .expect("invalid topology value"),
-            vertex_stream_count: vertex_stream_count_buf[0],
+            vertex_stream_count,
         })
     }
 }
@@ -65,20 +65,17 @@ impl StreamBuffer {
     }
 
     pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let mut content_location_buf = [0u8; 8];
-        let mut byte_length_buf = [0u8; 4];
-        let mut device_alignment_requirement_buf = [0u8; 4];
+        let mut content_location = 0u64;
+        let mut byte_length = 0u32;
+        let mut device_alignment_requirement = 0u32;
         readva(
             r,
             &mut [
-                std::io::IoSliceMut::new(&mut content_location_buf),
-                std::io::IoSliceMut::new(&mut byte_length_buf),
-                std::io::IoSliceMut::new(&mut device_alignment_requirement_buf),
+                io_slice_mut_u64(&mut content_location),
+                io_slice_mut_u32(&mut byte_length),
+                io_slice_mut_u32(&mut device_alignment_requirement),
             ],
         )?;
-        let mut content_location = u64::from_ne_bytes(content_location_buf);
-        let mut byte_length = u32::from_ne_bytes(byte_length_buf);
-        let mut device_alignment_requirement = u32::from_ne_bytes(device_alignment_requirement_buf);
         if needs_swap {
             content_location = content_location.swap_bytes();
             byte_length = byte_length.swap_bytes();
@@ -230,12 +227,12 @@ impl VertexStream {
 
     pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
         let buffer = StreamBuffer::deserialize(r, needs_swap)?;
-        let mut attribute_count_buf = [0u8];
-        readva(r, &mut [std::io::IoSliceMut::new(&mut attribute_count_buf)])?;
+        let mut attribute_count = 0u8;
+        readva(r, &mut [io_slice_mut_u8(&mut attribute_count)])?;
 
         Ok(Self {
             buffer,
-            attribute_count: attribute_count_buf[0],
+            attribute_count,
         })
     }
 }
@@ -351,23 +348,21 @@ impl AttributeData {
     }
 
     pub fn deserialize(r: &mut (impl Read + ?Sized), needs_swap: bool) -> std::io::Result<Self> {
-        let mut offset_buf = [0u8; 2];
-        let mut element_type_buf = [0u8; 2];
+        let mut offset = 0u16;
+        let mut element_type = 0u16;
         readva(
             r,
             &mut [
-                std::io::IoSliceMut::new(&mut offset_buf),
-                std::io::IoSliceMut::new(&mut element_type_buf),
+                io_slice_mut_u16(&mut offset),
+                io_slice_mut_u16(&mut element_type),
             ],
         )?;
-        let mut offset = u16::from_ne_bytes(offset_buf);
-        let mut element_type_v = u16::from_ne_bytes(element_type_buf);
         if needs_swap {
             offset = offset.swap_bytes();
-            element_type_v = element_type_v.swap_bytes();
+            element_type = element_type.swap_bytes();
         }
         let element_type =
-            BufferElementType::try_from(element_type_v).expect("invalid buffer element type");
+            BufferElementType::try_from(element_type).expect("invalid buffer element type");
 
         Ok(Self {
             offset,
@@ -429,6 +424,26 @@ impl BufferElementType {
             Self::Float4 => br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
         }
     }
+}
+
+#[inline(always)]
+fn io_slice_mut_u8<'a>(sink: &'a mut u8) -> std::io::IoSliceMut<'a> {
+    std::io::IoSliceMut::new(unsafe { core::mem::transmute::<&'a mut u8, &'a mut [u8; 1]>(sink) })
+}
+
+#[inline(always)]
+fn io_slice_mut_u16<'a>(sink: &'a mut u16) -> std::io::IoSliceMut<'a> {
+    std::io::IoSliceMut::new(unsafe { core::mem::transmute::<&'a mut u16, &'a mut [u8; 2]>(sink) })
+}
+
+#[inline(always)]
+fn io_slice_mut_u32<'a>(sink: &'a mut u32) -> std::io::IoSliceMut<'a> {
+    std::io::IoSliceMut::new(unsafe { core::mem::transmute::<&'a mut u32, &'a mut [u8; 4]>(sink) })
+}
+
+#[inline(always)]
+fn io_slice_mut_u64<'a>(sink: &'a mut u64) -> std::io::IoSliceMut<'a> {
+    std::io::IoSliceMut::new(unsafe { core::mem::transmute::<&'a mut u64, &'a mut [u8; 8]>(sink) })
 }
 
 fn readva(
