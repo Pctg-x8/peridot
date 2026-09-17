@@ -267,6 +267,10 @@ fn main() {
                         MeshVertexStream {
                             content_location: 0,
                             byte_length: (attribute_count as usize * offset as usize) as _,
+                            attribute_count: attribute_data
+                                .len()
+                                .try_into()
+                                .expect("too many attributes"),
                         },
                         attribute_data,
                     )
@@ -386,6 +390,7 @@ fn main() {
                                     .seek(SeekFrom::Start(
                                         internal_buffer_start
                                             .expect("no internal buffer chunk found?")
+                                            + a.2.buffer_range.start as u64
                                             + (n * a.2.byte_stride) as u64,
                                     ))
                                     .expect("reader.seek");
@@ -394,7 +399,7 @@ fn main() {
                             Buffer::External(_) => todo!("external buffer support"),
                         };
 
-                        let mut buffer = Vec::with_capacity(*dest_stride);
+                        let mut buffer = Vec::<u8>::with_capacity(*dest_stride);
                         reader
                             .read_exact(unsafe {
                                 core::mem::transmute(
@@ -404,6 +409,16 @@ fn main() {
                             .expect("reader.read_exact");
                         unsafe {
                             buffer.set_len(*dest_stride);
+                        }
+
+                        if matches!(
+                            a.0,
+                            Attribute::Position | Attribute::Normal | Attribute::Tangent
+                        ) {
+                            // gltfはzの向きがPeridotの想定と逆なので反転させる
+                            unsafe {
+                                *buffer.as_mut_ptr().byte_add(8).cast::<f32>() *= -1.0;
+                            }
                         }
 
                         mesh_out.write_all(&buffer).expect("mesh_out.write_all");
@@ -432,15 +447,17 @@ impl MeshHeader {
 pub struct MeshVertexStream {
     pub content_location: u64,
     pub byte_length: u32,
+    pub attribute_count: u8,
 }
 impl MeshVertexStream {
     pub const fn serialize_size() -> usize {
-        8 + 4
+        8 + 4 + 1
     }
 
     pub fn serialize(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         w.write_all(&self.content_location.to_ne_bytes())?;
-        w.write_all(&self.byte_length.to_ne_bytes())
+        w.write_all(&self.byte_length.to_ne_bytes())?;
+        w.write_all(&[self.attribute_count])
     }
 }
 
