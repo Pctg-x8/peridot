@@ -11,6 +11,7 @@ use peridot_mesh::{
     SIGNATURE, StreamBuffer, VertexStream,
 };
 
+pub mod glb;
 pub mod gltf;
 
 #[derive(Parser)]
@@ -26,32 +27,34 @@ fn main() {
     let args = App::parse();
 
     let mut reader = File::open(&args.input).expect("failed to open input file");
-    let magic = read_u32(&mut reader).expect("failed to read magic");
-    assert_eq!(magic, 0x46546c67, "magic mismatch");
-    let version = read_u32(&mut reader).expect("failed to read version");
-    let length = read_u32(&mut reader).expect("failed to read length");
-    println!("glb detected: version={version} length={length}");
+    let magic = glb::read_u32(&mut reader).expect("failed to read magic");
+    assert_eq!(magic, glb::MAGIC, "magic mismatch");
+    process_glb_file(&mut reader, args.out_dir, args.prefix);
+}
 
-    let chunk0_length = read_u32(&mut reader).expect("failed to read chunk length");
-    let chunk0_type =
-        ChunkType::from_binary(read_u32(&mut reader).expect("failed to read chunk type"))
-            .expect("invalid chunk type");
-    assert_eq!(chunk0_type, ChunkType::Json, "chunk 0 must be json");
-    println!("chunk 0: length={chunk0_length} type={chunk0_type:?}");
-    let mut content = Vec::<u8>::with_capacity(chunk0_length as usize);
-    reader
-        .read_exact(unsafe {
-            core::mem::transmute(&mut content.spare_capacity_mut()[..chunk0_length as usize])
-        })
-        .expect("failed to read chunk content");
+fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefix: String) {
+    let hdr = glb::Header::read(r).expect("failed to read header");
+    println!("glb detected: {hdr:?}");
+
+    let chunk0_hdr = glb::ChunkHeader::read(r).expect("failed to read chunk header");
+    assert_eq!(
+        chunk0_hdr.r#type,
+        glb::ChunkType::Json,
+        "chunk 0 must be json"
+    );
+    println!("chunk 0: {chunk0_hdr:?}");
+    let mut content = Vec::<u8>::with_capacity(chunk0_hdr.length as usize);
+    r.read_exact(unsafe {
+        core::mem::transmute(&mut content.spare_capacity_mut()[..chunk0_hdr.length as usize])
+    })
+    .expect("failed to read chunk content");
     unsafe {
-        content.set_len(chunk0_length as usize);
+        content.set_len(chunk0_hdr.length as usize);
     }
     let content = unsafe { str::from_utf8_unchecked(&content) };
-    reader
-        .seek(SeekFrom::Current((4 - (chunk0_length as i64 & 3)) & 3))
+    r.seek(SeekFrom::Current(chunk0_hdr.padding_tail_length() as _))
         .expect("reader.seek"); // skip for padding
-    let bin_chunk_base = reader.stream_position().expect("reader.stream_position");
+    let bin_chunk_base = r.stream_position().expect("reader.stream_position");
     let parsed = serde_json::from_str::<gltf::GLTF>(content).expect("invalid gltf json");
     println!("{parsed:#?}");
 
@@ -72,17 +75,17 @@ fn main() {
         .collect::<Vec<_>>();
 
     let internal_buffer_start = if buffers.iter().any(|x| matches!(x, Buffer::Internal { .. })) {
-        reader
-            .seek(SeekFrom::Start(bin_chunk_base))
+        r.seek(SeekFrom::Start(bin_chunk_base))
             .expect("reader.seek.internal_buffer");
-        let chunk1_length = read_u32(&mut reader).expect("failed to read chunk1 length");
-        let chunk1_type =
-            ChunkType::from_binary(read_u32(&mut reader).expect("failed to read chunk1 type"))
-                .expect("invalid chunk1 type");
-        assert_eq!(chunk1_type, ChunkType::Bin, "chunk 1 must be bin");
-        println!("chunk1 length: {chunk1_length}");
+        let chunk1_hdr = glb::ChunkHeader::read(r).expect("failed to read chunk1 header");
+        assert_eq!(
+            chunk1_hdr.r#type,
+            glb::ChunkType::Bin,
+            "chunk 1 must be bin"
+        );
+        println!("chunk1 length: {}", chunk1_hdr.length);
 
-        Some(reader.stream_position().expect("reader.stream_position"))
+        Some(r.stream_position().expect("reader.stream_position"))
     } else {
         None
     };
@@ -210,7 +213,7 @@ fn main() {
                     Attribute::Position => 0,
                     _ => 1,
                 };
-                while streams.len() < stream_index + 1 {
+                while streams.len() <= stream_index {
                     streams.push(StreamInfo {
                         attributes: HashMap::new(),
                     });
@@ -295,10 +298,9 @@ fn main() {
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let pa1_mesh_file_name =
-                format!("{}mesh{mesh_index}.{prim_index}.pa1-mesh", args.prefix);
+            let pa1_mesh_file_name = format!("{}mesh{mesh_index}.{prim_index}.pa1-mesh", prefix);
             let mut mesh_out = BufWriter::new(
-                File::create(args.out_dir.join(pa1_mesh_file_name)).expect("mesh_out.create"),
+                File::create(out_dir.join(pa1_mesh_file_name)).expect("mesh_out.create"),
             );
             mesh_out
                 .write_all(&SIGNATURE.to_ne_bytes())
@@ -366,18 +368,16 @@ fn main() {
                 let mut source_ptr = source.buffer_range.start;
                 while source_ptr < source.buffer_range.end {
                     // TODO: external buffer
-                    reader
-                        .seek(SeekFrom::Start(
-                            internal_buffer_start.expect("no internal chunk found?")
-                                + source_ptr as u64,
-                        ))
-                        .expect("reader.seek");
+                    r.seek(SeekFrom::Start(
+                        internal_buffer_start.expect("no internal chunk found?")
+                            + source_ptr as u64,
+                    ))
+                    .expect("reader.seek");
                     let mut buffer = Vec::with_capacity(dest_stride);
-                    reader
-                        .read_exact(unsafe {
-                            core::mem::transmute(&mut buffer.spare_capacity_mut()[..dest_stride])
-                        })
-                        .expect("reader.read_exact");
+                    r.read_exact(unsafe {
+                        core::mem::transmute(&mut buffer.spare_capacity_mut()[..dest_stride])
+                    })
+                    .expect("reader.read_exact");
                     unsafe {
                         buffer.set_len(dest_stride);
                     }
@@ -395,15 +395,13 @@ fn main() {
                     for (a, dest_stride) in attrs.iter().zip(dest_strides.iter()) {
                         let reader = match buffers[a.2.buffer_index] {
                             Buffer::Internal { .. } => {
-                                reader
-                                    .seek(SeekFrom::Start(
-                                        internal_buffer_start
-                                            .expect("no internal buffer chunk found?")
-                                            + a.2.buffer_range.start as u64
-                                            + (n * a.2.byte_stride) as u64,
-                                    ))
-                                    .expect("reader.seek");
-                                &mut reader
+                                r.seek(SeekFrom::Start(
+                                    internal_buffer_start.expect("no internal buffer chunk found?")
+                                        + a.2.buffer_range.start as u64
+                                        + (n * a.2.byte_stride) as u64,
+                                ))
+                                .expect("reader.seek");
+                                &mut *r
                             }
                             Buffer::External(_) => todo!("external buffer support"),
                         };
@@ -499,26 +497,4 @@ fn buffer_element_type_from_accessor(a: &gltf::Accessor) -> BufferElementType {
 pub enum Buffer {
     Internal { byte_length: usize },
     External(gltf::Buffer),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChunkType {
-    Json,
-    Bin,
-}
-impl ChunkType {
-    pub const fn from_binary(v: u32) -> Result<Self, u32> {
-        match v {
-            0x4e4f534a => Ok(Self::Json),
-            0x004e4942 => Ok(Self::Bin),
-            _ => Err(v),
-        }
-    }
-}
-
-#[inline(always)]
-fn read_u32(r: &mut (impl Read + ?Sized)) -> std::io::Result<u32> {
-    let mut buf = [0u8; 4];
-    r.read_exact(&mut buf)?;
-    Ok(u32::from_le_bytes(buf))
 }
