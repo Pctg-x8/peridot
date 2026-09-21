@@ -502,6 +502,25 @@ impl<PL: NativeLinker> Engine<'_, PL> {
     }
 
     #[inline(always)]
+    pub fn open_raw_asset<'a, A: LogicalAssetData>(
+        &'a self,
+        path: &str,
+    ) -> std::io::Result<impl AssetBlob + 'a> {
+        self.native_link.asset_loader().get(path, A::EXT)
+    }
+
+    #[inline(always)]
+    pub async fn open_raw_asset_async<'a, A: LogicalAssetData>(
+        &'a self,
+        path: &str,
+    ) -> std::io::Result<impl AssetBlobAsync + 'a> {
+        self.native_link
+            .asset_loader()
+            .get_async(path, A::EXT)
+            .await
+    }
+
+    #[inline(always)]
     pub fn load<A: FromAssetBlob>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset_blob(self.native_link.asset_loader().get(path, A::EXT)?)
     }
