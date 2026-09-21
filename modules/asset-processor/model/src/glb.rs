@@ -1,60 +1,61 @@
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufWriter, Read, Seek, SeekFrom, Write},
-    path::PathBuf,
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    path::Path,
 };
 
-use clap::Parser;
 use peridot_mesh::{
     Attribute, AttributeData, BufferElementType, Header, IndexStream, IndexType, PrimitiveTopology,
     SIGNATURE, StreamBuffer, VertexStream,
 };
 use peridot_tp_gltf as gltf;
 
-#[derive(Parser)]
-struct App {
-    input: PathBuf,
-    #[clap(long, short = 'o', default_value = ".")]
-    out_dir: PathBuf,
-    #[clap(long, short = 'p', default_value = "")]
-    prefix: String,
+macro_rules! file_assert {
+    ($cond: expr, $msg: literal) => {
+        if !$cond {
+            return Err(ProcessError::FileCorruption($msg));
+        }
+    };
 }
 
-fn main() {
-    let args = App::parse();
-
-    let mut reader = File::open(&args.input).expect("failed to open input file");
-    let magic = gltf::binary::read_u32(&mut reader).expect("failed to read magic");
-    assert_eq!(magic, gltf::binary::MAGIC, "magic mismatch");
-    process_glb_file(&mut reader, args.out_dir, args.prefix);
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
+    #[error("file corrupt: {0}")]
+    FileCorruption(&'static str),
+    #[error("file corrupt: invalid index buffer element type: {0:?}")]
+    InvalidIndexBufferElementType(BufferElementType),
+    #[error("too large index buffer")]
+    TooLargeIndexBuffer,
+    #[error("too many attributes")]
+    TooManyAttributes,
+    #[error("too many vertex streams")]
+    TooManyVertexStreams,
 }
 
-fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefix: String) {
-    let hdr = gltf::binary::Header::read(r).expect("failed to read header");
-    println!("glb detected: {hdr:?}");
+pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(), ProcessError> {
+    let _hdr = gltf::binary::Header::read(&mut r)?;
 
-    let chunk0_hdr = gltf::binary::ChunkHeader::read(r).expect("failed to read chunk header");
-    assert_eq!(
-        chunk0_hdr.r#type,
-        gltf::binary::ChunkType::Json,
-        "chunk 0 must be json"
+    let chunk0_hdr = gltf::binary::ChunkHeader::read(&mut r)?;
+    file_assert!(
+        chunk0_hdr.r#type == gltf::binary::ChunkType::Json,
+        "chunk 0 must be a json"
     );
-    println!("chunk 0: {chunk0_hdr:?}");
     let mut content = Vec::<u8>::with_capacity(chunk0_hdr.length as usize);
     r.read_exact(unsafe {
         core::mem::transmute(&mut content.spare_capacity_mut()[..chunk0_hdr.length as usize])
-    })
-    .expect("failed to read chunk content");
+    })?;
     unsafe {
         content.set_len(chunk0_hdr.length as usize);
     }
     let content = unsafe { str::from_utf8_unchecked(&content) };
-    r.seek(SeekFrom::Current(chunk0_hdr.padding_tail_length() as _))
-        .expect("reader.seek"); // skip for padding
-    let bin_chunk_base = r.stream_position().expect("reader.stream_position");
-    let parsed = serde_json::from_str::<gltf::json::GLTF>(content).expect("invalid gltf json");
-    println!("{parsed:#?}");
+    r.seek(SeekFrom::Current(chunk0_hdr.padding_tail_length() as _))?; // skip for padding
+    let bin_chunk_base = r.stream_position()?;
+    let parsed = serde_json::from_str::<gltf::json::GLTF>(content)?;
 
     let buffers = parsed
         .buffers
@@ -73,32 +74,25 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
         .collect::<Vec<_>>();
 
     let internal_buffer_start = if buffers.iter().any(|x| matches!(x, Buffer::Internal { .. })) {
-        r.seek(SeekFrom::Start(bin_chunk_base))
-            .expect("reader.seek.internal_buffer");
-        let chunk1_hdr = gltf::binary::ChunkHeader::read(r).expect("failed to read chunk1 header");
-        assert_eq!(
-            chunk1_hdr.r#type,
-            gltf::binary::ChunkType::Bin,
-            "chunk 1 must be bin"
+        r.seek(SeekFrom::Start(bin_chunk_base))?;
+        let chunk1_hdr = gltf::binary::ChunkHeader::read(&mut r)?;
+        file_assert!(
+            chunk1_hdr.r#type == gltf::binary::ChunkType::Bin,
+            "chunk 1 must be a bin"
         );
-        println!("chunk1 length: {}", chunk1_hdr.length);
 
-        Some(r.stream_position().expect("reader.stream_position"))
+        Some(r.stream_position()?)
     } else {
         None
     };
 
-    println!("meshes:");
     for (mesh_index, x) in parsed.meshes.iter().enumerate() {
-        println!("  {x:?}");
         if !x.weights.is_empty() {
-            eprintln!("mesh morphing is not supported by the importer");
+            tracing::warn!("TODO: mesh morphing is not supported by the processor");
         }
 
-        println!("  meshprim:");
         for (prim_index, x) in x.primitives.iter().enumerate() {
             let topo = primitive_topology_from_gltf(x);
-            println!("    topo: {topo:?}");
 
             #[derive(Debug)]
             struct SourceBufferData {
@@ -108,38 +102,23 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
             }
             let (mut index_stream, index_source_data) = if let Some(indices) = x.indices {
                 let accessor = &parsed.accessors[indices];
-                let buffer_view =
-                    &parsed.buffer_views[accessor.buffer_view.expect("no buffer view linked?")];
-                let buffer = &buffers[buffer_view.buffer];
+                let buffer_view = match accessor.buffer_view {
+                    Some(n) => &parsed.buffer_views[n],
+                    None => todo!("accessor without buffer view"),
+                };
                 let buffer_element_type = buffer_element_type_from_accessor(accessor);
-                let byte_stride = buffer_view
-                    .byte_stride
-                    .unwrap_or(buffer_element_type.size());
-
-                println!("    indices: {accessor:?}");
-                println!("      buffer_view: {buffer_view:?}",);
-                println!("      buffer: {buffer:?}");
-                println!(
-                    "      data: {buffer:?}[{}..{}]",
-                    accessor.byte_offset + buffer_view.byte_offset,
-                    accessor.byte_offset + buffer_view.byte_offset + buffer_view.byte_length
-                );
-                println!(
-                    "      count x stride: {} x {byte_stride}[{buffer_element_type:?}]",
-                    accessor.count
-                );
 
                 (
                     IndexStream::Stream {
                         index_type: match buffer_element_type {
                             BufferElementType::Ushort => IndexType::UInt16,
-                            _ => unreachable!("invalid index buffer element type"),
+                            e => return Err(ProcessError::InvalidIndexBufferElementType(e)),
                         },
                         buffer: StreamBuffer {
                             content_location: 0, // compute later
                             byte_length: (accessor.count * buffer_element_type.size())
                                 .try_into()
-                                .expect("too large index buffer"),
+                                .map_err(|_| ProcessError::TooLargeIndexBuffer)?,
                             device_alignment_requirement: buffer_element_type
                                 .device_alignment_requirement(),
                         },
@@ -171,40 +150,17 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
             let mut attribute_count = None;
             for (n, &x) in x.attributes.iter() {
                 let Some(attr_name) = attribute_try_from_gltf_attr_name(n) else {
-                    eprintln!("{n} is unsupported attr name: skipping");
+                    tracing::warn!(name = n, "[SKIP] unsupported attr name");
                     continue;
                 };
                 attr_name.assert_validate();
 
                 let accessor = &parsed.accessors[x];
-                let buffer_view =
-                    &parsed.buffer_views[accessor.buffer_view.expect("no buffer view linked?")];
-                let buffer = &buffers[buffer_view.buffer];
-                let buffer_element_type = buffer_element_type_from_accessor(accessor);
-                let byte_stride = buffer_view
-                    .byte_stride
-                    .unwrap_or(buffer_element_type.size());
-                let target = match buffer_view.target {
-                    Some(gltf::json::BUFFER_VIEW_TARGET_ARRAY_BUFFER) => "array buffer".into(),
-                    Some(gltf::json::BUFFER_VIEW_TARGET_ELEMENT_ARRAY_BUFFER) => {
-                        "element array buffer".into()
-                    }
-                    Some(x) => format!("unknown target: {x}"),
-                    None => "unknown target".into(),
+                let buffer_view = match accessor.buffer_view {
+                    Some(n) => &parsed.buffer_views[n],
+                    None => todo!("accessor without buffer view"),
                 };
-
-                println!("    {attr_name:?}: {accessor:?}");
-                println!("      buffer_view: {buffer_view:?}",);
-                println!("      buffer: {buffer:?}");
-                println!(
-                    "      data: {buffer:?}[{}..{}] ({target})",
-                    accessor.byte_offset + buffer_view.byte_offset,
-                    accessor.byte_offset + buffer_view.byte_offset + buffer_view.byte_length
-                );
-                println!(
-                    "      count x stride: {} x {byte_stride}[{buffer_element_type:?}]",
-                    accessor.count
-                );
+                let buffer_element_type = buffer_element_type_from_accessor(accessor);
 
                 let stream_index = match attr_name {
                     // Positionのみ0にする
@@ -218,7 +174,7 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                 }
                 match streams[stream_index].attributes.entry(attr_name) {
                     std::collections::hash_map::Entry::Occupied(e) => {
-                        panic!("same attribute occured in a mesh primitive: {:?}", e.key());
+                        unreachable!("same attribute occured in a mesh primitive: {:?}", e.key());
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
                         e.insert(AttributeInfo {
@@ -243,8 +199,8 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                         attribute_count = Some(accessor.count);
                     }
                     Some(count) => {
-                        assert_eq!(
-                            count, accessor.count,
+                        file_assert!(
+                            count == accessor.count,
                             "accessor count is not unique in same mesh primitive"
                         );
                     }
@@ -276,7 +232,7 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                             .max(x.element_type.device_alignment_requirement());
                     }
 
-                    (
+                    Ok((
                         VertexStream {
                             buffer: StreamBuffer {
                                 content_location: 0,
@@ -286,32 +242,34 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                             attribute_count: attribute_data
                                 .len()
                                 .try_into()
-                                .expect("too many attributes"),
+                                .map_err(|_| ProcessError::TooManyAttributes)?,
                         },
                         attribute_data,
-                    )
+                    ))
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, ProcessError>>()?;
             // println!("{index_stream:#?}");
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let pa1_mesh_file_name = format!("{}mesh{mesh_index}-{prim_index}.pa1-mesh", prefix);
-            let mut mesh_out = BufWriter::new(
-                File::create(out_dir.join(pa1_mesh_file_name)).expect("mesh_out.create"),
-            );
-            mesh_out
-                .write_all(&SIGNATURE.to_ne_bytes())
-                .expect("mesh_out.write.signature");
+            let mut opath = primary_mesh_out_path.to_owned();
+            opath.set_file_name(format!(
+                "{}-mesh{mesh_index}-{prim_index}.pa1-mesh",
+                opath.file_stem().map_or("", |x| {
+                    let src = x.to_str().expect("filepath cannot process");
+                    &src[..src.len() - "-mesh0-0".len()]
+                })
+            ));
+            let mut mesh_out = BufWriter::new(File::create(opath)?);
+            mesh_out.write_all(&SIGNATURE.to_ne_bytes())?;
             Header {
                 primitive_topology: topo,
                 vertex_stream_count: stream_attributes
                     .len()
                     .try_into()
-                    .expect("too many vertex streams"),
+                    .map_err(|_| ProcessError::TooManyVertexStreams)?,
             }
-            .serialize(&mut mesh_out)
-            .expect("mesh_out.write.header");
+            .serialize(&mut mesh_out)?;
 
             // compute content offsets and write headers
             let mut content_offset = 4
@@ -329,21 +287,15 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                 buffer.content_location = content_offset as _;
                 content_offset += buffer.byte_length as usize;
             }
-            index_stream
-                .serialize(&mut mesh_out)
-                .expect("mesh_out.write.index_stream");
+            index_stream.serialize(&mut mesh_out)?;
             for (stream, attrs) in stream_attributes.iter_mut() {
                 stream.buffer.content_location = content_offset as _;
                 content_offset += stream.buffer.byte_length as usize;
 
-                stream
-                    .serialize(&mut mesh_out)
-                    .expect("mesh_out.write.vertex_stream");
+                stream.serialize(&mut mesh_out)?;
                 for (a, d, _) in attrs {
-                    a.serialize(&mut mesh_out)
-                        .expect("mesh_out.write.attribute");
-                    d.serialize(&mut mesh_out)
-                        .expect("mesh_out.write.attribute_data");
+                    a.serialize(&mut mesh_out)?;
+                    d.serialize(&mut mesh_out)?;
                 }
             }
 
@@ -369,17 +321,15 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                     r.seek(SeekFrom::Start(
                         internal_buffer_start.expect("no internal chunk found?")
                             + source_ptr as u64,
-                    ))
-                    .expect("reader.seek");
+                    ))?;
                     let mut buffer = Vec::with_capacity(dest_stride);
                     r.read_exact(unsafe {
                         core::mem::transmute(&mut buffer.spare_capacity_mut()[..dest_stride])
-                    })
-                    .expect("reader.read_exact");
+                    })?;
                     unsafe {
                         buffer.set_len(dest_stride);
                     }
-                    mesh_out.write_all(&buffer).expect("mesh_out.write_all");
+                    mesh_out.write_all(&buffer)?;
 
                     source_ptr += source.byte_stride;
                 }
@@ -397,21 +347,16 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                                     internal_buffer_start.expect("no internal buffer chunk found?")
                                         + a.2.buffer_range.start as u64
                                         + (n * a.2.byte_stride) as u64,
-                                ))
-                                .expect("reader.seek");
-                                &mut *r
+                                ))?;
+                                &mut r
                             }
                             Buffer::External(_) => todo!("external buffer support"),
                         };
 
                         let mut buffer = Vec::<u8>::with_capacity(*dest_stride);
-                        reader
-                            .read_exact(unsafe {
-                                core::mem::transmute(
-                                    &mut buffer.spare_capacity_mut()[..*dest_stride],
-                                )
-                            })
-                            .expect("reader.read_exact");
+                        reader.read_exact(unsafe {
+                            core::mem::transmute(&mut buffer.spare_capacity_mut()[..*dest_stride])
+                        })?;
                         unsafe {
                             buffer.set_len(*dest_stride);
                         }
@@ -426,12 +371,14 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
                             }
                         }
 
-                        mesh_out.write_all(&buffer).expect("mesh_out.write_all");
+                        mesh_out.write_all(&buffer)?;
                     }
                 }
             }
         }
     }
+
+    Ok(())
 }
 
 fn attribute_try_from_gltf_attr_name(name: &str) -> Option<Attribute> {

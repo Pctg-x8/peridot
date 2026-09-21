@@ -3,6 +3,9 @@
 use std::io::Read;
 
 pub const MAGIC: u32 = 0x46546c67;
+pub fn try_verify_magic(r: &mut (impl Read + ?Sized)) -> bool {
+    read_u32(r).is_ok_and(|x| x == MAGIC)
+}
 
 #[derive(Debug)]
 pub struct Header {
