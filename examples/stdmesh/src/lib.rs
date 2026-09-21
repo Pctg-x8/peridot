@@ -83,7 +83,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
     camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
 
     let asset = peridot_mesh::AssetAsync::open(
-        e.open_raw_asset_async::<peridot_mesh::AssetCore>("mesh0-1")
+        e.open_raw_asset_async::<peridot_mesh::AssetCore>("test-mesh0-1")
             .await
             .expect("open asset"),
     )
