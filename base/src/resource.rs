@@ -27,6 +27,7 @@ pub enum PixelFormat {
     RGBA64F = br::vk::VK_FORMAT_R16G16B16A16_SFLOAT,
     RGB96F = br::vk::VK_FORMAT_R32G32B32_SFLOAT,
     BC7 = br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+    ETC2_RGBA32 = br::vk::VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
     ASTC4x4 = br::vk::VK_FORMAT_ASTC_4x4_UNORM_BLOCK,
 }
 impl PixelFormat {
@@ -37,8 +38,9 @@ impl PixelFormat {
             PixelFormat::RGB24 | PixelFormat::BGR24 => 24,
             PixelFormat::RGBA64F => 64,
             PixelFormat::RGB96F => 96,
-            PixelFormat::BC7 => 8,     // 8bpp on average
-            PixelFormat::ASTC4x4 => 8, // 8bpp on average
+            PixelFormat::BC7 => 8,         // 8bpp on average
+            PixelFormat::ETC2_RGBA32 => 8, // 8bpp on average
+            PixelFormat::ASTC4x4 => 8,     // 8bpp on average
         }
     }
 
@@ -51,7 +53,8 @@ impl PixelFormat {
             | PixelFormat::BGR24
             | PixelFormat::RGB96F
             | PixelFormat::ASTC4x4
-            | PixelFormat::BC7 => 4,
+            | PixelFormat::BC7
+            | PixelFormat::ETC2_RGBA32 => 4,
             PixelFormat::RGBA64F => 8,
         }
     }

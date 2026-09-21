@@ -47,6 +47,10 @@ static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerV
     |_data| {},
     |_data| {},
 );
+#[inline(always)]
+fn create_waker() -> core::task::Waker {
+    unsafe { core::task::Waker::new(core::ptr::null(), &USERCODE_WAKER_VTABLE) }
+}
 
 fn launch<F: core::future::Future>(
     asset_manager: native_wrapper::AssetManager,
@@ -61,6 +65,7 @@ fn launch<F: core::future::Future>(
     let event_queue = Box::pin(peridot::EventQueue::new());
     let event_queue_lifetime_extended: &'static peridot::EventQueue =
         unsafe { &*(&*event_queue as *const _) };
+    let mut frame_draining = Box::pin(false);
     let nl = NativeLink {
         al: PlatformAssetLoader::new(asset_manager),
         w: window,
@@ -73,6 +78,7 @@ fn launch<F: core::future::Future>(
         (event_sender.clone(), event_receiver),
         frame_timing_receiver,
         event_queue_lifetime_extended,
+        unsafe { &mut *core::ptr::from_mut(frame_draining.as_mut().get_mut()) },
     );
     let snd = NativeAudioEngine::new(engine.audio_mixer());
     let pos_cache = SharedRef::new(DynamicMut::new(TouchPositionCache::new()));
@@ -84,15 +90,19 @@ fn launch<F: core::future::Future>(
     let engine_input = engine.input().clone();
     let usercode_thread = Box::pin(usercode_launcher(engine));
 
-    let driver = Box::new(Game {
+    let mut driver = Box::new(Game {
         engine_input,
         _snd: snd,
         pos_cache,
         event_queue,
+        frame_draining,
         usercode_thread,
         _bgio_worker: bgio_worker,
         _pinned: core::marker::PhantomPinned,
     });
+
+    // initial step
+    driver.step();
 
     extern "C" fn fin<F: core::future::Future>(inst_ptr: *mut core::ffi::c_void) {
         let mut inst = unsafe { Box::from_raw(inst_ptr as *mut Game<F>) };
@@ -156,6 +166,7 @@ struct Game<F> {
     _snd: NativeAudioEngine,
     pos_cache: SharedRef<DynamicMut<TouchPositionCache>>,
     event_queue: Pin<Box<peridot::EventQueue>>,
+    frame_draining: Pin<Box<bool>>,
     _bgio_worker: peridot::native_io::android::BackgroundIoWorkerPool,
     usercode_thread: Pin<Box<F>>,
     // self-referential struct
@@ -163,16 +174,9 @@ struct Game<F> {
 }
 impl<F: core::future::Future> Game<F> {
     fn step(&mut self) -> bool {
-        let waker = unsafe {
-            core::task::Waker::from_raw(core::task::RawWaker::new(
-                core::ptr::null(),
-                &USERCODE_WAKER_VTABLE,
-            ))
-        };
-
         self.usercode_thread
             .as_mut()
-            .poll(&mut core::task::Context::from_waker(&waker))
+            .poll(&mut core::task::Context::from_waker(&create_waker()))
             .is_ready()
     }
 }

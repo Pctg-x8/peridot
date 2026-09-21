@@ -82,10 +82,14 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     if image_data.0.needs_transcoding() {
         // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
+        // image_data
+        //     .0
+        //     .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
+        //     .expect("failed to transcode to bc7");
         image_data
             .0
-            .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
-            .expect("failed to transcode to bc7");
+            .transcode_basis(ktx::ffi::KTX_TTF_ETC2_RGBA, ktx::TranscodeFlags::empty())
+            .expect("failed to transcode");
     }
     let image_width = image_data.0.base_width();
     let image_height = image_data.0.base_height();
@@ -198,7 +202,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     width: image_width,
                     height: image_height,
                 },
-                br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+                // br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+                br::vk::VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
             )
             .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized),
@@ -209,7 +214,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             e.graphics(),
             image_width,
             image_height,
-            peridot::PixelFormat::BC7,
+            // peridot::PixelFormat::BC7,
+            peridot::PixelFormat::ETC2_RGBA32,
             br::BufferUsage::TRANSFER_SRC,
         )
         .expect("Failed to allocate linear image buffer");
