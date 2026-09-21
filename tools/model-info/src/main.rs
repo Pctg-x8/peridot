@@ -298,7 +298,7 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let pa1_mesh_file_name = format!("{}mesh{mesh_index}.{prim_index}.pa1-mesh", prefix);
+            let pa1_mesh_file_name = format!("{}mesh{mesh_index}-{prim_index}.pa1-mesh", prefix);
             let mut mesh_out = BufWriter::new(
                 File::create(out_dir.join(pa1_mesh_file_name)).expect("mesh_out.create"),
             );
