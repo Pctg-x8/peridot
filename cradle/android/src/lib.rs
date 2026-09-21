@@ -56,7 +56,7 @@ fn launch<F: core::future::Future>(
     asset_manager: native_wrapper::AssetManager,
     window: native_wrapper::Window,
     usercode_launcher: impl FnOnce(peridot::Engine<'static, NativeLink>) -> F,
-) -> NativeCallData {
+) -> JNIBridge {
     let bgio_worker = peridot::native_io::android::BackgroundIoWorkerPool::spawn();
 
     let (event_sender, event_receiver) = async_std::channel::unbounded();
@@ -151,7 +151,7 @@ fn launch<F: core::future::Future>(
         );
     }
 
-    NativeCallData {
+    JNIBridge {
         inst_ptr: Box::into_raw(driver) as _,
         finalize: fin::<F>,
         update: update::<F>,
@@ -435,7 +435,7 @@ use jni::{
     JNIEnv,
 };
 
-struct NativeCallData {
+struct JNIBridge {
     inst_ptr: *mut core::ffi::c_void,
     finalize: extern "C" fn(inst_ptr: *mut core::ffi::c_void),
     update: extern "C" fn(inst_ptr: *mut core::ffi::c_void),
@@ -443,6 +443,60 @@ struct NativeCallData {
     process_touch_up_event: extern "C" fn(inst_ptr: *mut core::ffi::c_void, id: u32),
     set_touch_position_absolute:
         extern "C" fn(inst_ptr: *mut core::ffi::c_void, id: u32, x: f32, y: f32),
+}
+impl Drop for JNIBridge {
+    fn drop(&mut self) {
+        tracing::info!("Finalizing NativeGameEngine...");
+        (self.finalize)(self.inst_ptr);
+    }
+}
+impl JNIBridge {
+    #[inline(always)]
+    fn boxed_into_java<'e>(self: Box<Self>, env: &mut JNIEnv<'e>) -> JByteBuffer<'e> {
+        unsafe { env.new_direct_byte_buffer(Box::into_raw(self).cast(), size_of::<Self>()) }
+            .expect("Creating DirectByteBuffer failed")
+    }
+
+    #[inline(always)]
+    fn boxed_from_java<'e>(env: &JNIEnv<'e>, obj: JByteBuffer<'e>) -> Box<Self> {
+        unsafe {
+            Box::from_raw(
+                env.get_direct_buffer_address(&obj)
+                    .expect("Getting Pointer from DirectByteBuffer failed")
+                    .cast(),
+            )
+        }
+    }
+
+    #[inline(always)]
+    fn from_java_mut<'e>(env: &JNIEnv<'e>, obj: &JByteBuffer<'e>) -> &'e mut Self {
+        unsafe {
+            &mut *env
+                .get_direct_buffer_address(obj)
+                .expect("Getting Pointer from DirectByteBuffer failed")
+                .cast()
+        }
+    }
+
+    #[inline(always)]
+    fn update(&mut self) {
+        (self.update)(self.inst_ptr)
+    }
+
+    #[inline(always)]
+    fn touch_down(&mut self, id: u32) {
+        (self.process_touch_down_event)(self.inst_ptr, id)
+    }
+
+    #[inline(always)]
+    fn touch_up(&mut self, id: u32) {
+        (self.process_touch_up_event)(self.inst_ptr, id)
+    }
+
+    #[inline(always)]
+    fn set_touch_position_absolute(&mut self, id: u32, x: f32, y: f32) {
+        (self.set_touch_position_absolute)(self.inst_ptr, id, x, y)
+    }
 }
 
 #[no_mangle]
@@ -459,42 +513,61 @@ pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_init<'e>(
         .expect("No native window associated to the surface");
     let am = native_wrapper::AssetManager::from_java(&env, &asset_manager)
         .expect("Failed to get AndroidAssetManager native object");
-    let ncd = launch(am, window, |mut e| async move {
-        userlib::game_main(&mut e).await;
-    });
 
-    let ptr = Box::into_raw(Box::new(ncd));
-    unsafe {
-        env.new_direct_byte_buffer(ptr as *mut u8, core::mem::size_of::<NativeCallData>())
-            .expect("Creating DirectByteBuffer failed")
-    }
+    Box::new(launch(am, window, |mut e| async move {
+        userlib::game_main(&mut e).await;
+    }))
+    .boxed_into_java(&mut env)
 }
+
 #[no_mangle]
 pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_fin(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
 ) {
-    tracing::info!("Finalizing NativeGameEngine...");
-    let bytes = e
-        .get_direct_buffer_address(&obj)
-        .expect("Getting Pointer from DirectByteBuffer failed");
-    let ncd = unsafe { Box::from_raw(bytes as *mut NativeCallData) };
-
-    (ncd.finalize)(ncd.inst_ptr);
+    drop(JNIBridge::boxed_from_java(&e, obj))
 }
+
 #[no_mangle]
 pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_update(
     e: JNIEnv,
     _: JClass,
     obj: JByteBuffer,
 ) {
-    let bytes = e
-        .get_direct_buffer_address(&obj)
-        .expect("Getting Pointer from DirectByteBuffer failed");
-    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
+    JNIBridge::from_java_mut(&e, &obj).update()
+}
 
-    (ncd.update)(ncd.inst_ptr);
+#[no_mangle]
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchDownEvent(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint,
+) {
+    JNIBridge::from_java_mut(&e, &obj).touch_down(id as _)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchUpEvent(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint,
+) {
+    JNIBridge::from_java_mut(&e, &obj).touch_up(id as _)
+}
+
+#[no_mangle]
+pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
+    e: JNIEnv,
+    _: JClass,
+    obj: JByteBuffer,
+    id: jint,
+    x: jfloat,
+    y: jfloat,
+) {
+    JNIBridge::from_java_mut(&e, &obj).set_touch_position_absolute(id as _, x, y)
 }
 
 mod audio_backend;
@@ -564,49 +637,4 @@ impl Drop for NativeAudioEngine {
         }
         tracing::trace!("NativeAudioEngine end");
     }
-}
-
-#[no_mangle]
-pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchDownEvent(
-    e: JNIEnv,
-    _: JClass,
-    obj: JByteBuffer,
-    id: jint,
-) {
-    let bytes = e
-        .get_direct_buffer_address(&obj)
-        .expect("Getting Pointer from DirectByteBuffer failed");
-    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
-
-    (ncd.process_touch_down_event)(ncd.inst_ptr, id as _);
-}
-#[no_mangle]
-pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_processTouchUpEvent(
-    e: JNIEnv,
-    _: JClass,
-    obj: JByteBuffer,
-    id: jint,
-) {
-    let bytes = e
-        .get_direct_buffer_address(&obj)
-        .expect("Getting Pointer from DirectByteBuffer failed");
-    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
-
-    (ncd.process_touch_up_event)(ncd.inst_ptr, id as _);
-}
-#[no_mangle]
-pub extern "system" fn Java_io_ct2_peridot_NativeLibLink_setTouchPositionAbsolute(
-    e: JNIEnv,
-    _: JClass,
-    obj: JByteBuffer,
-    id: jint,
-    x: jfloat,
-    y: jfloat,
-) {
-    let bytes = e
-        .get_direct_buffer_address(&obj)
-        .expect("Getting Pointer from DirectByteBuffer failed");
-    let ncd = unsafe { (bytes as *mut NativeCallData).as_mut().expect("null ptr?") };
-
-    (ncd.set_touch_position_absolute)(ncd.inst_ptr, id as _, x, y);
 }
