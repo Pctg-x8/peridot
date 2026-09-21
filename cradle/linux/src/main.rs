@@ -132,6 +132,9 @@ static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerV
     },
     |_| {},
 );
+fn create_usercode_waker(fd: &EventFD) -> core::task::Waker {
+    unsafe { core::task::Waker::new(core::ptr::from_ref(fd).cast(), &USERCODE_WAKER_VTABLE) }
+}
 
 pub struct GameDriver<MainF> {
     engine_input: peridot::InputProcess,
@@ -140,6 +143,7 @@ pub struct GameDriver<MainF> {
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
     frame_timing_sender: async_std::channel::Sender<()>,
     event_queue: Pin<Box<peridot::EventQueue>>,
+    frame_draining: Pin<Box<bool>>,
     usercode: Pin<Box<MainF>>,
     usercode_event: Pin<Box<EventFD>>,
     // self-referential struct
@@ -163,6 +167,7 @@ impl<MainF: Future> GameDriver<MainF> {
         let event_queue = Box::pin(peridot::EventQueue::new());
         let event_queue_lifetime_extended: &'static peridot::EventQueue =
             unsafe { &*(&*event_queue as *const _) };
+        let mut frame_draining = Box::pin(false);
         let mut engine = peridot::Engine::new(
             userlib::APP_IDENTIFIER,
             userlib::APP_VERSION,
@@ -174,6 +179,7 @@ impl<MainF: Future> GameDriver<MainF> {
             (event_sender.clone(), event_receiver),
             frame_timing_receiver,
             &event_queue_lifetime_extended,
+            unsafe { &mut *core::ptr::from_mut(frame_draining.as_mut().get_mut()) },
         );
         engine
             .input()
@@ -212,6 +218,7 @@ impl<MainF: Future> GameDriver<MainF> {
             event_sender,
             frame_timing_sender,
             event_queue,
+            frame_draining,
             usercode,
             usercode_event,
             _pinned: core::marker::PhantomPinned,
@@ -220,16 +227,11 @@ impl<MainF: Future> GameDriver<MainF> {
 
     /// returns true if usercode coroutine has done
     pub fn step(&mut self) -> bool {
-        let usercode_waker = unsafe {
-            core::task::Waker::new(
-                self.usercode_event.as_ref().get_ref() as *const _ as _,
-                &USERCODE_WAKER_VTABLE,
-            )
-        };
-
         self.usercode
             .as_mut()
-            .poll(&mut core::task::Context::from_waker(&usercode_waker))
+            .poll(&mut core::task::Context::from_waker(
+                &create_usercode_waker(&self.usercode_event),
+            ))
             .is_ready()
     }
 }
@@ -282,7 +284,11 @@ where
     gd.engine_audio.write().start();
 
     // initial uesrcode step
-    gd.step();
+    if gd.step() {
+        tracing::warn!("usercode thread has terminated in the initial phase?");
+        gd.engine_audio.write().stop();
+        return;
+    }
 
     let mut events = Vec::with_capacity(8);
     let mut last_drawn_geometry = window_backend.borrow().geometry();
@@ -317,14 +323,18 @@ where
         if count == 0 {
             window_backend.borrow_mut().cancel_read();
             drop(window_backend_readiness_guard);
-            let current_geometry = window_backend.borrow().geometry();
-            if last_drawn_geometry != current_geometry {
-                last_drawn_geometry = current_geometry;
-                gd.event_queue
-                    .enqueue(peridot::Event::Resize(last_drawn_geometry));
+
+            if *gd.frame_draining.as_ref().get_ref() {
+                let current_geometry = window_backend.borrow().geometry();
+                if last_drawn_geometry != current_geometry {
+                    last_drawn_geometry = current_geometry;
+                    gd.event_queue
+                        .enqueue(peridot::Event::Resize(last_drawn_geometry));
+                }
+
+                gd.event_queue.enqueue(peridot::Event::NextFrame);
             }
 
-            gd.event_queue.enqueue(peridot::Event::NextFrame);
             continue;
         }
 
