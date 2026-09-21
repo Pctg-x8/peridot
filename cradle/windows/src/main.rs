@@ -4,23 +4,28 @@ mod audio;
 use audio::NativeAudioEngine;
 use log::*;
 use parking_lot::RwLock;
+use windows::Win32::System::Threading::{CreateEventW, SetEvent, INFINITE};
 mod input;
 mod userlib;
 use std::ffi::CStr;
 use std::sync::Arc;
 use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WAIT_OBJECT_0,
+    WPARAM,
+};
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::HiDpi::{SetProcessDpiAwareness, PROCESS_SYSTEM_DPI_AWARE};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExA, DefWindowProcA, DispatchMessageA, GetClientRect,
-    GetWindowLongPtrA, LoadCursorW, PeekMessageA, PostQuitMessage, RegisterClassExA,
-    SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT, GWLP_USERDATA, IDC_ARROW,
-    PM_REMOVE, SW_SHOWNORMAL, WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE,
-    WNDCLASSEXA, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
+    GetWindowLongPtrA, LoadCursorW, MsgWaitForMultipleObjectsEx, PeekMessageA, PostQuitMessage,
+    RegisterClassExA, SetWindowLongPtrA, ShowWindow, TranslateMessage, CW_USEDEFAULT,
+    GWLP_USERDATA, IDC_ARROW, MWMO_INPUTAVAILABLE, PM_REMOVE, QS_ALLINPUT, SW_SHOWNORMAL,
+    WINDOW_LONG_PTR_INDEX, WM_DESTROY, WM_INPUT, WM_QUIT, WM_SIZE, WNDCLASSEXA, WS_EX_APPWINDOW,
+    WS_EX_NOREDIRECTIONBITMAP, WS_OVERLAPPEDWINDOW,
 };
 
 mod presenter;
@@ -88,12 +93,47 @@ pub struct GameDriver {
     event_sender: async_std::channel::Sender<peridot::EngineEvent>,
 }
 
+struct Event(HANDLE);
+impl Drop for Event {
+    fn drop(&mut self) {
+        if let Err(e) = unsafe { CloseHandle(self.0) } {
+            tracing::error!(reason = %e, "event.close");
+        }
+    }
+}
+impl Event {
+    pub fn new(manual_reset: bool, initial_signaled: bool) -> windows::core::Result<Self> {
+        let h = unsafe { CreateEventW(None, manual_reset, initial_signaled, None)? };
+        Ok(Self(h))
+    }
+
+    pub fn set(&self) -> windows::core::Result<()> {
+        unsafe { SetEvent(self.0) }
+    }
+
+    pub const fn handle(&self) -> HANDLE {
+        self.0
+    }
+}
+
 static USERCODE_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, &USERCODE_WAKER_VTABLE),
-    |_| {},
-    |_| {},
+    |ptr| {
+        if let Err(e) = unsafe { &*ptr.cast::<Event>() }.set() {
+            tracing::error!(reason = %e, "usercode_thread.wake");
+        }
+    },
+    |ptr| {
+        if let Err(e) = unsafe { &*ptr.cast::<Event>() }.set() {
+            tracing::error!(reason = %e, "usercode_thread.wake");
+        }
+    },
     |_| {},
 );
+#[inline(always)]
+fn create_waker(notify: &Event) -> core::task::Waker {
+    unsafe { core::task::Waker::new(core::ptr::from_ref(notify).cast(), &USERCODE_WAKER_VTABLE) }
+}
 
 #[async_std::main]
 async fn main() {
@@ -208,19 +248,65 @@ async fn main() {
 
         userlib::game_main(&mut driver.base).await;
     });
+    let usercode_wake_notify = Event::new(false, false).expect("usercode_waker.native.create");
 
-    while process_message_all() {
-        event_queue.enqueue(peridot::Event::NextFrame);
+    // initial poll
+    let initial_terminated = usercode_thread
+        .as_mut()
+        .poll(&mut core::task::Context::from_waker(&create_waker(
+            &usercode_wake_notify,
+        )))
+        .is_ready();
+    if initial_terminated {
+        tracing::warn!("usercode thread has terminated in the initial phase?");
+        return;
+    }
 
-        let waker = unsafe {
-            core::task::Waker::from_raw(core::task::RawWaker::new(
-                core::ptr::null(),
-                &USERCODE_WAKER_VTABLE,
-            ))
+    let mut msg = core::mem::MaybeUninit::uninit();
+    'app: loop {
+        let r = unsafe {
+            MsgWaitForMultipleObjectsEx(
+                Some(&[usercode_wake_notify.handle()]),
+                INFINITE,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            )
         };
-        let _ = usercode_thread
-            .as_mut()
-            .poll(&mut core::task::Context::from_waker(&waker));
+        if r == WAIT_FAILED {
+            let reason = std::io::Error::last_os_error();
+            tracing::error!(%reason, "mainloop.call.native");
+            break 'app;
+        }
+        if r.0 == WAIT_OBJECT_0.0 + 0 {
+            let terminated = usercode_thread
+                .as_mut()
+                .poll(&mut core::task::Context::from_waker(&create_waker(
+                    &usercode_wake_notify,
+                )))
+                .is_ready();
+            if terminated {
+                tracing::info!("cradle is ongoing to shut down due to usercode thread termination");
+                break 'app;
+            }
+            continue;
+        }
+        if r.0 == WAIT_OBJECT_0.0 + 1 {
+            while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() } {
+                if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
+                    tracing::info!("cradle is going to shut down due to quit sysapi call");
+                    break 'app;
+                }
+                unsafe {
+                    TranslateMessage(msg.as_ptr());
+                    DispatchMessageA(msg.as_ptr());
+                }
+            }
+
+            event_queue.enqueue(peridot::Event::NextFrame);
+            continue;
+        }
+
+        tracing::warn!(?r, "unhandled main loop wait result");
     }
 
     event_queue.enqueue(peridot::Event::Shutdown);
@@ -241,6 +327,7 @@ async fn main() {
     }
 
     drop(io_reactor_thread);
+    drop(usercode_wake_notify);
 }
 
 extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -279,21 +366,6 @@ extern "system" fn window_callback(w: HWND, msg: u32, wparam: WPARAM, lparam: LP
     }
 
     unsafe { DefWindowProcA(w, msg, wparam, lparam) }
-}
-
-fn process_message_all() -> bool {
-    let mut msg = MaybeUninit::uninit();
-    while unsafe { PeekMessageA(msg.as_mut_ptr(), None, 0, 0, PM_REMOVE).as_bool() } {
-        if unsafe { (*msg.as_ptr()).message } == WM_QUIT {
-            return false;
-        }
-        unsafe {
-            TranslateMessage(msg.as_ptr());
-            DispatchMessageA(msg.as_ptr());
-        }
-    }
-
-    true
 }
 
 use std::path::PathBuf;
