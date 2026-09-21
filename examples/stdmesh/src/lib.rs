@@ -518,6 +518,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
         .expect("render_cb.end");
     }
 
+    e.start_frame_drain();
     loop {
         match e.next_event().await {
             peridot::Event::Shutdown => break,

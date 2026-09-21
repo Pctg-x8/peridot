@@ -13,7 +13,7 @@ use tracing_subscriber::prelude::__tracing_subscriber_SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use windows::Win32::Foundation::{
     CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WAIT_FAILED, WAIT_OBJECT_0,
-    WPARAM,
+    WAIT_TIMEOUT, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::MapWindowPoints;
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT, COINIT_MULTITHREADED};
@@ -213,6 +213,9 @@ async fn main() {
     let event_queue = core::pin::pin!(peridot::EventQueue::new());
     let event_queue_lifetime_extended: &'static peridot::EventQueue =
         unsafe { &*(&*event_queue as *const _) };
+    let mut frame_draining = false;
+    let frame_draining_lifetime_extended: &'static mut bool =
+        unsafe { &mut *core::ptr::from_mut(&mut frame_draining) };
     let mut usercode_thread = core::pin::pin!(async move {
         let nl = NativeLink {
             al: AssetProvider::new(),
@@ -228,6 +231,7 @@ async fn main() {
             (events_sender_th.clone(), events_receiver),
             frame_timing_receiver,
             event_queue_lifetime_extended,
+            frame_draining_lifetime_extended,
         );
         let ri_handler = self::input::RawInputHandler::init();
         base.input_mut()
@@ -267,7 +271,7 @@ async fn main() {
         let r = unsafe {
             MsgWaitForMultipleObjectsEx(
                 Some(&[usercode_wake_notify.handle()]),
-                INFINITE,
+                if frame_draining { 0 } else { INFINITE },
                 QS_ALLINPUT,
                 MWMO_INPUTAVAILABLE,
             )
@@ -276,6 +280,12 @@ async fn main() {
             let reason = std::io::Error::last_os_error();
             tracing::error!(%reason, "mainloop.call.native");
             break 'app;
+        }
+        if r == WAIT_TIMEOUT {
+            if frame_draining {
+                event_queue.enqueue(peridot::Event::NextFrame);
+            }
+            continue;
         }
         if r.0 == WAIT_OBJECT_0.0 + 0 {
             let terminated = usercode_thread
@@ -288,6 +298,7 @@ async fn main() {
                 tracing::info!("cradle is ongoing to shut down due to usercode thread termination");
                 break 'app;
             }
+
             continue;
         }
         if r.0 == WAIT_OBJECT_0.0 + 1 {
@@ -302,7 +313,9 @@ async fn main() {
                 }
             }
 
-            event_queue.enqueue(peridot::Event::NextFrame);
+            if frame_draining {
+                event_queue.enqueue(peridot::Event::NextFrame);
+            }
             continue;
         }
 

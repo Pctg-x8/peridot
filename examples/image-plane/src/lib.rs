@@ -655,6 +655,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     }
 
     bgm.write().play();
+    e.start_frame_drain();
 
     let mut rot = 0.0f32;
     loop {
