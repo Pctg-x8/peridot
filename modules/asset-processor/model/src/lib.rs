@@ -40,9 +40,3 @@ impl AssetProcessor for Processor {
         Err("unknown file format".into())
     }
 }
-
-#[derive(thiserror::Error, Debug)]
-pub enum ProcessError {
-    #[error(transparent)]
-    IO(#[from] std::io::Error),
-}
