@@ -6,3 +6,5 @@ mod linarg;
 pub use linarg::*;
 mod gaming;
 pub use gaming::*;
+mod bitops;
+pub use bitops::*;

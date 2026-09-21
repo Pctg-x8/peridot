@@ -30,6 +30,7 @@ peridot-rendering-configuration = { path = "../../modules/rendering-configuratio
 ] }
 peridot-asset-processing = { path = "../../modules/asset-processing", optional = true }
 peridot-sprite-atlas = { path = "../../modules/sprite-atlas", optional = true, features = ["with-asset-processing"] }
+peridot-asset-processor-model.path = "../../modules/asset-processor/model"
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 tracing.workspace = true
 serde_json = "1.0.151"
