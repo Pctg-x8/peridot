@@ -4,11 +4,15 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
+with-peridot = ["dep:peridot"]
 with-rendering-configuration = ["dep:peridot-rendering-configuration"]
 
 [dependencies]
-bedrock.workspace = true
+bedrock = { workspace = true, features = [] }
+futures-io.workspace = true
+pinned-futures-helper.path = "../../base-lib/pinned-futures-helper"
 
+peridot = { path = "../../base", optional = true }
 peridot-rendering-configuration = { path = "../rendering-configuration", optional = true }
 
 [lints]

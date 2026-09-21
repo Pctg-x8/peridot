@@ -1,11 +1,59 @@
 //! Standard Mesh
 
+use core::{mem::MaybeUninit, pin::Pin};
 use std::io::{Read, Write};
 
 use bedrock as br;
+use futures_io::AsyncRead;
+
+#[cfg(feature = "with-peridot")]
+mod asset;
+#[cfg(feature = "with-peridot")]
+pub use asset::{Asset, AssetAsync, AssetCore};
 
 /// ファイルシグネチャ
 pub const SIGNATURE: u32 = u32::from_ne_bytes(*b"pa1m");
+fn try_validate_signature_core(sig: u32) -> Option<Endianness> {
+    if sig == SIGNATURE {
+        Some(Endianness::Native)
+    } else if sig.swap_bytes() == SIGNATURE {
+        Some(Endianness::Swapped)
+    } else {
+        None
+    }
+}
+/// ファイルの先端を読み込み、シグネチャと合致するか、およびファイル内のエンディアンを検出して返す
+pub fn try_validate_signature(r: &mut (impl Read + ?Sized)) -> std::io::Result<Option<Endianness>> {
+    let mut sig = 0u32;
+    r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut sig) })?;
+    Ok(try_validate_signature_core(sig))
+}
+/// ファイルの先端を読み込み、シグネチャと合致するか、およびファイル内のエンディアンを検出して返す
+pub async fn try_validate_signature_async(
+    r: Pin<&mut (impl AsyncRead + ?Sized)>,
+) -> std::io::Result<Option<Endianness>> {
+    let mut sig = 0u32;
+    pinned_futures_helper::read_exact_async_pinned(r, unsafe {
+        core::mem::transmute::<_, &mut [MaybeUninit<u8>; 4]>(&mut sig)
+    })
+    .await?;
+    Ok(try_validate_signature_core(sig))
+}
+
+/// ファイル内エンディアン
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Endianness {
+    /// ネイティブ（変換なし）
+    Native,
+    /// スワップが必要
+    Swapped,
+}
+impl Endianness {
+    /// 読み込んだあとバイト列を逆向きにする必要があるか？
+    pub const fn needs_swap(&self) -> bool {
+        matches!(self, Self::Swapped)
+    }
+}
 
 /// ヘッダ情報
 #[derive(Debug)]
@@ -34,6 +82,27 @@ impl Header {
                 io_slice_mut_u8(&mut vertex_stream_count),
             ],
         )?;
+
+        Ok(Self {
+            primitive_topology: PrimitiveTopology::try_from(primitive_topology)
+                .expect("invalid topology value"),
+            vertex_stream_count,
+        })
+    }
+
+    pub async fn deserialize_async(
+        r: Pin<&mut (impl AsyncRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        let mut primitive_topology = 0u8;
+        let mut vertex_stream_count = 0u8;
+        pinned_futures_helper::read_vectored_all_async_pinned(
+            r,
+            &mut [
+                io_slice_mut_u8(&mut primitive_topology),
+                io_slice_mut_u8(&mut vertex_stream_count),
+            ],
+        )
+        .await?;
 
         Ok(Self {
             primitive_topology: PrimitiveTopology::try_from(primitive_topology)
@@ -76,6 +145,35 @@ impl StreamBuffer {
                 io_slice_mut_u32(&mut device_alignment_requirement),
             ],
         )?;
+        if needs_swap {
+            content_location = content_location.swap_bytes();
+            byte_length = byte_length.swap_bytes();
+            device_alignment_requirement = device_alignment_requirement.swap_bytes();
+        }
+
+        Ok(Self {
+            content_location,
+            byte_length,
+            device_alignment_requirement,
+        })
+    }
+
+    pub async fn deserialize_async(
+        r: Pin<&mut (impl AsyncRead + ?Sized)>,
+        needs_swap: bool,
+    ) -> std::io::Result<Self> {
+        let mut content_location = 0u64;
+        let mut byte_length = 0u32;
+        let mut device_alignment_requirement = 0u32;
+        pinned_futures_helper::read_vectored_all_async_pinned(
+            r,
+            &mut [
+                io_slice_mut_u64(&mut content_location),
+                io_slice_mut_u32(&mut byte_length),
+                io_slice_mut_u32(&mut device_alignment_requirement),
+            ],
+        )
+        .await?;
         if needs_swap {
             content_location = content_location.swap_bytes();
             byte_length = byte_length.swap_bytes();
@@ -148,6 +246,25 @@ pub enum IndexStream {
     },
 }
 impl IndexStream {
+    #[cfg(feature = "with-peridot")]
+    pub const fn buffer_content(&self) -> Option<peridot::BufferContent> {
+        match self {
+            Self::None => None,
+            Self::Stream {
+                buffer,
+                index_type: IndexType::UInt16,
+            } => Some(peridot::BufferContent::indices::<u16>(
+                buffer.byte_length as usize / 2,
+            )),
+            Self::Stream {
+                buffer,
+                index_type: IndexType::UInt32,
+            } => Some(peridot::BufferContent::indices::<u32>(
+                buffer.byte_length as usize / 4,
+            )),
+        }
+    }
+
     pub const fn serialize_size(&self) -> usize {
         match self {
             Self::None => 1,
@@ -174,6 +291,21 @@ impl IndexStream {
 
         let index_type = IndexType::try_from(index_type_buf[0]).expect("invalid index type");
         let buffer = StreamBuffer::deserialize(r, needs_swap)?;
+        Ok(Self::Stream { index_type, buffer })
+    }
+
+    pub async fn deserialize_async(
+        mut r: Pin<&mut (impl AsyncRead + ?Sized)>,
+        needs_swap: bool,
+    ) -> std::io::Result<Self> {
+        let mut index_type_buf = [MaybeUninit::uninit()];
+        pinned_futures_helper::read_exact_async_pinned(r.as_mut(), &mut index_type_buf).await?;
+        let index_type = unsafe { index_type_buf[0].assume_init() };
+        if index_type == 0 {
+            return Ok(Self::None);
+        }
+        let index_type = IndexType::try_from(index_type).expect("invalid index type");
+        let buffer = StreamBuffer::deserialize_async(r, needs_swap).await?;
         Ok(Self::Stream { index_type, buffer })
     }
 }
@@ -216,6 +348,14 @@ pub struct VertexStream {
     pub attribute_count: u8,
 }
 impl VertexStream {
+    #[cfg(feature = "with-peridot")]
+    pub const fn buffer_content(&self) -> peridot::BufferContent {
+        peridot::BufferContent::Vertex(
+            self.buffer.byte_length as _,
+            self.buffer.device_alignment_requirement as _,
+        )
+    }
+
     pub const fn serialize_size() -> usize {
         StreamBuffer::serialize_size() + 1
     }
@@ -229,6 +369,24 @@ impl VertexStream {
         let buffer = StreamBuffer::deserialize(r, needs_swap)?;
         let mut attribute_count = 0u8;
         readva(r, &mut [io_slice_mut_u8(&mut attribute_count)])?;
+
+        Ok(Self {
+            buffer,
+            attribute_count,
+        })
+    }
+
+    pub async fn deserialize_async(
+        mut r: Pin<&mut (impl AsyncRead + ?Sized)>,
+        needs_swap: bool,
+    ) -> std::io::Result<Self> {
+        let buffer = StreamBuffer::deserialize_async(r.as_mut(), needs_swap).await?;
+        let mut attribute_count = 0u8;
+        pinned_futures_helper::read_vectored_all_async_pinned(
+            r,
+            &mut [io_slice_mut_u8(&mut attribute_count)],
+        )
+        .await?;
 
         Ok(Self {
             buffer,
@@ -309,23 +467,31 @@ impl Attribute {
         }
     }
 
+    const fn deserialize_core(b: u8) -> Option<Self> {
+        match b {
+            0 => Some(Self::Position),
+            1 => Some(Self::Normal),
+            2 => Some(Self::Tangent),
+            0x08..0x10 => Some(Self::Texcoord(b - 0x08)),
+            0x10..0x18 => Some(Self::Color(b - 0x10)),
+            0x18..0x20 => Some(Self::Joints(b - 0x18)),
+            0x20..0x28 => Some(Self::Weights(b - 0x20)),
+            _ => None,
+        }
+    }
+
     pub fn deserialize(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
         let mut buf = [0u8];
         r.read_exact(&mut buf)?;
+        Ok(Self::deserialize_core(buf[0]).expect("invalid attribute"))
+    }
 
-        match buf[0] {
-            0 => Ok(Self::Position),
-            1 => Ok(Self::Normal),
-            2 => Ok(Self::Tangent),
-            0x08..0x10 => Ok(Self::Texcoord(buf[0] - 0x08)),
-            0x10..0x18 => Ok(Self::Color(buf[0] - 0x10)),
-            0x18..0x20 => Ok(Self::Joints(buf[0] - 0x18)),
-            0x20..0x28 => Ok(Self::Weights(buf[0] - 0x20)),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid attribute",
-            )),
-        }
+    pub async fn deserialize_async(
+        mut r: Pin<&mut (impl AsyncRead + ?Sized)>,
+    ) -> std::io::Result<Self> {
+        let mut buf = [MaybeUninit::uninit()];
+        pinned_futures_helper::read_exact_async_pinned(r.as_mut(), &mut buf).await?;
+        Ok(Self::deserialize_core(unsafe { buf[0].assume_init() }).expect("invalid attribute"))
     }
 }
 
@@ -357,6 +523,33 @@ impl AttributeData {
                 io_slice_mut_u16(&mut element_type),
             ],
         )?;
+        if needs_swap {
+            offset = offset.swap_bytes();
+            element_type = element_type.swap_bytes();
+        }
+        let element_type =
+            BufferElementType::try_from(element_type).expect("invalid buffer element type");
+
+        Ok(Self {
+            offset,
+            element_type,
+        })
+    }
+
+    pub async fn deserialize_async(
+        r: Pin<&mut (impl AsyncRead + ?Sized)>,
+        needs_swap: bool,
+    ) -> std::io::Result<Self> {
+        let mut offset = 0u16;
+        let mut element_type = 0u16;
+        pinned_futures_helper::read_vectored_all_async_pinned(
+            r,
+            &mut [
+                io_slice_mut_u16(&mut offset),
+                io_slice_mut_u16(&mut element_type),
+            ],
+        )
+        .await?;
         if needs_swap {
             offset = offset.swap_bytes();
             element_type = element_type.swap_bytes();

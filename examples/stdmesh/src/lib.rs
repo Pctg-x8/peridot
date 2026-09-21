@@ -1,15 +1,11 @@
-use std::{
-    fs::File,
-    io::{BufReader, Read, Seek, SeekFrom},
-};
-
 use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, RenderPass, ShaderModule,
     TypedVulkanStructure, VkHandle,
 };
+use futures_util::StreamExt;
 use peridot::math::One;
 
-pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinker>) {
+pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e, NL>) {
     let mut backbuffer_size = e.back_buffer_size();
 
     let shader = e
@@ -76,105 +72,6 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
     )
     .expect("pl.create");
 
-    let mut v_bindings = Vec::new();
-    let mut v_attributes = Vec::new();
-    let mut device_buffer_contents = Vec::new();
-    let mut upload_buffer_ranges = Vec::new();
-
-    // println!("{:?}", std::env::current_dir());
-    let mut r = BufReader::new(
-        File::open("../../examples/stdmesh/assets/mesh0.1.pa1-mesh").expect("file.open"),
-    );
-    let mut sig_buf = [0u8; 4];
-    r.read_exact(&mut sig_buf).expect("r.read.sig");
-    let sig = u32::from_ne_bytes(sig_buf);
-    let needs_swap = if sig == peridot_mesh::SIGNATURE {
-        false
-    } else if sig.swap_bytes() == peridot_mesh::SIGNATURE {
-        true
-    } else {
-        panic!("invalid pa1m signature");
-    };
-    let hdr = peridot_mesh::Header::deserialize(&mut r).expect("mesh_header.deserialize");
-    println!("{needs_swap} {hdr:?}");
-    let index_stream = peridot_mesh::IndexStream::deserialize(&mut r, needs_swap)
-        .expect("index_stream.deserialize");
-    println!("{index_stream:?}");
-    let (index_type_vk, index_count) =
-        if let peridot_mesh::IndexStream::Stream { index_type, buffer } = index_stream {
-            let index_count = match index_type {
-                peridot_mesh::IndexType::UInt16 => {
-                    device_buffer_contents.push(peridot::BufferContent::indices::<u16>(
-                        (buffer.byte_length / 2) as _,
-                    ));
-                    upload_buffer_ranges.push((0..buffer.byte_length, buffer.content_location));
-                    (buffer.byte_length / 2) as _
-                }
-                peridot_mesh::IndexType::UInt32 => {
-                    device_buffer_contents.push(peridot::BufferContent::indices::<u32>(
-                        (buffer.byte_length / 4) as _,
-                    ));
-                    upload_buffer_ranges.push((0..buffer.byte_length, buffer.content_location));
-                    (buffer.byte_length / 4) as _
-                }
-            };
-
-            (Some(index_type.into_vk()), index_count)
-        } else {
-            (None, 0)
-        };
-    let mut v_streams = Vec::with_capacity(hdr.vertex_stream_count as _);
-    for binding in 0..hdr.vertex_stream_count {
-        let vst = peridot_mesh::VertexStream::deserialize(&mut r, needs_swap)
-            .expect("vertex_stream.deserialize");
-        let mut attributes = Vec::with_capacity(vst.attribute_count as _);
-        let mut buffer_stride = 0;
-        for _ in 0..vst.attribute_count {
-            let attr = peridot_mesh::Attribute::deserialize(&mut r).expect("attribute.deserialize");
-            let attr_data = peridot_mesh::AttributeData::deserialize(&mut r, needs_swap)
-                .expect("attribute_data.deserialize");
-            buffer_stride =
-                buffer_stride.max(attr_data.offset as u32 + attr_data.element_type.size() as u32);
-            if let Some(&loc) = shading_variant
-                .vertex_semantic_to_location
-                .get(&attr.into_semantic())
-            {
-                v_attributes.push(br::VertexInputAttributeDescription(
-                    br::vk::VkVertexInputAttributeDescription {
-                        binding: binding as _,
-                        location: loc,
-                        format: attr_data.element_type.into_vk_format(),
-                        offset: attr_data.offset as _,
-                    },
-                ));
-            } else {
-                eprintln!("attribute {attr:?} is not supported on the shader, ignoring");
-            }
-            attributes.push((attr, attr_data));
-        }
-        device_buffer_contents.push(peridot::BufferContent::Vertex(
-            vst.buffer.byte_length as _,
-            vst.buffer.device_alignment_requirement as _,
-        ));
-        let upload_buffer_base = upload_buffer_ranges.last().map_or(0, |x| {
-            (x.0.end + (vst.buffer.device_alignment_requirement - 1))
-                & !(vst.buffer.device_alignment_requirement - 1)
-        });
-        upload_buffer_ranges.push((
-            upload_buffer_base..upload_buffer_base + vst.buffer.byte_length,
-            vst.buffer.content_location,
-        ));
-        v_streams.push((vst, attributes));
-        v_bindings.push(br::VertexInputBindingDescription(
-            br::vk::VkVertexInputBindingDescription {
-                binding: binding as _,
-                stride: buffer_stride,
-                inputRate: br::vk::VK_VERTEX_INPUT_RATE_VERTEX,
-            },
-        ));
-    }
-    println!("{v_streams:?}");
-
     let mut camera = peridot::math::Camera {
         projection: Some(peridot::math::ProjectionMethod::Perspective {
             fov: 60.0f32.to_radians(),
@@ -184,6 +81,71 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
         depth_range: 0.1..100.0,
     };
     camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
+
+    let asset = peridot_mesh::AssetAsync::open(
+        e.open_raw_asset_async::<peridot_mesh::AssetCore>("mesh0-1")
+            .await
+            .expect("open asset"),
+    )
+    .await
+    .expect("read contents");
+
+    let mut device_buffer_contents = Vec::new();
+    let mut upload_buffer_ranges = Vec::new();
+    let mut upload_buffer_top = 0;
+
+    let primitive_topology = asset.header.primitive_topology.into_vk();
+    let index_count = asset.index_count();
+    let index_type_vk = if let peridot_mesh::IndexStream::Stream {
+        index_type,
+        ref buffer,
+    } = asset.index_stream
+    {
+        device_buffer_contents.extend(asset.index_stream.buffer_content());
+        upload_buffer_ranges.push(0..buffer.byte_length as u64);
+        upload_buffer_top += buffer.byte_length as u64;
+
+        Some(index_type.into_vk())
+    } else {
+        None
+    };
+    let mut v_bindings = Vec::with_capacity(asset.vertex_streams.len());
+    let mut v_attributes = Vec::new();
+    for (binding, (v, attributes)) in asset.vertex_streams.iter().enumerate() {
+        let mut buffer_stride = 0;
+        for (a, ad) in attributes {
+            buffer_stride = buffer_stride.max(ad.offset as u32 + ad.element_type.size() as u32);
+            if let Some(&loc) = shading_variant
+                .vertex_semantic_to_location
+                .get(&a.into_semantic())
+            {
+                v_attributes.push(br::VertexInputAttributeDescription(
+                    br::vk::VkVertexInputAttributeDescription {
+                        binding: binding as _,
+                        location: loc,
+                        format: ad.element_type.into_vk_format(),
+                        offset: ad.offset as _,
+                    },
+                ));
+            } else {
+                tracing::warn!("attribute {a:?} is not supported on the shader, ignoring");
+            }
+        }
+
+        device_buffer_contents.push(v.buffer_content());
+        let upload_buffer_base = peridot::math::round_up_pow2n_u64(
+            upload_buffer_top,
+            v.buffer.device_alignment_requirement as u64,
+        );
+        upload_buffer_ranges
+            .push(upload_buffer_base..upload_buffer_base + v.buffer.byte_length as u64);
+        upload_buffer_top = upload_buffer_base + v.buffer.byte_length as u64;
+
+        v_bindings.push(br::VertexInputBindingDescription::per_vertex(
+            binding as _,
+            buffer_stride,
+        ));
+    }
 
     let mut memory_manager = peridot_memory_manager::MemoryManager::new(e.graphics());
     let (device_buffer, device_buffer_offsets) = memory_manager
@@ -204,9 +166,7 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
         camera_parameters: peridot_rendering_configuration::UniformCameraParameters,
         object_parameters: peridot_rendering_configuration::UniformObjectParameters,
     }
-    let buffer_init_content_base_offset = upload_buffer_ranges
-        .last()
-        .map_or(0, |x| (x.0.end + 15) & !15);
+    let buffer_init_content_base_offset = peridot::math::round_up_pow2n_u64(upload_buffer_top, 16);
     let mut upload_buffer = memory_manager
         .allocate_upload_buffer(
             e.graphics(),
@@ -216,32 +176,63 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
             ),
         )
         .expect("upload_buffer.alloc");
-    upload_buffer
-        .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
-            for &(ref br, co) in upload_buffer_ranges.iter() {
-                r.seek(SeekFrom::Start(co)).expect("reader.seek");
-                r.read_exact(core::slice::from_raw_parts_mut(
-                    p.ptr().byte_add(br.start as _).cast::<u8>().as_ptr(),
-                    (br.end - br.start) as _,
-                ))
-                .expect("reader.read");
+    let upload_mapped = upload_buffer
+        .map(peridot_memory_manager::BufferMapMode::Write)
+        .expect("upload_buffer.map");
+    unsafe {
+        let vertex_buffer_start = if asset.has_index() { 1 } else { 0 };
+        let index_load_job = async {
+            if asset.has_index() {
+                asset
+                    .read_index_buffer_into(upload_mapped.ptr().slice_mut(
+                        upload_buffer_ranges[0].start as _,
+                        asset.index_stream_byte_length() as _,
+                    ))
+                    .await
+                    .expect("asset.index_buffer.read");
             }
+        };
+        let vertex_load_jobs = upload_buffer_ranges[vertex_buffer_start..]
+            .iter()
+            .enumerate()
+            .map(|(stream_index, upload_range)| {
+                let asset = &asset;
+                let upload_mapped = &upload_mapped;
+                async move {
+                    asset
+                        .read_vertex_buffer_into(
+                            stream_index,
+                            upload_mapped.ptr().slice_mut(
+                                upload_range.start as _,
+                                asset.vertex_stream_byte_length(stream_index) as _,
+                            ),
+                        )
+                        .await
+                        .expect("asset.vertex_buffer.read");
+                }
+            })
+            .collect::<futures_util::stream::FuturesUnordered<_>>()
+            .collect::<()>();
+        let _ = futures_util::join!(index_load_job, vertex_load_jobs);
 
-            p.ptr()
-                .byte_add(buffer_init_content_base_offset as _)
-                .cast::<BufferInitContent>()
-                .write(BufferInitContent {
-                    camera_parameters: peridot_rendering_configuration::UniformCameraParameters {
-                        view_projection_matrix: camera.view_projection_matrix(
-                            backbuffer_size.0 as f32 / backbuffer_size.1 as f32,
-                        ),
-                    },
-                    object_parameters: peridot_rendering_configuration::UniformObjectParameters {
-                        transform_matrix: peridot::math::Matrix4::ONE,
-                    },
-                });
-        })
-        .expect("upload_buffer.write");
+        upload_mapped.ptr().write_at(
+            buffer_init_content_base_offset as _,
+            BufferInitContent {
+                camera_parameters: peridot_rendering_configuration::UniformCameraParameters {
+                    view_projection_matrix: camera.view_projection_matrix(
+                        backbuffer_size.0 as f32 / backbuffer_size.1 as f32,
+                    ),
+                },
+                object_parameters: peridot_rendering_configuration::UniformObjectParameters {
+                    transform_matrix: peridot::math::Matrix4::ONE,
+                },
+            },
+        );
+    }
+    upload_mapped
+        .handled_end()
+        .expect("upload_mapped.handled_end");
+    drop(asset);
     e.submit_commands(|rec| {
         rec.pipeline_barrier(
             br::PipelineStageFlags::BOTTOM_OF_PIPE,
@@ -262,7 +253,7 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
             &upload_buffer_ranges
                 .iter()
                 .zip(device_buffer_offsets.iter())
-                .map(|((br, _), &dbo)| {
+                .map(|(br, &dbo)| {
                     br::BufferCopy(br::vk::VkBufferCopy {
                         srcOffset: br.start as _,
                         dstOffset: dbo as _,
@@ -445,7 +436,7 @@ pub async fn game_main<'e>(e: &mut peridot::Engine<'e, impl peridot::NativeLinke
                     .map(|&(s, ref e)| shader_module.on_stage(s, e))
                     .collect::<Vec<_>>(),
                 &br::PipelineVertexInputStateCreateInfo::new(&v_bindings, &v_attributes),
-                &br::PipelineInputAssemblyStateCreateInfo::new(hdr.primitive_topology.into_vk()),
+                &br::PipelineInputAssemblyStateCreateInfo::new(primitive_topology),
                 &br::PipelineViewportStateCreateInfo::new(&viewports, &scissor_rects),
                 &br::PipelineRasterizationStateCreateInfo::new(
                     br::PolygonMode::Fill,
