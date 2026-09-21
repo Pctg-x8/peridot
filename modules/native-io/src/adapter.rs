@@ -12,6 +12,16 @@ impl<R> RandomBlobReadSeekAdapter<R> {
     pub const fn new(inner: R) -> Self {
         Self { inner, pos: 0 }
     }
+
+    #[inline(always)]
+    pub const fn readpos(&self) -> u64 {
+        self.pos
+    }
+
+    #[inline(always)]
+    pub fn into_inner(self) -> R {
+        self.inner
+    }
 }
 impl<R> Read for RandomBlobReadSeekAdapter<R>
 where
@@ -71,6 +81,19 @@ impl<'r, R: crate::RandomReadBlobAsync + 'r> RandomBlobAsyncReadSeekAdapter<'r, 
             state: RandomBlobAsyncReadSeekAdapterState::Idle,
         }
     }
+
+    #[inline(always)]
+    pub const fn readpos(&self) -> u64 {
+        self.pos
+    }
+
+    /// # Safety
+    ///
+    /// read/seek operation may be in progress.
+    #[inline(always)]
+    pub unsafe fn into_inner_unchecked(self) -> &'r R {
+        self.inner
+    }
 }
 impl<'r, R: crate::RandomReadBlobAsync + 'r> futures_io::AsyncRead
     for RandomBlobAsyncReadSeekAdapter<'r, R>
@@ -92,9 +115,10 @@ impl<'r, R: crate::RandomReadBlobAsync + 'r> futures_io::AsyncRead
                     ));
                 }
                 RandomBlobAsyncReadSeekAdapterStateProjected::Reading(f) => {
-                    let r = std::task::ready!(f.poll(cx));
+                    let r = std::task::ready!(f.poll(cx))?;
+                    *this.pos += r as u64;
                     this.state.set(RandomBlobAsyncReadSeekAdapterState::Idle);
-                    break std::task::Poll::Ready(r);
+                    return core::task::Poll::Ready(Ok(r));
                 }
                 RandomBlobAsyncReadSeekAdapterStateProjected::ReadingVec(_) => {
                     panic!("poll_read called but poll_read_vectored is ongoing");
@@ -121,9 +145,10 @@ impl<'r, R: crate::RandomReadBlobAsync + 'r> futures_io::AsyncRead
                         ));
                 }
                 RandomBlobAsyncReadSeekAdapterStateProjected::ReadingVec(f) => {
-                    let r = std::task::ready!(f.poll(cx));
+                    let r = std::task::ready!(f.poll(cx))?;
+                    *this.pos += r as u64;
                     this.state.set(RandomBlobAsyncReadSeekAdapterState::Idle);
-                    break std::task::Poll::Ready(r);
+                    break std::task::Poll::Ready(Ok(r));
                 }
                 RandomBlobAsyncReadSeekAdapterStateProjected::Reading(_) => {
                     panic!("poll_read_vectored called but poll_read is ongoing");
