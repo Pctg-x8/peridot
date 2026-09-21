@@ -9,6 +9,7 @@ android-build/
 **/*.pss
 **/*.spv
 **/*.prcc
+**/*.pa1-rendering-configuration
 **/*.pa1-mesh
 
 ## other artifacts
