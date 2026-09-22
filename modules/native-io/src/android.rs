@@ -2,7 +2,7 @@ use core::ptr::NonNull;
 use std::{
     cell::Cell,
     path::Path,
-    sync::{Arc, RwLock, atomic::AtomicBool},
+    sync::{Arc, Mutex, RwLock, atomic::AtomicBool},
 };
 
 use crossbeam_deque::{Injector, Worker};
@@ -155,12 +155,11 @@ impl super::RandomReadBlobAsync for BundledAssetAsyncRandomReader {
         pos: u64,
         buf: &'b mut [core::mem::MaybeUninit<u8>],
     ) -> Self::ReadFuture<'a, 'b> {
-        // TODO: これスレッドセーフじゃないのでなにかしらロックとる必要がある
         BundledAssetReadFuture {
             asset: &self.asset,
             pos,
             buf,
-            state: Arc::new(Cell::new(BundledAssetReadState::Init)),
+            state: Arc::new(Mutex::new(BundledAssetReadState::Init)),
         }
     }
 
@@ -176,7 +175,7 @@ impl super::RandomReadBlobAsync for BundledAssetAsyncRandomReader {
             buf: buf.first_mut().map_or(&mut [], |x| unsafe {
                 core::mem::transmute::<&mut [_], &mut [core::mem::MaybeUninit<_>]>(x)
             }),
-            state: Arc::new(Cell::new(BundledAssetReadState::Init)),
+            state: Arc::new(Mutex::new(BundledAssetReadState::Init)),
         }
     }
 }
@@ -255,7 +254,7 @@ pub struct BundledAssetReadFuture<'a, 'b> {
     asset: &'a BundledAsset,
     pos: u64,
     buf: &'b mut [core::mem::MaybeUninit<u8>],
-    state: Arc<Cell<BundledAssetReadState>>,
+    state: Arc<Mutex<BundledAssetReadState>>,
 }
 impl<'a, 'b> Future for BundledAssetReadFuture<'a, 'b> {
     type Output = std::io::Result<usize>;
@@ -265,13 +264,15 @@ impl<'a, 'b> Future for BundledAssetReadFuture<'a, 'b> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
         let this = self.get_mut();
+        let mut state = this.state.lock().expect("poisoned");
 
-        match this.state.get() {
+        match *state {
             BundledAssetReadState::Init => {
+                *state = BundledAssetReadState::Pending;
                 IoWorkerHandle::current().expect("no worker running").post(
                     BackgroundTask::ReadAssetPos {
                         asset: this.asset.0,
-                        ptr: this.buf.as_mut_ptr() as _,
+                        ptr: this.buf.as_mut_ptr().cast(),
                         len: this.buf.len(),
                         offset: this.pos,
                         state_store: Arc::downgrade(&this.state),
@@ -279,7 +280,6 @@ impl<'a, 'b> Future for BundledAssetReadFuture<'a, 'b> {
                     },
                 );
 
-                this.state.set(BundledAssetReadState::Pending);
                 core::task::Poll::Pending
             }
             BundledAssetReadState::Pending => core::task::Poll::Pending,
@@ -297,7 +297,7 @@ enum BackgroundTask {
         ptr: *mut core::ffi::c_void,
         len: usize,
         offset: u64,
-        state_store: std::sync::Weak<Cell<BundledAssetReadState>>,
+        state_store: std::sync::Weak<Mutex<BundledAssetReadState>>,
         waker: core::task::Waker,
     },
 }
@@ -403,86 +403,85 @@ impl BackgroundIoWorkerPool {
                                         state_store,
                                         waker,
                                     }) => {
-                                        if let Some(state_store) = state_store.upgrade() {
-                                            let r = unsafe {
-                                                android::AAsset_seek64(
-                                                    asset.as_ptr(),
-                                                    0,
-                                                    libc::SEEK_CUR,
-                                                )
-                                            };
-                                            let rewind_pos = if r < 0 {
-                                                state_store.set(
-                                                    BundledAssetReadState::CompleteFailed(
-                                                        std::io::Error::last_os_error()
-                                                            .raw_os_error()
-                                                            .unwrap_or(0),
-                                                    ),
-                                                );
-                                                waker.wake();
-                                                continue;
-                                            } else {
-                                                r.cast_unsigned()
-                                            };
+                                        let Some(state_store) = state_store.upgrade() else {
+                                            tracing::warn!("state_store has been gone");
+                                            continue;
+                                        };
 
-                                            let r = unsafe {
-                                                android::AAsset_seek64(
-                                                    asset.as_ptr(),
-                                                    offset as _,
-                                                    libc::SEEK_SET,
-                                                )
-                                            };
-                                            if r < 0 {
-                                                state_store.set(
-                                                    BundledAssetReadState::CompleteFailed(
-                                                        std::io::Error::last_os_error()
-                                                            .raw_os_error()
-                                                            .unwrap_or(0),
-                                                    ),
+                                        let r = unsafe {
+                                            android::AAsset_seek64(
+                                                asset.as_ptr(),
+                                                0,
+                                                libc::SEEK_CUR,
+                                            )
+                                        };
+                                        let rewind_pos = if r < 0 {
+                                            *state_store.lock().expect("poisoned") =
+                                                BundledAssetReadState::CompleteFailed(
+                                                    std::io::Error::last_os_error()
+                                                        .raw_os_error()
+                                                        .unwrap_or(0),
                                                 );
-                                                waker.wake();
-                                                continue;
-                                            }
-
-                                            let r = unsafe {
-                                                android::AAsset_read(asset.as_ptr(), ptr, len)
-                                            };
-                                            if r < 0 {
-                                                state_store.set(
-                                                    BundledAssetReadState::CompleteFailed(
-                                                        std::io::Error::last_os_error()
-                                                            .raw_os_error()
-                                                            .unwrap_or(0),
-                                                    ),
-                                                );
-                                                waker.wake();
-                                                continue;
-                                            }
-                                            let reads = r.cast_unsigned() as usize;
-
-                                            let r = unsafe {
-                                                android::AAsset_seek64(
-                                                    asset.as_ptr(),
-                                                    rewind_pos as _,
-                                                    libc::SEEK_SET,
-                                                )
-                                            };
-                                            if r < 0 {
-                                                state_store.set(
-                                                    BundledAssetReadState::CompleteFailed(
-                                                        std::io::Error::last_os_error()
-                                                            .raw_os_error()
-                                                            .unwrap_or(0),
-                                                    ),
-                                                );
-                                                waker.wake();
-                                                continue;
-                                            }
-
-                                            state_store
-                                                .set(BundledAssetReadState::CompleteSuccess(reads));
                                             waker.wake();
+                                            continue;
+                                        } else {
+                                            r.cast_unsigned()
+                                        };
+
+                                        let r = unsafe {
+                                            android::AAsset_seek64(
+                                                asset.as_ptr(),
+                                                offset as _,
+                                                libc::SEEK_SET,
+                                            )
+                                        };
+                                        if r < 0 {
+                                            *state_store.lock().expect("poisoned") =
+                                                BundledAssetReadState::CompleteFailed(
+                                                    std::io::Error::last_os_error()
+                                                        .raw_os_error()
+                                                        .unwrap_or(0),
+                                                );
+                                            waker.wake();
+                                            continue;
                                         }
+
+                                        let r = unsafe {
+                                            android::AAsset_read(asset.as_ptr(), ptr, len)
+                                        };
+                                        if r < 0 {
+                                            *state_store.lock().expect("poisoned") =
+                                                BundledAssetReadState::CompleteFailed(
+                                                    std::io::Error::last_os_error()
+                                                        .raw_os_error()
+                                                        .unwrap_or(0),
+                                                );
+                                            waker.wake();
+                                            continue;
+                                        }
+                                        let reads = r.cast_unsigned() as usize;
+
+                                        let r = unsafe {
+                                            android::AAsset_seek64(
+                                                asset.as_ptr(),
+                                                rewind_pos as _,
+                                                libc::SEEK_SET,
+                                            )
+                                        };
+                                        if r < 0 {
+                                            *state_store.lock().expect("poisoned") =
+                                                BundledAssetReadState::CompleteFailed(
+                                                    std::io::Error::last_os_error()
+                                                        .raw_os_error()
+                                                        .unwrap_or(0),
+                                                );
+                                            waker.wake();
+                                            continue;
+                                        }
+
+                                        *state_store.lock().expect("poisoned") =
+                                            BundledAssetReadState::CompleteSuccess(reads);
+                                        waker.wake();
                                     }
                                     None => std::thread::park(),
                                 }

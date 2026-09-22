@@ -1,8 +1,8 @@
 
-TARGETS = $(patsubst %.prc,%.prcc,$(wildcard *.prc))
+TARGETS = $(patsubst %.prc,%.pa1-rendering-configuration,$(wildcard *.prc))
 
-.SUFFIXES: .prc .prcc
+.SUFFIXES: .prc .pa1-rendering-configuration
 .PHONY: all
 all: $(TARGETS)
-.prc.prcc:
-	../../tools/target/debug/peridot-rendering-configuration-compiler $<
+.prc.pa1-rendering-configuration:
+	../../tools/target/debug/peridot-rendering-configuration-compiler $< -o $@

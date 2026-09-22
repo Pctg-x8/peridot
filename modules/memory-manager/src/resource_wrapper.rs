@@ -483,7 +483,7 @@ impl Buffer {
     }
 
     pub fn clone_content_from_slice<T: Clone>(&mut self, values: &[T]) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of_val(values));
+        assert!(self.size >= core::mem::size_of_val(values));
 
         self.guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.clone_slice_to(0, values);
@@ -491,7 +491,7 @@ impl Buffer {
     }
 
     pub fn copy_content_from_slice<T: Copy>(&mut self, values: &[T]) -> br::Result<()> {
-        assert_eq!(self.size, core::mem::size_of_val(values));
+        assert!(self.size >= core::mem::size_of_val(values));
 
         self.guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.copy_slice_to(0, values);

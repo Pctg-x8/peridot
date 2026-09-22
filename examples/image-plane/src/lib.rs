@@ -86,6 +86,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .0
             .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
             .expect("failed to transcode to bc7");
+        // image_data
+        //     .0
+        //     .transcode_basis(ktx::ffi::KTX_TTF_ETC2_RGBA, ktx::TranscodeFlags::empty())
+        //     .expect("failed to transcode");
     }
     let image_width = image_data.0.base_width();
     let image_height = image_data.0.base_height();
@@ -199,6 +203,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     height: image_height,
                 },
                 br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
+                // br::vk::VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
             )
             .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
             .init_layout(br::ImageLayout::Preinitialized),
@@ -210,6 +215,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             image_width,
             image_height,
             peridot::PixelFormat::BC7,
+            // peridot::PixelFormat::ETC2_RGBA32,
             br::BufferUsage::TRANSFER_SRC,
         )
         .expect("Failed to allocate linear image buffer");
@@ -655,6 +661,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     }
 
     bgm.write().play();
+    e.start_frame_drain();
 
     let mut rot = 0.0f32;
     loop {
