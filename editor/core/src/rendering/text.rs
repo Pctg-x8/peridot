@@ -21,58 +21,12 @@ pub enum FontID {
     UIFormLiftedLabel,
 }
 
+#[cfg(target_os = "macos")]
+pub use self::darwin_coretext::{FontSet, RootFontSet};
 #[cfg(windows)]
 pub use self::dwrite::{FontSet, RootFontSet};
 #[cfg(all(feature = "freetype", feature = "harfbuzz"))]
 pub use self::ft_hb::{FontSet, RootFontSet};
-
-#[cfg(not(any(all(feature = "freetype", feature = "harfbuzz"), windows)))]
-pub struct FontSet {
-    #[cfg(target_os = "macos")]
-    ui_default: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-    #[cfg(target_os = "macos")]
-    ui_title_project_name: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-    #[cfg(target_os = "macos")]
-    ui_form_lifted_label: apple_sdk_port::Owned<apple_sdk_port::text::Font>,
-}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for FontSet {}
-#[cfg(target_os = "macos")]
-unsafe impl Send for FontSet {}
-#[cfg(not(any(all(feature = "freetype", feature = "harfbuzz"), windows)))]
-impl FontSet {
-    #[cfg(target_os = "macos")]
-    pub fn new() -> Self {
-        let ui_default = apple_sdk_port::text::Font::new_ui(
-            apple_sdk_port::text::UIFontType::System,
-            12.0,
-            None,
-        );
-        let ui_title_project_name = apple_sdk_port::text::Font::new_ui(
-            apple_sdk_port::text::UIFontType::System,
-            10.0,
-            None,
-        );
-        let ui_form_lifted_label =
-            apple_sdk_port::text::Font::new_ui(apple_sdk_port::text::UIFontType::System, 8.0, None);
-
-        Self {
-            ui_default,
-            ui_title_project_name,
-            ui_form_lifted_label,
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[inline]
-    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
-        match category {
-            FontID::UIDefault => &self.ui_default,
-            FontID::UITitleProjectName => &self.ui_title_project_name,
-            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
-        }
-    }
-}
 
 pub struct TextRun<'s> {
     pub content: &'s str,
@@ -247,6 +201,7 @@ impl TextLayout {
                 font,
                 font_set,
                 CompositeRectTextHorizontalAlignment::Start,
+                None,
                 None,
             )
             .internal

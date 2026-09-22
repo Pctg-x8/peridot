@@ -598,7 +598,7 @@ pub struct TextInputViewCoreEventHandler {
     #[cfg(windows)]
     native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
-    ht_manager_ptr: *const HitTestTreeManager<'static>,
+    ht_manager_ptr: *const HitTestTreeManager,
     #[cfg(target_os = "macos")]
     font_set_ptr: *const FontSet,
     #[cfg(target_os = "macos")]
@@ -2682,7 +2682,7 @@ struct MultilineTextInputEventHandler {
     #[cfg(windows)]
     native_text_input_context: crate::platform::windows::NativeTextInputContext,
     #[cfg(target_os = "macos")]
-    ht_manager_ptr: *const HitTestTreeManager<'static>,
+    ht_manager_ptr: *const HitTestTreeManager,
     #[cfg(target_os = "macos")]
     font_set_ptr: *const FontSet,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
@@ -4089,8 +4089,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &mut *self.event_dispatcher }
-                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.view_id.into_untyped(),
+            });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -4106,8 +4107,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &mut *self.event_dispatcher }
-                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.view_id.into_untyped(),
+            });
         }
     }
 
@@ -4145,8 +4147,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &mut *self.event_dispatcher }
-                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.view_id.into_untyped(),
+            });
         } else {
             let text = text.to_str().expect("invalid input str");
             let mut content = self.content.borrow_mut();
@@ -4162,8 +4165,9 @@ impl crate::platform::mac::bridge::TextInputClientForwarding for MultilineTextIn
                     | TextInputViewUpdateMask::CURSOR
                     | TextInputViewUpdateMask::PREEDIT
             });
-            unsafe { &mut *self.event_dispatcher }
-                .dispatch(crate::Event::ScheduleViewRenderExt { id: self.view_id });
+            unsafe { &mut *self.event_dispatcher }.dispatch(crate::Event::ScheduleViewRenderExt {
+                id: self.view_id.into_untyped(),
+            });
         }
     }
 

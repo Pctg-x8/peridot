@@ -142,11 +142,18 @@ impl MemoryStats {
         let pagesize = self::platform::pagesize();
 
         #[cfg(target_os = "linux")]
-        Self {
+        return Self {
             total_resident_bytes: (statm.resident * pagesize as u64) as _,
             total_reserved_bytes: (statm.size * pagesize as u64) as _,
             total_private_resident_bytes: ((statm.resident - statm.shared) * pagesize as u64) as _,
-        }
+        };
+
+        #[cfg(target_os = "macos")]
+        return Self {
+            total_resident_bytes: 0,
+            total_reserved_bytes: 0,
+            total_private_resident_bytes: 0,
+        };
     }
 }
 

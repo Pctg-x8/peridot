@@ -232,7 +232,7 @@ pub fn launch() {
     #[cfg(feature = "wayland")]
     let delayed_action_timer_fd = std::os::unix::prelude::AsRawFd::as_raw_fd(&delayed_action_timer);
 
-    let coreloop = core::pin::pin!(CoreLoop::new(
+    let mut coreloop = core::pin::pin!(CoreLoop::new(
         #[cfg(windows)]
         SystemLink {
             font_set: FontSet::new(root_font_set),
@@ -271,7 +271,7 @@ pub fn launch() {
             },
             #[cfg(target_os = "macos")]
             flyout_surface_context: platform::mac::flyout_surface::SharedState {
-                event_dispatcher: app_event_dispatcher.as_mut().get_mut()
+                coreloop: core::ptr::null_mut(),
             },
         },
         &fs,
@@ -279,6 +279,11 @@ pub fn launch() {
         &renderer_sync,
         &preview_state,
     ));
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let cl = coreloop.as_mut().get_unchecked_mut();
+        cl.syslink.flyout_surface_context.coreloop = cl;
+    }
 
     profiler::sample_memory!();
     main_wrapper(
@@ -355,7 +360,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     app_event_dispatcher.poll_init();
     unsafe { Pin::new_unchecked(&mut *cl_ptr) }.init();
 
-    let sync_event_bus = SyncEventBus::new(app_event_dispatcher.clone());
+    let sync_event_bus = SyncEventBus::new(coreloop.as_mut());
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
@@ -1886,7 +1891,7 @@ impl<'sys> CoreLoop<'sys> {
         this.syslink.prelaunch(this.main_window);
     }
 
-    fn close_sub_window(mut self: core::pin::Pin<&mut Self>, mut target: WindowHandle) {
+    pub fn close_sub_window(mut self: core::pin::Pin<&mut Self>, mut target: WindowHandle) {
         let wd = unsafe { target.take_extra_data::<ui::PerWindowData>() };
         struct LocalContext<'a, 'sys>(ViewInitContext<'a, 'sys>);
         impl ViewDestructionContext for LocalContext<'_, '_> {
@@ -1941,7 +1946,7 @@ impl<'sys> CoreLoop<'sys> {
         self.as_mut().sync_threads();
     }
 
-    fn resize_window(
+    pub fn resize_window(
         mut self: core::pin::Pin<&mut Self>,
         target: WindowHandle,
         size: Size<LogicalUnit>,
@@ -1961,7 +1966,7 @@ impl<'sys> CoreLoop<'sys> {
         self.update_view();
     }
 
-    fn handle_window_move(
+    pub fn handle_window_move(
         self: core::pin::Pin<&mut Self>,
         mut target: WindowHandle,
         pos: Point<LogicalUnit>,
@@ -3635,7 +3640,7 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[tracing::instrument(target = "dbus::loop", skip(self, msg), fields(type = ?msg.r#type(), path = ?msg.path(), interface = ?msg.interface(), member = ?msg.member()))]
     fn handle_dbus_message(self: Pin<&mut Self>, msg: dbus::Message) {
         match msg.r#type() {
@@ -3664,7 +3669,7 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     fn dbusmenu_get_layout(self: Pin<&mut Self>, msg: dbus::Message) {
         let args = proto::dbus_menu::GetLayoutRequest::deserialize(&mut msg.iter());
         tracing::debug!(?args, "com.canonical.dbusmenu.GetLayout");
@@ -3733,7 +3738,7 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     fn dbusmenu_event(self: Pin<&mut Self>, msg: dbus::Message) {
         let mut args_iter = msg.iter();
         let id = args_iter.try_get_i32().expect("id:i");
@@ -3758,7 +3763,7 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     fn dbusmenu_about_to_show(self: Pin<&mut Self>, msg: dbus::Message) {
         let args_iter = msg.iter();
         let id = args_iter.try_get_i32().expect("id:i");
@@ -4070,10 +4075,7 @@ impl MenuSession {
         cl: Pin<&mut CoreLoop<'_>>,
     ) -> Self {
         #[cfg(target_os = "macos")]
-        view_init_context
-            .system_link
-            .flyout_surface_context
-            .observe_global_click();
+        cl.syslink.flyout_surface_context.observe_global_click();
 
         Self {
             opening_surfaces: vec![MenuSurface::new(
@@ -4280,7 +4282,7 @@ pub struct SystemLink<'sys> {
     #[cfg(feature = "wayland")]
     pub flyout_surface_context: platform::unix::wayland::flyout_surface::SharedState,
     #[cfg(target_os = "macos")]
-    pub flyout_surface_context: platform::mac::flyout_surface::SharedState,
+    pub flyout_surface_context: platform::mac::flyout_surface::SharedState<'sys>,
 }
 #[cfg(not(windows))]
 impl SystemLink<'_> {
@@ -4307,8 +4309,9 @@ impl SystemLink<'_> {
 
 #[cfg(target_os = "macos")]
 pub use platform::mac::{
-    DragPreviewPopoverHandle, PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit,
-    flyout_surface::Handle as FlyoutSurfaceHandle,
+    DragData, DragPreviewPopoverHandle, PointerID, WindowHandle,
+    WindowPersistentStateNativeGeometryUnit, close_sub_window, create_flyout_surface,
+    create_main_window, flyout_surface::Handle as FlyoutSurfaceHandle, open_sub_window,
 };
 #[cfg(feature = "wayland")]
 pub use platform::unix::wayland::{
@@ -4322,21 +4325,21 @@ pub use platform::windows::{
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 
-pub struct SyncEventBus {
+pub struct SyncEventBus<'sys> {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
     event_notify: utils::platform::windows::Event,
     #[cfg(target_os = "macos")]
-    redispatch_to: LogicFiberEventDispatcher,
+    redispatch_to: *mut CoreLoop<'sys>,
 }
 #[cfg(target_os = "macos")]
-unsafe impl Sync for SyncEventBus {}
+unsafe impl Sync for SyncEventBus<'_> {}
 #[cfg(target_os = "macos")]
-unsafe impl Send for SyncEventBus {}
-impl SyncEventBus {
-    pub fn new(redispatch_to: LogicFiberEventDispatcher) -> Self {
+unsafe impl Send for SyncEventBus<'_> {}
+impl<'sys> SyncEventBus<'sys> {
+    pub fn new(redispatch_to: Pin<&mut CoreLoop<'sys>>) -> Self {
         Self {
             queue: std::sync::Mutex::new(VecDeque::new()),
             #[cfg(target_os = "linux")]
@@ -4345,7 +4348,7 @@ impl SyncEventBus {
             #[cfg(windows)]
             event_notify: utils::platform::windows::Event::new(true, false).expect("event.new"),
             #[cfg(target_os = "macos")]
-            redispatch_to,
+            redispatch_to: unsafe { redispatch_to.get_unchecked_mut() },
         }
     }
 
@@ -4360,7 +4363,7 @@ impl SyncEventBus {
         unsafe {
             extern "C" fn callback(ctx: *mut core::ffi::c_void) {
                 let this = unsafe { &*(ctx.cast::<SyncEventBus>()) };
-                this.redispatch(&this.redispatch_to);
+                this.redispatch(unsafe { Pin::new_unchecked(&mut *this.redispatch_to) });
             }
 
             platform::mac::bridge::ni_post_unbound_callback_from_thread(
@@ -4602,10 +4605,10 @@ impl FileSystem {
         })
         .join("peridot/.editor");
 
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "macos")))]
         let cache_base_path =
             crate::utils::platform::unix::xdg::cache_home().join("io.ct2.peridot.editor");
-        #[cfg(unix)]
+        #[cfg(all(unix, not(target_os = "macos")))]
         let persist_state_base_path =
             crate::utils::platform::unix::xdg::state_home().join("io.ct2.peridot.editor");
 

@@ -15,19 +15,67 @@ use apple_sdk_port::{
         kCTParagraphStyleSpecifierAlignment, kCTTextAlignmentCenter, kCTTextAlignmentLeft,
         kCTTextAlignmentRight,
     },
-    text::{Font as NativeFont, FontOrientation, Frame, Framesetter, ParagraphStyle},
+    text::{Font as NativeFont, FontOrientation, Frame, Framesetter, ParagraphStyle, UIFontType},
 };
+use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
     platform::mac::ak_spacing_inline_start,
     rendering::{
         MaskTextureAtlasManager,
         composite::CompositeRectTextHorizontalAlignment,
-        text::{FontSet, GlyphPlacementBox},
-        vg::{VectorRasterizationState, VectorVertexRenderer},
+        text::{FontID, GlyphPlacementBox},
+        vg::{VectorRasterizationState, VectorVertexRenderer, point_new_vector_texture},
     },
-    utils::{LogicalUnit, Point, Rect, Size},
 };
+
+pub struct RootFontSet {
+    ui_default: Owned<NativeFont>,
+    ui_title_project_name: Owned<NativeFont>,
+    ui_form_lifted_label: Owned<NativeFont>,
+}
+unsafe impl Sync for RootFontSet {}
+unsafe impl Send for RootFontSet {}
+impl RootFontSet {
+    pub fn new() -> Self {
+        let ui_default = NativeFont::new_ui(UIFontType::System, 12.0, None);
+        let ui_title_project_name = NativeFont::new_ui(UIFontType::System, 10.0, None);
+        let ui_form_lifted_label = NativeFont::new_ui(UIFontType::System, 8.0, None);
+
+        Self {
+            ui_default,
+            ui_title_project_name,
+            ui_form_lifted_label,
+        }
+    }
+}
+
+pub struct FontSet {
+    ui_default: Owned<NativeFont>,
+    ui_title_project_name: Owned<NativeFont>,
+    ui_form_lifted_label: Owned<NativeFont>,
+}
+unsafe impl Sync for FontSet {}
+unsafe impl Send for FontSet {}
+impl FontSet {
+    #[inline]
+    pub fn new(root: &RootFontSet) -> Self {
+        Self {
+            ui_default: root.ui_default.clone(),
+            ui_title_project_name: root.ui_title_project_name.clone(),
+            ui_form_lifted_label: root.ui_form_lifted_label.clone(),
+        }
+    }
+
+    #[inline]
+    pub fn select(&self, category: FontID) -> &apple_sdk_port::text::Font {
+        match category {
+            FontID::UIDefault => &self.ui_default,
+            FontID::UITitleProjectName => &self.ui_title_project_name,
+            FontID::UIFormLiftedLabel => &self.ui_form_lifted_label,
+        }
+    }
+}
 
 pub struct CoreTextLayout {
     frame: Owned<Frame>,
@@ -281,7 +329,7 @@ impl CoreTextLayout {
                                 apple_sdk_port::raw::kCGPathElementMoveToPoint => {
                                     let to = unsafe { &*e.points };
 
-                                    vrender.move_to(Point::new_vector_texture(
+                                    vrender.move_to(point_new_vector_texture(
                                         to.x as f32 * scale + offset_x,
                                         to.y as f32 * scale + offset_y,
                                     ));
@@ -289,7 +337,7 @@ impl CoreTextLayout {
                                 apple_sdk_port::raw::kCGPathElementAddLineToPoint => {
                                     let to = unsafe { &*e.points };
 
-                                    vrender.line_to(Point::new_vector_texture(
+                                    vrender.line_to(point_new_vector_texture(
                                         to.x as f32 * scale + offset_x,
                                         to.y as f32 * scale + offset_y,
                                     ));
@@ -299,11 +347,11 @@ impl CoreTextLayout {
                                         unsafe { core::slice::from_raw_parts(e.points, 2) };
 
                                     vrender.quadratic_to(
-                                        Point::new_vector_texture(
+                                        point_new_vector_texture(
                                             points[0].x as f32 * scale + offset_x,
                                             points[0].y as f32 * scale + offset_y,
                                         ),
-                                        Point::new_vector_texture(
+                                        point_new_vector_texture(
                                             points[1].x as f32 * scale + offset_x,
                                             points[1].y as f32 * scale + offset_y,
                                         ),
@@ -314,15 +362,15 @@ impl CoreTextLayout {
                                         unsafe { core::slice::from_raw_parts(e.points, 3) };
 
                                     vrender.cubic_to(
-                                        Point::new_vector_texture(
+                                        point_new_vector_texture(
                                             points[0].x as f32 * scale + offset_x,
                                             points[0].y as f32 * scale + offset_y,
                                         ),
-                                        Point::new_vector_texture(
+                                        point_new_vector_texture(
                                             points[1].x as f32 * scale + offset_x,
                                             points[1].y as f32 * scale + offset_y,
                                         ),
-                                        Point::new_vector_texture(
+                                        point_new_vector_texture(
                                             points[2].x as f32 * scale + offset_x,
                                             points[2].y as f32 * scale + offset_y,
                                         ),

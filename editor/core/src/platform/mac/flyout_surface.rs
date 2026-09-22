@@ -1,9 +1,10 @@
-use core::ptr::NonNull;
+use core::{pin::Pin, ptr::NonNull};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
+use shared::{LogicalUnit, PixelsUnit, Point, Size};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SystemLink,
+    CoreLoop, SystemLink,
     graphics::{Graphics, VulkanSurface},
     input::{
         KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
@@ -14,8 +15,7 @@ use crate::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::{MenuItemSubMenuView, MountTarget},
-    utils::{LogicalUnit, PixelsUnit, Point, Size},
+    uikit::MenuItemSubMenuView,
 };
 
 #[repr(transparent)]
@@ -23,38 +23,30 @@ use crate::{
 pub struct Handle(NonNull<super::bridge::FlyoutSurface>);
 unsafe impl Sync for Handle {}
 unsafe impl Send for Handle {}
-impl MountTarget for Handle {
-    #[inline(always)]
-    fn ct_root(&self) -> CompositeTreeRef {
-        self.instance_vars().ct_root
-    }
-
-    #[inline(always)]
-    fn ht_root(&self) -> HitTestTreeRef {
-        self.instance_vars().ht_root
-    }
-}
 impl Handle {
-    pub(super) fn new<E>(
+    pub(super) fn new<'sys>(
         parent: super::WindowHandle,
         surface_pos: Point<LogicalUnit>,
         size: Size<LogicalUnit>,
-        syslink: &SystemLink,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        mut coreloop: Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
-        let ct_root = composite_tree.create(CompositeRect {
-            relative_size_adjustment: [1.0, 1.0],
-            // macの場合は背景は不要（NSVisualEffectViewが背景がわりになる）
-            ..Default::default()
-        });
-        let ht_root = ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
-        let kf_root_group = keyboard_focus_registry.acquire_group();
+        let ct_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
+            .composite_tree
+            .create(CompositeRect {
+                relative_size_adjustment: [1.0, 1.0],
+                // macの場合は背景は不要（NSVisualEffectViewが背景がわりになる）
+                ..Default::default()
+            });
+        let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
+            .ht_manager
+            .create(HitTestTreeData {
+                width_adjustment_factor: 1.0,
+                height_adjustment_factor: 1.0,
+                ..Default::default()
+            });
+        let kf_root_group = unsafe { coreloop.as_mut().get_unchecked_mut() }
+            .keyboard_focus_registry
+            .acquire_group();
         tracing::debug!(?ct_root, "flyout surface root");
         let h = Self(unsafe {
             NonNull::new_unchecked(super::bridge::ni_create_flyout_surface(
@@ -64,7 +56,7 @@ impl Handle {
                 size.width,
                 size.height,
                 Box::into_raw(Box::new(InstanceVars {
-                    event_dispatcher: syslink.event_dispatcher,
+                    coreloop: coreloop.get_unchecked_mut(),
                     ct_root,
                     ht_root,
                     kf_state: PerWindowKeyboardFocusState::new(kf_root_group),
@@ -90,7 +82,7 @@ impl Handle {
         device: &Graphics,
         delayed_render_messages: &mut Vec<RenderMessage>,
     ) {
-        delayed_render_messages.push(RenderMessage::NewContextMenu(NewContextMenuData {
+        delayed_render_messages.push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
             w: *self,
             vk_surface: NewWindowVulkanSurface(
                 VulkanSurface::new(device, unsafe {
@@ -118,7 +110,7 @@ impl Handle {
         let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
         syslink
             .rt_sender
-            .send(RenderMessage::DestroyContextMenu(self, done_event_sender))
+            .send(RenderMessage::DestroyFlyoutSurface(self, done_event_sender))
             .expect("rt_sender.send");
         let tpctx = unsafe { super::bridge::ni_degreade_thread_priroity_temporarily() };
         done_event_receiver
@@ -169,6 +161,11 @@ impl Handle {
         }
     }
 
+    #[inline(always)]
+    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.instance_vars().kf_state
+    }
+
     pub fn logical_size(&self) -> Size<LogicalUnit> {
         self.instance_vars().size
     }
@@ -207,21 +204,21 @@ impl Handle {
         let key_modifier = translate_event_modifier_key(modifier_flags);
 
         // move then down
-        h.instance_vars().dispatch_event(Event::MenuPointerMove {
-            pointer_id: super::PointerID(),
-            target: h,
-            client_pos: Point::new_logical(x as _, y as _),
+        h.instance_vars().coreloop().handle_menu_pointer_move(
+            h,
+            super::PointerID(),
+            Point::new_logical(x as _, y as _),
             key_modifier,
-        });
-        h.instance_vars().dispatch_event(Event::MenuPointerDown {
-            pointer_id: super::PointerID(),
-            target: h,
-            button: match button {
+        );
+        h.instance_vars().coreloop().dispatch_menu_pointer_down(
+            h,
+            super::PointerID(),
+            match button {
                 super::bridge::MouseButton::Left => PointerButton::Primary,
                 super::bridge::MouseButton::Right => PointerButton::Secondary,
             },
             key_modifier,
-        });
+        );
     }
 
     extern "C" fn pointer_move(
@@ -233,12 +230,12 @@ impl Handle {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
         let key_modifier = translate_event_modifier_key(modifier_flags);
 
-        h.instance_vars().dispatch_event(Event::MenuPointerMove {
-            pointer_id: super::PointerID(),
-            target: h,
-            client_pos: Point::new_logical(x as _, y as _),
+        h.instance_vars().coreloop().handle_menu_pointer_move(
+            h,
+            super::PointerID(),
+            Point::new_logical(x as _, y as _),
             key_modifier,
-        });
+        );
     }
 
     extern "C" fn pointer_up(
@@ -249,24 +246,23 @@ impl Handle {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
         let key_modifier = translate_event_modifier_key(modifier_flags);
 
-        h.instance_vars().dispatch_event(Event::MenuPointerUp {
-            pointer_id: super::PointerID(),
-            target: h,
-            button: match button {
+        h.instance_vars().coreloop().dispatch_menu_pointer_up(
+            h,
+            super::PointerID(),
+            match button {
                 super::bridge::MouseButton::Left => PointerButton::Primary,
                 super::bridge::MouseButton::Right => PointerButton::Secondary,
             },
             key_modifier,
-        });
+        );
     }
 
     extern "C" fn pointer_leave(sender: *mut super::bridge::FlyoutSurface) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
-        h.instance_vars().dispatch_event(Event::MenuPointerLeave {
-            target: h,
-            pointer_id: super::PointerID(),
-        });
+        h.instance_vars()
+            .coreloop()
+            .dispatch_menu_pointer_leave(super::PointerID());
     }
 }
 impl crate::input::ShellPointerActions for Handle {
@@ -276,9 +272,20 @@ impl crate::input::ShellPointerActions for Handle {
     #[inline(always)]
     fn release_pointer(&self) {}
 }
+impl crate::uicore::MountTarget for Handle {
+    #[inline(always)]
+    fn ct_root(&self) -> CompositeTreeRef {
+        self.instance_vars().ct_root
+    }
 
-struct InstanceVars {
-    event_dispatcher: *mut LogicFiberEventDispatcher,
+    #[inline(always)]
+    fn ht_root(&self) -> HitTestTreeRef {
+        self.instance_vars().ht_root
+    }
+}
+
+struct InstanceVars<'sys> {
+    coreloop: *mut CoreLoop<'sys>,
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     kf_state: PerWindowKeyboardFocusState,
@@ -286,28 +293,24 @@ struct InstanceVars {
     spawned_position: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
 }
-impl InstanceVars {
-    fn dispatch_event(&self, event: Event) {
-        unsafe { &*self.event_dispatcher }.dispatch(event);
+impl<'sys> InstanceVars<'sys> {
+    const fn coreloop(&self) -> Pin<&mut CoreLoop<'sys>> {
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
     }
 }
 
-pub struct SharedState {
-    pub event_dispatcher: *mut LogicFiberEventDispatcher,
+pub struct SharedState<'sys> {
+    pub coreloop: *mut CoreLoop<'sys>,
 }
-impl SharedState {
+impl<'sys> SharedState<'sys> {
     pub fn reserve_delayed_action(&self) {
-        extern "C" fn cb(ctx: *mut core::ffi::c_void) {
-            unsafe { &*ctx.cast::<LogicFiberEventDispatcher>() }
-                .dispatch(Event::MenuPerformDelayedAction);
+        extern "C" fn cb<'sys>(ctx: *mut core::ffi::c_void) {
+            unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }
+                .perform_menu_delayed_action();
         }
 
         unsafe {
-            super::bridge::ni_context_menu_reserve_delayed_action(
-                400,
-                cb,
-                self.event_dispatcher.cast(),
-            );
+            super::bridge::ni_context_menu_reserve_delayed_action(400, cb, self.coreloop.cast());
         }
     }
 
@@ -318,15 +321,15 @@ impl SharedState {
     }
 
     pub fn observe_global_click(&self) {
-        extern "C" fn cb(ctx: *mut core::ffi::c_void, on_context_menu_surface: u8) {
+        extern "C" fn cb<'sys>(ctx: *mut core::ffi::c_void, on_context_menu_surface: u8) {
             if on_context_menu_surface == 0 {
                 // コンテキストメニュー以外でクリックが入った
-                unsafe { &*ctx.cast::<LogicFiberEventDispatcher>() }.dispatch(Event::MenuCloseAll);
+                unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.close_all_menus();
             }
         }
 
         unsafe {
-            super::bridge::ni_context_menu_observe_global_click(cb, self.event_dispatcher.cast());
+            super::bridge::ni_context_menu_observe_global_click(cb, self.coreloop.cast());
         }
     }
 
