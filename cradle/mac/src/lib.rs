@@ -181,10 +181,18 @@ type Engine<'q> = peridot::Engine<'q, NativeLink>;
 
 const USERCODE_WAKER_VTABLE: &'static core::task::RawWakerVTable = &core::task::RawWakerVTable::new(
     |ptr| core::task::RawWaker::new(ptr, USERCODE_WAKER_VTABLE),
-    |ptr| /*println!("game_main wake")*/{unsafe { schedule_usercode_task_polling(ptr.cast_mut().cast::<core::ffi::c_void>()); }},
-    |ptr| /*println!("game_main wake by ref")*/{ unsafe { schedule_usercode_task_polling(ptr.cast_mut().cast::<core::ffi::c_void>()); } },
+    |ptr| unsafe {
+        schedule_usercode_task_polling(ptr.cast_mut().cast());
+    },
+    |ptr| unsafe {
+        schedule_usercode_task_polling(ptr.cast_mut().cast());
+    },
     |_| {},
 );
+#[inline(always)]
+fn create_usercode_waker(swift_context: SwiftContext) -> core::task::Waker {
+    unsafe { core::task::Waker::new(swift_context.cast(), &USERCODE_WAKER_VTABLE) }
+}
 
 pub struct GameDriver {
     ex_input: peridot::InputProcess,
@@ -196,6 +204,7 @@ pub struct GameDriver {
 
 pub struct AppInternalState {
     pub event_queue: peridot::EventQueue,
+    pub frame_draining: bool,
 }
 
 fn launch_f<'f, F>(
@@ -212,9 +221,10 @@ fn launch_f<'f, F>(
 
     let state = Box::new(AppInternalState {
         event_queue: peridot::EventQueue::new(),
+        frame_draining: false,
     });
     let state_ptr = Box::into_raw(state);
-    let state_lifetime_extended: &'f AppInternalState = unsafe { &*state_ptr };
+    let state_lifetime_extended: &'f mut AppInternalState = unsafe { &mut *state_ptr };
 
     let mut engine = Engine::new(
         userlib::APP_IDENTIFIER,
@@ -224,6 +234,7 @@ fn launch_f<'f, F>(
         (event_sender.clone(), event_receiver),
         frame_timing_receiver,
         &state_lifetime_extended.event_queue,
+        &mut state_lifetime_extended.frame_draining,
     );
     let nih = Box::new(NativeInputHandler::new(v));
     engine.input().set_nativelink(nih);
@@ -232,8 +243,6 @@ fn launch_f<'f, F>(
     engine.post_init();
     let input = engine.input().clone();
 
-    let usercode_waker =
-        unsafe { core::task::Waker::new(swift_context.cast::<()>(), &USERCODE_WAKER_VTABLE) };
     let usercode = Box::pin(launch_usercode(engine));
 
     struct GameDriverContext<F> {
@@ -396,7 +405,7 @@ fn launch_f<'f, F>(
     };
     let context_ptr = Box::into_raw(Box::new(GameDriverContext {
         usercode,
-        usercode_waker,
+        usercode_waker: create_usercode_waker(swift_context),
         state: unsafe { Box::from_raw(state_ptr) },
         input,
         audio_engine,
