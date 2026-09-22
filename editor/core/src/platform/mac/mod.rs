@@ -678,8 +678,8 @@ impl<'sys> WindowDispatcher<'sys> {
             target,
             pointer_id,
             match button {
-                self::bridge::MouseButton::Left => PointerButton::Primary,
-                self::bridge::MouseButton::Right => PointerButton::Secondary,
+                bridge::MouseButton::Left => PointerButton::Primary,
+                bridge::MouseButton::Right => PointerButton::Secondary,
             },
             key_modifier,
         );
@@ -737,8 +737,8 @@ impl<'sys> WindowDispatcher<'sys> {
             target,
             pointer_id,
             match button {
-                self::bridge::MouseButton::Left => PointerButton::Primary,
-                self::bridge::MouseButton::Right => PointerButton::Secondary,
+                bridge::MouseButton::Left => PointerButton::Primary,
+                bridge::MouseButton::Right => PointerButton::Secondary,
             },
             key_modifier,
         );
@@ -753,24 +753,10 @@ impl<'sys> WindowDispatcher<'sys> {
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        let mut modifier = ModifierKey::empty();
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
-            modifier |= ModifierKey::SHIFT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
-            modifier |= ModifierKey::CONTROL;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
-            modifier |= ModifierKey::ALT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
-            modifier |= ModifierKey::SUPER;
-        }
-
         this.coreloop().dispatch_key_down(
             WindowHandle(window),
             KeyInputCode::UnknownNativeCode(code as _),
-            modifier,
+            translate_event_modifier_key(modifier_flags),
         );
         this.coreloop().update_view_all();
     }
@@ -784,20 +770,7 @@ impl<'sys> WindowDispatcher<'sys> {
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
         let char = unsafe { char::from_u32_unchecked(char) };
-
-        let mut modifier = ModifierKey::empty();
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
-            modifier |= ModifierKey::SHIFT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
-            modifier |= ModifierKey::CONTROL;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
-            modifier |= ModifierKey::ALT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
-            modifier |= ModifierKey::SUPER;
-        }
+        let modifier = translate_event_modifier_key(modifier_flags);
 
         // Macの場合はいくつか文字コードで入ってくる
         match char {
@@ -867,24 +840,10 @@ impl<'sys> WindowDispatcher<'sys> {
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        let mut modifier = ModifierKey::empty();
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
-            modifier |= ModifierKey::SHIFT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
-            modifier |= ModifierKey::CONTROL;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
-            modifier |= ModifierKey::ALT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
-            modifier |= ModifierKey::SUPER;
-        }
-
         this.coreloop().dispatch_key_up(
             WindowHandle(window),
             KeyInputCode::UnknownNativeCode(code as _),
-            modifier,
+            translate_event_modifier_key(modifier_flags),
         );
         this.coreloop().update_view_all();
     }
@@ -898,20 +857,7 @@ impl<'sys> WindowDispatcher<'sys> {
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
         let char = unsafe { char::from_u32_unchecked(char) };
-
-        let mut modifier = ModifierKey::empty();
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
-            modifier |= ModifierKey::SHIFT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
-            modifier |= ModifierKey::CONTROL;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
-            modifier |= ModifierKey::ALT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
-            modifier |= ModifierKey::SUPER;
-        }
+        let modifier = translate_event_modifier_key(modifier_flags);
 
         // Macの場合はいくつか文字コードで入ってくる
         match char {

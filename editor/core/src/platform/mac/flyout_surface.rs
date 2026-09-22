@@ -257,6 +257,7 @@ impl Handle {
             },
             key_modifier,
         );
+        // TODO: pointer up内でflyoutを閉じるとここに来た時にいろいろ削除済みで不正な参照になってしまう flyoutのcloseもイベント処理の後に遅延させる必要がある
         h.instance_vars().coreloop().update_view_all();
     }
 

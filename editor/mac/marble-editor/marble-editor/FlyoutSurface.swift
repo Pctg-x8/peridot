@@ -247,12 +247,12 @@ var contextMenuLocalMonitor: Any? = nil
 @_cdecl("ni_context_menu_observe_global_click")
 func contextMenuObserveGlobalClick(_ callback: ContextMenuGlobalClickCallback, _ ctx: UnsafeMutableRawPointer) {
     contextMenuGlobalMonitor = NSEvent.addGlobalMonitorForEvents(
-        matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]
+        matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
     ) { event in
         callback(ctx, event.window is FlyoutSurface ? 1 : 0)
     }
     contextMenuLocalMonitor = NSEvent.addLocalMonitorForEvents(
-        matching: [.leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp, .otherMouseDown, .otherMouseUp]
+        matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
     ) { event in
         callback(ctx, event.window is FlyoutSurface ? 1 : 0)
         return event

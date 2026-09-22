@@ -615,11 +615,16 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
                 .redispatch(unsafe { Pin::new_unchecked(&mut *ctx.coreloop) });
         }
         #[cfg(target_os = "macos")]
+        extern "C" fn prof_sample_memory(_ctx: *mut core::ffi::c_void) {
+            profiler::sample_memory!();
+        }
+        #[cfg(target_os = "macos")]
         unsafe {
             platform::mac::bridge::nsapp_run(
                 &const {
                     platform::mac::bridge::AppRunCallbacks {
                         redispatch_sync_events,
+                        prof_sample_memory,
                     }
                 },
                 core::ptr::from_mut(&mut AppRunCallbackContext {
@@ -2267,6 +2272,8 @@ impl<'sys> CoreLoop<'sys> {
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
+        tracing::trace!(?target, ?button, "pointer down");
+
         // #[cfg(target_os = "macos")]
         // drag_preview_popover.bind_position_base_window_link(window);
 
@@ -2415,6 +2422,8 @@ impl<'sys> CoreLoop<'sys> {
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
+        tracing::trace!(?target, ?button, "pointer up");
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_up(
             pointer_id,

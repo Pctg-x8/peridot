@@ -9,6 +9,7 @@ static const uint8_t MouseButtonRight = 1;
 
 typedef struct {
     void (*redispatchSyncEvents)(void* callerContext);
+    void (*profSampleMemory)(void* callerContext);
 } AppRunCallbacks;
 
 typedef struct WindowLink_* WindowLink;

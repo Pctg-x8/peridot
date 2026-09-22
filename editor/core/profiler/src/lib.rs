@@ -149,11 +149,31 @@ impl MemoryStats {
         };
 
         #[cfg(target_os = "macos")]
-        return Self {
-            total_resident_bytes: 0,
-            total_reserved_bytes: 0,
-            total_private_resident_bytes: 0,
-        };
+        {
+            let mut task_vm_info = core::mem::MaybeUninit::<platform::mach::task_vm_info>::uninit();
+            let mut task_vm_info_count =
+                core::mem::MaybeUninit::new(platform::mach::TASK_VM_INFO_COUNT);
+            let r = unsafe {
+                platform::mach::task_info(
+                    platform::mach::mach_task_self_,
+                    platform::mach::TASK_VM_INFO,
+                    task_vm_info.as_mut_ptr().cast(),
+                    task_vm_info_count.as_mut_ptr(),
+                )
+            };
+            if r != platform::mach::KERN_SUCCESS {
+                tracing::warn!(r, "mach.task_info");
+            }
+            let task_vm_info = unsafe { task_vm_info.assume_init() };
+
+            tracing::debug!(?task_vm_info, "mach task mem");
+            // TODO: 暫定で割り振り private residentがinternalかはちょっと自信がない（本来はそういうテストする機能をつけて挙動を確認するのが良い）
+            return Self {
+                total_resident_bytes: task_vm_info.resident_size as _,
+                total_reserved_bytes: task_vm_info.phys_footprint as _,
+                total_private_resident_bytes: task_vm_info.internal as _,
+            };
+        }
     }
 }
 

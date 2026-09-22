@@ -28,7 +28,18 @@ var appRunCallbackContext: UnsafeMutableRawPointer? = nil
 func nsAppRun(_ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>, _ newAppRunCallbackContext: UnsafeMutableRawPointer) {
     appRunCallbacks = newAppRunCallbacks
     appRunCallbackContext = newAppRunCallbackContext
+    let memorySampleTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+    memorySampleTimer.schedule(deadline: DispatchTime.now().advanced(by: .milliseconds(50)), repeating: .milliseconds(50))
+    memorySampleTimer.setEventHandler {
+        guard let cb = appRunCallbacks else {
+            return
+        }
+        
+        cb.pointee.profSampleMemory(appRunCallbackContext!)
+    }
+    memorySampleTimer.activate()
     app.run()
+    memorySampleTimer.cancel()
     appRunCallbacks = nil
     appRunCallbackContext = nil
 }

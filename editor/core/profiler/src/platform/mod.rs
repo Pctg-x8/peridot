@@ -12,3 +12,7 @@ pub use self::linux::*;
 pub mod windows;
 #[cfg(windows)]
 pub use self::windows::*;
+#[cfg(target_os = "macos")]
+pub mod mach;
+#[cfg(target_os = "macos")]
+pub use self::mach::*;

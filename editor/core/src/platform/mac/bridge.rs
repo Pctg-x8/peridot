@@ -6,6 +6,7 @@ use bitflags::bitflags;
 #[repr(C)]
 pub struct AppRunCallbacks {
     pub redispatch_sync_events: extern "C" fn(ctx: *mut c_void),
+    pub prof_sample_memory: extern "C" fn(ctx: *mut c_void),
 }
 
 #[repr(C)]
