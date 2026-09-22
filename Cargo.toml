@@ -36,7 +36,7 @@ members = [
     "editor/core/bindgen",
     "editor/core/profiler",
     "editor/core/profiler-attr",
-    "editor/prof-reader"
+    "editor/prof-reader",
     "modules/mesh",
     "modules/asset-processor/model",
 ]

@@ -179,12 +179,12 @@ profiler::section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 
 pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
 
-pub struct RenderThread<'main, 'sys> {
+pub struct RenderThread<'main> {
     pub gfx: &'main Graphics<'main>,
     pub shutdown_signal: &'main AtomicBool,
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
-    pub event_bus: &'main SyncEventBus<'sys>,
+    pub event_bus: &'main SyncEventBus,
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     pub root_font_set: &'main RootFontSet,
     pub preview_state: &'main Mutex<preview::CommittedState>,
@@ -193,7 +193,7 @@ pub struct RenderThread<'main, 'sys> {
     #[cfg(windows)]
     pub d3d12_present_counter: u64,
 }
-impl<'main, 'sys> RenderThread<'main, 'sys> {
+impl<'main> RenderThread<'main> {
     #[allow(unused_mut)]
     pub fn run(mut self) {
         tracing::info!("Starting RenderThread...");

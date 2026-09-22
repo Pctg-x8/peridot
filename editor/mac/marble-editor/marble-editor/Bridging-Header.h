@@ -7,6 +7,10 @@ extern "C" {
 static const uint8_t MouseButtonLeft = 0;
 static const uint8_t MouseButtonRight = 1;
 
+typedef struct {
+    void (*redispatchSyncEvents)(void* callerContext);
+} AppRunCallbacks;
+
 typedef struct WindowLink_* WindowLink;
 typedef struct {
     void (*destructor)(void* callerContext);

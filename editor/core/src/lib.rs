@@ -360,7 +360,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     app_event_dispatcher.poll_init();
     unsafe { Pin::new_unchecked(&mut *cl_ptr) }.init();
 
-    let sync_event_bus = SyncEventBus::new(coreloop.as_mut());
+    let sync_event_bus = SyncEventBus::new();
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
@@ -603,8 +603,31 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         }
 
         #[cfg(target_os = "macos")]
+        struct AppRunCallbackContext<'sys> {
+            coreloop: *mut CoreLoop<'sys>,
+            sync_event_bus: *const SyncEventBus,
+        }
+        #[cfg(target_os = "macos")]
+        extern "C" fn redispatch_sync_events(ctx: *mut core::ffi::c_void) {
+            let ctx = unsafe { &*(ctx.cast::<AppRunCallbackContext>()) };
+
+            unsafe { &*ctx.sync_event_bus }
+                .redispatch(unsafe { Pin::new_unchecked(&mut *ctx.coreloop) });
+        }
+        #[cfg(target_os = "macos")]
         unsafe {
-            platform::mac::bridge::nsapp_run();
+            platform::mac::bridge::nsapp_run(
+                &const {
+                    platform::mac::bridge::AppRunCallbacks {
+                        redispatch_sync_events,
+                    }
+                },
+                core::ptr::from_mut(&mut AppRunCallbackContext {
+                    coreloop: coreloop.as_mut().get_unchecked_mut(),
+                    sync_event_bus: &sync_event_bus,
+                })
+                .cast(),
+            );
         }
 
         app_event_dispatcher.terminate();
@@ -4325,21 +4348,19 @@ pub use platform::windows::{
     flyout_surface::Handle as FlyoutSurfaceHandle,
 };
 
-pub struct SyncEventBus<'sys> {
+pub struct SyncEventBus {
     queue: std::sync::Mutex<VecDeque<SyncEvent>>,
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
     event_notify: utils::platform::windows::Event,
-    #[cfg(target_os = "macos")]
-    redispatch_to: *mut CoreLoop<'sys>,
 }
 #[cfg(target_os = "macos")]
-unsafe impl Sync for SyncEventBus<'_> {}
+unsafe impl Sync for SyncEventBus {}
 #[cfg(target_os = "macos")]
-unsafe impl Send for SyncEventBus<'_> {}
-impl<'sys> SyncEventBus<'sys> {
-    pub fn new(redispatch_to: Pin<&mut CoreLoop<'sys>>) -> Self {
+unsafe impl Send for SyncEventBus {}
+impl SyncEventBus {
+    pub fn new() -> Self {
         Self {
             queue: std::sync::Mutex::new(VecDeque::new()),
             #[cfg(target_os = "linux")]
@@ -4347,8 +4368,6 @@ impl<'sys> SyncEventBus<'sys> {
                 .expect("app_event_bus.efd.create"),
             #[cfg(windows)]
             event_notify: utils::platform::windows::Event::new(true, false).expect("event.new"),
-            #[cfg(target_os = "macos")]
-            redispatch_to: unsafe { redispatch_to.get_unchecked_mut() },
         }
     }
 
@@ -4361,15 +4380,7 @@ impl<'sys> SyncEventBus<'sys> {
         self.event_notify.set().expect("event_notify.set");
         #[cfg(target_os = "macos")]
         unsafe {
-            extern "C" fn callback(ctx: *mut core::ffi::c_void) {
-                let this = unsafe { &*(ctx.cast::<SyncEventBus>()) };
-                this.redispatch(unsafe { Pin::new_unchecked(&mut *this.redispatch_to) });
-            }
-
-            platform::mac::bridge::ni_post_unbound_callback_from_thread(
-                callback,
-                self as *const _ as _,
-            );
+            platform::mac::bridge::ni_schedule_redispatch_sync_events();
         }
     }
 

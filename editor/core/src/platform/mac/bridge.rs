@@ -4,6 +4,11 @@ use apple_sdk_port::raw::CFStringRef;
 use bitflags::bitflags;
 
 #[repr(C)]
+pub struct AppRunCallbacks {
+    pub redispatch_sync_events: extern "C" fn(ctx: *mut c_void),
+}
+
+#[repr(C)]
 pub struct WindowLink(
     [u8; 0],
     core::marker::PhantomData<(*mut u8, core::marker::PhantomPinned)>,
@@ -345,7 +350,7 @@ bitflags! {
 }
 
 unsafe extern "C" {
-    pub fn nsapp_run();
+    pub fn nsapp_run(callbacks: *const AppRunCallbacks, callback_context: *mut c_void);
 
     pub fn ni_create_window(flags: u32) -> *mut WindowLink;
     pub fn ni_release_window(window_link: *mut WindowLink);
@@ -431,7 +436,8 @@ unsafe extern "C" {
     );
     pub fn ni_context_menu_unobserve_global_click();
 
-    pub fn ni_post_unbound_callback_from_thread(f: UnboundCallback, caller_context: *mut c_void);
+    // pub fn ni_post_unbound_callback_from_thread(f: UnboundCallback, caller_context: *mut c_void);
+    pub fn ni_schedule_redispatch_sync_events();
 
     pub fn manual_capture_begin(window_link: *mut WindowLink);
     pub fn manual_capture_end();

@@ -22,9 +22,15 @@ app.mainMenu = menu
 
 rs_launch()
 
+var appRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>? = nil
+var appRunCallbackContext: UnsafeMutableRawPointer? = nil
 @_cdecl("nsapp_run")
-func nsAppRun() {
+func nsAppRun(_ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>, _ newAppRunCallbackContext: UnsafeMutableRawPointer) {
+    appRunCallbacks = newAppRunCallbacks
+    appRunCallbackContext = newAppRunCallbackContext
     app.run()
+    appRunCallbacks = nil
+    appRunCallbackContext = nil
 }
 
 final class AppMainDelegate : NSObject, NSApplicationDelegate {}
@@ -44,10 +50,15 @@ func manualCaptureEnd() {
     MTLCaptureManager.shared().stopCapture()
 }
 
-@_cdecl("ni_post_unbound_callback_from_thread")
-func postUnboundCallbackFromThread(cb: UnboundCallback, ctx: UnsafeMutableRawPointer) {
+@_cdecl("ni_schedule_redispatch_sync_events")
+func scheduleRedispatchSyncEvents() {
     DispatchQueue.main.async {
-        cb(ctx)
+        guard let cb = appRunCallbacks else {
+            // application has terminated
+            return
+        }
+        
+        cb.pointee.redispatchSyncEvents(appRunCallbackContext!)
     }
 }
 
