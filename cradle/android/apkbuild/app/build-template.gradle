@@ -21,6 +21,11 @@ android {
         minifyEnabled false
         proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
     }
+    buildTypes.debug {
+        // keep debug symbols for debug package
+        ndk.debugSymbolLevel "FULL"
+        packagingOptions.doNotStrip "**.so"
+    }
     sourceSets.main {
         java.srcDirs = ["src/main"]
         jniLibs.srcDir System.getenv("NDK_HOME") + '/sources/third_party/vulkan/src/build-android/jniLibs'

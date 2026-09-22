@@ -10,3 +10,5 @@ mod ray;
 pub use ray::*;
 mod geometry;
 pub use geometry::*;
+mod bitops;
+pub use bitops::*;

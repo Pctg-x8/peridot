@@ -459,6 +459,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .expect("Failed to record commands");
     }
 
+    e.start_frame_drain();
     let mut last_mouse_input = false;
     loop {
         match e.next_event().await {

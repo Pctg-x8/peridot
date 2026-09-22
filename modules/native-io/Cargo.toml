@@ -7,6 +7,7 @@ edition = "2024"
 [dependencies]
 futures-io = { workspace = true }
 pin-project = "1.1"
+tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 linux-io-uring = { path = "../../platform/linux/io_uring" }

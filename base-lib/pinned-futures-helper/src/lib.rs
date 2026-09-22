@@ -1,5 +1,6 @@
 use core::pin::Pin;
 use futures_io::AsyncRead;
+use std::io::IoSliceMut;
 
 /// `AsyncReadExt::read_exact` with pinned reference
 pub async fn read_exact_async_pinned(
@@ -19,6 +20,23 @@ pub async fn read_exact_async_pinned(
         }
 
         ro += read;
+    }
+
+    Ok(())
+}
+
+/// read all data from a reader into a vectored buffer
+pub async fn read_vectored_all_async_pinned<'buf>(
+    mut reader: Pin<&mut (impl AsyncRead + ?Sized)>,
+    mut bufs: &mut [IoSliceMut<'buf>],
+) -> std::io::Result<()> {
+    // ensure bufs is actually empty or not...
+    IoSliceMut::advance_slices(&mut bufs, 0);
+
+    while !bufs.is_empty() {
+        let read = core::future::poll_fn(|cx| reader.as_mut().poll_read_vectored(cx, bufs)).await?;
+
+        IoSliceMut::advance_slices(&mut bufs, read);
     }
 
     Ok(())

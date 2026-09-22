@@ -1,4 +1,6 @@
+use core::pin::Pin;
 use std::{
+    collections::HashSet,
     io::Result as IOResult,
     os::windows::ffi::OsStrExt,
     path::Path,
@@ -353,7 +355,7 @@ impl NativeFileBlobAsyncRandomReader {
 }
 
 struct NativeFileBlobAsyncReadPendingState {
-    overlapped: Box<OVERLAPPED>,
+    overlapped: Pin<Box<OVERLAPPED>>,
 }
 pub struct NativeFileBlobAsyncReadFuture<'a, 'b> {
     handle: &'a NativeFileBlobAsyncRandomReader,
@@ -373,7 +375,7 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
         match this.pending_state {
             None => {
                 let mut state = NativeFileBlobAsyncReadPendingState {
-                    overlapped: Box::new(init_overlapped(this.pos, HANDLE(core::ptr::null_mut()))),
+                    overlapped: Box::pin(init_overlapped(this.pos, HANDLE(core::ptr::null_mut()))),
                 };
 
                 let mut transferred = 0;
@@ -381,7 +383,7 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                     this.handle.0.read(
                         Some(this.buf),
                         Some(&mut transferred),
-                        Some(state.overlapped.as_mut()),
+                        Some(state.overlapped.as_mut().get_mut()),
                     )
                 };
 
@@ -394,7 +396,7 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                             .expect("no reactor running")
                             .request_register(OverlappedIoRegistrationRequest {
                                 file: this.handle.0.handle(),
-                                overlapped: state.overlapped.as_mut(),
+                                overlapped: state.overlapped.as_mut().get_mut(),
                                 waker: cx.waker().clone(),
                             })
                             .expect("Failed to register file handle to io reactor");
@@ -410,7 +412,7 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
             Some(ref mut state) => match this
                 .handle
                 .0
-                .get_overlapped_result(state.overlapped.as_ref(), false)
+                .get_overlapped_result(state.overlapped.as_ref().get_ref(), false)
             {
                 Ok(transferred) => core::task::Poll::Ready(Ok(transferred as _)),
                 Err(e)
@@ -422,7 +424,7 @@ impl<'a, 'b> core::future::Future for NativeFileBlobAsyncReadFuture<'a, 'b> {
                         .expect("no reactor running")
                         .request_register(OverlappedIoRegistrationRequest {
                             file: this.handle.0.handle(),
-                            overlapped: state.overlapped.as_mut(),
+                            overlapped: state.overlapped.as_mut().get_mut(),
                             waker: cx.waker().clone(),
                         })
                         .expect("Failed to register file handle to io reactor");
@@ -455,7 +457,7 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
         match this.pending_state {
             None => {
                 let mut state = NativeFileBlobAsyncReadPendingState {
-                    overlapped: Box::new(init_overlapped(this.pos, HANDLE(core::ptr::null_mut()))),
+                    overlapped: Box::pin(init_overlapped(this.pos, HANDLE(core::ptr::null_mut()))),
                 };
 
                 // windows has no actual vectored read support
@@ -467,7 +469,7 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                             &mut [core::mem::MaybeUninit<_>],
                         >(&mut this.buf[0])),
                         Some(&mut transferred),
-                        Some(state.overlapped.as_mut()),
+                        Some(state.overlapped.as_mut().get_mut()),
                     )
                 };
 
@@ -480,7 +482,7 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                             .expect("no reactor running")
                             .request_register(OverlappedIoRegistrationRequest {
                                 file: this.handle.0.handle(),
-                                overlapped: state.overlapped.as_mut(),
+                                overlapped: state.overlapped.as_mut().get_mut(),
                                 waker: cx.waker().clone(),
                             })
                             .expect("Failed to register file handle to io reactor");
@@ -497,7 +499,7 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
             Some(ref mut state) => match this
                 .handle
                 .0
-                .get_overlapped_result(state.overlapped.as_ref(), false)
+                .get_overlapped_result(state.overlapped.as_ref().get_ref(), false)
             {
                 Ok(transferred) => core::task::Poll::Ready(Ok(transferred as _)),
                 Err(e)
@@ -509,7 +511,7 @@ impl<'a, 'b, 'b2> core::future::Future for NativeFileBlobAsyncReadVecFuture<'a, 
                         .expect("no reactor running")
                         .request_register(OverlappedIoRegistrationRequest {
                             file: this.handle.0.handle(),
-                            overlapped: state.overlapped.as_mut(),
+                            overlapped: state.overlapped.as_mut().get_mut(),
                             waker: cx.waker().clone(),
                         })
                         .expect("Failed to register file handle to io reactor");
@@ -638,11 +640,6 @@ impl IoReactorHandle {
             .lock()
             .expect("Failed to lock request queue")
             .push(req);
-        self.post_interrupt()
-    }
-
-    #[inline(always)]
-    pub fn post_interrupt(&self) -> windows::core::Result<()> {
         self.iocp.post(0, IO_COMPLETION_KEY_INTERRUPT_REACTOR, None)
     }
 }
@@ -688,25 +685,32 @@ pub fn spawn_io_reactor_thread() -> IoReactorThreadTerminator {
             move || {
                 let mut waker_for_overlapped: HashMap<*mut OVERLAPPED, core::task::Waker> =
                     HashMap::new();
+                let mut sink = [OVERLAPPED_ENTRY {
+                    lpCompletionKey: 0,
+                    lpOverlapped: core::ptr::null_mut(),
+                    Internal: 0,
+                    dwNumberOfBytesTransferred: 0,
+                }; 32];
+                let mut reqs = Vec::new();
+                let mut already_completed = HashSet::new();
 
                 loop {
-                    let reqs = core::mem::replace(
+                    core::mem::swap(
                         &mut *registration_requests
                             .lock()
                             .expect("Failed to lock registration queue"),
-                        Vec::new(),
+                        &mut reqs,
                     );
+                    for r in reqs.drain(..) {
+                        if already_completed.remove(&r.overlapped) {
+                            // already completed before processing request
+                            r.waker.wake();
+                            continue;
+                        }
 
-                    for r in reqs {
                         waker_for_overlapped.insert(r.overlapped, r.waker);
                     }
 
-                    let mut sink = [OVERLAPPED_ENTRY {
-                        lpCompletionKey: 0,
-                        lpOverlapped: core::ptr::null_mut(),
-                        Internal: 0,
-                        dwNumberOfBytesTransferred: 0,
-                    }; 32];
                     let completions = iocp
                         .wait(&mut sink, None, false)
                         .expect("Failed to wait io completion");
@@ -723,6 +727,8 @@ pub fn spawn_io_reactor_thread() -> IoReactorThreadTerminator {
 
                         if let Some(w) = waker_for_overlapped.remove(&c.lpOverlapped) {
                             w.wake();
+                        } else {
+                            already_completed.insert(c.lpOverlapped);
                         }
                     }
                 }

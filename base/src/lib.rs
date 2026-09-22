@@ -337,6 +337,7 @@ pub struct Engine<'q, NL: NativeLinker> {
     engine_events_sender: async_std::channel::Sender<EngineEvent>,
     receivers: core::cell::UnsafeCell<EngineEventReceiver>,
     shared_event_queue: &'q EventQueue,
+    frame_draining: &'q mut bool,
 }
 impl<'q, PL: NativeLinker> Engine<'q, PL> {
     pub fn new(
@@ -350,6 +351,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
         ),
         frame_timing_receiver: async_std::channel::Receiver<()>,
         shared_event_queue: &'q EventQueue,
+        frame_draining: &'q mut bool,
     ) -> Self {
         let mut g = Graphics::new(
             name,
@@ -385,6 +387,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
                 other_events_receiver: engine_events_bus.1,
             }),
             shared_event_queue,
+            frame_draining,
         }
     }
 
@@ -401,6 +404,15 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     #[inline(always)]
     pub fn next_event(&self) -> impl core::future::Future<Output = Event> + 'q {
         self.shared_event_queue.next_event()
+    }
+
+    pub fn start_frame_drain(&mut self) {
+        *self.frame_draining = true;
+        self.shared_event_queue.enqueue(Event::NextFrame);
+    }
+
+    pub fn stop_frame_drain(&mut self) {
+        *self.frame_draining = false;
     }
 
     pub async fn quit(&self) {
@@ -499,6 +511,25 @@ impl<PL: NativeLinker> Engine<'_, PL> {
     #[inline(always)]
     pub fn internal_native_link_mut(&mut self) -> &mut PL {
         &mut self.native_link
+    }
+
+    #[inline(always)]
+    pub fn open_raw_asset<'a, A: LogicalAssetData>(
+        &'a self,
+        path: &str,
+    ) -> std::io::Result<impl AssetBlob + 'a> {
+        self.native_link.asset_loader().get(path, A::EXT)
+    }
+
+    #[inline(always)]
+    pub async fn open_raw_asset_async<'a, A: LogicalAssetData>(
+        &'a self,
+        path: &str,
+    ) -> std::io::Result<impl AssetBlobAsync + 'a> {
+        self.native_link
+            .asset_loader()
+            .get_async(path, A::EXT)
+            .await
     }
 
     #[inline(always)]
