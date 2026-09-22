@@ -146,7 +146,7 @@ impl Handle {
     }
 
     #[inline(always)]
-    fn instance_vars(&self) -> &InstanceVars {
+    fn instance_vars<'a, 'sys>(&'a self) -> &'a InstanceVars<'sys> {
         unsafe {
             &*super::bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
                 .cast::<InstanceVars>()
@@ -154,7 +154,7 @@ impl Handle {
     }
 
     #[inline(always)]
-    fn instance_vars_mut(&mut self) -> &mut InstanceVars {
+    fn instance_vars_mut<'a, 'sys>(&'a mut self) -> &'a mut InstanceVars<'sys> {
         unsafe {
             &mut *super::bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
                 .cast::<InstanceVars>()
@@ -219,6 +219,7 @@ impl Handle {
             },
             key_modifier,
         );
+        h.instance_vars().coreloop().update_view_all();
     }
 
     extern "C" fn pointer_move(
@@ -236,6 +237,7 @@ impl Handle {
             Point::new_logical(x as _, y as _),
             key_modifier,
         );
+        h.instance_vars().coreloop().update_view_all();
     }
 
     extern "C" fn pointer_up(
@@ -255,6 +257,7 @@ impl Handle {
             },
             key_modifier,
         );
+        h.instance_vars().coreloop().update_view_all();
     }
 
     extern "C" fn pointer_leave(sender: *mut super::bridge::FlyoutSurface) {
@@ -263,6 +266,7 @@ impl Handle {
         h.instance_vars()
             .coreloop()
             .dispatch_menu_pointer_leave(super::PointerID());
+        h.instance_vars().coreloop().update_view_all();
     }
 }
 impl crate::input::ShellPointerActions for Handle {
@@ -307,6 +311,7 @@ impl<'sys> SharedState<'sys> {
         extern "C" fn cb<'sys>(ctx: *mut core::ffi::c_void) {
             unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }
                 .perform_menu_delayed_action();
+            unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.update_view_all();
         }
 
         unsafe {
@@ -325,6 +330,7 @@ impl<'sys> SharedState<'sys> {
             if on_context_menu_surface == 0 {
                 // コンテキストメニュー以外でクリックが入った
                 unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.close_all_menus();
+                unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.update_view_all();
             }
         }
 

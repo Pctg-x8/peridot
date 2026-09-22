@@ -625,6 +625,7 @@ impl<'sys> WindowDispatcher<'sys> {
         let this = unsafe { &*caller_context.cast::<Self>() };
         if let WindowType::Sub = this.window_type {
             this.coreloop().close_sub_window(WindowHandle(window));
+            this.coreloop().update_view_all();
         }
     }
 
@@ -650,6 +651,7 @@ impl<'sys> WindowDispatcher<'sys> {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             this.coreloop()
                 .resize_window(WindowHandle(window), logical_size);
+            this.coreloop().update_view_all();
         }
     }
 
@@ -681,6 +683,7 @@ impl<'sys> WindowDispatcher<'sys> {
             },
             key_modifier,
         );
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_pointer_move(
@@ -701,6 +704,7 @@ impl<'sys> WindowDispatcher<'sys> {
             Point::new_logical(x as _, y as _),
             key_modifier,
         );
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_pointer_delta_move(
@@ -715,6 +719,7 @@ impl<'sys> WindowDispatcher<'sys> {
 
         this.coreloop()
             .handle_pointer_move_relative(pointer_id, Point::new_logical(dx as _, dy as _));
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_pointer_up(
@@ -737,6 +742,7 @@ impl<'sys> WindowDispatcher<'sys> {
             },
             key_modifier,
         );
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_key_down(
@@ -766,6 +772,7 @@ impl<'sys> WindowDispatcher<'sys> {
             KeyInputCode::UnknownNativeCode(code as _),
             modifier,
         );
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_key_down_with_char(
@@ -849,6 +856,7 @@ impl<'sys> WindowDispatcher<'sys> {
                     .dispatch_key_char(WindowHandle(window), c, modifier);
             }
         }
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_key_up(
@@ -878,6 +886,7 @@ impl<'sys> WindowDispatcher<'sys> {
             KeyInputCode::UnknownNativeCode(code as _),
             modifier,
         );
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_key_up_with_char(
@@ -954,42 +963,32 @@ impl<'sys> WindowDispatcher<'sys> {
                 modifier,
             ),
         }
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_key_focus_state_changed(
         caller_context: *mut core::ffi::c_void,
-        window: *mut crate::platform::mac::bridge::WindowLink,
+        window: *mut bridge::WindowLink,
         focused: u8,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
         this.coreloop()
             .handle_window_focus_changed(WindowHandle(window), focused != 0);
+        this.coreloop().update_view_all();
     }
 
     extern "C" fn on_scroll_wheel(
         caller_context: *mut core::ffi::c_void,
-        window: *mut self::bridge::WindowLink,
+        window: *mut bridge::WindowLink,
         modifier_flags: u32,
         amount: f64,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
-        let mut modifier = ModifierKey::empty();
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_SHIFT) != 0 {
-            modifier |= ModifierKey::SHIFT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_CONTROL) != 0 {
-            modifier |= ModifierKey::CONTROL;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_OPTION) != 0 {
-            modifier |= ModifierKey::ALT;
-        }
-        if (modifier_flags & self::bridge::NSEVENT_MODIFIER_FLAG_COMMAND) != 0 {
-            modifier |= ModifierKey::SUPER;
-        }
-
-        this.coreloop().dispatch_scroll_wheel(amount as _, modifier);
+        this.coreloop()
+            .dispatch_scroll_wheel(amount as _, translate_event_modifier_key(modifier_flags));
+        this.coreloop().update_view_all();
     }
 }
 
@@ -1012,7 +1011,7 @@ pub(self) fn translate_event_modifier_key(mk: u32) -> ModifierKey {
 }
 
 pub struct WindowState {
-    wlink: *mut self::bridge::WindowLink,
+    wlink: *mut bridge::WindowLink,
     extra_data: *mut core::ffi::c_void,
     pub swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
@@ -1030,9 +1029,7 @@ unsafe impl Send for WindowState {}
 #[inline(always)]
 pub fn ak_spacing_inline_start() -> &'static apple_sdk_port::foundation::String {
     unsafe {
-        apple_sdk_port::foundation::String::from_internal_ref(
-            &*self::bridge::ni_ak_spacing_inline_start(),
-        )
+        apple_sdk_port::foundation::String::from_internal_ref(&*bridge::ni_ak_spacing_inline_start())
     }
 }
 
@@ -1041,7 +1038,7 @@ pub fn query_range_for_word_at(input: &str, at_utf16: usize) -> core::range::Ran
     let mut end = core::mem::MaybeUninit::uninit();
 
     unsafe {
-        self::bridge::ni_query_range_for_word_at(
+        bridge::ni_query_range_for_word_at(
             input.as_ptr(),
             input.len() as _,
             at_utf16 as _,
