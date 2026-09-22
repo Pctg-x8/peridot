@@ -330,6 +330,12 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
         &[],
     );
 
+    // mac(kosmickrisp?)だとどうやらD24_UNORM_S8_UINTが使えないっぽい（D16なら使える）
+    #[cfg(target_os = "macos")]
+    let depth_format = br::vk::VK_FORMAT_D16_UNORM;
+    #[cfg(not(target_os = "macos"))]
+    let depth_format = br::vk::VK_FORMAT_D24_UNORM_S8_UINT;
+
     let render_pass = br::RenderPassObject::new(
         e.graphics_device().clone(),
         &br::RenderPassCreateInfo::new(
@@ -337,7 +343,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
                 e.back_buffer_attachment_desc()
                     .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store),
                 br::AttachmentDescription::new(
-                    br::vk::VK_FORMAT_D24_UNORM_S8_UINT,
+                    depth_format,
                     br::ImageLayout::Undefined,
                     br::ImageLayout::DepthStencilAttachmentOpt,
                 )
@@ -371,11 +377,10 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
     let depth_buffer = memory_manager
         .allocate_device_local_image(
             e.graphics(),
-            br::ImageCreateInfo::new(backbuffer_size, br::vk::VK_FORMAT_D24_UNORM_S8_UINT)
-                .with_usage(
-                    br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                        | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-                ),
+            br::ImageCreateInfo::new(backbuffer_size, depth_format).with_usage(
+                br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                    | br::ImageUsageFlags::TRANSIENT_ATTACHMENT,
+            ),
         )
         .expect("depth_buffer.create");
     let mut depth_buffer_view = br::ImageViewBuilder::new(
