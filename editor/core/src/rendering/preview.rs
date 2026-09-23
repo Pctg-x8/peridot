@@ -1057,6 +1057,10 @@ impl DynamicBuffer {
     fn free(&mut self, ptr: DynamicBufferPointer) {
         unsafe { &mut *ptr.source_page.get() }.free(ptr.offset);
     }
+
+    unsafe fn free_ref(&mut self, ptr: &DynamicBufferPointer) {
+        unsafe { &mut *ptr.source_page.get() }.free(ptr.offset);
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2875,6 +2879,56 @@ impl Renderer {
                 index_type: m.index_type,
                 sub_mesh_ranges: m.sub_mesh_ranges.as_ref().to_owned(),
             });
+        }
+        for (id, m) in committed_state.dirty_meshes.drain() {
+            let existing = &mut self.user_meshes[id];
+            if existing.vertex_size != m.vertices.len() as _ {
+                // needs realloc
+                unsafe {
+                    self.dynamic_buffer.free_ref(&existing.vertex_offset);
+                }
+                existing.vertex_offset =
+                    self.dynamic_buffer
+                        .alloc(device, m.vertices.len() as _, |_, _| {});
+                existing.vertex_size = m.vertices.len() as _;
+            }
+            if existing.index_size != m.indices.len() as _ {
+                // needs realloc
+                unsafe {
+                    self.dynamic_buffer.free_ref(&existing.index_offset);
+                }
+                existing.index_offset =
+                    self.dynamic_buffer
+                        .alloc(device, m.indices.len() as _, |_, _| {});
+                existing.index_size = m.indices.len() as _;
+            }
+
+            let vertex_update = self.scratch_staging.reserve(m.vertices.len());
+            let index_update = self.scratch_staging.reserve(m.indices.len());
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    m.vertices.as_ptr(),
+                    self.scratch_staging
+                        .mapped_ptr
+                        .byte_add(vertex_update)
+                        .cast(),
+                    m.vertices.len(),
+                );
+                core::ptr::copy_nonoverlapping(
+                    m.indices.as_ptr(),
+                    self.scratch_staging
+                        .mapped_ptr
+                        .byte_add(index_update)
+                        .cast(),
+                    m.indices.len(),
+                );
+            }
+            self.user_data_update_pending = true;
+
+            existing.vertex_update_pending = Some(vertex_update);
+            existing.index_update_pending = Some(index_update);
+            existing.index_type = m.index_type;
+            existing.sub_mesh_ranges = m.sub_mesh_ranges.as_ref().to_owned();
         }
 
         for r in committed_state.pushed_render_data.drain(..) {
