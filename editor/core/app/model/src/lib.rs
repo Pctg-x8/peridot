@@ -820,6 +820,17 @@ pub fn object_deselect_all(env: &mut (impl ApplicationMutableAccess + ?Sized)) {
     env.dispatch_view_feedback(ViewFeedbackObjectSelectionChanged);
 }
 
+pub fn highlight_render_ids(
+    env: &(impl ApplicationAccess + ?Sized),
+) -> impl Iterator<Item = usize> {
+    let state = env.application();
+
+    state
+        .selected_objects
+        .iter()
+        .filter_map(move |x| state.objects.get(x.into_array_index())?.render_id)
+}
+
 pub fn set_preview_edit_tool_type(
     env: &mut (impl ApplicationMutableAccess + ?Sized),
     tool_type: PreviewEditToolType,

@@ -167,6 +167,7 @@ pub fn launch() {
         pushed_render_data: Vec::new(),
         dirty_render_data: HashMap::new(),
         removed_render_data: HashSet::new(),
+        highlight_render_index: None,
         handle_shape: None,
         handle_pointing: None,
         handle_to_world_transform: peridot_math::Matrix4::ONE,

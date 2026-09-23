@@ -696,6 +696,9 @@ impl MainThreadState {
             committed_state.handle_shape = current_handle_shape;
             committed_state.handle_data_dirtified = true;
         }
+
+        // TODO: multiple highlight
+        committed_state.highlight_render_index = model::highlight_render_ids(application).next();
     }
 
     fn hittest_with_handle(

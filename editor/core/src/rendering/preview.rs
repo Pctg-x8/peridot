@@ -7,7 +7,7 @@ use std::{
 
 use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, ImageChild,
-    MemoryBound, VkHandle,
+    MemoryBound, RenderPass, ShaderModule, VkHandle,
 };
 use peridot_math::{Camera, Matrix4, Matrix4F32, One};
 use shared::{
@@ -1103,6 +1103,7 @@ pub struct CommittedState {
     pub pushed_render_data: Vec<CommittedRenderData>,
     pub dirty_render_data: HashMap<usize, CommittedRenderData>,
     pub removed_render_data: HashSet<usize>,
+    pub highlight_render_index: Option<usize>,
     pub handle_shape: Option<HandleShape>,
     pub handle_to_world_transform: Matrix4F32,
     pub handle_pointing: Option<HandlePointing>,
@@ -1129,12 +1130,920 @@ enum RenderData {
     },
 }
 
+struct MeshRenderData {
+    vertices: br::DeviceSize,
+    indices: br::DeviceSize,
+    index_type: br::IndexType,
+    index_count: u32,
+}
+impl MeshRenderData {
+    #[inline(always)]
+    pub fn bind_buffers<'d>(
+        &self,
+        buffer: &(impl br::VkHandle<Handle = br::vk::VkBuffer> + ?Sized),
+        r: br::CmdRecord<'d>,
+    ) -> br::CmdRecord<'d> {
+        r.bind_vertex_buffer_array(0, &[buffer.as_transparent_ref()], &[self.vertices])
+            .bind_index_buffer(buffer, self.indices as _, self.index_type)
+    }
+
+    #[inline(always)]
+    pub fn simple_draw<'d>(
+        &self,
+        buffer: &(impl br::VkHandle<Handle = br::vk::VkBuffer> + ?Sized),
+        instance_count: u32,
+        r: br::CmdRecord<'d>,
+    ) -> br::CmdRecord<'d> {
+        self.bind_buffers(buffer, r)
+            .draw_indexed(self.index_count, instance_count, 0, 0, 0)
+    }
+}
+const HANDLE_MESH_VERTEX_INPUT_STATE: &br::PipelineVertexInputStateCreateInfo =
+    &br::PipelineVertexInputStateCreateInfo::new(
+        &[br::VertexInputBindingDescription::per_vertex_typed::<
+            HandleVertex,
+        >(0)],
+        &[
+            br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                offset: core::mem::offset_of!(HandleVertex, pos) as _,
+                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+            }),
+            br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                offset: core::mem::offset_of!(HandleVertex, col_index) as _,
+                format: br::vk::VK_FORMAT_R32_UINT,
+            }),
+        ],
+    );
+
+#[derive(br::SpecializationConstants)]
+struct BlurSpecConstants {
+    #[constant_id = 0]
+    offset_x: f32,
+    #[constant_id = 1]
+    offset_y: f32,
+    #[constant_id = 2]
+    gaussian_blur_factor_0: f32,
+    #[constant_id = 3]
+    gaussian_blur_factor_1: f32,
+    #[constant_id = 4]
+    gaussian_blur_factor_2: f32,
+    #[constant_id = 5]
+    gaussian_blur_factor_3: f32,
+}
+
+pub struct ObjectOutlineGenerator {
+    mem: br::vk::VkDeviceMemory,
+    stencil_buffer: br::vk::VkImage,
+    stencil_buffer_view: br::vk::VkImageView,
+    silhouette_buffers: [(br::vk::VkImage, br::vk::VkImageView); 2],
+    render_passes: [br::vk::VkRenderPass; 3],
+    framebuffers: [br::vk::VkFramebuffer; 3],
+    shader: br::vk::VkShaderModule,
+    pipeline_layout: br::vk::VkPipelineLayout,
+    blur_shader: br::vk::VkShaderModule,
+    x_blur_constants: BlurSpecConstants,
+    y_blur_constants: BlurSpecConstants,
+    blur_pipeline_layout: br::vk::VkPipelineLayout,
+    dp: br::vk::VkDescriptorPool,
+    blur_inputs: [br::DescriptorSet; 2],
+    pipelines: [br::vk::VkPipeline; 3],
+}
+impl ObjectOutlineGenerator {
+    unsafe fn drop(self, gfx: &Graphics) {
+        drop(
+            self.pipelines
+                .map(|x| unsafe { br::PipelineObject::manage(x, gfx) }),
+        );
+        drop(unsafe { br::DescriptorPoolObject::manage(self.dp, gfx) });
+        drop(unsafe { br::PipelineLayoutObject::manage(self.blur_pipeline_layout, gfx) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.blur_shader, gfx) });
+        drop(unsafe { br::PipelineLayoutObject::manage(self.pipeline_layout, gfx) });
+        drop(unsafe { br::ShaderModuleObject::manage(self.shader, gfx) });
+
+        for fb in self.framebuffers {
+            drop(unsafe { br::FramebufferObject::manage(fb, gfx) });
+        }
+        for x in self.render_passes {
+            drop(unsafe { br::RenderPassObject::manage(x, gfx) });
+        }
+
+        for (r, v) in self.silhouette_buffers {
+            drop(unsafe {
+                br::ImageViewObject::manage(
+                    v,
+                    br::ImageObject::manage(
+                        r,
+                        gfx,
+                        br::vk::VK_IMAGE_TYPE_2D,
+                        br::vk::VK_FORMAT_UNDEFINED,
+                        br::Extent3D::spread1(1),
+                    ),
+                )
+            });
+        }
+        drop(unsafe {
+            br::ImageViewObject::manage(
+                self.stencil_buffer_view,
+                br::ImageObject::manage(
+                    self.stencil_buffer,
+                    gfx,
+                    br::vk::VK_IMAGE_TYPE_2D,
+                    br::vk::VK_FORMAT_UNDEFINED,
+                    br::Extent3D::spread1(1),
+                ),
+            )
+        });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.mem, gfx) });
+    }
+
+    pub fn new(
+        gfx: &Graphics,
+        size: br::Extent2D,
+        dsl_common: &(impl br::VkHandle<Handle = br::vk::VkDescriptorSetLayout> + ?Sized),
+        dsl_object: &(impl br::VkHandle<Handle = br::vk::VkDescriptorSetLayout> + ?Sized),
+        dsl_cis1: &(impl br::VkHandle<Handle = br::vk::VkDescriptorSetLayout> + ?Sized),
+    ) -> Self {
+        let stencil_buffer_attachment_desc =
+            br::AttachmentDescription2::new(br::vk::VK_FORMAT_S8_UINT);
+        let silhouette_buffer_attachment_desc =
+            br::AttachmentDescription2::new(br::vk::VK_FORMAT_R8_UNORM);
+        let render_passes = [
+            br::RenderPassObject::new(
+                gfx,
+                &br::RenderPassCreateInfo2::new(
+                    &[
+                        silhouette_buffer_attachment_desc
+                            .clone()
+                            .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                            .layout_transition(
+                                br::ImageLayout::Undefined,
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            ),
+                        stencil_buffer_attachment_desc
+                            .clone()
+                            .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                            .layout_transition(
+                                br::ImageLayout::Undefined,
+                                br::ImageLayout::DepthStencilReadOnlyOpt,
+                            ),
+                    ],
+                    &[br::SubpassDescription2::new()
+                        .colors(&[br::AttachmentReference2::color_attachment_opt(0)])
+                        .depth_stencil(&br::AttachmentReference2::depth_stencil_attachment_opt(1))],
+                    &[br::SubpassDependency2::new(
+                        br::SubpassIndex::Internal(0),
+                        br::SubpassIndex::External,
+                    )
+                    .of_memory(
+                        br::AccessFlags::COLOR_ATTACHMENT.write
+                            | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.write,
+                        br::AccessFlags::SHADER.read
+                            | br::AccessFlags::DEPTH_STENCIL_ATTACHMENT.read,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                            | br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                        br::PipelineStageFlags::FRAGMENT_SHADER
+                            | br::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                    )],
+                ),
+            )
+            .expect("object_outline_generator.render_pass.1.create"),
+            br::RenderPassObject::new(
+                gfx,
+                &br::RenderPassCreateInfo2::new(
+                    &[silhouette_buffer_attachment_desc
+                        .clone()
+                        .color_memory_op(br::LoadOp::DontCare, br::StoreOp::Store)
+                        .layout_transition(
+                            br::ImageLayout::Undefined,
+                            br::ImageLayout::ShaderReadOnlyOpt,
+                        )],
+                    &[br::SubpassDescription2::new()
+                        .colors(&[br::AttachmentReference2::color_attachment_opt(0)])],
+                    &[br::SubpassDependency2::new(
+                        br::SubpassIndex::Internal(0),
+                        br::SubpassIndex::External,
+                    )
+                    .of_memory(
+                        br::AccessFlags::COLOR_ATTACHMENT.write,
+                        br::AccessFlags::SHADER.read,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        br::PipelineStageFlags::FRAGMENT_SHADER,
+                    )],
+                ),
+            )
+            .expect("object_outline_generator.render_pass.2.create"),
+            br::RenderPassObject::new(
+                gfx,
+                &br::RenderPassCreateInfo2::new(
+                    &[
+                        silhouette_buffer_attachment_desc
+                            .clone()
+                            .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                            .layout_transition(
+                                br::ImageLayout::Undefined,
+                                br::ImageLayout::ShaderReadOnlyOpt,
+                            ),
+                        stencil_buffer_attachment_desc
+                            .clone()
+                            .stencil_memory_op(br::LoadOp::Load, br::StoreOp::DontCare)
+                            .layout_transition(
+                                br::ImageLayout::DepthStencilReadOnlyOpt,
+                                br::ImageLayout::DepthStencilReadOnlyOpt,
+                            ),
+                    ],
+                    &[br::SubpassDescription2::new()
+                        .colors(&[br::AttachmentReference2::color_attachment_opt(0)])
+                        .depth_stencil(&br::AttachmentReference2::depth_stencil_readonly_opt(1))],
+                    &[br::SubpassDependency2::new(
+                        br::SubpassIndex::Internal(0),
+                        br::SubpassIndex::External,
+                    )
+                    .of_memory(
+                        br::AccessFlags::COLOR_ATTACHMENT.write,
+                        br::AccessFlags::SHADER.read,
+                    )
+                    .of_execution(
+                        br::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                        br::PipelineStageFlags::FRAGMENT_SHADER,
+                    )],
+                ),
+            )
+            .expect("object_outline_generator.render_pass.3.create"),
+        ];
+        let shader = gfx.require_shader("preview/default_silhouette.spv");
+        let pipeline_layout = br::PipelineLayoutObject::new(
+            gfx,
+            &br::PipelineLayoutCreateInfo::new(
+                &[
+                    dsl_common.as_transparent_ref(),
+                    dsl_object.as_transparent_ref(),
+                ],
+                &[],
+            ),
+        )
+        .expect("object_outline_generator.pipeline_layout.create");
+        let blur_shader = gfx.require_shader("preview/silhouette_blur.spv");
+        let blur_pipeline_layout = br::PipelineLayoutObject::new(
+            gfx,
+            &br::PipelineLayoutCreateInfo::new(&[dsl_cis1.as_transparent_ref()], &[]),
+        )
+        .expect("object_outline_generator.blur_pipeline_layout.create");
+        let mut dp = br::DescriptorPoolObject::new(
+            gfx,
+            &br::DescriptorPoolCreateInfo::new(
+                2,
+                &[br::DescriptorType::CombinedImageSampler.make_size(2)],
+            ),
+        )
+        .expect("object_outline_generator.descriptor_pool.create");
+        let blur_inputs = dp
+            .alloc_array(&[dsl_cis1.as_transparent_ref(), dsl_cis1.as_transparent_ref()])
+            .expect("object_outline_generator.blur_inputs.alloc");
+
+        let mut blur_factors = [0.0; 4];
+        let mut factor_sum = 0.0;
+        let r = 0.3 * 3.0;
+        fn gauss(x: f32, r: f32) -> f32 {
+            (-(x * x) / (2.0 * r * r)) / (core::f32::consts::TAU * r * r).sqrt()
+        }
+        blur_factors[0] = gauss(0.0, r);
+        factor_sum += blur_factors[0];
+        for x in 1..=3 {
+            blur_factors[x] = gauss(x as _, r);
+            // +と-両方に出る
+            factor_sum += blur_factors[x] * 2.0;
+        }
+        for v in &mut blur_factors {
+            *v /= factor_sum;
+        }
+        let x_blur_constants = BlurSpecConstants {
+            offset_x: 1.0,
+            offset_y: 0.0,
+            gaussian_blur_factor_0: blur_factors[0],
+            gaussian_blur_factor_1: blur_factors[1],
+            gaussian_blur_factor_2: blur_factors[2],
+            gaussian_blur_factor_3: blur_factors[3],
+        };
+        let y_blur_constants = BlurSpecConstants {
+            offset_x: 0.0,
+            offset_y: 1.0,
+            gaussian_blur_factor_0: blur_factors[0],
+            gaussian_blur_factor_1: blur_factors[1],
+            gaussian_blur_factor_2: blur_factors[2],
+            gaussian_blur_factor_3: blur_factors[3],
+        };
+
+        let stencil_buffer = br::ImageObject::new(
+            gfx,
+            &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_S8_UINT)
+                .with_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+        )
+        .expect("object_outline_generator.stencil_buffer.create");
+        let silhouette_buffers = core::array::from_fn::<_, 2, _>(|_| {
+            br::ImageObject::new(
+                gfx,
+                &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).with_usage(
+                    br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::SAMPLED,
+                ),
+            )
+            .expect("object_outline_generator.silhouette_buffer.create")
+        });
+
+        let mut offsets = [0; 3];
+        let mut memtop = 0;
+        let mut memindex_mask = u32::MAX;
+        let mreq = stencil_buffer.requirements();
+        offsets[0] = rup2_u64(memtop, mreq.alignment);
+        memtop = offsets[0] + mreq.size;
+        memindex_mask &= mreq.memoryTypeBits;
+        for (n, x) in silhouette_buffers.iter().enumerate() {
+            let mreq = x.requirements();
+            offsets[1 + n] = rup2_u64(memtop, mreq.alignment);
+            memtop = offsets[1 + n] + mreq.size;
+            memindex_mask &= mreq.memoryTypeBits;
+        }
+        assert_ne!(
+            memindex_mask, 0,
+            "no suitable memory for all buffers(TODO: should separate buffer memory)"
+        );
+        let memindex = gfx
+            .find_device_local_memory_index(memindex_mask)
+            .expect("no suitable memory for buffers");
+        let mem = br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(memtop, memindex))
+            .expect("object_outline_generator.mem.alloc");
+        let mut binds = Vec::with_capacity(3);
+        binds.push(br::BindImageMemoryInfo::new(
+            &stencil_buffer,
+            &mem,
+            offsets[0],
+        ));
+        binds.extend(
+            silhouette_buffers
+                .iter()
+                .enumerate()
+                .map(|(n, x)| br::BindImageMemoryInfo::new(x, &mem, offsets[1 + n])),
+        );
+        unsafe {
+            gfx.bind_images(&binds)
+                .expect("object_outline_generator.bind_buffers");
+        }
+
+        let stencil_buffer_view = br::ImageViewBuilder::new(
+            stencil_buffer,
+            br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
+        )
+        .create()
+        .expect("object_outline_generator.stencil_buffer_view.create");
+        let silhouette_buffers = silhouette_buffers.map(|r| {
+            br::ImageViewBuilder::new(
+                r,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+            )
+            .create()
+            .expect("object_outline_generator.silhouette_buffer_view.create")
+        });
+        gfx.update_descriptor_sets(
+            &[
+                blur_inputs[0]
+                    .binding_at(0)
+                    .write(br::DescriptorContents::combined_image_sampler(
+                        &silhouette_buffers[0],
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    )),
+                blur_inputs[1]
+                    .binding_at(0)
+                    .write(br::DescriptorContents::combined_image_sampler(
+                        &silhouette_buffers[1],
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    )),
+            ],
+            &[],
+        );
+
+        let framebuffers = [
+            br::FramebufferObject::new(
+                gfx,
+                &br::FramebufferCreateInfo::new(
+                    &render_passes[0],
+                    &[
+                        silhouette_buffers[0].as_transparent_ref(),
+                        stencil_buffer_view.as_transparent_ref(),
+                    ],
+                    size.width,
+                    size.height,
+                ),
+            )
+            .expect("object_outline_generator.framebuffers.1.create"),
+            br::FramebufferObject::new(
+                gfx,
+                &br::FramebufferCreateInfo::new(
+                    &render_passes[1],
+                    &[silhouette_buffers[1].as_transparent_ref()],
+                    size.width,
+                    size.height,
+                ),
+            )
+            .expect("object_outline_generator.framebuffers.2.create"),
+            br::FramebufferObject::new(
+                gfx,
+                &br::FramebufferCreateInfo::new(
+                    &render_passes[2],
+                    &[
+                        silhouette_buffers[0].as_transparent_ref(),
+                        stencil_buffer_view.as_transparent_ref(),
+                    ],
+                    size.width,
+                    size.height,
+                ),
+            )
+            .expect("object_outline_generator.framebuffers.3.create"),
+        ];
+        let pipelines = gfx
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    &pipeline_layout,
+                    render_passes[0].subpass(0),
+                    &[
+                        shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        shader.on_stage(br::ShaderStage::Fragment, c"fragMain"),
+                    ],
+                    &br::PipelineVertexInputStateCreateInfo::new(
+                        &[
+                            // TODO: from mesh
+                            br::VertexInputBindingDescription::per_vertex_typed::<
+                                [peridot_math::Vector4F32; 2],
+                            >(0),
+                        ],
+                        &[br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: 0,
+                                binding: 0,
+                                // TODO: from mesh
+                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                offset: 0,
+                            },
+                        )],
+                    ),
+                    // TODO: from mesh
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                        &[size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::BACK,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new().stencil_state_front(
+                        br::StencilOpState::always(
+                            br::StencilOp::Replace,
+                            br::StencilOp::Keep,
+                            br::StencilOp::Keep,
+                        )
+                        .set_compare(br::CompareOp::Always, 0x01, 0x01)
+                        .write_mask(0x01),
+                    ),
+                ),
+                br::GraphicsPipelineCreateInfo::new(
+                    &blur_pipeline_layout,
+                    render_passes[1].subpass(0),
+                    &[
+                        blur_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        blur_shader
+                            .on_stage(br::ShaderStage::Fragment, c"fragMain")
+                            .with_specialization_info(&br::SpecializationInfo::new(
+                                &x_blur_constants,
+                            )),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                        &[size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new()),
+                br::GraphicsPipelineCreateInfo::new(
+                    &blur_pipeline_layout,
+                    render_passes[2].subpass(0),
+                    &[
+                        blur_shader.on_stage(br::ShaderStage::Vertex, c"vertMain"),
+                        blur_shader
+                            .on_stage(br::ShaderStage::Fragment, c"fragMain")
+                            .with_specialization_info(&br::SpecializationInfo::new(
+                                &y_blur_constants,
+                            )),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                        &[size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .stencil_test(true)
+                        .stencil_state_front(br::StencilOpState::NOP.set_compare(
+                            br::CompareOp::NotEqual,
+                            0x01,
+                            0x01,
+                        ))
+                        .stencil_state_back(br::StencilOpState::NOP.set_compare(
+                            br::CompareOp::NotEqual,
+                            0x01,
+                            0x01,
+                        )),
+                ),
+            ])
+            .expect("object_outline_generator.pipelines.create");
+
+        let (mem, _) = mem.unmanage();
+        let (stencil_buffer_view, stencil_buffer) = stencil_buffer_view.unmanage();
+        let (stencil_buffer, _, _, _, _) = stencil_buffer.unmanage();
+        let silhouette_buffers = silhouette_buffers.map(|x| {
+            let (view, res) = x.unmanage();
+            let (res, _, _, _, _) = res.unmanage();
+
+            (res, view)
+        });
+        let render_passes = render_passes.map(|x| x.unmanage().0);
+        let framebuffers = framebuffers.map(|x| x.unmanage().0);
+        let (shader, _) = shader.unmanage();
+        let (pipeline_layout, _) = pipeline_layout.unmanage();
+        let (blur_shader, _) = blur_shader.unmanage();
+        let (blur_pipeline_layout, _) = blur_pipeline_layout.unmanage();
+        let (dp, _) = dp.unmanage();
+        let pipelines = pipelines.map(|x| x.unmanage().0);
+        Self {
+            mem,
+            stencil_buffer,
+            stencil_buffer_view,
+            silhouette_buffers,
+            render_passes,
+            framebuffers,
+            shader,
+            pipeline_layout,
+            blur_shader,
+            x_blur_constants,
+            y_blur_constants,
+            blur_pipeline_layout,
+            dp,
+            blur_inputs,
+            pipelines,
+        }
+    }
+
+    pub fn resize(&mut self, gfx: &Graphics, size: br::Extent2D) {
+        for x in self.pipelines {
+            drop(unsafe { br::PipelineObject::manage(x, gfx) });
+        }
+        for x in self.framebuffers {
+            drop(unsafe { br::FramebufferObject::manage(x, gfx) });
+        }
+        for (r, v) in self.silhouette_buffers {
+            drop(unsafe {
+                br::ImageViewObject::manage(
+                    v,
+                    br::ImageObject::manage(
+                        r,
+                        gfx,
+                        br::vk::VK_IMAGE_TYPE_2D,
+                        br::vk::VK_FORMAT_UNDEFINED,
+                        br::Extent3D::spread1(1),
+                    ),
+                )
+            });
+        }
+        drop(unsafe {
+            br::ImageViewObject::manage(
+                self.stencil_buffer_view,
+                br::ImageObject::manage(
+                    self.stencil_buffer,
+                    gfx,
+                    br::vk::VK_IMAGE_TYPE_2D,
+                    br::vk::VK_FORMAT_UNDEFINED,
+                    br::Extent3D::spread1(1),
+                ),
+            )
+        });
+        drop(unsafe { br::DeviceMemoryObject::manage(self.mem, gfx) });
+
+        let stencil_buffer = br::ImageObject::new(
+            gfx,
+            &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_S8_UINT)
+                .with_usage(br::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT),
+        )
+        .expect("object_outline_generator.stencil_buffer.create");
+        let silhouette_buffers = core::array::from_fn::<_, 2, _>(|_| {
+            br::ImageObject::new(
+                gfx,
+                &br::ImageCreateInfo::new(size, br::vk::VK_FORMAT_R8_UNORM).with_usage(
+                    br::ImageUsageFlags::COLOR_ATTACHMENT | br::ImageUsageFlags::SAMPLED,
+                ),
+            )
+            .expect("object_outline_generator.silhouette_buffer.create")
+        });
+
+        let mut offsets = [0; 3];
+        let mut memtop = 0;
+        let mut memindex_mask = u32::MAX;
+        let mreq = stencil_buffer.requirements();
+        offsets[0] = rup2_u64(memtop, mreq.alignment);
+        memtop = offsets[0] + mreq.size;
+        memindex_mask &= mreq.memoryTypeBits;
+        for (n, x) in silhouette_buffers.iter().enumerate() {
+            let mreq = x.requirements();
+            offsets[1 + n] = rup2_u64(memtop, mreq.alignment);
+            memtop = offsets[1 + n] + mreq.size;
+            memindex_mask &= mreq.memoryTypeBits;
+        }
+        assert_ne!(
+            memindex_mask, 0,
+            "no suitable memory for all buffers(TODO: should separate buffer memory)"
+        );
+        let memindex = gfx
+            .find_device_local_memory_index(memindex_mask)
+            .expect("no suitable memory for buffers");
+        let mem = br::DeviceMemoryObject::new(gfx, &br::MemoryAllocateInfo::new(memtop, memindex))
+            .expect("object_outline_generator.mem.alloc");
+        let mut binds = Vec::with_capacity(3);
+        binds.push(br::BindImageMemoryInfo::new(
+            &stencil_buffer,
+            &mem,
+            offsets[0],
+        ));
+        binds.extend(
+            silhouette_buffers
+                .iter()
+                .enumerate()
+                .map(|(n, x)| br::BindImageMemoryInfo::new(x, &mem, offsets[1 + n])),
+        );
+        unsafe {
+            gfx.bind_images(&binds)
+                .expect("object_outline_generator.bind_buffers");
+        }
+
+        let stencil_buffer_view = br::ImageViewBuilder::new(
+            stencil_buffer,
+            br::ImageSubresourceRange::new(br::AspectMask::STENCIL, 0..1, 0..1),
+        )
+        .create()
+        .expect("object_outline_generator.stencil_buffer_view.create");
+        let silhouette_buffers = silhouette_buffers.map(|r| {
+            br::ImageViewBuilder::new(
+                r,
+                br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+            )
+            .create()
+            .expect("object_outline_generator.silhouette_buffer_view.create")
+        });
+        gfx.update_descriptor_sets(
+            &[
+                self.blur_inputs[0].binding_at(0).write(
+                    br::DescriptorContents::combined_image_sampler(
+                        &silhouette_buffers[0],
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                ),
+                self.blur_inputs[1].binding_at(0).write(
+                    br::DescriptorContents::combined_image_sampler(
+                        &silhouette_buffers[1],
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                ),
+            ],
+            &[],
+        );
+
+        let framebuffers = [
+            br::FramebufferObject::new(
+                gfx,
+                &br::FramebufferCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.render_passes[0]),
+                    &[
+                        silhouette_buffers[0].as_transparent_ref(),
+                        stencil_buffer_view.as_transparent_ref(),
+                    ],
+                    size.width,
+                    size.height,
+                ),
+            )
+            .expect("object_outline_generator.framebuffers.1.create"),
+            br::FramebufferObject::new(
+                gfx,
+                &br::FramebufferCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.render_passes[1]),
+                    &[silhouette_buffers[1].as_transparent_ref()],
+                    size.width,
+                    size.height,
+                ),
+            )
+            .expect("object_outline_generator.framebuffers.2.create"),
+            br::FramebufferObject::new(
+                gfx,
+                &br::FramebufferCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.render_passes[2]),
+                    &[
+                        silhouette_buffers[0].as_transparent_ref(),
+                        stencil_buffer_view.as_transparent_ref(),
+                    ],
+                    size.width,
+                    size.height,
+                ),
+            )
+            .expect("object_outline_generator.framebuffers.3.create"),
+        ];
+        let pipelines = gfx
+            .create_graphics_pipelines_array(&[
+                br::GraphicsPipelineCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.pipeline_layout),
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_passes[0]), 0),
+                    &[
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Vertex,
+                            br::VkHandleRef::from_raw_ref(&self.shader),
+                            c"vertMain",
+                        ),
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Fragment,
+                            br::VkHandleRef::from_raw_ref(&self.shader),
+                            c"fragMain",
+                        ),
+                    ],
+                    &br::PipelineVertexInputStateCreateInfo::new(
+                        &[
+                            // TODO: from mesh
+                            br::VertexInputBindingDescription::per_vertex_typed::<
+                                [peridot_math::Vector4F32; 2],
+                            >(0),
+                        ],
+                        &[br::VertexInputAttributeDescription(
+                            br::vk::VkVertexInputAttributeDescription {
+                                location: 0,
+                                binding: 0,
+                                // TODO: from mesh
+                                format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
+                                offset: 0,
+                            },
+                        )],
+                    ),
+                    // TODO: from mesh
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                        &[size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::BACK,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new().stencil_state_front(
+                        br::StencilOpState::always(
+                            br::StencilOp::Replace,
+                            br::StencilOp::Keep,
+                            br::StencilOp::Keep,
+                        )
+                        .set_compare(br::CompareOp::Always, 0x01, 0x01)
+                        .write_mask(0x01),
+                    ),
+                ),
+                br::GraphicsPipelineCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.blur_pipeline_layout),
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_passes[1]), 0),
+                    &[
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Vertex,
+                            br::VkHandleRef::from_raw_ref(&self.blur_shader),
+                            c"vertMain",
+                        ),
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Fragment,
+                            br::VkHandleRef::from_raw_ref(&self.blur_shader),
+                            c"fragMain",
+                        )
+                        .with_specialization_info(
+                            &br::SpecializationInfo::new(&self.x_blur_constants),
+                        ),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                        &[size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new()),
+                br::GraphicsPipelineCreateInfo::new(
+                    br::VkHandleRef::from_raw_ref(&self.blur_pipeline_layout),
+                    br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_passes[2]), 0),
+                    &[
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Vertex,
+                            br::VkHandleRef::from_raw_ref(&self.blur_shader),
+                            c"vertMain",
+                        ),
+                        br::PipelineShaderStage::new(
+                            br::ShaderStage::Fragment,
+                            br::VkHandleRef::from_raw_ref(&self.blur_shader),
+                            c"fragMain",
+                        )
+                        .with_specialization_info(
+                            &br::SpecializationInfo::new(&self.y_blur_constants),
+                        ),
+                    ],
+                    VI_STATE_EMPTY,
+                    IA_STATE_TRILIST,
+                    &br::PipelineViewportStateCreateInfo::new(
+                        &[size.into_rect(br::Offset2D::ZERO).make_viewport(0.0..1.0)],
+                        &[size.into_rect(br::Offset2D::ZERO)],
+                    ),
+                    &br::PipelineRasterizationStateCreateInfo::new(
+                        br::PolygonMode::Fill,
+                        br::CullModeFlags::NONE,
+                        br::FrontFace::CounterClockwise,
+                    ),
+                    BLEND_STATE_SINGLE_NONE,
+                )
+                .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
+                .set_depth_stencil_state(
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .stencil_test(true)
+                        .stencil_state_front(br::StencilOpState::NOP.set_compare(
+                            br::CompareOp::NotEqual,
+                            0x01,
+                            0x01,
+                        ))
+                        .stencil_state_back(br::StencilOpState::NOP.set_compare(
+                            br::CompareOp::NotEqual,
+                            0x01,
+                            0x01,
+                        )),
+                ),
+            ])
+            .expect("object_outline_generator.pipelines.create");
+
+        self.mem = mem.unmanage().0;
+        let (v, r) = stencil_buffer_view.unmanage();
+        self.stencil_buffer_view = v;
+        self.stencil_buffer = r.unmanage().0;
+        self.silhouette_buffers = silhouette_buffers.map(|x| {
+            let (v, r) = x.unmanage();
+            let r = r.unmanage().0;
+
+            (r, v)
+        });
+        self.framebuffers = framebuffers.map(|x| x.unmanage().0);
+        self.pipelines = pipelines.map(|x| x.unmanage().0);
+    }
+}
+
 pub struct Renderer {
     common_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
     object_descriptor_set_layout: br::vk::VkDescriptorSetLayout,
+    dsl_cis1: br::vk::VkDescriptorSetLayout,
+    linear_sampler: br::vk::VkSampler,
     descriptor_pool: br::vk::VkDescriptorPool,
     common_descriptor_set: br::DescriptorSet,
     offsettable_object_descriptor_set: br::DescriptorSet,
+    rasterize_outline_descriptor_set: br::DescriptorSet,
     dynamic_ubuf_object_descriptor_pool: br::vk::VkDescriptorPool,
     dynamic_ubuf_object_descriptor_sets: Vec<br::DescriptorSet>,
     dynamic_ubuf_object_descriptor_set_index_by_buffer_handle: HashMap<br::vk::VkBuffer, usize>,
@@ -1154,6 +2063,9 @@ pub struct Renderer {
     grid_pipeline_layout: br::vk::VkPipelineLayout,
     grid_shader: br::vk::VkShaderModule,
     grid_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
+    rasterize_outline_shader: br::vk::VkShaderModule,
+    rasterize_outline_pipeline_layout: br::vk::VkPipelineLayout,
+    rasterize_outline_pipeline: core::mem::MaybeUninit<br::vk::VkPipeline>,
     unlit_colored_shader: br::vk::VkShaderModule,
     rotation_handle_shader: br::vk::VkShaderModule,
     unlit_colored_object_pipeline_layout: br::vk::VkPipelineLayout,
@@ -1168,20 +2080,19 @@ pub struct Renderer {
     pending_camera_data_updates: Option<usize>,
     internal_mesh_buffer: br::vk::VkBuffer,
     origin_axes_vbuf_range: core::range::Range<br::DeviceSize>,
-    translate_handle_vbuf_range: core::range::Range<br::DeviceSize>,
-    translate_handle_ibuf_range: core::range::Range<br::DeviceSize>,
-    rotation_handle_vbuf_range: core::range::Range<br::DeviceSize>,
-    rotation_handle_ibuf_range: core::range::Range<br::DeviceSize>,
-    scale_handle_vbuf_range: core::range::Range<br::DeviceSize>,
-    scale_handle_ibuf_range: core::range::Range<br::DeviceSize>,
+    translate_handle_mesh: MeshRenderData,
+    rotation_handle_mesh: MeshRenderData,
+    scale_handle_mesh: MeshRenderData,
     internal_uniform_buffer: br::vk::VkBuffer,
     camera_data_ubuf_range: core::range::Range<br::DeviceSize>,
     handle_data_ubuf_range: core::range::Range<br::DeviceSize>,
     internal_data_memory: br::vk::VkDeviceMemory,
+    object_outline_generator: ObjectOutlineGenerator,
     dynamic_buffer: DynamicBuffer,
     dynamic_ubuf: DynamicBuffer,
     user_meshes: Vec<MeshData>,
     user_renders: Vec<RenderData>,
+    highlight_render_index: Option<usize>,
     user_data_update_pending: bool,
     handle_shape: Option<HandleShape>,
     handle_pointing: Option<HandlePointing>,
@@ -1193,6 +2104,10 @@ impl Renderer {
     pub unsafe fn drop(mut self, device: &Graphics) {
         self.user_renders.clear();
         self.user_meshes.clear();
+
+        unsafe {
+            self.object_outline_generator.drop(device);
+        }
 
         drop(unsafe { br::CommandPoolObject::manage(self.update_command_pool, device) });
         drop(unsafe { br::CommandPoolObject::manage(self.command_pool, device) });
@@ -1208,6 +2123,9 @@ impl Renderer {
                 br::PipelineObject::manage(self.rotation_handle_pipeline.assume_init(), device)
             });
             drop(unsafe { br::PipelineObject::manage(self.gizmos_pipeline.assume_init(), device) });
+            drop(unsafe {
+                br::PipelineObject::manage(self.rasterize_outline_pipeline.assume_init(), device)
+            });
             drop(unsafe { br::PipelineObject::manage(self.grid_pipeline.assume_init(), device) });
             drop(unsafe {
                 br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
@@ -1220,6 +2138,10 @@ impl Renderer {
 
         drop(unsafe { br::ShaderModuleObject::manage(self.rotation_handle_shader, device) });
         drop(unsafe { br::ShaderModuleObject::manage(self.unlit_colored_shader, device) });
+        drop(unsafe {
+            br::PipelineLayoutObject::manage(self.rasterize_outline_pipeline_layout, device)
+        });
+        drop(unsafe { br::ShaderModuleObject::manage(self.rasterize_outline_shader, device) });
         drop(unsafe {
             br::PipelineLayoutObject::manage(self.unlit_colored_object_pipeline_layout, device)
         });
@@ -1244,6 +2166,8 @@ impl Renderer {
         drop(unsafe {
             br::DescriptorSetLayoutObject::manage(self.common_descriptor_set_layout, device)
         });
+        drop(unsafe { br::DescriptorSetLayoutObject::manage(self.dsl_cis1, device) });
+        drop(unsafe { br::SamplerObject::manage(self.linear_sampler, device) });
         drop(unsafe { br::BufferObject::manage(self.internal_mesh_buffer, device) });
         drop(unsafe { br::BufferObject::manage(self.internal_uniform_buffer, device) });
         drop(unsafe { br::DeviceMemoryObject::manage(self.internal_data_memory, device) });
@@ -1277,23 +2201,26 @@ impl Renderer {
             .bind(&streaming_memory, 0)
             .expect("preview_streaming_buffer.bind");
 
+        let final_color_buffer_attachment_desc =
+            br::AttachmentDescription2::new(PreviewRenderTargetBuffer::COLOR_FORMAT)
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
+                .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined());
+        let depth_buffer_attachment_desc =
+            br::AttachmentDescription2::new(PreviewRenderTargetBuffer::DEPTH_FORMAT)
+                .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+                .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
+                .with_layout_to(br::ImageLayout::DepthStencilAttachmentOpt.from_undefined());
+        let subpass_main = br::SubpassDescription2::new()
+            .colors(&const { [br::AttachmentReference2::color_attachment_opt(0)] })
+            .depth_stencil(&const { br::AttachmentReference2::depth_stencil_attachment_opt(1) });
         let render_pass = br::RenderPassObject::new(
             device,
             &br::RenderPassCreateInfo2::new(
                 &[
-                    br::AttachmentDescription2::new(PreviewRenderTargetBuffer::COLOR_FORMAT)
-                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::Store)
-                        .with_layout_to(br::ImageLayout::ShaderReadOnlyOpt.from_undefined()),
-                    br::AttachmentDescription2::new(PreviewRenderTargetBuffer::DEPTH_FORMAT)
-                        .color_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
-                        .stencil_memory_op(br::LoadOp::Clear, br::StoreOp::DontCare)
-                        .with_layout_to(
-                            br::ImageLayout::DepthStencilAttachmentOpt.from_undefined(),
-                        ),
+                    final_color_buffer_attachment_desc,
+                    depth_buffer_attachment_desc,
                 ],
-                &[br::SubpassDescription2::new()
-                    .colors(&[br::AttachmentReference2::color_attachment_opt(0)])
-                    .depth_stencil(&br::AttachmentReference2::depth_stencil_attachment_opt(1))],
+                &[subpass_main],
                 &[br::SubpassDependency2::new(
                     br::SubpassIndex::Internal(0),
                     br::SubpassIndex::External,
@@ -1311,6 +2238,8 @@ impl Renderer {
         )
         .expect("preview.render_pass.create");
 
+        let linear_sampler = br::SamplerObject::new(device, &br::SamplerCreateInfo::new())
+            .expect("preview.linear_sampler.create");
         let common_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
             device,
             &br::DescriptorSetLayoutCreateInfo::new(&[
@@ -1325,6 +2254,13 @@ impl Renderer {
             ]),
         )
         .expect("preview.object_descriptor_set_layout.create");
+        let dsl_cis1 = br::DescriptorSetLayoutObject::new(
+            device,
+            &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::CombinedImageSampler
+                .make_binding(0, 1)
+                .with_immutable_samplers(&[linear_sampler.as_transparent_ref()])]),
+        )
+        .expect("preview.dsl_cis1.create");
 
         let default_material_pipeline_layout = br::PipelineLayoutObject::new(
             device,
@@ -1356,6 +2292,11 @@ impl Renderer {
             ),
         )
         .expect("preview.grid.pipeline_layout.create");
+        let rasterize_outline_pipeline_layout = br::PipelineLayoutObject::new(
+            device,
+            &br::PipelineLayoutCreateInfo::new(&[dsl_cis1.as_transparent_ref()], &[]),
+        )
+        .expect("preview.rasterize_outline.pipeline_layout.create");
         let unlit_colored_object_pipeline_layout = br::PipelineLayoutObject::new(
             device,
             &br::PipelineLayoutCreateInfo::new(
@@ -1373,6 +2314,7 @@ impl Renderer {
         let default_material_shader = device.require_shader("preview/default.spv");
         let origin_axes_shader = device.require_shader("preview/origin_axes.spv");
         let grid_shader = device.require_shader("preview/grid.spv");
+        let rasterize_outline_shader = device.require_shader("preview/rasterize_outline.spv");
         let unlit_colored_shader = device.require_shader("preview/unlit_colored.spv");
         let rotation_handle_shader = device.require_shader("preview/rotation_handle.spv");
 
@@ -1658,23 +2600,27 @@ impl Renderer {
             )
             .expect("preview.init_cb.submit");
 
-        let scratch_staging = ScratchStagingBuffer::new(device);
-
         let mut descriptor_pool = br::DescriptorPoolObject::new(
             device,
             &br::DescriptorPoolCreateInfo::new(
-                2,
+                3,
                 &[
                     br::DescriptorType::UniformBuffer.make_size(1),
                     br::DescriptorType::UniformBufferDynamic.make_size(1),
+                    br::DescriptorType::CombinedImageSampler.make_size(1),
                 ],
             ),
         )
         .expect("preview.descriptor_pool.create");
-        let [common_descriptor_set, offsettable_object_descriptor_set] = descriptor_pool
+        let [
+            common_descriptor_set,
+            offsettable_object_descriptor_set,
+            rasterize_outline_descriptor_set,
+        ] = descriptor_pool
             .alloc_array(&[
                 common_descriptor_set_layout.as_transparent_ref(),
                 object_descriptor_set_layout.as_transparent_ref(),
+                dsl_cis1.as_transparent_ref(),
             ])
             .expect("preview.descriptor.alloc");
         device.update_descriptor_sets(
@@ -1744,6 +2690,15 @@ impl Renderer {
         drop(mem);
         drop(upload_buffer);
 
+        let scratch_staging = ScratchStagingBuffer::new(device);
+        let object_outline_generator = ObjectOutlineGenerator::new(
+            device,
+            init_rt.size,
+            &common_descriptor_set_layout,
+            &object_descriptor_set_layout,
+            &dsl_cis1,
+        );
+
         let (update_command_pool, _) = update_command_pool.unmanage();
         let (command_pool, _) = command_pool.unmanage();
         let (internal_data_memory, _) = internal_data_memory.unmanage();
@@ -1755,6 +2710,8 @@ impl Renderer {
         let (rotation_handle_shader, _) = rotation_handle_shader.unmanage();
         let (unlit_colored_object_pipeline_layout, _) =
             unlit_colored_object_pipeline_layout.unmanage();
+        let (rasterize_outline_pipeline_layout, _) = rasterize_outline_pipeline_layout.unmanage();
+        let (rasterize_outline_shader, _) = rasterize_outline_shader.unmanage();
         let (grid_shader, _) = grid_shader.unmanage();
         let (grid_pipeline_layout, _) = grid_pipeline_layout.unmanage();
         let (origin_axes_shader, _) = origin_axes_shader.unmanage();
@@ -1765,14 +2722,19 @@ impl Renderer {
         let (dynamic_ubuf_object_descriptor_pool, _) =
             dynamic_ubuf_object_descriptor_pool.unmanage();
         let (descriptor_pool, _) = descriptor_pool.unmanage();
+        let (dsl_cis1, _) = dsl_cis1.unmanage();
         let (object_descriptor_set_layout, _) = object_descriptor_set_layout.unmanage();
         let (common_descriptor_set_layout, _) = common_descriptor_set_layout.unmanage();
+        let (linear_sampler, _) = linear_sampler.unmanage();
         Self {
+            linear_sampler,
             common_descriptor_set_layout,
             object_descriptor_set_layout,
+            dsl_cis1,
             descriptor_pool,
             common_descriptor_set,
             offsettable_object_descriptor_set,
+            rasterize_outline_descriptor_set,
             dynamic_ubuf_object_descriptor_pool,
             dynamic_ubuf_object_descriptor_sets,
             dynamic_ubuf_object_descriptor_set_index_by_buffer_handle: HashMap::new(),
@@ -1792,6 +2754,9 @@ impl Renderer {
             grid_pipeline_layout,
             grid_shader,
             grid_pipeline: core::mem::MaybeUninit::uninit(),
+            rasterize_outline_pipeline: core::mem::MaybeUninit::uninit(),
+            rasterize_outline_pipeline_layout,
+            rasterize_outline_shader,
             unlit_colored_object_pipeline_layout,
             unlit_colored_shader,
             rotation_handle_shader,
@@ -1799,16 +2764,29 @@ impl Renderer {
             rotation_handle_pipeline: core::mem::MaybeUninit::uninit(),
             internal_mesh_buffer,
             origin_axes_vbuf_range,
-            translate_handle_vbuf_range,
-            translate_handle_ibuf_range,
-            rotation_handle_vbuf_range,
-            rotation_handle_ibuf_range,
-            scale_handle_vbuf_range,
-            scale_handle_ibuf_range,
+            translate_handle_mesh: MeshRenderData {
+                vertices: translate_handle_vbuf_range.start,
+                indices: translate_handle_ibuf_range.start,
+                index_type: br::IndexType::U16,
+                index_count: TRANSLATE_HANDLE_ICOUNT as _,
+            },
+            rotation_handle_mesh: MeshRenderData {
+                vertices: rotation_handle_vbuf_range.start,
+                indices: rotation_handle_ibuf_range.start,
+                index_type: br::IndexType::U16,
+                index_count: ROTATION_HANDLE_ICOUNT as _,
+            },
+            scale_handle_mesh: MeshRenderData {
+                vertices: scale_handle_vbuf_range.start,
+                indices: scale_handle_ibuf_range.start,
+                index_type: br::IndexType::U16,
+                index_count: SCALE_HANDLE_ICOUNT as _,
+            },
             internal_uniform_buffer,
             camera_data_ubuf_range,
             handle_data_ubuf_range,
             internal_data_memory,
+            object_outline_generator,
             scratch_staging,
             pending_camera_data_updates: None,
             command_pool,
@@ -1828,6 +2806,7 @@ impl Renderer {
             ),
             user_meshes: Vec::new(),
             user_renders: Vec::new(),
+            highlight_render_index: None,
             user_data_update_pending: false,
             handle_shape: None,
             handle_pointing: None,
@@ -2021,6 +3000,8 @@ impl Renderer {
             self.handle_data_update_offset = Some(handle_data_update_offset);
             self.needs_invalidate_render = true;
         }
+
+        self.highlight_render_index = committed_state.highlight_render_index;
     }
 
     pub fn validate(
@@ -2056,6 +3037,19 @@ impl Renderer {
                 .0,
             );
 
+            self.object_outline_generator.resize(device, active_rt.size);
+            device.update_descriptor_sets(
+                &[self.rasterize_outline_descriptor_set.binding_at(0).write(
+                    br::DescriptorContents::combined_image_sampler(
+                        br::VkHandleRef::from_raw_ref(
+                            &self.object_outline_generator.silhouette_buffers[0].1,
+                        ),
+                        br::ImageLayout::ShaderReadOnlyOpt,
+                    ),
+                )],
+                &[],
+            );
+
             framebuffer_changed = true;
         }
 
@@ -2064,6 +3058,12 @@ impl Renderer {
             if self.valid {
                 drop(unsafe {
                     br::PipelineObject::manage(self.default_material_pipeline.assume_init(), device)
+                });
+                drop(unsafe {
+                    br::PipelineObject::manage(
+                        self.rasterize_outline_pipeline.assume_init(),
+                        device,
+                    )
                 });
                 drop(unsafe {
                     br::PipelineObject::manage(self.origin_axes_pipeline.assume_init(), device)
@@ -2083,6 +3083,7 @@ impl Renderer {
                 default_material_pipeline,
                 origin_axes_pipeline,
                 grid_pipeline,
+                rasterize_outline_pipeline,
                 gizmos_pipeline,
                 rotation_handle_pipeline,
             ] = device
@@ -2254,6 +3255,39 @@ impl Renderer {
                         &br::PipelineDepthStencilStateCreateInfo::new()
                             .config_depth(Some(br::CompareOp::Less), false),
                     ),
+                    // rasterize outline
+                    br::GraphicsPipelineCreateInfo::new(
+                        br::VkHandleRef::from_raw_ref(&self.rasterize_outline_pipeline_layout),
+                        br::SubpassRef(br::VkHandleRef::from_raw_ref(&self.render_pass), 0),
+                        &[
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Vertex,
+                                br::VkHandleRef::from_raw_ref(&self.rasterize_outline_shader),
+                                c"vertMain",
+                            ),
+                            br::PipelineShaderStage::new(
+                                br::ShaderStage::Fragment,
+                                br::VkHandleRef::from_raw_ref(&self.rasterize_outline_shader),
+                                c"fragMain",
+                            ),
+                        ],
+                        VI_STATE_EMPTY,
+                        IA_STATE_TRILIST,
+                        &br::PipelineViewportStateCreateInfo::new(
+                            &[active_rt
+                                .size
+                                .into_rect(br::Offset2D::ZERO)
+                                .make_viewport(0.0..1.0)],
+                            &[active_rt.size.into_rect(br::Offset2D::ZERO)],
+                        ),
+                        RASTER_STATE_DEFAULT_FILL_NOCULL,
+                        BLEND_STATE_SINGLE_PREMULTIPLIED,
+                    )
+                    .set_multisample_state(MS_STATE_EMPTY)
+                    .set_depth_stencil_state(
+                        &br::PipelineDepthStencilStateCreateInfo::new()
+                            .config_depth(Some(br::CompareOp::Less), false),
+                    ),
                     // gizmos
                     br::GraphicsPipelineCreateInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.unlit_colored_object_pipeline_layout),
@@ -2270,29 +3304,7 @@ impl Renderer {
                                 c"fragMain",
                             ),
                         ],
-                        &br::PipelineVertexInputStateCreateInfo::new(
-                            &[br::VertexInputBindingDescription::per_vertex_typed::<
-                                HandleVertex,
-                            >(0)],
-                            &[
-                                br::VertexInputAttributeDescription(
-                                    br::vk::VkVertexInputAttributeDescription {
-                                        location: 0,
-                                        binding: 0,
-                                        offset: core::mem::offset_of!(HandleVertex, pos) as _,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    },
-                                ),
-                                br::VertexInputAttributeDescription(
-                                    br::vk::VkVertexInputAttributeDescription {
-                                        location: 1,
-                                        binding: 0,
-                                        offset: core::mem::offset_of!(HandleVertex, col_index) as _,
-                                        format: br::vk::VK_FORMAT_R32_UINT,
-                                    },
-                                ),
-                            ],
-                        ),
+                        HANDLE_MESH_VERTEX_INPUT_STATE,
                         IA_STATE_TRILIST,
                         &br::PipelineViewportStateCreateInfo::new(
                             &[active_rt
@@ -2325,29 +3337,7 @@ impl Renderer {
                                 c"fragMain",
                             ),
                         ],
-                        &br::PipelineVertexInputStateCreateInfo::new(
-                            &[br::VertexInputBindingDescription::per_vertex_typed::<
-                                HandleVertex,
-                            >(0)],
-                            &[
-                                br::VertexInputAttributeDescription(
-                                    br::vk::VkVertexInputAttributeDescription {
-                                        location: 0,
-                                        binding: 0,
-                                        offset: core::mem::offset_of!(HandleVertex, pos) as _,
-                                        format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
-                                    },
-                                ),
-                                br::VertexInputAttributeDescription(
-                                    br::vk::VkVertexInputAttributeDescription {
-                                        location: 1,
-                                        binding: 0,
-                                        offset: core::mem::offset_of!(HandleVertex, col_index) as _,
-                                        format: br::vk::VK_FORMAT_R32_UINT,
-                                    },
-                                ),
-                            ],
-                        ),
+                        HANDLE_MESH_VERTEX_INPUT_STATE,
                         &br::PipelineInputAssemblyStateCreateInfo::new(
                             br::PrimitiveTopology::LineList,
                         ),
@@ -2378,6 +3368,8 @@ impl Renderer {
             self.origin_axes_pipeline
                 .write(origin_axes_pipeline.unmanage().0);
             self.grid_pipeline.write(grid_pipeline.unmanage().0);
+            self.rasterize_outline_pipeline
+                .write(rasterize_outline_pipeline.unmanage().0);
             self.gizmos_pipeline.write(gizmos_pipeline.unmanage().0);
             self.rotation_handle_pipeline
                 .write(rotation_handle_pipeline.unmanage().0);
@@ -2560,6 +3552,143 @@ impl Renderer {
                 .expect("preview.validate.command_buffer.begin");
             }
             br::CmdRecord::new(unsafe { br::VkHandleRefMut::dangling(self.command_buffer) })
+                // selected outline prepass
+                .begin_render_pass(
+                    &br::RenderPassBeginInfo::new(
+                        br::VkHandleRef::from_raw_ref(
+                            &self.object_outline_generator.render_passes[0],
+                        ),
+                        br::VkHandleRef::from_raw_ref(
+                            &self.object_outline_generator.framebuffers[0],
+                        ),
+                        active_rt.size.into_rect(br::Offset2D::ZERO),
+                        &[
+                            br::ClearValue::color_f32([0.0; 4]),
+                            br::ClearValue::depth_stencil(1.0, 0),
+                        ],
+                    ),
+                    br::SubpassContents::Inline,
+                )
+                .inject(|r| {
+                    if let Some(&RenderData::Active {
+                        ref object_uniform_start,
+                        mesh_id,
+                        ..
+                    }) = committed_state
+                        .highlight_render_index
+                        .and_then(|x| self.user_renders.get(x))
+                    {
+                        let mesh = &self.user_meshes[mesh_id];
+                        let mut r = r
+                            .bind_pipeline(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.object_outline_generator.pipelines[0],
+                                ),
+                            )
+                            .bind_descriptor_sets(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.object_outline_generator.pipeline_layout,
+                                ),
+                                0,
+                                &[
+                                    self.common_descriptor_set,
+                                    self.dynamic_ubuf_object_descriptor_sets[self
+                                        .dynamic_ubuf_object_descriptor_set_index_by_buffer_handle
+                                        [&unsafe { &*object_uniform_start.source_page.get() }
+                                            .buffer]],
+                                ],
+                                &[object_uniform_start.offset as _],
+                            )
+                            .bind_vertex_buffer_array(
+                                0,
+                                &[unsafe {
+                                    br::VkHandleRef::dangling(
+                                        (&*mesh.vertex_offset.source_page.get()).buffer,
+                                    )
+                                }],
+                                &[mesh.vertex_offset.offset],
+                            )
+                            .bind_index_buffer(
+                                br::VkHandleRef::from_raw_ref(
+                                    &unsafe { &*mesh.index_offset.source_page.get() }.buffer,
+                                ),
+                                mesh.index_offset.offset as _,
+                                match mesh.index_type {
+                                    IndexType::U16 => br::IndexType::U16,
+                                    IndexType::U32 => br::IndexType::U32,
+                                },
+                            );
+                        for sub in mesh.sub_mesh_ranges.iter() {
+                            r = r.draw_indexed(sub.end - sub.start, 1, sub.start, 0, 0);
+                        }
+
+                        r.end_render_pass()
+                            .begin_render_pass(
+                                &br::RenderPassBeginInfo::new(
+                                    br::VkHandleRef::from_raw_ref(
+                                        &self.object_outline_generator.render_passes[1],
+                                    ),
+                                    br::VkHandleRef::from_raw_ref(
+                                        &self.object_outline_generator.framebuffers[1],
+                                    ),
+                                    active_rt.size.into_rect(br::Offset2D::ZERO),
+                                    &[],
+                                ),
+                                br::SubpassContents::Inline,
+                            )
+                            .bind_pipeline(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.object_outline_generator.pipelines[1],
+                                ),
+                            )
+                            .bind_descriptor_sets(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.object_outline_generator.blur_pipeline_layout,
+                                ),
+                                0,
+                                &[self.object_outline_generator.blur_inputs[0]],
+                                &[],
+                            )
+                            .draw(3, 1, 0, 0)
+                            .end_render_pass()
+                            .begin_render_pass(
+                                &br::RenderPassBeginInfo::new(
+                                    br::VkHandleRef::from_raw_ref(
+                                        &self.object_outline_generator.render_passes[2],
+                                    ),
+                                    br::VkHandleRef::from_raw_ref(
+                                        &self.object_outline_generator.framebuffers[2],
+                                    ),
+                                    active_rt.size.into_rect(br::Offset2D::ZERO),
+                                    &[br::ClearValue::color_f32([0.0; 4])],
+                                ),
+                                br::SubpassContents::Inline,
+                            )
+                            .bind_pipeline(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.object_outline_generator.pipelines[2],
+                                ),
+                            )
+                            .bind_descriptor_sets(
+                                br::PipelineBindPoint::Graphics,
+                                br::VkHandleRef::from_raw_ref(
+                                    &self.object_outline_generator.blur_pipeline_layout,
+                                ),
+                                0,
+                                &[self.object_outline_generator.blur_inputs[1]],
+                                &[],
+                            )
+                            .draw(3, 1, 0, 0)
+                            .end_render_pass()
+                    } else {
+                        r.end_render_pass()
+                    }
+                })
                 .begin_render_pass(
                     &br::RenderPassBeginInfo::new(
                         br::VkHandleRef::from_raw_ref(&self.render_pass),
@@ -2726,6 +3855,21 @@ impl Renderer {
                         layerCount: 1,
                     }],
                 )
+                // render object outline
+                .bind_pipeline(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(unsafe {
+                        self.rasterize_outline_pipeline.assume_init_ref()
+                    }),
+                )
+                .bind_descriptor_sets(
+                    br::PipelineBindPoint::Graphics,
+                    br::VkHandleRef::from_raw_ref(&self.rasterize_outline_pipeline_layout),
+                    0,
+                    &[self.rasterize_outline_descriptor_set],
+                    &[],
+                )
+                .draw(3, 1, 0, 0)
                 // render gizmos
                 .inject(|r| match self.handle_shape {
                     None => r,
@@ -2778,17 +3922,13 @@ impl Renderer {
                                 [1.0, 1.0, 1.0, 1.0],
                             ],
                         )
-                        .bind_vertex_buffer_array(
-                            0,
-                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                            &[self.translate_handle_vbuf_range.start],
-                        )
-                        .bind_index_buffer(
-                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                            self.translate_handle_ibuf_range.start as _,
-                            br::IndexType::U16,
-                        )
-                        .draw_indexed(TRANSLATE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
+                        .inject(|r| {
+                            self.translate_handle_mesh.simple_draw(
+                                br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                                1,
+                                r,
+                            )
+                        }),
                     Some(HandleShape::Rotation) => r
                         .bind_pipeline(
                             br::PipelineBindPoint::Graphics,
@@ -2841,12 +3981,12 @@ impl Renderer {
                         .bind_vertex_buffer_array(
                             0,
                             &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                            &[self.rotation_handle_vbuf_range.start],
+                            &[self.rotation_handle_mesh.vertices],
                         )
                         .bind_index_buffer(
                             br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                            self.rotation_handle_ibuf_range.start as _,
-                            br::IndexType::U16,
+                            self.rotation_handle_mesh.indices as _,
+                            self.rotation_handle_mesh.index_type,
                         )
                         .draw_indexed(ROTATION_HANDLE_AXES_DRAW_ICOUNT, 1, 0, 0, 0),
                     Some(HandleShape::Scale) => r
@@ -2898,17 +4038,13 @@ impl Renderer {
                                 [1.0, 1.0, 1.0, 1.0],
                             ],
                         )
-                        .bind_vertex_buffer_array(
-                            0,
-                            &[unsafe { br::VkHandleRef::dangling(self.internal_mesh_buffer) }],
-                            &[self.scale_handle_vbuf_range.start],
-                        )
-                        .bind_index_buffer(
-                            br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
-                            self.scale_handle_ibuf_range.start as _,
-                            br::IndexType::U16,
-                        )
-                        .draw_indexed(SCALE_HANDLE_ICOUNT as _, 1, 0, 0, 0),
+                        .inject(|r| {
+                            self.scale_handle_mesh.simple_draw(
+                                br::VkHandleRef::from_raw_ref(&self.internal_mesh_buffer),
+                                1,
+                                r,
+                            )
+                        }),
                 })
                 .end_render_pass()
                 .end()
