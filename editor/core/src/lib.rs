@@ -35,7 +35,7 @@ use crate::{
     },
     persistence::{DockState, PersistStateWindowData, WindowGeometryState, WindowState},
     rendering::{
-        MainThreadTextureIDIssuer, RenderMessage, RenderMessageSender, RenderThread, RendererSync,
+        MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
             AnimatableColor, CompositeMode, CompositeTree, CompositeTreeSyncBuffer, Gradient,
             GradientRef,
@@ -44,15 +44,15 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uicore::{
-        MeasureContext, MountTarget, PopupID, PopupManager, RenderContext, TeardownContext,
-        TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
-        ViewFeedbackRegistry, ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
+        MountTarget, PopupID, PopupManager, RenderContext, TeardownContext, TypedViewIdentifier,
+        View, ViewDestructionContext, ViewFeedbackContext, ViewFeedbackRegistry,
+        ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
         ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
         ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
-        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderElements,
-        ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
+        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
+        ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
     uikit::{
         ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuEventHandler, MenuItem,
@@ -1433,13 +1433,16 @@ pub struct CoreLoop<'sys> {
     // high-level functionalities
     popup_manager: PopupManager,
     dock_store: ui::dock::DockStore,
-    menu_open_requests: Vec<MenuOpenRequest>,
-    menu_reopen_request: Option<MenuOpenRequest>,
     current_active_menu_session: Option<MenuSession>,
     // current_active_dropdown_menu_session: Option<DropdownMenuSession>,
-    custom_view_flyout_open_request: Option<uicore::CustomFlyoutViewOpenRequest>,
     custom_view_flyout_session: Option<uicore::CustomViewFlyoutSession>,
     docking_preview_state: Option<ui::dock::DockingPreviewState>,
+    // delayed queues
+    menu_open_requests: Vec<MenuOpenRequest>,
+    menu_reopen_request: Option<MenuOpenRequest>,
+    custom_view_flyout_open_request: Option<uicore::CustomFlyoutViewOpenRequest>,
+    close_current_custom_view_flyout_requested: bool,
+    close_menu_requested: bool,
     // preview
     preview_input_state: core::pin::Pin<Box<ui::pane::preview::InputState>>,
     preview_state: ui::pane::preview::MainThreadState,
@@ -1495,13 +1498,16 @@ impl<'sys> CoreLoop<'sys> {
             // high-level functionalities
             popup_manager: PopupManager::new(),
             dock_store: ui::dock::DockStore::new(),
-            menu_open_requests: Vec::new(),
-            menu_reopen_request: None,
             current_active_menu_session: None,
             // current_active_dropdown_menu_session: None,
-            custom_view_flyout_open_request: None,
             custom_view_flyout_session: None,
             docking_preview_state: None,
+            // delayed queues
+            menu_open_requests: Vec::new(),
+            menu_reopen_request: None,
+            custom_view_flyout_open_request: None,
+            close_current_custom_view_flyout_requested: false,
+            close_menu_requested: false,
             // preview
             preview_input_state: Box::pin(ui::pane::preview::InputState::new()),
             preview_state: ui::pane::preview::MainThreadState::new(),
@@ -2300,30 +2306,8 @@ impl<'sys> CoreLoop<'sys> {
             );
         }
 
-        if let Some(c) = this.current_active_menu_session.take() {
-            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu {
-                uicore::view_instance::<ui::app_menu_bar::View>(
-                    a.into_untyped(),
-                    &this.view_instance_store,
-                )
-                .expect("query failed")
-                .on_close_all(
-                    &mut this.composite_tree,
-                    this.global_time_base.elapsed().as_secs_f32(),
-                );
-            }
-
-            c.terminate(
-                &this.syslink,
-                &mut this.composite_tree,
-                &mut this.ht_manager,
-                &mut this.keyboard_focus_registry,
-            );
-        }
-
-        self.as_mut().terminate_flyout_session();
-
-        let this = unsafe { self.get_unchecked_mut() };
+        this.close_menu_requested = true;
+        this.close_current_custom_view_flyout_requested = true;
         this.pointer_input_manager.handle_mouse_down(
             pointer_id,
             &mut InputEventContext {
@@ -3116,41 +3100,12 @@ impl<'sys> CoreLoop<'sys> {
 
     fn perform_select_menu_command(self: Pin<&mut Self>, id: u64) {
         let this = unsafe { self.get_unchecked_mut() };
-        // コマンド選択したらとじる
-        let ch = if let Some(c) = this.current_active_menu_session.take() {
-            if let Some(ref a) = unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu {
-                uicore::view_instance::<ui::app_menu_bar::View>(
-                    a.into_untyped(),
-                    &this.view_instance_store,
-                )
-                .expect("query failed")
-                .on_close_all(
-                    &mut this.composite_tree,
-                    this.global_time_base.elapsed().as_secs_f32(),
-                );
-            }
 
-            let ch = c.terminate(
-                &this.syslink,
-                &mut this.composite_tree,
-                &mut this.ht_manager,
-                &mut this.keyboard_focus_registry,
-            );
-
-            this.composite_tree.commit(
-                &mut this
-                    .renderer_sync
-                    .lock()
-                    .expect("poisoned")
-                    .composite_buffer,
-            );
-
-            Some(ch)
-        } else {
-            None
-        };
-
-        if let Some(mut ch) = ch {
+        if let Some(ch) = this
+            .current_active_menu_session
+            .as_mut()
+            .map(|x| &mut x.command_handler)
+        {
             ch.on_select_command(
                 id,
                 &mut ApplicationMutation {
@@ -3159,6 +3114,9 @@ impl<'sys> CoreLoop<'sys> {
                 },
             );
         }
+
+        // コマンド選択したらとじる
+        this.close_menu_requested = true;
     }
 
     fn perform_dropdown_menu_select_item(
@@ -3214,7 +3172,7 @@ impl<'sys> CoreLoop<'sys> {
         }
 
         // 選択したら閉じる
-        self.terminate_flyout_session();
+        this.close_current_custom_view_flyout_requested = true;
     }
 
     fn begin_new_flyout_session(
@@ -3486,6 +3444,38 @@ impl<'sys> CoreLoop<'sys> {
         this.view_render_queue.schedule(id);
     }
 
+    fn perform_menu_closes(mut self: Pin<&mut Self>) {
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        if core::mem::replace(&mut this.close_menu_requested, false) {
+            if let Some(c) = this.current_active_menu_session.take() {
+                if let Some(ref a) =
+                    unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu
+                {
+                    uicore::view_instance::<ui::app_menu_bar::View>(
+                        a.into_untyped(),
+                        &this.view_instance_store,
+                    )
+                    .expect("query failed")
+                    .on_close_all(
+                        &mut this.composite_tree,
+                        this.global_time_base.elapsed().as_secs_f32(),
+                    );
+                }
+
+                c.terminate(
+                    &this.syslink,
+                    &mut this.composite_tree,
+                    &mut this.ht_manager,
+                    &mut this.keyboard_focus_registry,
+                );
+            }
+        }
+
+        if core::mem::replace(&mut this.close_current_custom_view_flyout_requested, false) {
+            self.terminate_flyout_session();
+        }
+    }
+
     fn perform_menu_opens(mut self: Pin<&mut Self>) {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         assert!(
@@ -3633,6 +3623,7 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     pub fn update_view_all(mut self: Pin<&mut Self>) {
+        self.as_mut().perform_menu_closes();
         self.as_mut().perform_menu_opens();
         self.as_mut().dispatch_view_feedback();
         self.as_mut().update_view();
@@ -4044,7 +4035,7 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
         }
 
         // after-input common update phase
-        inst.as_mut().update_view_all();
+        // inst.as_mut().update_view_all();
     }
 
     inst.save_window_state();
@@ -4276,6 +4267,8 @@ impl MenuSession {
         ht_manager: &mut HitTestTreeManager,
         keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
     ) -> Box<dyn MenuCommandSelectionHandler> {
+        tracing::trace!("menu terminate");
+
         while let Some(c) = self.opening_surfaces.pop() {
             c.handle.close(
                 system_link,
