@@ -236,14 +236,14 @@ pub fn launch() {
     let mut coreloop = core::pin::pin!(CoreLoop::new(
         #[cfg(windows)]
         SystemLink {
-            font_set: FontSet::new(root_font_set),
+            font_set: FontSet::new(&root_font_set),
             rt_sender: rt_sender.clone(),
-            gfx,
+            gfx: &gfx,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
-            app_context,
+            app_context: &app_context,
             pointer_hovering_timer_handle: pointer_hovering_timer.as_handle(),
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
-                app_context,
+                &app_context,
                 &dx_context,
                 &context_menu_delayed_action_timer,
             ),
@@ -299,9 +299,14 @@ pub fn launch() {
         &root_font_set,
         &preview_state,
         #[cfg(windows)]
-        &mut app_context,
-        #[cfg(windows)]
         &dx_context,
+        #[cfg(windows)]
+        &pointer_hovering_timer,
+        #[cfg(windows)]
+        &context_menu_delayed_action_timer,
+        #[cfg(windows)]
+        #[cfg(feature = "enable-profiling")]
+        &memory_sample_timer,
         #[cfg(feature = "wayland")]
         &mut dp_context,
         #[cfg(feature = "wayland")]
@@ -333,8 +338,12 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
     rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     root_font_set: &'sys RootFontSet,
     preview_state: &'sys Mutex<rendering::preview::CommittedState>,
-    #[cfg(windows)] app_context: &'sys mut platform::windows::ApplicationContext,
     #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
+    #[cfg(windows)] pointer_hovering_timer: &utils::platform::windows::WaitableTimer,
+    #[cfg(windows)] delayed_action_timer: &utils::platform::windows::WaitableTimer,
+    #[cfg(windows)]
+    #[cfg(feature = "enable-profiling")]
+    memory_sample_timer: &utils::platform::windows::WaitableTimer,
     #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
     #[cfg(feature = "wayland")] mut wl_global_msg: Pin<
         &'sys mut platform::unix::wayland::GlobalMessaging<'sys>,
@@ -531,7 +540,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         let handles = [
             sync_event_bus.event_notify.as_handle(),
             pointer_hovering_timer.as_handle(),
-            context_menu_delayed_action_timer.as_handle(),
+            delayed_action_timer.as_handle(),
             #[cfg(feature = "enable-profiling")]
             memory_sample_timer.as_handle(),
         ];
@@ -559,15 +568,15 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
             {
                 // handle signaled
                 if handle == sync_event_bus.event_notify.as_handle() {
-                    sync_event_bus.redispatch(&app_event_dispatcher);
+                    sync_event_bus.redispatch(coreloop.as_mut());
                     continue;
                 }
                 if handle == pointer_hovering_timer.as_handle() {
-                    app_event_dispatcher.dispatch(Event::PointerHover);
+                    coreloop.as_mut().handle_pointer_hover_timeout();
                     continue;
                 }
-                if handle == context_menu_delayed_action_timer.as_handle() {
-                    app_event_dispatcher.dispatch(Event::MenuPerformDelayedAction);
+                if handle == delayed_action_timer.as_handle() {
+                    coreloop.as_mut().perform_menu_delayed_action();
                     continue;
                 }
                 #[cfg(feature = "enable-profiling")]
@@ -3811,6 +3820,186 @@ impl<'sys> CoreLoop<'sys> {
             .send(&mut reply)
             .expect("dbus.send");
     }
+
+    #[cfg(windows)]
+    pub fn core_text_layout_requested(
+        self: Pin<&mut Self>,
+        req: windows::UI::Text::Core::CoreTextLayoutRequest,
+        deferral: Option<windows::Foundation::Deferral>,
+        ht: HitTestTreeRef,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        if deferral.is_none()
+            || req
+                .IsCanceled()
+                .inspect_err(|e| tracing::error!(reason = %e, "request.is_canceled"))
+                == Ok(false)
+        {
+            if let Some(w) = this
+                .ht_manager
+                .get_data(ht)
+                .native_text_deferrable_event_handler()
+            {
+                if let Err(e) = w.layout(
+                    &mut InputEventContext {
+                        composite_tree: &mut this.composite_tree,
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut this.syslink,
+                        ht_manager: &this.ht_manager,
+                        dock_store: &mut this.dock_store,
+                        view_instance_store: &mut this.view_instance_store,
+                        view_tree_relation_store: &this.view_tree_relation_store,
+                        view_group_relation_store: &this.view_group_relation_store,
+                        view_render_queue: &mut this.view_render_queue,
+                        menu_open_requests: &mut this.menu_open_requests,
+                        menu_reopen_request: &mut this.menu_reopen_request,
+                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                        application: ApplicationMutation {
+                            state: &mut this.application,
+                            view_feedbacks: &mut this.view_feedback_store,
+                        },
+                        popup_manager: &mut this.popup_manager,
+                        docking_preview_state: &mut this.docking_preview_state,
+                    },
+                    &req,
+                ) {
+                    tracing::error!(reason = %e, "CoreTextLayoutRequested");
+                    if let Some(d) = deferral {
+                        if let Err(e) = d.Close() {
+                            tracing::error!(reason = %e, "deferral.close");
+                        }
+                    }
+                } else {
+                    if let Some(d) = deferral {
+                        if let Err(e) = d.Complete() {
+                            tracing::error!(reason = %e, "deferral.complete");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn core_text_text_updating(
+        self: Pin<&mut Self>,
+        args: windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
+        deferral: Option<windows::Foundation::Deferral>,
+        ht: HitTestTreeRef,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        if deferral.is_none()
+            || args
+                .IsCanceled()
+                .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
+                == Ok(false)
+        {
+            if let Some(w) = this
+                .ht_manager
+                .get_data(ht)
+                .native_text_deferrable_event_handler()
+            {
+                if let Err(e) = w.text_updating(
+                    &mut InputEventContext {
+                        composite_tree: &mut this.composite_tree,
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut this.syslink,
+                        ht_manager: &this.ht_manager,
+                        dock_store: &mut this.dock_store,
+                        view_instance_store: &mut this.view_instance_store,
+                        view_tree_relation_store: &this.view_tree_relation_store,
+                        view_group_relation_store: &this.view_group_relation_store,
+                        view_render_queue: &mut this.view_render_queue,
+                        menu_open_requests: &mut this.menu_open_requests,
+                        menu_reopen_request: &mut this.menu_reopen_request,
+                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                        application: ApplicationMutation {
+                            state: &mut this.application,
+                            view_feedbacks: &mut this.view_feedback_store,
+                        },
+                        popup_manager: &mut this.popup_manager,
+                        docking_preview_state: &mut this.docking_preview_state,
+                    },
+                    &args,
+                ) {
+                    tracing::error!(reason = %e, "CoreTextTextUpdating");
+                    if let Some(d) = deferral {
+                        if let Err(e) = d.Close() {
+                            tracing::error!(reason = %e, "deferral.close");
+                        }
+                    }
+                } else {
+                    if let Some(d) = deferral {
+                        if let Err(e) = d.Complete() {
+                            tracing::error!(reason = %e, "deferral.complete");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn core_text_format_updating(
+        self: Pin<&mut Self>,
+        args: windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
+        deferral: Option<windows::Foundation::Deferral>,
+        ht: HitTestTreeRef,
+    ) {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        if deferral.is_none()
+            || args
+                .IsCanceled()
+                .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
+                == Ok(false)
+        {
+            if let Some(w) = this
+                .ht_manager
+                .get_data(ht)
+                .native_text_deferrable_event_handler()
+            {
+                if let Err(e) = w.format_updating(
+                    &mut InputEventContext {
+                        composite_tree: &mut this.composite_tree,
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut this.syslink,
+                        ht_manager: &this.ht_manager,
+                        dock_store: &mut this.dock_store,
+                        view_instance_store: &mut this.view_instance_store,
+                        view_tree_relation_store: &this.view_tree_relation_store,
+                        view_group_relation_store: &this.view_group_relation_store,
+                        view_render_queue: &mut this.view_render_queue,
+                        menu_open_requests: &mut this.menu_open_requests,
+                        menu_reopen_request: &mut this.menu_reopen_request,
+                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                        application: ApplicationMutation {
+                            state: &mut this.application,
+                            view_feedbacks: &mut this.view_feedback_store,
+                        },
+                        popup_manager: &mut this.popup_manager,
+                        docking_preview_state: &mut this.docking_preview_state,
+                    },
+                    &args,
+                ) {
+                    tracing::error!(reason = %e, "CoreTextFormatUpdating");
+                    if let Some(d) = deferral {
+                        if let Err(e) = d.Close() {
+                            tracing::error!(reason = %e, "deferral.close");
+                        }
+                    }
+                } else {
+                    if let Some(d) = deferral {
+                        if let Err(e) = d.Complete() {
+                            tracing::error!(reason = %e, "deferral.complete");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
@@ -3841,137 +4030,16 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
                 ht,
                 request,
                 deferral,
-            } => {
-                if deferral.is_none()
-                    || request
-                        .IsCanceled()
-                        .inspect_err(|e| tracing::error!(reason = %e, "request.is_canceled"))
-                        == Ok(false)
-                {
-                    if let Some(w) = ht_manager
-                        .get_data(ht)
-                        .native_text_deferrable_event_handler()
-                    {
-                        if let Err(e) = w.layout(
-                            &mut InputEventContext {
-                                composite_tree: &mut composite_tree,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                system_link: &mut system_link,
-                                ht_manager: &ht_manager,
-                                dock_store: &mut dock_store,
-                                view_instance_store: &mut view_instance_store,
-                                view_group_relation_store: &view_group_relation_store,
-                                view_render_queue: &mut view_render_queue,
-                                application: ApplicationMutation {
-                                    state: &mut application,
-                                    view_feedbacks: &mut view_feedback_store,
-                                },
-                            },
-                            &request,
-                        ) {
-                            tracing::error!(reason = %e, "CoreTextLayoutRequested");
-                            if let Some(d) = deferral {
-                                if let Err(e) = d.Close() {
-                                    tracing::error!(reason = %e, "deferral.close");
-                                }
-                            }
-                        } else {
-                            if let Some(d) = deferral {
-                                if let Err(e) = d.Complete() {
-                                    tracing::error!(reason = %e, "deferral.complete");
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            } => inst
+                .as_mut()
+                .core_text_layout_requested(request, deferral, ht),
             #[cfg(windows)]
             Event::CoreTextTextUpdating { ht, e, deferral } => {
-                if deferral.is_none()
-                    || e.IsCanceled()
-                        .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
-                        == Ok(false)
-                {
-                    if let Some(w) = ht_manager
-                        .get_data(ht)
-                        .native_text_deferrable_event_handler()
-                    {
-                        if let Err(e) = w.text_updating(
-                            &mut InputEventContext {
-                                composite_tree: &mut composite_tree,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                system_link: &mut system_link,
-                                ht_manager: &ht_manager,
-                                dock_store: &mut dock_store,
-                                view_instance_store: &mut view_instance_store,
-                                view_group_relation_store: &view_group_relation_store,
-                                view_render_queue: &mut view_render_queue,
-                                application: ApplicationMutation {
-                                    state: &mut application,
-                                    view_feedbacks: &mut view_feedback_store,
-                                },
-                            },
-                            &e,
-                        ) {
-                            tracing::error!(reason = %e, "CoreTextTextUpdating");
-                            if let Some(d) = deferral {
-                                if let Err(e) = d.Close() {
-                                    tracing::error!(reason = %e, "deferral.close");
-                                }
-                            }
-                        } else {
-                            if let Some(d) = deferral {
-                                if let Err(e) = d.Complete() {
-                                    tracing::error!(reason = %e, "deferral.complete");
-                                }
-                            }
-                        }
-                    }
-                }
+                inst.as_mut().core_text_text_updating(e, deferral, ht)
             }
             #[cfg(windows)]
             Event::CoreTextFormatUpdating { ht, e, deferral } => {
-                if deferral.is_none()
-                    || e.IsCanceled()
-                        .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
-                        == Ok(false)
-                {
-                    if let Some(w) = ht_manager
-                        .get_data(ht)
-                        .native_text_deferrable_event_handler()
-                    {
-                        if let Err(e) = w.format_updating(
-                            &mut InputEventContext {
-                                composite_tree: &mut composite_tree,
-                                current_sec: global_time_base.elapsed().as_secs_f32(),
-                                system_link: &mut system_link,
-                                ht_manager: &ht_manager,
-                                dock_store: &mut dock_store,
-                                view_instance_store: &mut view_instance_store,
-                                view_group_relation_store: &view_group_relation_store,
-                                view_render_queue: &mut view_render_queue,
-                                application: ApplicationMutation {
-                                    state: &mut application,
-                                    view_feedbacks: &mut view_feedback_store,
-                                },
-                            },
-                            &e,
-                        ) {
-                            tracing::error!(reason = %e, "CoreTextFormatUpdating");
-                            if let Some(d) = deferral {
-                                if let Err(e) = d.Close() {
-                                    tracing::error!(reason = %e, "deferral.close");
-                                }
-                            }
-                        } else {
-                            if let Some(d) = deferral {
-                                if let Err(e) = d.Complete() {
-                                    tracing::error!(reason = %e, "deferral.complete");
-                                }
-                            }
-                        }
-                    }
-                }
+                inst.as_mut().core_text_format_updating(e, deferral, ht)
             }
         }
 
@@ -4355,7 +4423,9 @@ pub use platform::unix::wayland::{
 #[cfg(windows)]
 pub use platform::windows::{
     DragData, PointerID, SystemLink, WindowHandle, WindowPersistentStateNativeGeometryUnit,
-    flyout_surface::Handle as FlyoutSurfaceHandle,
+    close_sub_window, create_main_window,
+    flyout_surface::{Handle as FlyoutSurfaceHandle, create_flyout_surface},
+    open_sub_window,
 };
 
 pub struct SyncEventBus {

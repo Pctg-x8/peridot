@@ -1,3 +1,5 @@
+use core::pin::Pin;
+
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
 use windows::{
@@ -103,20 +105,15 @@ use windows_core::{BOOL, HRESULT, HSTRING, IInspectable, Interface, PCWSTR, h, i
 use windows_numerics::{Vector2, Vector3};
 
 use core::cell::{Cell, UnsafeCell};
-use std::{
-    cell::{OnceCell, RefCell},
-    rc::Rc,
-    sync::Mutex,
-};
+use std::{cell::OnceCell, rc::Rc, sync::Mutex};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, SyncEvent, WindowType,
+    CoreLoop, Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{Graphics, VulkanSurface},
     input::{
-        InputEventContext, KeyInputCode, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
-        ModifierKey, PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit,
-        ShellPointerActions,
+        InputEventContext, KeyInputCode, KeyboardFocusGroupRef, ModifierKey,
+        PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit, ShellPointerActions,
         hittest::{
             CursorShape, DragDropFlags, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
             PointerButton,
@@ -125,7 +122,7 @@ use crate::{
     persistence::WindowGeometryState,
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderMessageSender,
-        composite::{CompositeRect, CompositeTree, CompositeTreeRef},
+        composite::{CompositeRect, CompositeTreeRef},
         text::FontSet,
     },
     utils::platform::windows::{
@@ -489,16 +486,13 @@ impl NativeWindow {
         }
     }
 
-    fn new<E>(
+    fn new<'sys>(
         app_context: &ApplicationContext,
         window_type: WindowType,
         pos: Option<Point<PixelsUnit>>,
         size: Option<Size<PixelsUnit>>,
         maximized: bool,
-        event_dispatcher: LogicFiberEventDispatcher,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
+        mut coreloop: Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
         let mut window_style = WS_OVERLAPPEDWINDOW;
         if maximized {
@@ -529,21 +523,27 @@ impl NativeWindow {
                     state: WindowState {
                         r#type: window_type,
                         content_scale: GetDpiForWindow(w) as f32 / 96.0,
-                        composite_root: CompositeRect::build().expand_full().create(composite_tree),
-                        ht_root: ht_manager.create(HitTestTreeData {
-                            width_adjustment_factor: 1.0,
-                            height_adjustment_factor: 1.0,
-                            root_of_window: Some(WindowHandle(w)),
-                            ..Default::default()
-                        }),
+                        composite_root: CompositeRect::build().expand_full().create(
+                            &mut unsafe { coreloop.as_mut().get_unchecked_mut() }.composite_tree,
+                        ),
+                        ht_root: unsafe { coreloop.as_mut().get_unchecked_mut() }
+                            .ht_manager
+                            .create(HitTestTreeData {
+                                width_adjustment_factor: 1.0,
+                                height_adjustment_factor: 1.0,
+                                root_of_window: Some(WindowHandle(w)),
+                                ..Default::default()
+                            }),
                         latest_ui_scale_changes: Mutex::new(None),
                         keyboard_focus_state: PerWindowKeyboardFocusState::new(
-                            keyboard_focus_registry.acquire_group(),
+                            unsafe { coreloop.as_mut().get_unchecked_mut() }
+                                .keyboard_focus_registry
+                                .acquire_group(),
                         ),
                         destroying: false,
                     },
                     app_context,
-                    event_dispatcher,
+                    coreloop: unsafe { coreloop.get_unchecked_mut() },
                     modifier_key_state: ModifierKeyRecorder::new(),
                 }))
                 .addr()
@@ -599,7 +599,7 @@ pub struct WindowState {
 
 // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタをグローバルにおいて参照もたせる（実際どうするかはあとで考える）
 static mut POINTER_INPUT_MANAGER_PTR: *const PointerInputManager = core::ptr::null();
-static mut HIT_TEST_TREE_MANAGER_PTR: *const HitTestTreeManager<'static> = core::ptr::null();
+static mut HIT_TEST_TREE_MANAGER_PTR: *const HitTestTreeManager = core::ptr::null();
 pub unsafe fn locate_non_client_hittest_managers(
     pointer_input_manager: &PointerInputManager,
     ht_manager: &HitTestTreeManager,
@@ -660,14 +660,19 @@ impl ModifierKeyRecorder {
 }
 
 #[repr(C)] // place state at always 0: this structure can be reinterpreted as a WindowState
-struct WindowEventHandler {
+struct WindowEventHandler<'sys> {
     state: WindowState,
     app_context: *const ApplicationContext,
-    event_dispatcher: LogicFiberEventDispatcher,
+    coreloop: *mut CoreLoop<'sys>,
     modifier_key_state: ModifierKeyRecorder,
 }
-impl WindowEventHandler {
+impl<'sys> WindowEventHandler<'sys> {
     const LONG_PTR_INDEX: WINDOW_LONG_PTR_INDEX = NativeWindow::EVENT_HANDLER_LONG_PTR_INDEX;
+
+    #[inline(always)]
+    const fn coreloop(&self) -> Pin<&mut CoreLoop<'sys>> {
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
+    }
 
     #[inline(always)]
     fn get_for_window<'a>(w: HWND) -> &'a mut Self {
@@ -685,18 +690,6 @@ impl WindowEventHandler {
                 GetWindowLongPtrW(w, Self::LONG_PTR_INDEX).cast_unsigned(),
             )
             .as_mut()
-        }
-    }
-
-    #[inline(always)]
-    fn dispatch_event(w: HWND, e: Event) {
-        Self::get_for_window(w).event_dispatcher.dispatch(e);
-    }
-
-    #[inline(always)]
-    fn try_dispatch_event(w: HWND, e: Event) {
-        if let Some(st) = Self::try_get_for_window(w) {
-            st.event_dispatcher.dispatch(e);
         }
     }
 
@@ -736,10 +729,9 @@ impl WindowEventHandler {
 
         self.state.content_scale = new_scale;
         *self.state.latest_ui_scale_changes.lock().expect("poisoned") = Some(new_scale);
-        self.event_dispatcher.dispatch(Event::WindowRescaleUI {
-            window: WindowHandle(hwnd),
-            new_scale,
-        });
+        self.coreloop()
+            .rescale_popup_of_window(WindowHandle(hwnd), new_scale);
+        self.coreloop().update_view_all();
 
         unsafe {
             // move to suggested rect
@@ -759,12 +751,11 @@ impl WindowEventHandler {
 
     #[tracing::instrument(skip(self))]
     fn resize(&mut self, hwnd: HWND, new_size: Size<PixelsUnit>) {
-        tracing::trace!(?new_size);
-
-        self.event_dispatcher.dispatch(Event::WindowResize {
-            window: WindowHandle(hwnd),
-            size: new_size.to_logical(self.state.content_scale),
-        });
+        self.coreloop().resize_window(
+            WindowHandle(hwnd),
+            new_size.to_logical(self.state.content_scale),
+        );
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(skip(self))]
@@ -799,37 +790,38 @@ impl WindowEventHandler {
             unsafe {
                 SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
             }
-            self.event_dispatcher.dispatch(Event::DockMovePreview {
-                dest_window,
-                client_pos_in_dest,
-            });
+            self.coreloop()
+                .move_redock_preview(dest_window, client_pos_in_dest);
+            self.coreloop().update_view_all();
 
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(hwnd),
-            client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier: self.modifier_key_state.current,
-        });
+        self.coreloop().handle_pointer_move(
+            WindowHandle(hwnd),
+            PointerID(),
+            client_pos.to_logical(self.state.content_scale),
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(skip(self))]
     fn left_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
         // move then down
-        self.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(hwnd),
-            client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier: self.modifier_key_state.current,
-        });
-        self.event_dispatcher.dispatch(Event::PointerDown {
-            window: WindowHandle(hwnd),
-            pointer_id: PointerID(),
-            button: PointerButton::Primary,
-            key_modifier: self.modifier_key_state.current,
-        });
+        self.coreloop().handle_pointer_move(
+            WindowHandle(hwnd),
+            PointerID(),
+            client_pos.to_logical(self.state.content_scale),
+            self.modifier_key_state.current,
+        );
+        self.coreloop().handle_pointer_down(
+            WindowHandle(hwnd),
+            PointerID(),
+            PointerButton::Primary,
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(skip(self))]
@@ -838,29 +830,31 @@ impl WindowEventHandler {
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::PointerUp {
-            window: WindowHandle(hwnd),
-            pointer_id: PointerID(),
-            button: PointerButton::Primary,
-            key_modifier: self.modifier_key_state.current,
-        });
+        self.coreloop().handle_pointer_up(
+            WindowHandle(hwnd),
+            PointerID(),
+            PointerButton::Primary,
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(skip(self))]
     fn right_button_down(&mut self, hwnd: HWND, client_pos: Point<PixelsUnit>) {
         // move then down
-        self.event_dispatcher.dispatch(Event::PointerMove {
-            pointer_id: PointerID(),
-            window: WindowHandle(hwnd),
-            client_pos: client_pos.to_logical(self.state.content_scale),
-            key_modifier: self.modifier_key_state.current,
-        });
-        self.event_dispatcher.dispatch(Event::PointerDown {
-            window: WindowHandle(hwnd),
-            pointer_id: PointerID(),
-            button: PointerButton::Secondary,
-            key_modifier: self.modifier_key_state.current,
-        });
+        self.coreloop().handle_pointer_move(
+            WindowHandle(hwnd),
+            PointerID(),
+            client_pos.to_logical(self.state.content_scale),
+            self.modifier_key_state.current,
+        );
+        self.coreloop().handle_pointer_down(
+            WindowHandle(hwnd),
+            PointerID(),
+            PointerButton::Secondary,
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     #[tracing::instrument(skip(self))]
@@ -869,12 +863,13 @@ impl WindowEventHandler {
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::PointerUp {
-            window: WindowHandle(hwnd),
-            pointer_id: PointerID(),
-            button: PointerButton::Secondary,
-            key_modifier: self.modifier_key_state.current,
-        });
+        self.coreloop().handle_pointer_up(
+            WindowHandle(hwnd),
+            PointerID(),
+            PointerButton::Secondary,
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     fn try_perform_confirm_drag(&mut self, hwnd: HWND) -> bool {
@@ -910,11 +905,9 @@ impl WindowEventHandler {
         unsafe {
             SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
         }
-        self.event_dispatcher.dispatch(Event::DockConfirm {
-            pointer: PointerID(),
-            destination_window: dest_window,
-            client_pos_in_dest,
-        });
+        self.coreloop()
+            .confirm_redock(dest_window, client_pos_in_dest);
+        self.coreloop().update_view_all();
 
         true
     }
@@ -1013,21 +1006,23 @@ impl WindowEventHandler {
     fn keydown(&mut self, hwnd: HWND, code: usize) {
         self.modifier_key_state.handle_keydown(code);
 
-        self.event_dispatcher.dispatch(Event::KeyDown {
-            code: Self::translate_keycode(code),
-            modifier: self.modifier_key_state.current,
-            window: WindowHandle(hwnd),
-        });
+        self.coreloop().dispatch_key_down(
+            WindowHandle(hwnd),
+            Self::translate_keycode(code),
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     fn keyup(&mut self, hwnd: HWND, code: usize) {
         self.modifier_key_state.handle_keyup(code);
 
-        self.event_dispatcher.dispatch(Event::KeyUp {
-            code: Self::translate_keycode(code),
-            modifier: self.modifier_key_state.current,
-            window: WindowHandle(hwnd),
-        });
+        self.coreloop().dispatch_key_up(
+            WindowHandle(hwnd),
+            Self::translate_keycode(code),
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     fn char_key(&self, hwnd: HWND, code: usize) {
@@ -1036,11 +1031,12 @@ impl WindowEventHandler {
             return;
         }
 
-        self.event_dispatcher.dispatch(Event::KeyChar {
-            ch: unsafe { char::from_u32_unchecked(code as _) },
-            modifier: self.modifier_key_state.current,
-            window: WindowHandle(hwnd),
-        });
+        self.coreloop().dispatch_key_char(
+            WindowHandle(hwnd),
+            unsafe { char::from_u32_unchecked(code as _) },
+            self.modifier_key_state.current,
+        );
+        self.coreloop().update_view_all();
     }
 
     extern "system" fn handle_messages(
@@ -1059,9 +1055,7 @@ impl WindowEventHandler {
                 WindowType::Main {} => unsafe {
                     PostQuitMessage(0);
                 },
-                WindowType::Sub => e.event_dispatcher.dispatch(Event::SubWindowClose {
-                    window: WindowHandle(hwnd),
-                }),
+                WindowType::Sub => e.coreloop().close_sub_window(WindowHandle(hwnd)),
             }
 
             return LRESULT(0);
@@ -1117,13 +1111,13 @@ impl WindowEventHandler {
                 tracing::error!(reason = %e, "DwmExtendFrameIntoClientArea");
             }
 
-            Self::try_dispatch_event(
-                hwnd,
-                Event::WindowActivatingStateChanged {
-                    window: WindowHandle(hwnd),
-                    activated: wparam.0 != WA_INACTIVE as _,
-                },
-            );
+            if let Some(st) = Self::try_get_for_window(hwnd) {
+                st.coreloop().handle_window_activation_state_changed(
+                    WindowHandle(hwnd),
+                    wparam.0 != WA_INACTIVE as _,
+                );
+                st.coreloop().update_view_all();
+            }
 
             return LRESULT(0);
         }
@@ -1145,11 +1139,9 @@ impl WindowEventHandler {
                 return LRESULT(0);
             }
 
-            st.event_dispatcher.dispatch(Event::WindowFocusChanged {
-                window: WindowHandle(hwnd),
-                focused: true,
-            });
-
+            st.coreloop()
+                .handle_window_focus_changed(WindowHandle(hwnd), true);
+            st.coreloop().update_view_all();
             return LRESULT(0);
         }
 
@@ -1160,11 +1152,9 @@ impl WindowEventHandler {
                 return LRESULT(0);
             }
 
-            st.event_dispatcher.dispatch(Event::WindowFocusChanged {
-                window: WindowHandle(hwnd),
-                focused: false,
-            });
-
+            st.coreloop()
+                .handle_window_focus_changed(WindowHandle(hwnd), false);
+            st.coreloop().update_view_all();
             return LRESULT(0);
         }
 
@@ -1241,10 +1231,9 @@ impl WindowEventHandler {
                 (lparam.0 & 0xffff) as u16 as i16 as _,
                 ((lparam.0 >> 16) & 0xffff) as u16 as i16 as _,
             );
-            st.event_dispatcher.dispatch(Event::WindowMove {
-                window: WindowHandle(hwnd),
-                pos: p.to_logical(unsafe { GetDpiForWindow(hwnd) as f32 / 96.0 }),
-            });
+
+            st.coreloop().close_all_menus();
+            st.coreloop().update_view_all();
 
             return LRESULT(0);
         }
@@ -1265,19 +1254,15 @@ impl WindowEventHandler {
 
             if wparam.0 == SIZE_MAXIMIZED as _ {
                 state
-                    .event_dispatcher
-                    .dispatch(Event::WindowMaximizeStateChanged {
-                        window: WindowHandle(hwnd),
-                        is_maximized: true,
-                    });
+                    .coreloop()
+                    .handle_window_maximize_state_changes(WindowHandle(hwnd), true);
+                state.coreloop().update_view_all();
             }
             if wparam.0 == SIZE_RESTORED as _ {
                 state
-                    .event_dispatcher
-                    .dispatch(Event::WindowMaximizeStateChanged {
-                        window: WindowHandle(hwnd),
-                        is_maximized: false,
-                    });
+                    .coreloop()
+                    .handle_window_maximize_state_changes(WindowHandle(hwnd), false);
+                state.coreloop().update_view_all();
             }
 
             return LRESULT(0);
@@ -1454,11 +1439,8 @@ impl WindowEventHandler {
                 return LRESULT(0);
             }
 
-            st.event_dispatcher.dispatch(Event::PointerLeaveWindow {
-                window: WindowHandle(hwnd),
-                pointer_id: PointerID(),
-            });
-
+            st.coreloop().handle_pointer_leave_window(PointerID());
+            st.coreloop().update_view_all();
             return LRESULT(0);
         }
 
@@ -1472,14 +1454,11 @@ impl WindowEventHandler {
                 key_modifier |= ModifierKey::SHIFT;
             }
 
-            Self::dispatch_event(
-                hwnd,
-                Event::ScrollWheel {
-                    amount: (wparam.0 >> 16) as i16 as f32 / WHEEL_DELTA as f32,
-                    key_modifier,
-                },
+            Self::get_for_window(hwnd).coreloop().dispatch_scroll_wheel(
+                (wparam.0 >> 16) as i16 as f32 / WHEEL_DELTA as f32,
+                key_modifier,
             );
-
+            Self::get_for_window(hwnd).coreloop().update_view_all();
             return LRESULT(0);
         }
 
@@ -1864,6 +1843,143 @@ fn find_maximized_base_left_top(monitor_index: usize) -> Option<Point<PixelsUnit
     target_left_top.or(primary_left_top)
 }
 
+pub fn create_main_window<'sys>(
+    mode: MainWindowOpenMode,
+    mut coreloop: Pin<&mut CoreLoop<'sys>>,
+) -> WindowHandle {
+    let (pos, size, initial_maximized);
+    match mode {
+        MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+            pos = find_maximized_base_left_top(monitor_index);
+            size = None;
+            initial_maximized = true;
+        }
+        MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+            pos = None;
+            size = Some(rect.size());
+            initial_maximized = false;
+        }
+        MainWindowOpenMode::New => {
+            pos = None;
+            size = None;
+            initial_maximized = false;
+        }
+    }
+
+    let w = NativeWindow::new(
+        coreloop.syslink.app_context,
+        WindowType::Main {},
+        pos,
+        size,
+        initial_maximized,
+        coreloop.as_mut(),
+    );
+    let h = w.make_handle();
+
+    let vk_surface = w.create_vk_surface(unsafe { &*coreloop.syslink.gfx });
+    unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .delayed_render_messages
+        .push(RenderMessage::NewWindow(NewWindowData {
+            key: h,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        }));
+
+    h
+}
+
+pub fn open_sub_window<'sys>(
+    mode: SubWindowOpenMode,
+    mut coreloop: Pin<&mut CoreLoop<'sys>>,
+    setup_contents: impl FnOnce(WindowHandle, Pin<&mut CoreLoop<'sys>>),
+) -> WindowHandle {
+    let (initial_pos, initial_size, initial_maximized);
+    match mode {
+        SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+            initial_pos = find_maximized_base_left_top(monitor_index);
+            initial_size = None;
+            initial_maximized = true;
+        }
+        SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+            initial_pos = Some(rect.left_top());
+            initial_size = Some(rect.size());
+            initial_maximized = false;
+        }
+        SubWindowOpenMode::DockDiverge {
+            rect,
+            position_ref_window,
+        } => {
+            let mut grect_lt = [point_to_win32(
+                &rect
+                    .left_top()
+                    .to_pixels_round(position_ref_window.ui_scale_factor()),
+            )];
+            unsafe {
+                MapWindowPoints(Some(position_ref_window.0), None, &mut grect_lt);
+            }
+
+            initial_pos = Some(point_from_win32(grect_lt[0]));
+            initial_size = Some(
+                rect.size()
+                    .to_pixels_ceil(position_ref_window.ui_scale_factor()),
+            );
+            initial_maximized = false;
+        }
+    };
+
+    let w = NativeWindow::new(
+        coreloop.syslink.app_context,
+        WindowType::Sub,
+        initial_pos,
+        initial_size,
+        initial_maximized,
+        coreloop.as_mut(),
+    );
+    let h = w.make_handle();
+
+    let vk_surface = w.create_vk_surface(unsafe { &*coreloop.syslink.gfx });
+    unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .delayed_render_messages
+        .push(RenderMessage::NewWindow(NewWindowData {
+            key: h,
+            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+        }));
+
+    setup_contents(h, coreloop);
+    unsafe {
+        let _ = ShowWindow(w.hwnd, SW_SHOW);
+    }
+    h
+}
+
+pub fn close_sub_window(mut window_handle: WindowHandle) {
+    let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
+    window_handle
+        .event_handler()
+        .coreloop()
+        .syslink
+        .rt_sender
+        .send(RenderMessage::DestroyWindow(
+            window_handle,
+            done_event_sender,
+        ))
+        .expect("rt_sender.send.destroy_window");
+    done_event_receiver
+        .recv()
+        .expect("done_event_receiver.recv");
+
+    let mut coreloop = window_handle.event_handler().coreloop();
+    unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .composite_tree
+        .free_all(window_handle.state().composite_root);
+    unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .ht_manager
+        .free_all(window_handle.state().ht_root);
+    unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .keyboard_focus_registry
+        .release_group(window_handle.state().keyboard_focus_state.root_group());
+    window_handle.destroy();
+}
+
 pub struct SystemLink<'sys> {
     pub font_set: FontSet,
     pub gfx: *const Graphics<'sys>,
@@ -1895,159 +2011,10 @@ impl<'sys> SystemLink<'sys> {
         true
     }
 
-    pub fn create_main_window(
-        &mut self,
-        mode: MainWindowOpenMode,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-    ) -> WindowHandle {
-        let (pos, size, initial_maximized);
-        match mode {
-            MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-                pos = find_maximized_base_left_top(monitor_index);
-                size = None;
-                initial_maximized = true;
-            }
-            MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
-                pos = None;
-                size = Some(rect.size());
-                initial_maximized = false;
-            }
-            MainWindowOpenMode::New => {
-                pos = None;
-                size = None;
-                initial_maximized = false;
-            }
-        }
-
-        let w = NativeWindow::new(
-            self.app_context,
-            WindowType::Main {},
-            pos,
-            size,
-            initial_maximized,
-            unsafe { &*self.event_dispatcher }.clone(),
-            composite_tree,
-            ht_manager,
-            keyboard_focus_registry,
-        );
-        let h = w.make_handle();
-
-        let vk_surface = w.create_vk_surface(unsafe { &*self.gfx });
-        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
-            key: h,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-        }));
-
+    pub fn prelaunch(&self, handle: WindowHandle) {
         unsafe {
-            let _ = ShowWindow(h.0, SW_SHOWNORMAL);
+            let _ = ShowWindow(handle.0, SW_SHOWNORMAL);
         }
-
-        h
-    }
-
-    pub fn prelaunch(&self, _handle: WindowHandle) {}
-
-    pub fn open_window<'h>(
-        &mut self,
-        mode: SubWindowOpenMode,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        hit_tree: &mut HitTestTreeManager<'h>,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-        setup_contents: impl FnOnce(
-            WindowHandle,
-            &mut CompositeTree<SyncEvent>,
-            &mut HitTestTreeManager<'h>,
-            &mut KeyboardFocusTokenRegistry,
-            &mut Self,
-        ),
-    ) -> WindowHandle {
-        let (initial_pos, initial_size, initial_maximized);
-        match mode {
-            SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-                initial_pos = find_maximized_base_left_top(monitor_index);
-                initial_size = None;
-                initial_maximized = true;
-            }
-            SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
-                initial_pos = Some(rect.left_top());
-                initial_size = Some(rect.size());
-                initial_maximized = false;
-            }
-            SubWindowOpenMode::DockDiverge {
-                rect,
-                position_ref_window,
-            } => {
-                let mut grect_lt = [point_to_win32(
-                    &rect
-                        .left_top()
-                        .to_pixels_round(position_ref_window.ui_scale_factor()),
-                )];
-                unsafe {
-                    MapWindowPoints(Some(position_ref_window.0), None, &mut grect_lt);
-                }
-
-                initial_pos = Some(point_from_win32(grect_lt[0]));
-                initial_size = Some(
-                    rect.size()
-                        .to_pixels_ceil(position_ref_window.ui_scale_factor()),
-                );
-                initial_maximized = false;
-            }
-        };
-
-        let w = NativeWindow::new(
-            self.app_context,
-            WindowType::Sub,
-            initial_pos,
-            initial_size,
-            initial_maximized,
-            unsafe { &*self.event_dispatcher }.clone(),
-            composite_tree,
-            hit_tree,
-            keyboard_focus_registry,
-        );
-        let h = w.make_handle();
-
-        let vk_surface = w.create_vk_surface(unsafe { &*self.gfx });
-        delayed_render_messages.push(RenderMessage::NewWindow(NewWindowData {
-            key: h,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-        }));
-
-        setup_contents(h, composite_tree, hit_tree, keyboard_focus_registry, self);
-        unsafe {
-            let _ = ShowWindow(w.hwnd, SW_SHOW);
-        }
-        h
-    }
-
-    pub fn close_window(
-        &mut self,
-        mut window_handle: WindowHandle,
-        composite_tree: &mut CompositeTree<SyncEvent>,
-        hit_tree: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-    ) {
-        let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-        self.rt_sender
-            .send(RenderMessage::DestroyWindow(
-                window_handle,
-                done_event_sender,
-            ))
-            .expect("rt_sender.send.destroy_window");
-        done_event_receiver
-            .recv()
-            .expect("done_event_receiver.recv");
-
-        composite_tree.free_all(window_handle.state().composite_root);
-        hit_tree.free_all(window_handle.state().ht_root);
-        keyboard_focus_registry
-            .release_group(window_handle.state().keyboard_focus_state.root_group());
-        window_handle.destroy();
     }
 
     pub fn set_cursor(&self, _pointer_id: &PointerID, cursor: CursorShape) {
@@ -2660,17 +2627,20 @@ impl IDropTarget_Impl for DropTarget_Impl {
 
         WindowHandle(self.hwnd)
             .event_handler()
-            .event_dispatcher
-            .dispatch(Event::PerformDrop {
-                data: DragData {
+            .coreloop()
+            .perform_drop(
+                DragData {
                     obj: dataobj.clone(),
                     is_file_drop: OnceCell::new(),
                 }
                 .into(),
-                target_window: WindowHandle(self.hwnd),
-                client_pos: point_from_win32(client_pos)
-                    .to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
-            });
+                WindowHandle(self.hwnd),
+                point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
+            );
+        WindowHandle(self.hwnd)
+            .event_handler()
+            .coreloop()
+            .update_view_all();
 
         Ok(())
     }
@@ -2774,12 +2744,18 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
             }
             let [client_pos] = ps;
 
-            // TODO: DoDragDropでループに入ってしまうのでdispatchしても終わるまで反応がない これはどうするか......
-            unsafe { &mut *self.event_dispatcher }.dispatch(Event::DockMovePreview {
-                dest_window: WindowHandle(dest_window),
-                client_pos_in_dest: point_from_win32(client_pos)
-                    .to_logical(WindowHandle(dest_window).ui_scale_factor()),
-            });
+            WindowHandle(dest_window)
+                .event_handler()
+                .coreloop()
+                .move_redock_preview(
+                    WindowHandle(dest_window),
+                    point_from_win32(client_pos)
+                        .to_logical(WindowHandle(dest_window).ui_scale_factor()),
+                );
+            WindowHandle(dest_window)
+                .event_handler()
+                .coreloop()
+                .update_view_all();
 
             return S_OK;
         }

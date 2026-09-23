@@ -1,3 +1,5 @@
+use core::pin::Pin;
+
 use shared::{LogicalUnit, PixelsUnit, Point, Size};
 use windows::{
     UI::Composition::{
@@ -41,7 +43,7 @@ use windows_core::{HSTRING, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
 
 use crate::{
-    Event, LogicFiberEventDispatcher, SystemLink, WindowHandle,
+    CoreLoop, SystemLink, WindowHandle,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     input::{
         KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState, ShellPointerActions,
@@ -182,17 +184,17 @@ impl ShellPointerActions for Handle {
     }
 }
 
-pub struct InstanceState {
+pub struct InstanceState<'sys> {
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
-    event_dispatcher: *const LogicFiberEventDispatcher,
+    coreloop: *mut CoreLoop<'sys>,
     _c_target: DesktopWindowTarget,
     keyboard_focus_state: PerWindowKeyboardFocusState,
     spawned_surface_pos: Point<LogicalUnit>,
     pointer_focus: bool,
     modifier_key_state: ModifierKeyRecorder,
 }
-impl InstanceState {
+impl<'sys> InstanceState<'sys> {
     fn done<E>(
         self,
         composite_tree: &mut CompositeTree<E>,
@@ -205,8 +207,8 @@ impl InstanceState {
     }
 
     #[inline(always)]
-    fn dispatch_event(&self, event: Event) {
-        unsafe { &*self.event_dispatcher }.dispatch(event);
+    const fn coreloop(&self) -> Pin<&mut CoreLoop<'sys>> {
+        unsafe { Pin::new_unchecked(&mut *self.coreloop) }
     }
 }
 
@@ -219,7 +221,7 @@ const SHADOW_OFFSET: Vector3 = Vector3 {
 };
 
 #[inline(always)]
-fn set_state(hwnd: HWND, state: Box<InstanceState>) {
+fn set_state<'sys>(hwnd: HWND, state: Box<InstanceState<'sys>>) {
     unsafe {
         SetWindowLongPtrW(
             hwnd,
@@ -229,7 +231,7 @@ fn set_state(hwnd: HWND, state: Box<InstanceState>) {
     }
 }
 
-fn take_state(hwnd: HWND) -> Box<InstanceState> {
+fn take_state<'sys>(hwnd: HWND) -> Box<InstanceState<'sys>> {
     let r = unsafe {
         Box::from_raw(core::ptr::with_exposed_provenance_mut(
             GetWindowLongPtrW(hwnd, WINDOW_PTR_STATE).cast_unsigned(),
@@ -243,7 +245,7 @@ fn take_state(hwnd: HWND) -> Box<InstanceState> {
 }
 
 #[inline(always)]
-fn state<'a>(hwnd: HWND) -> &'a InstanceState {
+fn state<'a, 'sys>(hwnd: HWND) -> &'a InstanceState<'sys> {
     unsafe {
         &*core::ptr::with_exposed_provenance(
             GetWindowLongPtrW(hwnd, WINDOW_PTR_STATE).cast_unsigned(),
@@ -252,7 +254,7 @@ fn state<'a>(hwnd: HWND) -> &'a InstanceState {
 }
 
 #[inline(always)]
-fn state_mut<'a>(hwnd: HWND) -> &'a mut InstanceState {
+fn state_mut<'a, 'sys>(hwnd: HWND) -> &'a mut InstanceState<'sys> {
     unsafe {
         &mut *core::ptr::with_exposed_provenance_mut(
             GetWindowLongPtrW(hwnd, WINDOW_PTR_STATE).cast_unsigned(),
@@ -347,22 +349,23 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
     if msg == WM_LBUTTONDOWN {
         // move then down
-        state(hwnd).dispatch_event(Event::MenuPointerMove {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            client_pos: Point::new_pixels(
+        state(hwnd).coreloop().handle_menu_pointer_move(
+            Handle(hwnd),
+            super::PointerID(),
+            Point::new_pixels(
                 (lparam.0 & 0xffff) as i16 as _,
                 ((lparam.0 >> 16) & 0xffff) as i16 as _,
             )
             .to_logical(Handle(hwnd).render_scale()),
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
-        state(hwnd).dispatch_event(Event::MenuPointerDown {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            button: PointerButton::Primary,
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().dispatch_menu_pointer_down(
+            Handle(hwnd),
+            super::PointerID(),
+            PointerButton::Primary,
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
 
         return LRESULT(0);
     }
@@ -379,18 +382,19 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        state(hwnd).dispatch_event(Event::MenuPointerMove {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
-        state(hwnd).dispatch_event(Event::MenuPointerDown {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            button: PointerButton::Primary,
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+        state(hwnd).coreloop().handle_menu_pointer_move(
+            Handle(hwnd),
+            super::PointerID(),
+            Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().dispatch_menu_pointer_down(
+            Handle(hwnd),
+            super::PointerID(),
+            PointerButton::Primary,
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
 
         return LRESULT(0);
     }
@@ -398,33 +402,35 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_LBUTTONUP
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        state(hwnd).dispatch_event(Event::MenuPointerUp {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            button: PointerButton::Primary,
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+        state(hwnd).coreloop().dispatch_menu_pointer_up(
+            Handle(hwnd),
+            super::PointerID(),
+            PointerButton::Primary,
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
         return LRESULT(0);
     }
 
     if msg == WM_RBUTTONDOWN {
         // move then down
-        state(hwnd).dispatch_event(Event::MenuPointerMove {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            client_pos: Point::new_pixels(
+        state(hwnd).coreloop().handle_menu_pointer_move(
+            Handle(hwnd),
+            super::PointerID(),
+            Point::new_pixels(
                 (lparam.0 & 0xffff) as i16 as _,
                 ((lparam.0 >> 16) & 0xffff) as i16 as _,
             )
             .to_logical(Handle(hwnd).render_scale()),
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
-        state(hwnd).dispatch_event(Event::MenuPointerDown {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            button: PointerButton::Secondary,
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().dispatch_menu_pointer_down(
+            Handle(hwnd),
+            super::PointerID(),
+            PointerButton::Secondary,
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
 
         return LRESULT(0);
     }
@@ -441,18 +447,19 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         }
 
         // move then down
-        state(hwnd).dispatch_event(Event::MenuPointerMove {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
-        state(hwnd).dispatch_event(Event::MenuPointerDown {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            button: PointerButton::Secondary,
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+        state(hwnd).coreloop().handle_menu_pointer_move(
+            Handle(hwnd),
+            super::PointerID(),
+            Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().dispatch_menu_pointer_down(
+            Handle(hwnd),
+            super::PointerID(),
+            PointerButton::Secondary,
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
 
         return LRESULT(0);
     }
@@ -460,12 +467,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     if msg == WM_RBUTTONUP
         || (msg == WM_NCRBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
-        state(hwnd).dispatch_event(Event::MenuPointerUp {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            button: PointerButton::Secondary,
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+        state(hwnd).coreloop().dispatch_menu_pointer_up(
+            Handle(hwnd),
+            super::PointerID(),
+            PointerButton::Secondary,
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
         return LRESULT(0);
     }
 
@@ -482,16 +490,17 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
         state_mut(hwnd).pointer_focus = true;
 
-        state(hwnd).dispatch_event(Event::MenuPointerMove {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            client_pos: Point::new_pixels(
+        state(hwnd).coreloop().handle_menu_pointer_move(
+            Handle(hwnd),
+            super::PointerID(),
+            Point::new_pixels(
                 (lparam.0 & 0xffff) as i16 as _,
                 ((lparam.0 >> 16) & 0xffff) as i16 as _,
             )
             .to_logical(Handle(hwnd).render_scale()),
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
 
         return LRESULT(0);
     }
@@ -518,12 +527,13 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             MapWindowPoints(None, Some(hwnd), &mut p);
         }
 
-        state(hwnd).dispatch_event(Event::MenuPointerMove {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-            client_pos: Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
-            key_modifier: state(hwnd).modifier_key_state.current,
-        });
+        state(hwnd).coreloop().handle_menu_pointer_move(
+            Handle(hwnd),
+            super::PointerID(),
+            Point::new_pixels(p[0].x, p[0].y).to_logical(Handle(hwnd).render_scale()),
+            state(hwnd).modifier_key_state.current,
+        );
+        state(hwnd).coreloop().update_view_all();
         // Note: NCMOUSEMOVEはデフォルト動作もさせる
     }
 
@@ -545,10 +555,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             //     });
         }
 
-        state(hwnd).dispatch_event(Event::MenuPointerLeave {
-            target: Handle(hwnd),
-            pointer_id: super::PointerID(),
-        });
+        state(hwnd)
+            .coreloop()
+            .dispatch_menu_pointer_leave(super::PointerID());
+        state(hwnd).coreloop().update_view_all();
 
         return LRESULT(0);
     }
@@ -639,58 +649,48 @@ impl SharedState {
     }
 }
 
-impl super::SystemLink<'_> {
-    #[tracing::instrument(skip(
-        self,
-        parent,
-        composite_tree,
-        ht_manager,
-        keyboard_focus_registry,
-        delayed_render_messages
-    ))]
-    pub fn new_flyout_surface<E>(
-        &self,
-        parent: WindowHandle,
-        pos: Point<LogicalUnit>,
-        size: Size<LogicalUnit>,
-        composite_tree: &mut CompositeTree<E>,
-        ht_manager: &mut HitTestTreeManager,
-        keyboard_focus_registry: &mut KeyboardFocusTokenRegistry,
-        delayed_render_messages: &mut Vec<RenderMessage>,
-    ) -> Handle {
-        let render_scale = parent.ui_scale_factor();
-        let mut ps = [point_to_win32(&pos.to_pixels_round(render_scale))];
-        unsafe {
-            MapWindowPoints(Some(parent.0), None, &mut ps);
-        }
-        let screen_pos = point_from_win32(ps[0]);
-        let pixels_size = size.to_pixels_ceil(render_scale);
+#[tracing::instrument(skip(parent, coreloop))]
+pub fn create_flyout_surface<'sys>(
+    parent: WindowHandle,
+    pos: Point<LogicalUnit>,
+    size: Size<LogicalUnit>,
+    mut coreloop: Pin<&mut CoreLoop<'sys>>,
+) -> Handle {
+    let render_scale = parent.ui_scale_factor();
+    let mut ps = [point_to_win32(&pos.to_pixels_round(render_scale))];
+    unsafe {
+        MapWindowPoints(Some(parent.0), None, &mut ps);
+    }
+    let screen_pos = point_from_win32(ps[0]);
+    let pixels_size = size.to_pixels_ceil(render_scale);
 
-        tracing::debug!(?screen_pos, ?pixels_size, "new_flyout_surface");
+    tracing::debug!(?screen_pos, ?pixels_size, "new_flyout_surface");
 
-        let h = unsafe {
-            // Note: 子ウィンドウにしちゃうとcropされちゃうので独立させる
-            CreateWindowExW(
-                WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
-                self.flyout_surface_context.window_class(),
-                w!(""),
-                WS_POPUP,
-                screen_pos.x - SHADOW_SIZE.ceil() as i32,
-                screen_pos.y - SHADOW_SIZE.ceil() as i32,
-                pixels_size.width as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
-                pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
-                Some(parent.0),
-                None,
-                Some(self.app_context.hinstance),
-                None,
-            )
-            .expect("context_menu.create_window")
-        };
-        let composite_root = CompositeRect::build()
-            .expand_full()
-            .composite_fill_color_imm([0.0, 0.0, 0.0, 0.375])
-            .create(composite_tree);
-        let ht_root = ht_manager.create(HitTestTreeData {
+    let h = unsafe {
+        // Note: 子ウィンドウにしちゃうとcropされちゃうので独立させる
+        CreateWindowExW(
+            WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_NOREDIRECTIONBITMAP,
+            coreloop.syslink.flyout_surface_context.window_class(),
+            w!(""),
+            WS_POPUP,
+            screen_pos.x - SHADOW_SIZE.ceil() as i32,
+            screen_pos.y - SHADOW_SIZE.ceil() as i32,
+            pixels_size.width as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
+            pixels_size.height as i32 + (SHADOW_SIZE * 2.0).ceil() as i32,
+            Some(parent.0),
+            None,
+            Some(coreloop.syslink.app_context.hinstance),
+            None,
+        )
+        .expect("context_menu.create_window")
+    };
+    let composite_root = CompositeRect::build()
+        .expand_full()
+        .composite_fill_color_imm([0.0, 0.0, 0.0, 0.375])
+        .create(&mut unsafe { coreloop.as_mut().get_unchecked_mut() }.composite_tree);
+    let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .ht_manager
+        .create(HitTestTreeData {
             width_adjustment_factor: 1.0,
             height_adjustment_factor: 1.0,
             // shadowの分を開ける
@@ -701,148 +701,165 @@ impl super::SystemLink<'_> {
             ..Default::default()
         });
 
-        let swapchain = unsafe {
-            self.flyout_surface_context
-                .dxgi_factory
-                .CreateSwapChainForComposition(
-                    &self.flyout_surface_context.d3d12_cq,
-                    &DXGI_SWAP_CHAIN_DESC1 {
-                        Width: pixels_size.width as _,
-                        Height: pixels_size.height as _,
-                        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                        SampleDesc: DXGI_SAMPLE_DESC {
-                            Count: 1,
-                            Quality: 0,
-                        },
-                        BufferCount: 2,
-                        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-                        Stereo: FALSE,
-                        Scaling: DXGI_SCALING_STRETCH,
-                        SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-                        AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
-                        Flags: 0,
+    let swapchain = unsafe {
+        coreloop
+            .syslink
+            .flyout_surface_context
+            .dxgi_factory
+            .CreateSwapChainForComposition(
+                &coreloop.syslink.flyout_surface_context.d3d12_cq,
+                &DXGI_SWAP_CHAIN_DESC1 {
+                    Width: pixels_size.width as _,
+                    Height: pixels_size.height as _,
+                    Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    SampleDesc: DXGI_SAMPLE_DESC {
+                        Count: 1,
+                        Quality: 0,
                     },
-                    None,
-                )
-                .expect("dxgi_factory.CreateSwapChainForComposition")
-        };
-        let swapchain: IDXGISwapChain3 = swapchain.cast().expect("swapchain.cast");
-
-        let c_target = unsafe {
-            self.app_context
-                .native_compositor_desktop_interop
-                .CreateDesktopWindowTarget(h, true)
-                .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
-        };
-        let cv_root = self
-            .app_context
-            .native_compositor
-            .CreateSpriteVisual()
-            .expect("compositor.CreateSpriteVisual");
-        c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
-        cv_root
-            .SetSize(Vector2 {
-                X: pixels_size.width as _,
-                Y: pixels_size.height as _,
-            })
-            .expect("cv_root.SetSize");
-        cv_root
-            .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
-            .expect("drag.visual.blur.set_center_point");
-        cv_root
-            .SetAnchorPoint(Vector2::new(0.5, 0.5))
-            .expect("drag.visual.blur.set_anchor_point");
-        cv_root
-            .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
-            .expect("drag.visual.blur.set_relative_offset_adjustment");
-        cv_root
-            .SetBrush(&{
-                let x = self
-                    .flyout_surface_context
-                    .blur_effect_factory
-                    .CreateBrush()
-                    .expect("drag.fx_brush.create");
-                x.SetSourceParameter(
-                    BLUR_EFFECT_SOURCE_PARAM_NAME,
-                    &self
-                        .app_context
-                        .native_compositor
-                        .CreateBackdropBrush()
-                        .expect("drag.backdrop_brush.create"),
-                )
-                .expect("drag.fx.set_blur_source");
-
-                x
-            })
-            .expect("drag.visual.blur.set_brush");
-        cv_root
-            .SetShadow(&{
-                let x = self
-                    .app_context
-                    .native_compositor
-                    .CreateDropShadow()
-                    .expect("drag.visual.shadow.create");
-                x.SetBlurRadius(SHADOW_SIZE)
-                    .expect("context_menu.shadow.set_blur_radius");
-                x.SetOffset(SHADOW_OFFSET)
-                    .expect("context_menu.shadow.set_offset");
-                x.SetOpacity(0.3).expect("context_menu.shadow.set_opacity");
-                x
-            })
-            .expect("drag.visual.set_shadow");
-        let cv_composited = self
-            .app_context
-            .native_compositor
-            .CreateSpriteVisual()
-            .expect("drag.visual.color_tint.create");
-        cv_composited
-            .SetBrush(
-                &self
-                    .app_context
-                    .native_compositor
-                    .CreateSurfaceBrushWithSurface(&unsafe {
-                        self.app_context
-                            .native_compositor_interop
-                            .CreateCompositionSurfaceForSwapChain(&swapchain)
-                            .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")
-                    })
-                    .expect("compositor.CreateSurfaceBrushWithSurface"),
+                    BufferCount: 2,
+                    BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                    Stereo: FALSE,
+                    Scaling: DXGI_SCALING_STRETCH,
+                    SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                    AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                    Flags: 0,
+                },
+                None,
             )
-            .expect("cv_root.SetBrush");
-        cv_composited
-            .SetRelativeSizeAdjustment(Vector2::one())
-            .expect("drag.visual.color_tint.set_relative_size_adjustment");
-        cv_root
-            .Children()
-            .expect("drag.visual.get_children")
-            .InsertAtTop(&cv_composited)
-            .expect("drag.visual.add_child");
+            .expect("dxgi_factory.CreateSwapChainForComposition")
+    };
+    let swapchain: IDXGISwapChain3 = swapchain.cast().expect("swapchain.cast");
 
-        set_state(
-            h,
-            Box::new(InstanceState {
-                composite_root,
-                ht_root,
-                event_dispatcher: self.event_dispatcher,
-                _c_target: c_target,
-                keyboard_focus_state: PerWindowKeyboardFocusState::new(
-                    keyboard_focus_registry.acquire_group(),
-                ),
-                spawned_surface_pos: pos,
-                pointer_focus: false,
-                modifier_key_state: ModifierKeyRecorder::new(),
-            }),
-        );
-        delayed_render_messages.push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
+    let c_target = unsafe {
+        coreloop
+            .syslink
+            .app_context
+            .native_compositor_desktop_interop
+            .CreateDesktopWindowTarget(h, true)
+            .expect("compositor_desktop_interop.CreateDesktopWindowTarget")
+    };
+    let cv_root = coreloop
+        .syslink
+        .app_context
+        .native_compositor
+        .CreateSpriteVisual()
+        .expect("compositor.CreateSpriteVisual");
+    c_target.SetRoot(&cv_root).expect("c_target.SetRoot");
+    cv_root
+        .SetSize(Vector2 {
+            X: pixels_size.width as _,
+            Y: pixels_size.height as _,
+        })
+        .expect("cv_root.SetSize");
+    cv_root
+        .SetCenterPoint(Vector3::new(0.5, 0.5, 0.5))
+        .expect("drag.visual.blur.set_center_point");
+    cv_root
+        .SetAnchorPoint(Vector2::new(0.5, 0.5))
+        .expect("drag.visual.blur.set_anchor_point");
+    cv_root
+        .SetRelativeOffsetAdjustment(Vector3::new(0.5, 0.5, 0.0))
+        .expect("drag.visual.blur.set_relative_offset_adjustment");
+    cv_root
+        .SetBrush(&{
+            let x = coreloop
+                .syslink
+                .flyout_surface_context
+                .blur_effect_factory
+                .CreateBrush()
+                .expect("drag.fx_brush.create");
+            x.SetSourceParameter(
+                BLUR_EFFECT_SOURCE_PARAM_NAME,
+                &coreloop
+                    .syslink
+                    .app_context
+                    .native_compositor
+                    .CreateBackdropBrush()
+                    .expect("drag.backdrop_brush.create"),
+            )
+            .expect("drag.fx.set_blur_source");
+
+            x
+        })
+        .expect("drag.visual.blur.set_brush");
+    cv_root
+        .SetShadow(&{
+            let x = coreloop
+                .syslink
+                .app_context
+                .native_compositor
+                .CreateDropShadow()
+                .expect("drag.visual.shadow.create");
+            x.SetBlurRadius(SHADOW_SIZE)
+                .expect("context_menu.shadow.set_blur_radius");
+            x.SetOffset(SHADOW_OFFSET)
+                .expect("context_menu.shadow.set_offset");
+            x.SetOpacity(0.3).expect("context_menu.shadow.set_opacity");
+            x
+        })
+        .expect("drag.visual.set_shadow");
+    let cv_composited = coreloop
+        .syslink
+        .app_context
+        .native_compositor
+        .CreateSpriteVisual()
+        .expect("drag.visual.color_tint.create");
+    cv_composited
+        .SetBrush(
+            &coreloop
+                .syslink
+                .app_context
+                .native_compositor
+                .CreateSurfaceBrushWithSurface(&unsafe {
+                    coreloop
+                        .syslink
+                        .app_context
+                        .native_compositor_interop
+                        .CreateCompositionSurfaceForSwapChain(&swapchain)
+                        .expect("compositor_interop.CreateCompositionSurfaceForSwapChain")
+                })
+                .expect("compositor.CreateSurfaceBrushWithSurface"),
+        )
+        .expect("cv_root.SetBrush");
+    cv_composited
+        .SetRelativeSizeAdjustment(Vector2::one())
+        .expect("drag.visual.color_tint.set_relative_size_adjustment");
+    cv_root
+        .Children()
+        .expect("drag.visual.get_children")
+        .InsertAtTop(&cv_composited)
+        .expect("drag.visual.add_child");
+
+    set_state(
+        h,
+        Box::new(InstanceState {
+            composite_root,
+            ht_root,
+            coreloop: unsafe { coreloop.as_mut().get_unchecked_mut() },
+            _c_target: c_target,
+            keyboard_focus_state: PerWindowKeyboardFocusState::new(
+                unsafe { coreloop.as_mut().get_unchecked_mut() }
+                    .keyboard_focus_registry
+                    .acquire_group(),
+            ),
+            spawned_surface_pos: pos,
+            pointer_focus: false,
+            modifier_key_state: ModifierKeyRecorder::new(),
+        }),
+    );
+    unsafe { coreloop.as_mut().get_unchecked_mut() }
+        .delayed_render_messages
+        .push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
             w: Handle(h),
             swapchain,
             composite_root,
         }));
 
-        let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
-        Handle(h)
-    }
+    let _ = unsafe { ShowWindow(h, SW_SHOWNOACTIVATE) };
+    Handle(h)
+}
 
+impl super::SystemLink<'_> {
     pub fn any_pointer_on_context_menu(&self) -> bool {
         let mut p = core::mem::MaybeUninit::<POINT>::uninit();
         unsafe {
