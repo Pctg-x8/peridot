@@ -27,8 +27,8 @@ struct VshOutput {
 [shader("vertex")]
 VshOutput vertMain(uint vindex: SV_VertexID) {
     VshOutput vo;
-    vo.uv = float2(select((vindex & 0x01) == 0x00, 0.0, 1.0), select((vindex & 0x02) == 0x00, 0.0, 1.0));
-    vo.pos = float4(vo.uv * 4.0 - 1.0, 0.0, 1.0);
+    vo.uv = float2(select((vindex & 0x01) == 0x00, 0.0, 2.0), select((vindex & 0x02) == 0x00, 0.0, 2.0));
+    vo.pos = float4(vo.uv * 2.0 - 1.0, 0.0, 1.0);
     return vo;
 }
 

@@ -1213,6 +1213,8 @@ pub struct ObjectOutlineGenerator {
     pipelines: [br::vk::VkPipeline; 3],
 }
 impl ObjectOutlineGenerator {
+    const THICKNESS_MAG: f32 = 1.5;
+
     unsafe fn drop(self, gfx: &Graphics) {
         drop(
             self.pipelines
@@ -1410,9 +1412,9 @@ impl ObjectOutlineGenerator {
 
         let mut blur_factors = [0.0; 4];
         let mut factor_sum = 0.0;
-        let r = 0.3 * 3.0;
+        let r = 1.0;
         fn gauss(x: f32, r: f32) -> f32 {
-            (-(x * x) / (2.0 * r * r)) / (core::f32::consts::TAU * r * r).sqrt()
+            (-(x * x) / (2.0 * r * r)).exp() / (core::f32::consts::TAU * r * r).sqrt()
         }
         blur_factors[0] = gauss(0.0, r);
         factor_sum += blur_factors[0];
@@ -1425,7 +1427,7 @@ impl ObjectOutlineGenerator {
             *v /= factor_sum;
         }
         let x_blur_constants = BlurSpecConstants {
-            offset_x: 1.0,
+            offset_x: Self::THICKNESS_MAG / size.width as f32,
             offset_y: 0.0,
             gaussian_blur_factor_0: blur_factors[0],
             gaussian_blur_factor_1: blur_factors[1],
@@ -1434,7 +1436,7 @@ impl ObjectOutlineGenerator {
         };
         let y_blur_constants = BlurSpecConstants {
             offset_x: 0.0,
-            offset_y: 1.0,
+            offset_y: Self::THICKNESS_MAG / size.height as f32,
             gaussian_blur_factor_0: blur_factors[0],
             gaussian_blur_factor_1: blur_factors[1],
             gaussian_blur_factor_2: blur_factors[2],
@@ -1607,15 +1609,17 @@ impl ObjectOutlineGenerator {
                 )
                 .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
                 .set_depth_stencil_state(
-                    &br::PipelineDepthStencilStateCreateInfo::new().stencil_state_front(
-                        br::StencilOpState::always(
-                            br::StencilOp::Replace,
-                            br::StencilOp::Keep,
-                            br::StencilOp::Keep,
-                        )
-                        .set_compare(br::CompareOp::Always, 0x01, 0x01)
-                        .write_mask(0x01),
-                    ),
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .stencil_test(true)
+                        .stencil_state_front(
+                            br::StencilOpState::always(
+                                br::StencilOp::Replace,
+                                br::StencilOp::Keep,
+                                br::StencilOp::Keep,
+                            )
+                            .set_compare(br::CompareOp::Always, 0x01, 0x01)
+                            .write_mask(0x01),
+                        ),
                 ),
                 br::GraphicsPipelineCreateInfo::new(
                     &blur_pipeline_layout,
@@ -1754,6 +1758,9 @@ impl ObjectOutlineGenerator {
             )
         });
         drop(unsafe { br::DeviceMemoryObject::manage(self.mem, gfx) });
+
+        self.x_blur_constants.offset_x = Self::THICKNESS_MAG / size.width as f32;
+        self.y_blur_constants.offset_y = Self::THICKNESS_MAG / size.height as f32;
 
         let stencil_buffer = br::ImageObject::new(
             gfx,
@@ -1929,15 +1936,17 @@ impl ObjectOutlineGenerator {
                 )
                 .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())
                 .set_depth_stencil_state(
-                    &br::PipelineDepthStencilStateCreateInfo::new().stencil_state_front(
-                        br::StencilOpState::always(
-                            br::StencilOp::Replace,
-                            br::StencilOp::Keep,
-                            br::StencilOp::Keep,
-                        )
-                        .set_compare(br::CompareOp::Always, 0x01, 0x01)
-                        .write_mask(0x01),
-                    ),
+                    &br::PipelineDepthStencilStateCreateInfo::new()
+                        .stencil_test(true)
+                        .stencil_state_front(
+                            br::StencilOpState::always(
+                                br::StencilOp::Replace,
+                                br::StencilOp::Keep,
+                                br::StencilOp::Keep,
+                            )
+                            .set_compare(br::CompareOp::Always, 0x01, 0x01)
+                            .write_mask(0x01),
+                        ),
                 ),
                 br::GraphicsPipelineCreateInfo::new(
                     br::VkHandleRef::from_raw_ref(&self.blur_pipeline_layout),
@@ -2238,8 +2247,15 @@ impl Renderer {
         )
         .expect("preview.render_pass.create");
 
-        let linear_sampler = br::SamplerObject::new(device, &br::SamplerCreateInfo::new())
-            .expect("preview.linear_sampler.create");
+        let linear_sampler = br::SamplerObject::new(
+            device,
+            &br::SamplerCreateInfo::new().addressing(
+                br::AddressingMode::ClampToEdge,
+                br::AddressingMode::ClampToEdge,
+                br::AddressingMode::ClampToEdge,
+            ),
+        )
+        .expect("preview.linear_sampler.create");
         let common_descriptor_set_layout = br::DescriptorSetLayoutObject::new(
             device,
             &br::DescriptorSetLayoutCreateInfo::new(&[
