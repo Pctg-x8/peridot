@@ -8,6 +8,9 @@ exclude = [
     "thirdparty/",
     "build-script-helper/",
     "platform/",
+    "editor/win",
+    "editor/mac",
+    "editor/linux",
 ]
 members = [
     "base",
@@ -26,7 +29,16 @@ members = [
     "modules/asset-processing",
     "modules/native-io",
     "base-lib/pinned-futures-helper",
-    "modules/sprite-atlas", "modules/mesh", "modules/asset-processor/model",
+    "modules/sprite-atlas",
+    "editor/core",
+    "editor/core/app/shared",
+    "editor/core/app/model",
+    "editor/core/bindgen",
+    "editor/core/profiler",
+    "editor/core/profiler-attr",
+    "editor/prof-reader",
+    "modules/mesh",
+    "modules/asset-processor/model",
 ]
 
 [workspace.dependencies]

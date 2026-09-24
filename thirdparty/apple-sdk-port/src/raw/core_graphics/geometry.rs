@@ -3,24 +3,28 @@
 use crate::raw::CGFloat;
 
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct CGPoint {
     pub x: CGFloat,
     pub y: CGFloat,
 }
 
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct CGSize {
     pub width: CGFloat,
     pub height: CGFloat,
 }
 
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct CGVector {
     pub dx: CGFloat,
     pub dy: CGFloat,
 }
 
 #[repr(C)]
+#[derive(Debug, Clone)]
 pub struct CGRect {
     pub origin: CGPoint,
     pub size: CGSize,

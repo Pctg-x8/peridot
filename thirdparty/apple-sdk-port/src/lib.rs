@@ -28,6 +28,11 @@ pub trait Object {
     fn as_typeref(&self) -> raw::CFTypeRef;
 
     #[inline(always)]
+    fn as_any(&self) -> &AnyObject {
+        unsafe { &*(self as *const Self as *const AnyObject) }
+    }
+
+    #[inline(always)]
     fn retain(&self) {
         unsafe {
             raw::CFRetain(self.as_typeref());
@@ -49,11 +54,27 @@ pub trait Object {
 pub trait MutableObject: Object {}
 
 #[repr(transparent)]
+pub struct AnyObject(core::ffi::c_void);
+impl Object for AnyObject {
+    #[inline(always)]
+    fn as_typeref(&self) -> raw::CFTypeRef {
+        &self.0
+    }
+}
+
+#[repr(transparent)]
 pub struct Owned<T: Object>(core::ptr::NonNull<T>);
 impl<T: Object> Drop for Owned<T> {
     #[inline(always)]
     fn drop(&mut self) {
         unsafe {
+            tracing::trace!(
+                target: "apple_sdk_port::drop_trace",
+                type_name = core::any::type_name::<T>(),
+                before_rc = self.0.as_ref().retain_count(),
+                "release cf"
+            );
+
             self.0.as_ref().release();
         }
     }
@@ -81,10 +102,16 @@ impl<T: MutableObject> core::ops::DerefMut for Owned<T> {
         unsafe { self.0.as_mut() }
     }
 }
+impl<T: Object + core::fmt::Debug> core::fmt::Debug for Owned<T> {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        T::fmt(unsafe { self.0.as_ref() }, f)
+    }
+}
 impl<T: Object> Owned<T> {
     #[inline(always)]
-    pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Option<Self> {
-        Some(Self(unsafe { core::ptr::NonNull::new_unchecked(ptr) }))
+    pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Self {
+        Self(unsafe { core::ptr::NonNull::new_unchecked(ptr) })
     }
 
     #[inline(always)]

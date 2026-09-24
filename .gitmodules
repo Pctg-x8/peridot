@@ -10,3 +10,6 @@
 	path = thirdparty/spirv-tools/source-repo
     url = https://github.com/KhronosGroup/SPIRV-Tools
     ignore = dirty
+[submodule "thirdparty/budoux/source-repo"]
+	path = thirdparty/budoux/source-repo
+	url = https://github.com/google/budoux

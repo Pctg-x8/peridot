@@ -1,5 +1,7 @@
 //! PeridotExtendedMathematics: Numeric Traits
 
+use std::ops::{Add, Div, Mul, Sub};
+
 /// Provides zero(additive identity)
 pub trait Zero {
     const ZERO: Self;
@@ -107,7 +109,15 @@ impl Max for f64 {
 }
 
 /// Indicates real numbers type
-pub trait Real: Sized {
+pub trait Real:
+    Sized
+    + Add<Self, Output = Self>
+    + Sub<Self, Output = Self>
+    + Mul<Self, Output = Self>
+    + Div<Self, Output = Self>
+    + PartialEq<Self>
+    + PartialOrd<Self>
+{
     fn sqrt(self) -> Self;
     fn sin(self) -> Self;
     fn cos(self) -> Self;
