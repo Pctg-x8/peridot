@@ -428,8 +428,44 @@ fn primitive_topology_from_gltf(mesh_primitive: &gltf::json::MeshPrimitive) -> P
 
 fn buffer_element_type_from_accessor(a: &gltf::json::Accessor) -> BufferElementType {
     match (a.r#type, a.component_type, a.normalized) {
+        (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte
+        }
+        (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte2
+        }
+        (gltf::json::AccessorType::Vec3, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte3
+        }
+        (gltf::json::AccessorType::Vec4, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte4
+        }
+        (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::ByteNormalized
+        }
+        (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::Byte2Normalized
+        }
+        (gltf::json::AccessorType::Vec3, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::Byte3Normalized
+        }
+        (gltf::json::AccessorType::Vec4, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::Byte4Normalized
+        }
         (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, false) => {
             BufferElementType::Ushort
+        }
+        (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::UshortNormalized
+        }
+        (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::Ushort2Normalized
+        }
+        (gltf::json::AccessorType::Vec3, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::Ushort3Normalized
+        }
+        (gltf::json::AccessorType::Vec4, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::Ushort4Normalized
         }
         (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_FLOAT, false) => {
             BufferElementType::Float2
