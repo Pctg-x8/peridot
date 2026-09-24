@@ -4,6 +4,7 @@ mod codegen;
 mod syntax;
 mod tokenizer;
 
+use peridot_semantic_shader::VertexInputSemantic;
 use slang::{IBlob, IComponentType, IGlobalSession, IModule, ISession, IUnknown};
 
 use crate::{
@@ -292,55 +293,31 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                                     return;
                                 }
 
-                                let Some(semantic_name) = v.semantic_name() else {
-                                    tracing::error!(var_name = ?v.name(), "vertex input variables should have semantic");
-                                    *has_failure = true;
-                                    return;
-                                };
-                                let semantic_name = match semantic_name.to_str() {
+                                let semantic = match extract_vertex_semantic(v) {
                                     Ok(x) => x,
-                                    Err(e) => {
+                                    Err(VertexSemanticExtractionError::Unspecified) => {
+                                        tracing::error!(var_name = ?v.name(), "vertex input variables should have semantic");
+                                        *has_failure = true;
+                                        return;
+                                    }
+                                    Err(VertexSemanticExtractionError::InvalidNameBytes(
+                                        semantic_name,
+                                        e,
+                                    )) => {
                                         tracing::error!(reason = ?e, var_name = ?v.name(), ?semantic_name, "invalid semantic_name bytes");
                                         *has_failure = true;
                                         return;
                                     }
-                                };
-
-                                let semantic = if semantic_name.eq_ignore_ascii_case("position") {
-                                    peridot_semantic_shader::VertexInputSemantic::Position(
-                                        v.semantic_index() as _,
-                                    )
-                                } else if semantic_name.eq_ignore_ascii_case("normal") {
-                                    peridot_semantic_shader::VertexInputSemantic::Normal(
-                                        v.semantic_index() as _,
-                                    )
-                                } else if semantic_name.eq_ignore_ascii_case("tangent") {
-                                    peridot_semantic_shader::VertexInputSemantic::Tangent(
-                                        v.semantic_index() as _,
-                                    )
-                                } else if semantic_name.eq_ignore_ascii_case("binormal") {
-                                    peridot_semantic_shader::VertexInputSemantic::Binormal(
-                                        v.semantic_index() as _,
-                                    )
-                                } else if semantic_name.eq_ignore_ascii_case("texcoord") {
-                                    peridot_semantic_shader::VertexInputSemantic::Texcoord(
-                                        v.semantic_index() as _,
-                                    )
-                                } else if semantic_name.eq_ignore_ascii_case("color") {
-                                    peridot_semantic_shader::VertexInputSemantic::Color(
-                                        v.semantic_index() as _,
-                                    )
-                                } else if semantic_name.eq_ignore_ascii_case("misc") {
-                                    peridot_semantic_shader::VertexInputSemantic::Misc(
-                                        v.semantic_index() as _,
-                                    )
-                                } else {
-                                    tracing::warn!(
-                                        var_name = ?v.name(),
+                                    Err(VertexSemanticExtractionError::Unsupported(
                                         semantic_name,
-                                        "unsupported semantic name, skipping"
-                                    );
-                                    return;
+                                    )) => {
+                                        tracing::warn!(
+                                            var_name = ?v.name(),
+                                            semantic_name,
+                                            "unsupported semantic name, skipping"
+                                        );
+                                        return;
+                                    }
                                 };
 
                                 vertex_semantic_to_location
@@ -390,6 +367,59 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
     }
 
     (!has_failure).then_some(asset)
+}
+
+enum VertexSemanticExtractionError<'s> {
+    Unspecified,
+    InvalidNameBytes(&'s core::ffi::CStr, core::str::Utf8Error),
+    Unsupported(&'s str),
+}
+
+fn extract_vertex_semantic<'s>(
+    v: &'s slang::reflection::VariableLayout,
+) -> Result<VertexInputSemantic, VertexSemanticExtractionError<'s>> {
+    let Some(semantic_name) = v.semantic_name() else {
+        return Err(VertexSemanticExtractionError::Unspecified);
+    };
+    let semantic_name = match semantic_name.to_str() {
+        Ok(x) => x,
+        Err(e) => {
+            return Err(VertexSemanticExtractionError::InvalidNameBytes(
+                semantic_name,
+                e,
+            ));
+        }
+    };
+
+    if semantic_name.eq_ignore_ascii_case("position") {
+        return Ok(VertexInputSemantic::Position(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("normal") {
+        return Ok(VertexInputSemantic::Normal(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("tangent") {
+        return Ok(VertexInputSemantic::Tangent(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("binormal") {
+        return Ok(VertexInputSemantic::Binormal(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("texcoord") {
+        return Ok(VertexInputSemantic::Texcoord(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("color") {
+        return Ok(VertexInputSemantic::Color(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("blendindex") {
+        return Ok(VertexInputSemantic::BlendIndex(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("blendweight") {
+        return Ok(VertexInputSemantic::BlendWeight(v.semantic_index() as _));
+    }
+    if semantic_name.eq_ignore_ascii_case("misc") {
+        return Ok(VertexInputSemantic::Misc(v.semantic_index() as _));
+    }
+
+    Err(VertexSemanticExtractionError::Unsupported(semantic_name))
 }
 
 fn print_slang_diag(diag: &(impl slang::IBlob + ?Sized)) {

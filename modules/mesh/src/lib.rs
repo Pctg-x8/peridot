@@ -445,8 +445,10 @@ impl Attribute {
             Self::Tangent => peridot_rendering_configuration::VertexInputSemantic::Tangent(0),
             &Self::Texcoord(n) => peridot_rendering_configuration::VertexInputSemantic::Texcoord(n),
             &Self::Color(n) => peridot_rendering_configuration::VertexInputSemantic::Color(n),
-            &Self::Joints(n) => todo!("joints"),
-            &Self::Weights(n) => todo!("weights"),
+            &Self::Joints(n) => peridot_rendering_configuration::VertexInputSemantic::BlendIndex(n),
+            &Self::Weights(n) => {
+                peridot_rendering_configuration::VertexInputSemantic::BlendWeight(n)
+            }
         }
     }
 
@@ -568,23 +570,61 @@ impl AttributeData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum BufferElementType {
+    /// u8
+    Byte = 0x0001,
+    /// vec2 u8
+    Byte2 = 0x0002,
+    /// vec3 u8
+    Byte3 = 0x0003,
+    /// vec4 u8
+    Byte4 = 0x0004,
+    /// u8 normalized
+    ByteNormalized = 0x0011,
+    /// vec2 u8 normalized
+    Byte2Normalized = 0x0012,
+    /// vec3 u8 normalized
+    Byte3Normalized = 0x0013,
+    /// vec4 u8 normalized
+    Byte4Normalized = 0x0014,
     /// u16
-    Ushort = 0,
+    Ushort = 0x0201,
+    /// u16 normalized
+    UshortNormalized = 0x0211,
+    /// vec2 u16 normalized
+    Ushort2Normalized = 0x0212,
+    /// vec3 u16 normalized
+    Ushort3Normalized = 0x0213,
+    /// vec4 u16 normalized
+    Ushort4Normalized = 0x0214,
     /// vec2 f32
-    Float2 = 1,
+    Float2 = 0x0601,
     /// vec3 f32
-    Float3 = 2,
+    Float3 = 0x0602,
     /// vec4 f32
-    Float4 = 3,
+    Float4 = 0x0603,
 }
 impl TryFrom<u16> for BufferElementType {
     type Error = u16;
 
     fn try_from(value: u16) -> Result<Self, Self::Error> {
-        if Self::Ushort as u16 <= value && value <= Self::Float4 as u16 {
-            Ok(unsafe { std::mem::transmute(value) })
-        } else {
-            Err(value)
+        match value {
+            x if x == Self::Byte as u16 => Ok(Self::Byte),
+            x if x == Self::Byte2 as u16 => Ok(Self::Byte2),
+            x if x == Self::Byte3 as u16 => Ok(Self::Byte3),
+            x if x == Self::Byte4 as u16 => Ok(Self::Byte4),
+            x if x == Self::ByteNormalized as u16 => Ok(Self::ByteNormalized),
+            x if x == Self::Byte2Normalized as u16 => Ok(Self::Byte2Normalized),
+            x if x == Self::Byte3Normalized as u16 => Ok(Self::Byte3Normalized),
+            x if x == Self::Byte4Normalized as u16 => Ok(Self::Byte4Normalized),
+            x if x == Self::Ushort as u16 => Ok(Self::Ushort),
+            x if x == Self::UshortNormalized as u16 => Ok(Self::UshortNormalized),
+            x if x == Self::Ushort2Normalized as u16 => Ok(Self::Ushort2Normalized),
+            x if x == Self::Ushort3Normalized as u16 => Ok(Self::Ushort3Normalized),
+            x if x == Self::Ushort4Normalized as u16 => Ok(Self::Ushort4Normalized),
+            x if x == Self::Float2 as u16 => Ok(Self::Float2),
+            x if x == Self::Float3 as u16 => Ok(Self::Float3),
+            x if x == Self::Float4 as u16 => Ok(Self::Float4),
+            _ => Err(value),
         }
     }
 }
@@ -592,7 +632,19 @@ impl BufferElementType {
     /// 要素のサイズ（バイト数）
     pub const fn size(&self) -> usize {
         match self {
+            Self::Byte => 1,
+            Self::Byte2 => 2,
+            Self::Byte3 => 3,
+            Self::Byte4 => 4,
+            Self::ByteNormalized => 1,
+            Self::Byte2Normalized => 2,
+            Self::Byte3Normalized => 3,
+            Self::Byte4Normalized => 4,
             Self::Ushort => 2,
+            Self::UshortNormalized => 2,
+            Self::Ushort2Normalized => 4,
+            Self::Ushort3Normalized => 6,
+            Self::Ushort4Normalized => 8,
             Self::Float2 => 2 * 4,
             Self::Float3 => 3 * 4,
             Self::Float4 => 4 * 4,
@@ -602,7 +654,19 @@ impl BufferElementType {
     /// デバイスのアライメント要件（バイト数）
     pub const fn device_alignment_requirement(&self) -> u32 {
         match self {
+            Self::Byte => 1,
+            Self::Byte2 => 1,
+            Self::Byte3 => 1,
+            Self::Byte4 => 1,
+            Self::ByteNormalized => 1,
+            Self::Byte2Normalized => 1,
+            Self::Byte3Normalized => 1,
+            Self::Byte4Normalized => 1,
             Self::Ushort => 2,
+            Self::UshortNormalized => 2,
+            Self::Ushort2Normalized => 2,
+            Self::Ushort3Normalized => 2,
+            Self::Ushort4Normalized => 2,
             Self::Float2 => 4,
             Self::Float3 => 4,
             Self::Float4 => 4,
@@ -611,7 +675,19 @@ impl BufferElementType {
 
     pub const fn into_vk_format(self) -> br::Format {
         match self {
+            Self::Byte => br::vk::VK_FORMAT_R8_UINT,
+            Self::Byte2 => br::vk::VK_FORMAT_R8G8_UINT,
+            Self::Byte3 => br::vk::VK_FORMAT_R8G8B8_UINT,
+            Self::Byte4 => br::vk::VK_FORMAT_R8G8B8A8_UINT,
+            Self::ByteNormalized => br::vk::VK_FORMAT_R8_UNORM,
+            Self::Byte2Normalized => br::vk::VK_FORMAT_R8G8_UNORM,
+            Self::Byte3Normalized => br::vk::VK_FORMAT_R8G8B8_UNORM,
+            Self::Byte4Normalized => br::vk::VK_FORMAT_R8G8B8A8_UNORM,
             Self::Ushort => br::vk::VK_FORMAT_R16_UINT,
+            Self::UshortNormalized => br::vk::VK_FORMAT_R16_UNORM,
+            Self::Ushort2Normalized => br::vk::VK_FORMAT_R16G16_UNORM,
+            Self::Ushort3Normalized => br::vk::VK_FORMAT_R16G16B16_UNORM,
+            Self::Ushort4Normalized => br::vk::VK_FORMAT_R16G16B16A16_UNORM,
             Self::Float2 => br::vk::VK_FORMAT_R32G32_SFLOAT,
             Self::Float3 => br::vk::VK_FORMAT_R32G32B32_SFLOAT,
             Self::Float4 => br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,

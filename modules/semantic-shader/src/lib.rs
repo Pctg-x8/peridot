@@ -23,6 +23,10 @@ pub enum VertexInputSemantic {
     Texcoord(u8),
     /// Color input
     Color(u8),
+    /// Blend Index input
+    BlendIndex(u8),
+    /// Blend Weights input
+    BlendWeight(u8),
     /// Miscellaneous(Application-defined) input
     Misc(u8),
 }
@@ -36,42 +40,37 @@ impl VertexInputSemantic {
             Self::Binormal(n) => writer.write_all(&[4, n]).map(|_| 2),
             Self::Texcoord(n) => writer.write_all(&[5, n]).map(|_| 2),
             Self::Color(n) => writer.write_all(&[6, n]).map(|_| 2),
+            Self::BlendIndex(n) => writer.write_all(&[7, n]).map(|_| 2),
+            Self::BlendWeight(n) => writer.write_all(&[8, n]).map(|_| 2),
+        }
+    }
+
+    #[inline(always)]
+    fn read_core(bytes: [u8; 2]) -> std::io::Result<Self> {
+        match bytes[0] {
+            0 => Ok(Self::Misc(bytes[1])),
+            1 => Ok(Self::Position(bytes[1])),
+            2 => Ok(Self::Normal(bytes[1])),
+            3 => Ok(Self::Tangent(bytes[1])),
+            4 => Ok(Self::Binormal(bytes[1])),
+            5 => Ok(Self::Texcoord(bytes[1])),
+            6 => Ok(Self::Color(bytes[1])),
+            7 => Ok(Self::BlendIndex(bytes[1])),
+            8 => Ok(Self::BlendWeight(bytes[1])),
+            _ => Err(std::io::Error::other("unknown tag for VertexInputSemantic")),
         }
     }
 
     pub fn read(reader: &mut (impl std::io::Read + ?Sized)) -> std::io::Result<Self> {
         let mut buf = [0u8; 2];
         reader.read_exact(&mut buf)?;
-
-        match buf[0] {
-            0 => Ok(Self::Misc(buf[1])),
-            1 => Ok(Self::Position(buf[1])),
-            2 => Ok(Self::Normal(buf[1])),
-            3 => Ok(Self::Tangent(buf[1])),
-            4 => Ok(Self::Binormal(buf[1])),
-            5 => Ok(Self::Texcoord(buf[1])),
-            6 => Ok(Self::Color(buf[1])),
-            _ => Err(std::io::Error::other("unknown tag for VertexInputSemantic")),
-        }
+        Self::read_core(buf)
     }
 
     pub async fn read_async(reader: Pin<&mut (impl AsyncRead + ?Sized)>) -> std::io::Result<Self> {
-        let mut buf = Vec::with_capacity(2);
-        read_exact_async_pinned(reader, buf.spare_capacity_mut()).await?;
-        unsafe {
-            buf.set_len(2);
-        }
-
-        match buf[0] {
-            0 => Ok(Self::Misc(buf[1])),
-            1 => Ok(Self::Position(buf[1])),
-            2 => Ok(Self::Normal(buf[1])),
-            3 => Ok(Self::Tangent(buf[1])),
-            4 => Ok(Self::Binormal(buf[1])),
-            5 => Ok(Self::Texcoord(buf[1])),
-            6 => Ok(Self::Color(buf[1])),
-            _ => Err(std::io::Error::other("unknown tag for VertexInputSemantic")),
-        }
+        let mut buf = [core::mem::MaybeUninit::uninit(); 2];
+        read_exact_async_pinned(reader, &mut buf).await?;
+        Self::read_core(unsafe { core::mem::transmute(buf) })
     }
 }
 
