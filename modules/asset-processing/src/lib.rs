@@ -1,3 +1,5 @@
+//! Processing user assets into runtime assets.
+
 use std::{
     collections::HashMap,
     ffi::OsStr,
@@ -22,8 +24,129 @@ pub trait AssetProcessor {
         &self,
         source_path: &Path,
         metadata: &HashMap<metadata::Key, String>,
-        out_path: &Path,
+        dest_dir: &Path,
+        ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+pub fn build_runtime_asset_path(dest_dir: &Path, asset_id: &peridot::AssetID) -> PathBuf {
+    let mut file_path = String::with_capacity(16 * 2);
+    for byte in asset_id.as_bytes() {
+        file_path.push_str(&format!("{:02x}", byte));
+    }
+
+    dest_dir.join(file_path)
+}
+
+pub struct AssetProcessContext {
+    pub assetdb: peridot::AssetDatabase,
+    pub asset_id_generator: peridot::AssetIDGenerator,
+}
+impl AssetProcessContext {
+    pub fn register_or_update_asset_group(&mut self, source_path: &Path) -> peridot::AssetID {
+        let new_group_id = self.asset_id_generator.generate();
+        let source_last_modified = source_path
+            .metadata()
+            .inspect_err(|e| tracing::error!(reason = %e, "Failed to query source asset metadata"))
+            .ok()
+            .and_then(
+                |x| x
+                    .modified()
+                    .inspect_err(|e| tracing::error!(reason = %e, "Failed to query source asset last modified time"))
+                    .ok()
+            )
+            .unwrap_or_else(std::time::SystemTime::now)
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .inspect_err(|e| tracing::error!(reason = %e, "Invalid source asset last modified date"))
+            .map_or(0, |x| x.as_millis()) as i64;
+
+        let mut stmt = self.assetdb.0.prepare("Insert into user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = excluded.last_processed where excluded.last_processed > last_processed returning group_id, last_processed").expect("assetdb op prepare");
+        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+            .expect("stmt.bind_text");
+        stmt.bind_blob(2, new_group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_i64(3, source_last_modified)
+            .expect("stmt.bind_int");
+        let has_next = stmt.step().expect("stmt.step");
+        if !has_next {
+            // no insertion occurred(file is too old)
+            let mut stmt = self
+                .assetdb
+                .0
+                .prepare("Select group_id from user_asset where source_path = ?")
+                .expect("assetdb op prepare");
+            stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+                .expect("stmt.bind_text");
+            let has_next = stmt.step().expect("stmt.step");
+            assert!(has_next);
+            let group_id_len = stmt.column_bytes(0);
+            assert_eq!(group_id_len, 16);
+            let group_id = stmt.column_blob(0);
+
+            return unsafe { peridot::AssetID::from_bytes(*group_id.cast()) };
+        }
+
+        let group_id_len = stmt.column_bytes(0);
+        assert_eq!(group_id_len, 16);
+        let group_id = stmt.column_blob(0);
+        let last_processed = stmt.column_i64(1);
+
+        eprintln!(
+            "source_path: {source_path:?}, group_id: {:?}(new {new_group_id:?}), last_processed: {last_processed}",
+            unsafe { peridot::AssetID::from_bytes(*group_id.cast()) }
+        );
+        unsafe { peridot::AssetID::from_bytes(*group_id.cast()) }
+    }
+
+    pub fn register_or_update_child_asset(
+        &mut self,
+        group_id: &peridot::AssetID,
+        asset_type: AssetType,
+        local_id: i32,
+    ) -> peridot::AssetID {
+        let new_asset_id = self.asset_id_generator.generate();
+        let mut stmt = self.assetdb
+            .0
+            .prepare(
+                "Insert into asset_group (id, asset_type, local_id, runtime_asset_id) values (?, ?, ?, ?) on conflict do nothing returning runtime_asset_id",
+            )
+            .expect("prepare_cached failed");
+        stmt.bind_blob(1, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
+        stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
+        stmt.bind_blob(4, new_asset_id.as_bytes())
+            .expect("stmt.bind_blob");
+        let r = stmt.step().expect("stmt.step");
+        if !r {
+            // reuse existing entry
+            let mut stmt = self
+                .assetdb
+                .0
+                .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?")
+                .expect("assetdb op prepare");
+            stmt.bind_blob(1, group_id.as_bytes())
+                .expect("stmt.bind_blob");
+            stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
+            stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
+            let has_next = stmt.step().expect("stmt.step");
+            assert!(has_next);
+
+            let runtime_asset_id_len = stmt.column_bytes(0);
+            assert_eq!(runtime_asset_id_len, 16);
+            return unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) };
+        }
+
+        let runtime_asset_id_len = stmt.column_bytes(0);
+        assert_eq!(runtime_asset_id_len, 16);
+        unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u16)]
+pub enum AssetType {
+    Mesh = 1,
 }
 
 pub struct ProcessOptions<'p> {
@@ -40,9 +163,10 @@ impl<'p> Default for ProcessOptions<'p> {
     }
 }
 
-#[tracing::instrument(skip(processors, options), fields(source_path = %source_path.as_ref().display()))]
+#[tracing::instrument(skip(processors, ctx, options), fields(source_path = %source_path.as_ref().display()))]
 pub fn process(
     processors: &[Box<dyn AssetProcessor>],
+    ctx: &mut AssetProcessContext,
     source_path: impl AsRef<Path>,
     options: ProcessOptions,
 ) -> Option<PathBuf> {
@@ -177,7 +301,7 @@ pub fn process(
     };
     let metadata = metadata.unwrap_or_else(HashMap::new);
 
-    if let Err(e) = processor.process(source_path.as_ref(), &metadata, &dest_path) {
+    if let Err(e) = processor.process(source_path.as_ref(), &metadata, dest_dir, ctx) {
         tracing::error!(reason = ?e, "Failed to process asset");
         return None;
     }

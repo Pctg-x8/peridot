@@ -25,6 +25,10 @@ fn main() {
             Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
             Box::new(peridot_asset_processor_model::Processor),
         ],
+        &mut peridot_asset_processing::AssetProcessContext {
+            assetdb: peridot::AssetDatabase::open("test.adb").expect("assetdb.open"),
+            asset_id_generator: peridot::AssetIDGenerator::new(),
+        },
         &args.source_path,
         peridot_asset_processing::ProcessOptions {
             out_dir: args.out_dir.as_deref(),

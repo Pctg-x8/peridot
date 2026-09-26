@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+peridot.path = "../../base"
 tracing = { workspace = true }
 thiserror = { workspace = true }
 ktx = { path = "../../thirdparty/ktx" }
 image = "*"
 bedrock = { workspace = true }
+peridot-tp-sqlite3 = { path = "../../thirdparty/sqlite3" }
 
 [lints]
 workspace = true

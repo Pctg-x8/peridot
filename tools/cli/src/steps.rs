@@ -265,6 +265,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
     fn process_recursive(
         ctx: &BuildContext,
         processors: &[Box<dyn peridot_asset_processing::AssetProcessor>],
+        process_ctx: &mut peridot_asset_processing::AssetProcessContext,
         target_dir: &Path,
         base_dir: &Path,
         output_path: &Path,
@@ -273,7 +274,14 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
             let e = e.expect("std::fs::read_dir failed entry");
             let source_path = e.path();
             if source_path.is_dir() {
-                process_recursive(ctx, processors, &source_path, base_dir, output_path);
+                process_recursive(
+                    ctx,
+                    processors,
+                    process_ctx,
+                    &source_path,
+                    base_dir,
+                    output_path,
+                );
                 continue;
             }
 
@@ -293,6 +301,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
             std::fs::create_dir_all(&runtime_path).expect("Failed to create runtime-asset-path");
             peridot_asset_processing::process(
                 processors,
+                process_ctx,
                 source_path,
                 peridot_asset_processing::ProcessOptions {
                     out_dir: Some(&runtime_path),
@@ -303,5 +312,15 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         }
     }
 
-    process_recursive(ctx, &processors, &stg_path, &stg_path, output_path);
+    process_recursive(
+        ctx,
+        &processors,
+        &mut peridot_asset_processing::AssetProcessContext {
+            assetdb: peridot::AssetDatabase::open(output_path.join("db")).expect("assetdb.open"),
+            asset_id_generator: peridot::AssetIDGenerator::new(),
+        },
+        &stg_path,
+        &stg_path,
+        output_path,
+    );
 }

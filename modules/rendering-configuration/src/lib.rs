@@ -78,18 +78,22 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         &self,
         source_path: &Path,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
-        out_path: &Path,
+        dest_dir: &Path,
+        ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let content =
             std::fs::read_to_string(source_path).map_err(AssetProcessError::ReadingFailed)?;
         let asset =
             compilation::compile(&content).ok_or(AssetProcessError::GeneratingAssetFailure)?;
+        let asset_id = ctx.asset_id_generator.generate();
         write(
             &mut std::fs::File::options()
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(out_path)
+                .open(peridot_asset_processing::build_runtime_asset_path(
+                    dest_dir, &asset_id,
+                ))
                 .map_err(AssetProcessError::DestWriteOpenFailed)?,
             asset,
         )

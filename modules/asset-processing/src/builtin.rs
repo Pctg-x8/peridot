@@ -6,6 +6,8 @@ use std::{
 
 use ktx::Texture;
 
+use crate::{AssetProcessContext, build_runtime_asset_path};
+
 #[derive(thiserror::Error, Debug)]
 pub enum ImageAssetProcessError {
     #[error("Failed to open asset: {0}")]
@@ -38,8 +40,10 @@ impl crate::AssetProcessor for ImageAssetProcessor {
         &self,
         source_path: &Path,
         metadata: &HashMap<crate::metadata::Key, String>,
-        out_path: &Path,
+        dest_dir: &Path,
+        ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let asset_id = ctx.asset_id_generator.generate();
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
 
         let uastc_level_flag = metadata
@@ -105,7 +109,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
             .map_err(|e| ImageAssetProcessError::Ktx2OperationFailure("deflate_zstd", e))?;
         ktx.write_to_named_file(
             &std::ffi::CString::new(
-                out_path
+                build_runtime_asset_path(dest_dir, &asset_id)
                     .to_str()
                     .ok_or(ImageAssetProcessError::InvalidOutPath)?,
             )
@@ -141,10 +145,13 @@ impl crate::AssetProcessor for SoundAssetProcessor {
         &self,
         source_path: &Path,
         _metadata: &HashMap<crate::metadata::Key, String>,
-        out_path: &Path,
+        dest_dir: &Path,
+        ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
-        std::fs::copy(source_path, out_path).map_err(SoundAssetProcessError::CopyFailed)?;
+        let asset_id = ctx.asset_id_generator.generate();
+        std::fs::copy(source_path, build_runtime_asset_path(dest_dir, &asset_id))
+            .map_err(SoundAssetProcessError::CopyFailed)?;
 
         Ok(())
     }

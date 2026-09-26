@@ -25,6 +25,7 @@ console = "0.14"
 regex = "1.4"
 semver = "1.0"
 pbxproj = { path = "../../thirdparty/pbxproj" }
+peridot.path = "../../base"
 peridot-rendering-configuration = { path = "../../modules/rendering-configuration", optional = true, features = [
     "with-asset-processing",
 ] }
