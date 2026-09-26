@@ -253,16 +253,19 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
 
     #[tracing::instrument(
         name = "AssetProcessor::process",
-        skip(self, _metadata),
+        skip(self, _metadata, ctx),
         fields(atlas_width, atlas_height)
     )]
     fn process(
         &self,
         source_path: &std::path::Path,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
-        out_path: &std::path::Path,
+        dest_dir: &std::path::Path,
+        ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use ktx::Texture;
+
+        let asset_id = ctx.asset_id_generator.generate();
 
         let source = std::fs::read_to_string(source_path)?;
         let mut config = None;
@@ -443,7 +446,9 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(out_path)
+                .open(peridot_asset_processing::build_runtime_asset_path(
+                    dest_dir, &asset_id,
+                ))
                 .inspect_err(|e| tracing::error!(reason = ?e, "Failed to open output"))?,
         )
         .inspect_err(|e| tracing::error!(reason = ?e, "Failed to write asset data"))?;

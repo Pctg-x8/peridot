@@ -10,6 +10,7 @@ use peridot_mesh::{
     SIGNATURE, StreamBuffer, VertexStream,
 };
 use peridot_tp_gltf as gltf;
+use rand::{Rng, SeedableRng};
 
 macro_rules! file_assert {
     ($cond: expr, $msg: literal) => {
@@ -37,7 +38,12 @@ pub enum ProcessError {
     TooManyVertexStreams,
 }
 
-pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(), ProcessError> {
+pub fn process(
+    mut r: BufReader<File>,
+    dest_dir: &Path,
+    asset_group_id: peridot::AssetID,
+    ctx: &mut peridot_asset_processing::AssetProcessContext,
+) -> Result<(), ProcessError> {
     let _hdr = gltf::binary::Header::read(&mut r)?;
 
     let chunk0_hdr = gltf::binary::ChunkHeader::read(&mut r)?;
@@ -236,7 +242,7 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
                         VertexStream {
                             buffer: StreamBuffer {
                                 content_location: 0,
-                                byte_length: (attribute_count as usize * offset as usize) as _,
+                                byte_length: (attribute_count * offset as usize) as _,
                                 device_alignment_requirement,
                             },
                             attribute_count: attribute_data
@@ -252,15 +258,14 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let mut opath = primary_mesh_out_path.to_owned();
-            opath.set_file_name(format!(
-                "{}-mesh{mesh_index}-{prim_index}.pa1-mesh",
-                opath.file_stem().map_or("", |x| {
-                    let src = x.to_str().expect("filepath cannot process");
-                    &src[..src.len() - "-mesh0-0".len()]
-                })
-            ));
-            let mut mesh_out = BufWriter::new(File::create(opath)?);
+            let asset_id = ctx.register_or_update_child_asset(
+                &asset_group_id,
+                peridot_asset_processing::AssetType::Mesh,
+                (mesh_index * 1000 + prim_index) as i32,
+            );
+            let mut mesh_out = BufWriter::new(File::create(
+                peridot_asset_processing::build_runtime_asset_path(dest_dir, &asset_id),
+            )?);
             mesh_out.write_all(&SIGNATURE.to_ne_bytes())?;
             Header {
                 primitive_topology: topo,

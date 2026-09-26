@@ -1,5 +1,97 @@
+use std::fmt::Write;
 use std::io::prelude::{Read, Seek};
 use std::io::{Error as IOError, Result as IOResult, SeekFrom};
+use std::path::Path;
+
+#[repr(transparent)]
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct AssetID([u8; 16]);
+impl core::fmt::Debug for AssetID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[inline(always)]
+        fn h(v: u8) -> char {
+            match v {
+                0..=9 => ((v + b'0') as char),
+                10..=15 => ((v - 10 + b'a') as char),
+                _ => unreachable!(),
+            }
+        }
+        #[inline(always)]
+        fn h2(f: &mut core::fmt::Formatter<'_>, v: u8) -> core::fmt::Result {
+            f.write_char(h((v >> 4) as u8))?;
+            f.write_char(h((v & 0xf) as u8))?;
+
+            Ok(())
+        }
+
+        for &b in &self.0[0..4] {
+            h2(f, b)?;
+        }
+        f.write_char('-')?;
+        for &b in &self.0[4..8] {
+            h2(f, b)?;
+        }
+        f.write_char('-')?;
+        for &b in &self.0[8..12] {
+            h2(f, b)?;
+        }
+        f.write_char('-')?;
+        for &b in &self.0[12..16] {
+            h2(f, b)?;
+        }
+
+        Ok(())
+    }
+}
+impl AssetID {
+    pub const unsafe fn from_bytes(b: [u8; 16]) -> Self {
+        Self(b)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+#[repr(transparent)]
+pub struct AssetIDGenerator(rand_pcg::Pcg64Mcg);
+impl AssetIDGenerator {
+    pub fn new() -> Self {
+        match rand_pcg::Pcg64Mcg::try_from_rng(&mut rand::rngs::SysRng) {
+            Ok(r) => Self(r),
+            Err(e) => {
+                tracing::error!(reason = %e, "SysRng failed, falling back to thread rng as seed");
+                Self(rand_pcg::Pcg64Mcg::from_rng(
+                    &mut rand::rngs::ThreadRng::default(),
+                ))
+            }
+        }
+    }
+
+    pub fn generate(&mut self) -> AssetID {
+        let mut buf = [0u8; 16];
+        self.0.fill_bytes(&mut buf);
+        AssetID(buf)
+    }
+}
+
+pub struct AssetDatabase(pub peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::DB>);
+impl AssetDatabase {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, peridot_tp_sqlite3::Error> {
+        let needs_initialization = !path.as_ref().exists();
+        let mut con = peridot_tp_sqlite3::DB::open(
+            path,
+            peridot_tp_sqlite3::OpenFlags::READWRITE | peridot_tp_sqlite3::OpenFlags::CREATE,
+        )?;
+        if needs_initialization {
+            if let Err(e) = con.exec(include_str!("../assetdb.sql"), |_, _, _| 0) {
+                tracing::error!(reason = ?e, "assetdb initialization failed");
+            }
+        }
+
+        Ok(Self(con))
+    }
+}
 
 pub trait InputStream: Read {
     fn skip(&mut self, amount: u64) -> IOResult<u64>;
@@ -73,6 +165,7 @@ pub trait FromAssetBlobAsync: LogicalAssetData {
 
 // Shader Blob //
 use bedrock as br;
+use rand::{Rng, SeedableRng};
 
 /// An shader blob representation as Asset
 pub struct SpirvShaderBlob(Vec<u32>);

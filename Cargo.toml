@@ -26,7 +26,9 @@ members = [
     "modules/asset-processing",
     "modules/native-io",
     "base-lib/pinned-futures-helper",
-    "modules/sprite-atlas", "modules/mesh", "modules/asset-processor/model",
+    "modules/sprite-atlas",
+    "modules/mesh",
+    "modules/asset-processor/model",
 ]
 
 [workspace.dependencies]
@@ -37,6 +39,8 @@ futures-util = "0.3"
 futures-io = "0.3"
 cfg-if = "1.0"
 thiserror = "2.0"
+rand = "0.10"
+rand_pcg = "0.10"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"
