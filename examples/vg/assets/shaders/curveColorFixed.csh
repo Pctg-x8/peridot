@@ -31,18 +31,18 @@ VertexShader {
 }
 Varyings VertexShader -> FragmentShader { helper_coord: vec2; lb_dir: int; }
 FragmentShader {
-    /*// gradients
+    // gradients
     vec2 px = dFdx(helper_coord), py = dFdy(helper_coord);
     // chain rule
     float fx = (2 * helper_coord.x) * px.x - px.y, fy = (2 * helper_coord.x) * py.x - py.y;
     // signed distance
     float sd = (pow(helper_coord.x, 2) - helper_coord.y) / sqrt(pow(fx, 2) + pow(fy, 2));
     // linear alpha 1..inside, 0..outside
-    float alpha = min(0.5 - lb_dir*sd, 1);
+    float alpha = min(lb_dir*sd - 0.5, 1);
     if(alpha < 0) discard;
-    Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA * alpha;*/
+    Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA * alpha;
 
-    float sd = pow(helper_coord.x, 2) - helper_coord.y;
+    /*float sd = pow(helper_coord.x, 2) - helper_coord.y;
     if(sd * lb_dir < 0) discard;
-    Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA;
+    Target[0] = vec4(FillR, FillG, FillB, 1.0) * FillA;*/
 }

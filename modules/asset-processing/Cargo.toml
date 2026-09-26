@@ -1,0 +1,14 @@
+[package]
+name = "peridot-asset-processing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tracing = { workspace = true }
+thiserror = { workspace = true }
+ktx = { path = "../../thirdparty/ktx" }
+image = "*"
+bedrock = { workspace = true }
+
+[lints]
+workspace = true

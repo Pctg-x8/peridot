@@ -1,0 +1,17 @@
+[package]
+name = "sprite-atlas"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot = { path = "../../base" }
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
+    "Implements",
+] }
+peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = [
+    "with-loader-impl",
+] }
+peridot-memory-manager = { path = "../../modules/memory-manager" }
+peridot-sprite-atlas = { path = "../../modules/sprite-atlas", features = ["with-loader-impl"] }
+ktx = { path = "../../thirdparty/ktx" }
+rand = "0.9"

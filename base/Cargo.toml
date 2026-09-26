@@ -1,0 +1,43 @@
+[package]
+name = "peridot"
+description = "Peridot Engine"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2021"
+
+[features]
+debug = ["bedrock/VK_EXT_debug_utils"]
+derive = ["peridot-derive"]
+mt = ["bedrock/Multithreaded"]
+
+[dependencies]
+pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
+libc = "*"
+rayon = "1.0"
+num_cpus = "1.0"
+num = "*"
+parking_lot = "0.12"
+
+peridot-archive = { path = "../modules/archive" }
+peridot-math = { path = "../modules/math" }
+peridot-derive = { path = "../derive", optional = true }
+peridot-native-io = { path = "../modules/native-io" }
+cfg-if.workspace = true
+async-std.workspace = true
+futures-util.workspace = true
+tracing.workspace = true
+
+[dependencies.bedrock]
+features = [
+    "VK_KHR_surface",
+    "VK_KHR_swapchain",
+    "Implements",
+    "VK_KHR_get_physical_device_properties2",
+    "VK_KHR_synchronization2",
+    "VK_KHR_bind_memory2",
+    "VK_KHR_get_memory_requirements2",
+]
+workspace = true
+
+[lints]
+workspace = true

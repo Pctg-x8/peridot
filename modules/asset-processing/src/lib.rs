@@ -1,0 +1,186 @@
+use std::{
+    collections::HashMap,
+    ffi::OsStr,
+    path::{Path, PathBuf},
+};
+
+pub mod builtin;
+pub mod metadata;
+
+/// An asset processor interface.
+pub trait AssetProcessor {
+    /// Determines if this processor can handle the given source file.
+    fn can_process(&self, source_path: &Path) -> bool;
+
+    /// Constructs the destination path for the processed asset based on the source file name and output directory.
+    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf;
+
+    /// Processes the asset from the source path.
+    ///
+    /// Expected some files to be created and placed in `out_path`.
+    fn process(
+        &self,
+        source_path: &Path,
+        metadata: &HashMap<metadata::Key, String>,
+        out_path: &Path,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+}
+
+pub struct ProcessOptions<'p> {
+    pub out_dir: Option<&'p Path>,
+    pub force_rebuild: bool,
+}
+impl<'p> Default for ProcessOptions<'p> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            out_dir: None,
+            force_rebuild: false,
+        }
+    }
+}
+
+#[tracing::instrument(skip(processors, options), fields(source_path = %source_path.as_ref().display()))]
+pub fn process(
+    processors: &[Box<dyn AssetProcessor>],
+    source_path: impl AsRef<Path>,
+    options: ProcessOptions,
+) -> Option<PathBuf> {
+    tracing::info!("Processing...");
+
+    let (Some(source_dir), Some(source_file_name)) = (
+        source_path.as_ref().parent(),
+        source_path.as_ref().file_name(),
+    ) else {
+        tracing::error!("invalid source file path provided");
+        return None;
+    };
+    let dest_dir = options.out_dir.unwrap_or(source_dir);
+
+    let mut matching_processors_iter = processors
+        .iter()
+        .filter(|x| x.can_process(source_path.as_ref()));
+    let Some(processor) = matching_processors_iter.next() else {
+        // unknown assets
+        tracing::warn!("found unknown assets(not processed)");
+        let dest_path = dest_dir.join(source_file_name);
+
+        if let Err(e) = std::fs::copy(source_path, &dest_path) {
+            tracing::error!(reason = ?e, "Failed to copy asset file");
+            return None;
+        }
+
+        return Some(dest_path);
+    };
+    if matching_processors_iter.next().is_some() {
+        tracing::error!("Cannot determine an asset processor");
+        return None;
+    }
+
+    let metadata_path = source_path.as_ref().with_extension("p-meta");
+    let dest_path = processor.dest_path(source_file_name, dest_dir);
+
+    'determine_rebuild: {
+        if options.force_rebuild {
+            // forced
+            break 'determine_rebuild;
+        }
+
+        let source_meta = match source_path.as_ref().metadata() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving file metadata failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let meta_meta = match metadata_path.metadata() {
+            Ok(x) => Some(x),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving file metadata failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let dest_meta = match dest_path.metadata() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?dest_path, "retrieving file metadata failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+
+        let source_modtime = match source_meta.modified() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified time failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let meta_modtime = match meta_meta.map(|x| x.modified()).transpose() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving modified time failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+        let dest_modtime = match dest_meta.modified() {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified time failed");
+                // cannot determine(force rebuild)
+                break 'determine_rebuild;
+            }
+        };
+
+        if source_modtime <= dest_modtime && meta_modtime.is_some_and(|x| x <= dest_modtime) {
+            tracing::info!(reason = "modified time", "skip asset");
+            return Some(dest_path);
+        }
+    }
+
+    let metadata = 'load_metadata: {
+        match metadata_path.try_exists() {
+            Ok(true) => (),
+            Ok(false) => {
+                tracing::trace!(source_path = ?source_path.as_ref(), metadata_path = ?metadata_path, "no metadata exists for this asset");
+                break 'load_metadata None;
+            }
+            Err(e) => {
+                tracing::warn!(reason = ?e, path = ?metadata_path, "querying metadata existential failed");
+                break 'load_metadata None;
+            }
+        }
+
+        let content = match std::fs::read_to_string(&metadata_path) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, path = ?metadata_path, "reading metadata content failed");
+                break 'load_metadata None;
+            }
+        };
+
+        Some(
+            metadata::Parser::new(&content)
+                .filter_map(
+                    |x| x
+                        .inspect_err(|e| tracing::error!(reason = ?e, path = ?metadata_path, "parsing metadata failed"))
+                        .ok()
+                )
+                .map(|(k, v)| (k, v.to_owned()))
+                .collect::<HashMap<_, _>>()
+        )
+    };
+    let metadata = metadata.unwrap_or_else(HashMap::new);
+
+    if let Err(e) = processor.process(source_path.as_ref(), &metadata, &dest_path) {
+        tracing::error!(reason = ?e, "Failed to process asset");
+        return None;
+    }
+
+    Some(dest_path)
+}

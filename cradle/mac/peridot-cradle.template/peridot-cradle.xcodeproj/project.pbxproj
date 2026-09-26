@@ -1,0 +1,486 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */ = {isa = PBXBuildFile; fileRef = 4B40D4B621DCFB5B00C1B31F /* assets.par */; };
+		4B643A4430157D3D0024EF86 /* libvulkan.1.4.350.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; };
+		4B643A4530157D3D0024EF86 /* libvulkan.1.4.350.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B696EED231BD4E000C2417C /* AudioUnit.framework */; };
+		4B979FC930158835002CF562 /* vulkan in Resources */ = {isa = PBXBuildFile; fileRef = 4B979FC830158835002CF562 /* vulkan */; };
+		4B988915301584040005AB61 /* libvulkan_kosmickrisp.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1821B2554E0006BE24 /* Assets.xcassets */; };
+		4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */ = {isa = PBXBuildFile; fileRef = 4BAF7A1A21B2554E0006BE24 /* MainMenu.xib */; };
+		4BAF7A2721B29F1F0006BE24 /* PeridotRenderableView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A2621B29F1F0006BE24 /* PeridotRenderableView.swift */; };
+		4BAF7A2921B2A4B00006BE24 /* PeridotRenderableViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */; };
+		4BAF7A3121B313B00006BE24 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BAF7A3021B313B00006BE24 /* AppDelegate.swift */; };
+		4BB1536027DC9E5A00A214E0 /* libpegamelib.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */; };
+		4BC8ED1D21B3F4C900FB4AF9 /* libc++.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */; };
+		4BC8ED1F21B3F4EC00FB4AF9 /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */; };
+		4BC8ED2121B3F50B00FB4AF9 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */; };
+		4BC8ED2321B3F51600FB4AF9 /* IOSurface.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */; };
+		4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */; };
+		4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		4B2CAECE2CD9153B00178F62 /* Embed Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				4B988915301584040005AB61 /* libvulkan_kosmickrisp.dylib in Embed Frameworks */,
+				4B643A4530157D3D0024EF86 /* libvulkan.1.4.350.dylib in Embed Frameworks */,
+			);
+			name = "Embed Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
+		4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.4.350.dylib; path = lib/libvulkan.1.4.350.dylib; sourceTree = "<group>"; };
+		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
+		4B696EEF231BDB3200C2417C /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		4B696EF1231BDB4900C2417C /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		4B979FC830158835002CF562 /* vulkan */ = {isa = PBXFileReference; lastKnownFileType = folder; path = vulkan; sourceTree = "<group>"; };
+		4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan_kosmickrisp.dylib; path = lib/libvulkan_kosmickrisp.dylib; sourceTree = "<group>"; };
+		4BAF7A1321B2554B0006BE24 /* peridot-cradle.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "peridot-cradle.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		4BAF7A1821B2554E0006BE24 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		4BAF7A1B21B2554E0006BE24 /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.xib; name = Base; path = Base.lproj/MainMenu.xib; sourceTree = "<group>"; };
+		4BAF7A1D21B2554E0006BE24 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		4BAF7A1E21B2554E0006BE24 /* peridot_cradle.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = peridot_cradle.entitlements; sourceTree = "<group>"; };
+		4BAF7A2621B29F1F0006BE24 /* PeridotRenderableView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeridotRenderableView.swift; sourceTree = "<group>"; };
+		4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PeridotRenderableViewController.swift; sourceTree = "<group>"; };
+		4BAF7A3021B313B00006BE24 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		4BAF7A3221B3C0990006BE24 /* peridot-cradle-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "peridot-cradle-Bridging-Header.h"; sourceTree = "<group>"; };
+		4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */ = {isa = PBXFileReference; lastKnownFileType = archive.ar; name = libpegamelib.a; path = rlibs/libpegamelib.a; sourceTree = SOURCE_ROOT; };
+		4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = "libc++.tbd"; path = "usr/lib/libc++.tbd"; sourceTree = SDKROOT; };
+		4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
+		4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOSurface.framework; path = System/Library/Frameworks/IOSurface.framework; sourceTree = SDKROOT; };
+		4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeInterface.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		4BAF7A1021B2554B0006BE24 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BB1536027DC9E5A00A214E0 /* libpegamelib.a in Frameworks */,
+				4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */,
+				4BC8ED2521B3F54400FB4AF9 /* Foundation.framework in Frameworks */,
+				4BC8ED2321B3F51600FB4AF9 /* IOSurface.framework in Frameworks */,
+				4B643A4430157D3D0024EF86 /* libvulkan.1.4.350.dylib in Frameworks */,
+				4BC8ED2121B3F50B00FB4AF9 /* IOKit.framework in Frameworks */,
+				4BC8ED1F21B3F4EC00FB4AF9 /* Metal.framework in Frameworks */,
+				4BC8ED1D21B3F4C900FB4AF9 /* libc++.tbd in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		4B979FCB3015885E002CF562 /* extra-resources */ = {
+			isa = PBXGroup;
+			children = (
+				4B979FC830158835002CF562 /* vulkan */,
+			);
+			name = "extra-resources";
+			path = "extra-resources";
+			sourceTree = "<group>";
+		};
+		4BAF7A0A21B2554B0006BE24 = {
+			isa = PBXGroup;
+			children = (
+				4B979FCB3015885E002CF562 /* extra-resources */,
+				4B40D4B621DCFB5B00C1B31F /* assets.par */,
+				4BAF7A1521B2554B0006BE24 /* peridot-cradle */,
+				4BAF7A1421B2554B0006BE24 /* Products */,
+				4BAF7A3321B3C7380006BE24 /* Frameworks */,
+			);
+			sourceTree = "<group>";
+		};
+		4BAF7A1421B2554B0006BE24 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4BAF7A1321B2554B0006BE24 /* peridot-cradle.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4BAF7A1521B2554B0006BE24 /* peridot-cradle */ = {
+			isa = PBXGroup;
+			children = (
+				4BAF7A1821B2554E0006BE24 /* Assets.xcassets */,
+				4BAF7A1A21B2554E0006BE24 /* MainMenu.xib */,
+				4BAF7A1D21B2554E0006BE24 /* Info.plist */,
+				4BAF7A1E21B2554E0006BE24 /* peridot_cradle.entitlements */,
+				4BAF7A2621B29F1F0006BE24 /* PeridotRenderableView.swift */,
+				4BAF7A2821B2A4B00006BE24 /* PeridotRenderableViewController.swift */,
+				4BAF7A3021B313B00006BE24 /* AppDelegate.swift */,
+				4BAF7A3221B3C0990006BE24 /* peridot-cradle-Bridging-Header.h */,
+				4BC8ED2D21B9FC0900FB4AF9 /* NativeInterface.swift */,
+			);
+			path = "peridot-cradle";
+			sourceTree = "<group>";
+		};
+		4BAF7A3321B3C7380006BE24 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				4BBC28023014F77200821C40 /* PeridotCLIRef-VulkanSDK */,
+				4BB1535F27DC9E5A00A214E0 /* libpegamelib.a */,
+				4B696EF1231BDB4900C2417C /* CoreAudio.framework */,
+				4B696EEF231BDB3200C2417C /* AudioToolbox.framework */,
+				4B696EED231BD4E000C2417C /* AudioUnit.framework */,
+				4BC8ED2621B3F54900FB4AF9 /* QuartzCore.framework */,
+				4BC8ED2421B3F54400FB4AF9 /* Foundation.framework */,
+				4BC8ED2221B3F51600FB4AF9 /* IOSurface.framework */,
+				4BC8ED2021B3F50B00FB4AF9 /* IOKit.framework */,
+				4BC8ED1E21B3F4EC00FB4AF9 /* Metal.framework */,
+				4BC8ED1C21B3F4C900FB4AF9 /* libc++.tbd */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		4BBC28023014F77200821C40 /* PeridotCLIRef-VulkanSDK */ = {
+			isa = PBXGroup;
+			children = (
+				4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */,
+				4B988914301584040005AB61 /* libvulkan_kosmickrisp.dylib */,
+			);
+			name = "PeridotCLIRef-VulkanSDK";
+			path = ../../../../../VulkanSDK/1.4.350.1/macOS;
+			sourceTree = SOURCE_ROOT;
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		4BAF7A1221B2554B0006BE24 /* peridot-cradle */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4BAF7A2121B2554E0006BE24 /* Build configuration list for PBXNativeTarget "peridot-cradle" */;
+			buildPhases = (
+				4BAF7A0F21B2554B0006BE24 /* Sources */,
+				4BAF7A1021B2554B0006BE24 /* Frameworks */,
+				4BAF7A1121B2554B0006BE24 /* Resources */,
+				4B2CAECE2CD9153B00178F62 /* Embed Frameworks */,
+				4B643A4230157D110024EF86 /* Generate symlinks for Versioned libvulkan */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "peridot-cradle";
+			productName = "peridot-cradle";
+			productReference = 4BAF7A1321B2554B0006BE24 /* peridot-cradle.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		4BAF7A0B21B2554B0006BE24 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastSwiftUpdateCheck = 1010;
+				LastUpgradeCheck = 1010;
+				ORGANIZATIONNAME = S.Percentage;
+				TargetAttributes = {
+					4BAF7A1221B2554B0006BE24 = {
+						CreatedOnToolsVersion = 10.1;
+						LastSwiftMigration = 1320;
+					};
+				};
+			};
+			buildConfigurationList = 4BAF7A0E21B2554B0006BE24 /* Build configuration list for PBXProject "peridot-cradle" */;
+			compatibilityVersion = "Xcode 9.3";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 4BAF7A0A21B2554B0006BE24;
+			productRefGroup = 4BAF7A1421B2554B0006BE24 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				4BAF7A1221B2554B0006BE24 /* peridot-cradle */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		4BAF7A1121B2554B0006BE24 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4B979FC930158835002CF562 /* vulkan in Resources */,
+				4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */,
+				4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */,
+				4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		4B643A4230157D110024EF86 /* Generate symlinks for Versioned libvulkan */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Generate symlinks for Versioned libvulkan";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "TARGET_VERSIONED_LIB_NAME=libvulkan.1.4.350.dylib\n\ncd $BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH\nln -s ./$TARGET_VERSIONED_LIB_NAME libvulkan.1.dylib\nln -s ./$TARGET_VERSIONED_LIB_NAME libvulkan.dylib\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		4BAF7A0F21B2554B0006BE24 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				4BC8ED2E21B9FC0900FB4AF9 /* NativeInterface.swift in Sources */,
+				4BAF7A2721B29F1F0006BE24 /* PeridotRenderableView.swift in Sources */,
+				4BAF7A2921B2A4B00006BE24 /* PeridotRenderableViewController.swift in Sources */,
+				4BAF7A3121B313B00006BE24 /* AppDelegate.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		4BAF7A1A21B2554E0006BE24 /* MainMenu.xib */ = {
+			isa = PBXVariantGroup;
+			children = (
+				4BAF7A1B21B2554E0006BE24 /* Base */,
+			);
+			name = MainMenu.xib;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		4BAF7A1F21B2554E0006BE24 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		4BAF7A2021B2554E0006BE24 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.14;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		4BAF7A2221B2554E0006BE24 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "peridot-cradle/peridot_cradle.entitlements";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				FRAMEWORK_SEARCH_PATHS = "$(VULKAN_SDK)/Frameworks";
+				INFOPLIST_FILE = "peridot-cradle/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/rlibs",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(VULKAN_SDK)/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				ONLY_ACTIVE_ARCH = NO;
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				VULKAN_SDK = "";
+			};
+			name = Debug;
+		};
+		4BAF7A2321B2554E0006BE24 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "peridot-cradle/peridot_cradle.entitlements";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = "";
+				FRAMEWORK_SEARCH_PATHS = "$(VULKAN_SDK)/Frameworks";
+				INFOPLIST_FILE = "peridot-cradle/Info.plist";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+				);
+				LIBRARY_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/rlibs",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(VULKAN_SDK)/lib",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				ONLY_ACTIVE_ARCH = NO;
+				OTHER_LDFLAGS = "";
+				PRODUCT_BUNDLE_IDENTIFIER = "";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SWIFT_OBJC_BRIDGING_HEADER = "$(SRCROOT)/$(PRODUCT)peridot-cradle/peridot-cradle-Bridging-Header.h";
+				SWIFT_VERSION = 5.0;
+				VULKAN_SDK = "";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4BAF7A0E21B2554B0006BE24 /* Build configuration list for PBXProject "peridot-cradle" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BAF7A1F21B2554E0006BE24 /* Debug */,
+				4BAF7A2021B2554E0006BE24 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		4BAF7A2121B2554E0006BE24 /* Build configuration list for PBXNativeTarget "peridot-cradle" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				4BAF7A2221B2554E0006BE24 /* Debug */,
+				4BAF7A2321B2554E0006BE24 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 4BAF7A0B21B2554B0006BE24 /* Project object */;
+}
