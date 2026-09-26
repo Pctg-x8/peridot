@@ -25,7 +25,7 @@ pub struct Asset<Internal: AssetBlob> {
     /// 頂点データ
     pub vertex_streams: Vec<(VertexStream, Vec<(Attribute, AttributeData)>)>,
     /// バッファ読み取り用のファイルポインタ
-    internal: Internal,
+    pub internal: Internal,
 }
 impl<Internal: AssetBlob> LogicalAssetData for Asset<Internal> {
     const EXT: &'static str = "pa1-mesh";
