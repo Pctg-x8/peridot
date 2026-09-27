@@ -52,7 +52,7 @@ impl AssetProcessContext {
         let new_group_id = self.asset_id_generator.generate();
 
         let mut stmt = self.assetdb.db.prepare(
-            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed) returning group_id, last_processed",
+            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning group_id, last_processed, is_new_insertion",
             PrepareFlags::empty(),
         ).expect("assetdb op prepare");
         stmt.bind_text(1, source_path.to_str().expect("invalid str"))
@@ -67,7 +67,7 @@ impl AssetProcessContext {
         let inserted_group_id =
             unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) };
         let inserted_last_processed = stmt.column_i64(1);
-        let new_inserted = inserted_group_id == new_group_id;
+        let new_inserted = stmt.column_int(2) != 0;
 
         // update asset group info
         let mut stmt = self
@@ -97,9 +97,9 @@ impl AssetProcessContext {
         source_path: &Path,
         group_id: &peridot::AssetID,
         to_be_processed: i64,
-    ) -> i64 {
+    ) -> (i64, bool) {
         let mut stmt = self.assetdb.db.prepare(
-            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed) returning last_processed",
+            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning last_processed, is_new_insertion",
             PrepareFlags::empty(),
         ).expect("assetdb op prepare");
         stmt.bind_text(1, source_path.to_str().expect("invalid str"))
@@ -111,6 +111,7 @@ impl AssetProcessContext {
         assert!(has_insertion);
 
         let inserted_last_processed = stmt.column_i64(0);
+        let new_inserted = stmt.column_int(1) != 0;
 
         // update asset group info
         let mut stmt = self
@@ -132,7 +133,7 @@ impl AssetProcessContext {
         .expect("stmt.bind_text");
         stmt.step().expect("stmt.step");
 
-        inserted_last_processed
+        (inserted_last_processed, new_inserted)
     }
 
     fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &peridot::AssetID) {
@@ -368,9 +369,9 @@ pub fn process(
     let (asset_group_id, needs_build) = match assigned_asset_id {
         Some(existing) => {
             // use asset group id from metadata
-            let db_last_processed =
+            let (db_last_processed, new_inserted) =
                 ctx.register_existing_asset_group(source_path.as_ref(), &existing, to_be_processed);
-            let needs_build = db_last_processed < to_be_processed;
+            let needs_build = new_inserted || db_last_processed < to_be_processed;
             (existing, needs_build)
         }
         None => {

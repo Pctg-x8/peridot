@@ -33,6 +33,7 @@ Create table dev_user_asset(
     `source_path` text,
     `group_id` blob(16) unique,
     `last_processed` timestamp not null,
+    `is_new_insertion` boolean not null default true,
     primary key(`source_path`),
     foreign key(`group_id`) references asset_group(`id`)
 );
