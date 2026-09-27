@@ -256,6 +256,10 @@ pub fn loadable_asset_identifier(
     Some(id_components.join("."))
 }
 
+pub fn is_metadata_file(path: impl AsRef<Path>) -> bool {
+    path.as_ref().extension().is_some_and(|e| e == "p-meta")
+}
+
 #[tracing::instrument(skip(processors, ctx, base_path, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?dest_dir.as_ref()), err)]
 pub fn process(
     processors: &[Box<dyn AssetProcessor>],
@@ -265,7 +269,6 @@ pub fn process(
     dest_dir: impl AsRef<Path>,
     options: &ProcessOptions,
 ) -> Result<(), ProcessError> {
-    tracing::info!("Processing...");
     let source_path = source_path.as_ref();
     let dest_dir = dest_dir.as_ref();
     let metadata_path = source_path.with_extension("p-meta");
@@ -406,6 +409,7 @@ pub fn process(
         return Ok(());
     }
 
+    tracing::info!("Processing...");
     if let Some(load_identifier) = loadable_asset_identifier(source_path, base_path) {
         ctx.register_loadable_asset(
             &format!("{}{load_identifier}", options.loadable_prefix.unwrap_or("")),

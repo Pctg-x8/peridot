@@ -265,6 +265,11 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
                 continue;
             }
 
+            if peridot_asset_processing::is_metadata_file(&source_path) {
+                // metadata file
+                continue;
+            }
+
             peridot_asset_processing::process(
                 processors,
                 process_ctx,
