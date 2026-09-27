@@ -10,7 +10,6 @@ use peridot_mesh::{
     SIGNATURE, StreamBuffer, VertexStream,
 };
 use peridot_tp_gltf as gltf;
-use rand::{Rng, SeedableRng};
 
 macro_rules! file_assert {
     ($cond: expr, $msg: literal) => {
@@ -264,7 +263,7 @@ pub fn process(
                 (mesh_index * 1000 + prim_index) as i32,
             );
             let mut mesh_out = BufWriter::new(File::create(
-                peridot_asset_processing::build_runtime_asset_path(dest_dir, &asset_id),
+                peridot_asset_processing::prepare_runtime_asset_output(dest_dir, &asset_id),
             )?);
             mesh_out.write_all(&SIGNATURE.to_ne_bytes())?;
             Header {

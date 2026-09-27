@@ -2,7 +2,6 @@
 
 use std::{
     collections::HashMap,
-    ffi::OsStr,
     path::{Path, PathBuf},
 };
 
@@ -15,9 +14,6 @@ pub mod metadata;
 pub trait AssetProcessor {
     /// Determines if this processor can handle the given source file.
     fn can_process(&self, source_path: &Path) -> bool;
-
-    /// Constructs the destination path for the processed asset based on the source file name and output directory.
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf;
 
     /// Processes the asset from the source path.
     ///
@@ -32,13 +28,24 @@ pub trait AssetProcessor {
     ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-pub fn build_runtime_asset_path(dest_dir: &Path, asset_id: &peridot::AssetID) -> PathBuf {
-    let mut file_path = String::with_capacity(16 * 2);
-    for byte in asset_id.as_bytes() {
+pub fn prepare_runtime_asset_output(dest_dir: &Path, asset_id: &peridot::AssetID) -> PathBuf {
+    let mut file_path = String::with_capacity(16 * 2 + 1);
+    for &byte in &asset_id.as_bytes()[0..2] {
+        file_path.push_str(&format!("{:02x}", byte));
+    }
+    file_path.push('/');
+    for &byte in &asset_id.as_bytes()[2..] {
         file_path.push_str(&format!("{:02x}", byte));
     }
 
-    dest_dir.join(file_path)
+    let path = dest_dir.join(file_path);
+    if let Some(p) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(p)
+    {
+        tracing::error!(reason = %e, path = ?p, "Failed to prepare output directory");
+    }
+
+    path
 }
 
 pub struct AssetProcessContext {
@@ -124,6 +131,7 @@ impl AssetProcessContext {
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum AssetType {
+    Raw = 0,
     Mesh = 1,
     Image2D = 10,
     SpriteAtlas = 19,
@@ -131,60 +139,46 @@ pub enum AssetType {
     CompiledRenderingConfigurationVk = 100,
 }
 
-pub struct ProcessOptions<'p> {
-    pub out_dir: Option<&'p Path>,
+pub struct ProcessOptions {
     pub force_rebuild: bool,
 }
-impl<'p> Default for ProcessOptions<'p> {
+impl Default for ProcessOptions {
     #[inline(always)]
     fn default() -> Self {
         Self {
-            out_dir: None,
             force_rebuild: false,
         }
     }
 }
 
-#[tracing::instrument(skip(processors, ctx, options), fields(source_path = %source_path.as_ref().display()))]
+#[derive(thiserror::Error, Debug)]
+pub enum ProcessError {
+    #[error("Failed to copy asset file: {0:?}")]
+    RawAssetCopyFailed(std::io::Error),
+    #[error("Cannot determine the asset processor")]
+    MultipleAssetProcessor,
+    #[error(transparent)]
+    ProcessorFailure(Box<dyn std::error::Error>),
+}
+
+#[tracing::instrument(skip(processors, ctx, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?dest_dir.as_ref()), err)]
 pub fn process(
     processors: &[Box<dyn AssetProcessor>],
     ctx: &mut AssetProcessContext,
     source_path: impl AsRef<Path>,
+    dest_dir: impl AsRef<Path>,
     options: ProcessOptions,
-) -> Option<PathBuf> {
+) -> Result<(), ProcessError> {
     tracing::info!("Processing...");
     let source_path = source_path.as_ref();
-
-    let (Some(source_dir), Some(source_file_name)) =
-        (source_path.parent(), source_path.file_name())
-    else {
-        tracing::error!("invalid source file path provided");
-        return None;
-    };
-    let dest_dir = options.out_dir.unwrap_or(source_dir);
-
-    let mut matching_processors_iter = processors
-        .iter()
-        .filter(|x| x.can_process(source_path.as_ref()));
-    let Some(processor) = matching_processors_iter.next() else {
-        // unknown assets
-        tracing::warn!("found unknown assets(not processed)");
-        let dest_path = dest_dir.join(source_file_name);
-
-        if let Err(e) = std::fs::copy(source_path, &dest_path) {
-            tracing::error!(reason = ?e, "Failed to copy asset file");
-            return None;
-        }
-
-        return Some(dest_path);
-    };
-    if matching_processors_iter.next().is_some() {
-        tracing::error!("Cannot determine an asset processor");
-        return None;
-    }
-
+    let dest_dir = dest_dir.as_ref();
     let metadata_path = source_path.with_extension("p-meta");
-    let dest_path = processor.dest_path(source_file_name, dest_dir);
+
+    let mut matching_processors_iter = processors.iter().filter(|x| x.can_process(source_path));
+    let processor = matching_processors_iter.next();
+    if matching_processors_iter.next().is_some() {
+        return Err(ProcessError::MultipleAssetProcessor);
+    }
 
     let source_meta = source_path
         .metadata()
@@ -271,19 +265,30 @@ pub fn process(
             to_be_processed,
             "skip asset"
         );
-        return Some(dest_path);
+        return Ok(());
     }
 
-    if let Err(e) = processor.process(
-        source_path.as_ref(),
-        asset_group_id,
-        &metadata,
-        dest_dir,
-        ctx,
-    ) {
-        tracing::error!(reason = ?e, "Failed to process asset");
-        return None;
-    }
+    match processor {
+        None => {
+            // Raw Asset Processing
+            tracing::warn!("unknown assets(processed as raw)");
+            let asset_id = ctx.register_or_update_child_asset(&asset_group_id, AssetType::Raw, 0);
 
-    Some(dest_path)
+            std::fs::copy(
+                source_path,
+                prepare_runtime_asset_output(dest_dir, &asset_id),
+            )
+            .map_err(ProcessError::RawAssetCopyFailed)
+            .map(drop)
+        }
+        Some(p) => p
+            .process(
+                source_path.as_ref(),
+                asset_group_id,
+                &metadata,
+                dest_dir,
+                ctx,
+            )
+            .map_err(ProcessError::ProcessorFailure),
+    }
 }

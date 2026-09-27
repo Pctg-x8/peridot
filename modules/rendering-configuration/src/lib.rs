@@ -1,11 +1,8 @@
+#[cfg(feature = "with-asset-processing")]
+use std::path::Path;
 use std::{
     collections::HashMap,
     io::{BufRead, Seek, SeekFrom, Write},
-};
-#[cfg(feature = "with-asset-processing")]
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
 };
 
 pub use peridot_semantic_shader::VertexInputSemantic;
@@ -68,12 +65,6 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path.extension().is_some_and(|x| x == "prc")
     }
 
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-rendering-configuration")
-    }
-
     fn process(
         &self,
         source_path: &Path,
@@ -96,7 +87,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(peridot_asset_processing::build_runtime_asset_path(
+                .open(peridot_asset_processing::prepare_runtime_asset_output(
                     dest_dir, &asset_id,
                 ))
                 .map_err(AssetProcessError::DestWriteOpenFailed)?,

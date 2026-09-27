@@ -1,10 +1,4 @@
-use std::{
-    collections::HashMap,
-    ffi::OsStr,
-    fs::File,
-    io::BufReader,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
 
 use peridot_asset_processing::AssetProcessor;
 
@@ -14,16 +8,6 @@ pub struct Processor;
 impl AssetProcessor for Processor {
     fn can_process(&self, source_path: &Path) -> bool {
         source_path.extension().is_some_and(|x| x == "glb")
-    }
-
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        // 0番目のメッシュはだいたいほぼ生成されるのでそれで更新判断する（複数アセットが出来上がるかどうかはsource_file開いてみないとわからないので一旦これで）
-        let mut path = out_dir_path.join(source_file_name);
-        path.set_file_name(format!(
-            "{}-mesh0-0.pa1-mesh",
-            path.file_stem().unwrap_or_default().display()
-        ));
-        path
     }
 
     fn process(

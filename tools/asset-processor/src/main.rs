@@ -18,7 +18,7 @@ fn main() {
         .init();
 
     let args = Args::parse();
-    let res = peridot_asset_processing::process(
+    peridot_asset_processing::process(
         &[
             Box::new(peridot_rendering_configuration::AssetProcessor),
             Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
@@ -30,13 +30,11 @@ fn main() {
             asset_id_generator: peridot::AssetIDGenerator::new(),
         },
         &args.source_path,
+        args.out_dir
+            .unwrap_or_else(|| std::env::current_dir().expect("current_dir")),
         peridot_asset_processing::ProcessOptions {
-            out_dir: args.out_dir.as_deref(),
             force_rebuild: args.force_rebuild,
         },
-    );
-    if res.is_none() {
-        tracing::error!("Error in processing asset");
-        std::process::exit(1);
-    }
+    )
+    .expect("Error in processing asset");
 }

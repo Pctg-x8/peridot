@@ -241,16 +241,6 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path.extension().is_some_and(|x| x == "spratlas")
     }
 
-    fn dest_path(
-        &self,
-        source_file_name: &std::ffi::OsStr,
-        out_dir_path: &std::path::Path,
-    ) -> std::path::PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-sprite-atlas")
-    }
-
     #[tracing::instrument(
         name = "AssetProcessor::process",
         skip(self, _metadata, ctx),
@@ -451,7 +441,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(peridot_asset_processing::build_runtime_asset_path(
+                .open(peridot_asset_processing::prepare_runtime_asset_output(
                     dest_dir, &asset_id,
                 ))
                 .inspect_err(|e| tracing::error!(reason = ?e, "Failed to open output"))?,

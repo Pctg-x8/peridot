@@ -1,12 +1,8 @@
-use std::{
-    collections::HashMap,
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 
 use ktx::Texture;
 
-use crate::{AssetProcessContext, AssetType, build_runtime_asset_path};
+use crate::{AssetProcessContext, AssetType, prepare_runtime_asset_output};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImageAssetProcessError {
@@ -28,12 +24,6 @@ impl crate::AssetProcessor for ImageAssetProcessor {
         source_path
             .extension()
             .is_some_and(|x| x == "png" || x == "jpg" || x == "tiff")
-    }
-
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-texture2d")
     }
 
     fn process(
@@ -110,7 +100,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
             .map_err(|e| ImageAssetProcessError::Ktx2OperationFailure("deflate_zstd", e))?;
         ktx.write_to_named_file(
             &std::ffi::CString::new(
-                build_runtime_asset_path(dest_dir, &asset_id)
+                prepare_runtime_asset_output(dest_dir, &asset_id)
                     .to_str()
                     .ok_or(ImageAssetProcessError::InvalidOutPath)?,
             )
@@ -136,12 +126,6 @@ impl crate::AssetProcessor for SoundAssetProcessor {
             .is_some_and(|x| x == "wav" || x == "mp3" || x == "ogg" || x == "flac")
     }
 
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-audio")
-    }
-
     fn process(
         &self,
         source_path: &Path,
@@ -152,8 +136,11 @@ impl crate::AssetProcessor for SoundAssetProcessor {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
         let asset_id = ctx.register_or_update_child_asset(&asset_group_id, AssetType::Sound, 0);
-        std::fs::copy(source_path, build_runtime_asset_path(dest_dir, &asset_id))
-            .map_err(SoundAssetProcessError::CopyFailed)?;
+        std::fs::copy(
+            source_path,
+            prepare_runtime_asset_output(dest_dir, &asset_id),
+        )
+        .map_err(SoundAssetProcessError::CopyFailed)?;
 
         Ok(())
     }

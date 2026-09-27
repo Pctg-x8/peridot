@@ -293,18 +293,12 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
                 continue;
             }
 
-            let relative_path = target_dir
-                .strip_prefix(base_dir)
-                .expect("not a path onto base_dir");
-            let runtime_path = output_path.join(relative_path);
-
-            std::fs::create_dir_all(&runtime_path).expect("Failed to create runtime-asset-path");
             peridot_asset_processing::process(
                 processors,
                 process_ctx,
                 source_path,
+                output_path,
                 peridot_asset_processing::ProcessOptions {
-                    out_dir: Some(&runtime_path),
                     force_rebuild: false,
                 },
             )
@@ -312,6 +306,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         }
     }
 
+    std::fs::create_dir_all(output_path).expect("Failed to create runtime-asset-path");
     process_recursive(
         ctx,
         &processors,
