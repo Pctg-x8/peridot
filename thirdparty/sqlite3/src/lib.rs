@@ -142,13 +142,13 @@ impl DB {
         }
     }
 
-    pub fn prepare(&mut self, sql: &str, flags: PrepareFlags) -> Result<Owned<Statement>, Error> {
+    pub fn prepare(&self, sql: &str, flags: PrepareFlags) -> Result<Owned<Statement>, Error> {
         assert!(!sql.is_empty());
 
         let mut stmt = core::mem::MaybeUninit::uninit();
         let r = unsafe {
             raw::sqlite3_prepare_v3(
-                self.0.get_mut(),
+                self.0.get(),
                 sql.as_ptr().cast(),
                 sql.len() as _,
                 flags.bits(),

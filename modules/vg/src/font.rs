@@ -120,6 +120,7 @@ pub type DefaultFont = <DefaultFontProvider as FontProvider>::Font;
 pub struct TTFBlob(pub(crate) Vec<u8>);
 impl peridot::LogicalAssetData for TTFBlob {
     const EXT: &'static str = "ttf";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_RAW;
 }
 impl peridot::FromAssetBlob for TTFBlob {
     type Error = std::io::Error;

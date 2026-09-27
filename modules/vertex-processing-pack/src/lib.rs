@@ -121,6 +121,7 @@ impl PvpContainer {
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for PvpContainer {
     const EXT: &'static str = "pvp";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_RAW;
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::FromAssetBlob for PvpContainer {

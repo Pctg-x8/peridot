@@ -259,7 +259,7 @@ pub fn process(
 
             let asset_id = ctx.register_or_update_child_asset(
                 &asset_group_id,
-                peridot_asset_processing::AssetType::Mesh,
+                peridot::ASSET_TYPE_MESH,
                 (mesh_index * 1000 + prim_index) as i32,
             );
             let mut mesh_out = BufWriter::new(File::create(

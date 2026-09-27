@@ -312,7 +312,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         ctx,
         &processors,
         &mut peridot_asset_processing::AssetProcessContext {
-            assetdb: peridot::AssetDatabase::open(output_path.join("db")).expect("assetdb.open"),
+            assetdb: peridot::AssetDatabase::open(output_path).expect("assetdb.open"),
             asset_id_generator: peridot::AssetIDGenerator::new(),
         },
         &stg_path,

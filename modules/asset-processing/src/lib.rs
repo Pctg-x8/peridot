@@ -29,16 +29,7 @@ pub trait AssetProcessor {
 }
 
 pub fn prepare_runtime_asset_output(dest_dir: &Path, asset_id: &peridot::AssetID) -> PathBuf {
-    let mut file_path = String::with_capacity(16 * 2 + 1);
-    for &byte in &asset_id.as_bytes()[0..2] {
-        file_path.push_str(&format!("{:02x}", byte));
-    }
-    file_path.push('/');
-    for &byte in &asset_id.as_bytes()[2..] {
-        file_path.push_str(&format!("{:02x}", byte));
-    }
-
-    let path = dest_dir.join(file_path);
+    let path = asset_id.build_runtime_asset_path(dest_dir);
     if let Some(p) = path.parent()
         && let Err(e) = std::fs::create_dir_all(p)
     {
@@ -60,7 +51,7 @@ impl AssetProcessContext {
     ) -> (peridot::AssetID, i64, bool) {
         let new_group_id = self.asset_id_generator.generate();
 
-        let mut stmt = self.assetdb.0.prepare(
+        let mut stmt = self.assetdb.db.prepare(
             "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed) returning group_id, last_processed",
             PrepareFlags::empty(),
         ).expect("assetdb op prepare");
@@ -81,7 +72,7 @@ impl AssetProcessContext {
         // update asset group info
         let mut stmt = self
             .assetdb
-            .0
+            .db
             .prepare(
                 "Replace into asset_group_info (id, name) values (?, ?)",
                 PrepareFlags::empty(),
@@ -104,7 +95,7 @@ impl AssetProcessContext {
     fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &peridot::AssetID) {
         let mut stmt = self
             .assetdb
-            .0
+            .db
             .prepare(
                 "Replace into loadable_asset (identifier, group_id) values (?, ?)",
                 PrepareFlags::empty(),
@@ -119,12 +110,12 @@ impl AssetProcessContext {
     pub fn register_or_update_child_asset(
         &mut self,
         group_id: &peridot::AssetID,
-        asset_type: AssetType,
+        asset_type: peridot::AssetType,
         local_id: i32,
     ) -> peridot::AssetID {
         let new_asset_id = self.asset_id_generator.generate();
         let mut stmt = self.assetdb
-            .0
+            .db
             .prepare(
                 "Insert into asset_group (id, asset_type, local_id, runtime_asset_id) values (?, ?, ?, ?) on conflict do nothing returning runtime_asset_id",
                 PrepareFlags::empty()
@@ -141,7 +132,7 @@ impl AssetProcessContext {
             // reuse existing entry
             let mut stmt = self
                 .assetdb
-                .0
+                .db
                 .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?", PrepareFlags::empty())
                 .expect("assetdb op prepare");
             stmt.bind_blob(1, group_id.as_bytes())
@@ -160,18 +151,6 @@ impl AssetProcessContext {
         assert_eq!(runtime_asset_id_len, 16);
         unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) }
     }
-}
-
-/// アセット種別レジストリ
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u16)]
-pub enum AssetType {
-    Raw = 0,
-    Mesh = 1,
-    Image2D = 10,
-    SpriteAtlas = 19,
-    Sound = 20,
-    CompiledRenderingConfigurationVk = 100,
 }
 
 pub struct ProcessOptions {
@@ -330,9 +309,6 @@ pub fn process(
 
     let (asset_group_id, db_last_processed, new_inserted) =
         ctx.register_or_update_asset_group(source_path.as_ref(), to_be_processed);
-    if let Some(load_identifier) = loadable_asset_identifier(source_path, base_path) {
-        ctx.register_loadable_asset(&load_identifier, &asset_group_id);
-    }
     let needs_build = options.force_rebuild || new_inserted || db_last_processed < to_be_processed;
     if !needs_build {
         tracing::info!(
@@ -343,11 +319,15 @@ pub fn process(
         return Ok(());
     }
 
+    if let Some(load_identifier) = loadable_asset_identifier(source_path, base_path) {
+        ctx.register_loadable_asset(&load_identifier, &asset_group_id);
+    }
     match processor {
         None => {
             // Raw Asset Processing
             tracing::warn!("unknown assets(processed as raw)");
-            let asset_id = ctx.register_or_update_child_asset(&asset_group_id, AssetType::Raw, 0);
+            let asset_id =
+                ctx.register_or_update_child_asset(&asset_group_id, peridot::ASSET_TYPE_RAW, 0);
 
             std::fs::copy(
                 source_path,

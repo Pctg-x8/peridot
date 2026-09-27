@@ -367,7 +367,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
         let last_rendering_completion = match LastRenderingCompletionFence::new(&g.gfx_device) {
             Ok(x) => x,
             Err(e) => {
-                tracing::error!(cause = ?e, "Faield to create last rendering completion fence");
+                tracing::error!(cause = ?e, "Failed to create last rendering completion fence");
                 std::process::abort();
             }
         };
@@ -518,7 +518,15 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         &'a self,
         path: &str,
     ) -> std::io::Result<impl AssetBlob + 'a> {
-        self.native_link.asset_loader().get(path, A::EXT)
+        let id = self
+            .native_link
+            .asset_loader()
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(path, A::ASSET_TYPE)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "asset not found in assetdb")
+            })?;
+        self.native_link.asset_loader().get(id)
     }
 
     #[inline(always)]
@@ -526,35 +534,40 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         &'a self,
         path: &str,
     ) -> std::io::Result<impl AssetBlobAsync + 'a> {
-        self.native_link
+        let id = self
+            .native_link
             .asset_loader()
-            .get_async(path, A::EXT)
-            .await
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(path, A::ASSET_TYPE)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "asset not found in assetdb")
+            })?;
+
+        self.native_link.asset_loader().get_async(id).await
     }
 
     #[inline(always)]
     pub fn load<A: FromAssetBlob>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset_blob(self.native_link.asset_loader().get(path, A::EXT)?)
+        A::from_asset_blob(self.open_raw_asset::<A>(path)?)
     }
 
     #[inline(always)]
     pub async fn load_async<A: FromAssetBlobAsync>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset_blob_async(
-            self.native_link
-                .asset_loader()
-                .get_async(path, A::EXT)
-                .await?,
-        )
-        .await
+        A::from_asset_blob_async(self.open_raw_asset_async::<A>(path).await?).await
     }
 
     #[inline(always)]
     pub fn streaming<'a, A: FromStreamingAsset<'a>>(&'a self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(
-            self.native_link
-                .asset_loader()
-                .get_streaming(path, A::EXT)?,
-        )
+        let id = self
+            .native_link
+            .asset_loader()
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(path, A::ASSET_TYPE)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "asset not found in assetdb")
+            })?;
+
+        A::from_asset(self.native_link.asset_loader().get_streaming(id)?)
     }
 
     #[inline(always)]

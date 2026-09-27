@@ -20,6 +20,7 @@ pub struct CompiledRenderingConfigurationVk {
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
     const EXT: &'static str = "pa1-rendering-configuration";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK;
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::FromAssetBlob for CompiledRenderingConfigurationVk {
@@ -79,7 +80,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             compilation::compile(&content).ok_or(AssetProcessError::GeneratingAssetFailure)?;
         let asset_id = ctx.register_or_update_child_asset(
             &asset_group_id,
-            peridot_asset_processing::AssetType::CompiledRenderingConfigurationVk,
+            peridot::ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK,
             0,
         );
         write(

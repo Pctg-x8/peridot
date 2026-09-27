@@ -214,6 +214,7 @@ impl SpriteAtlasAsset {
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for SpriteAtlasAsset {
     const EXT: &'static str = "pa1-sprite-atlas";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SPRITE_ATLAS;
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::FromAssetBlob for SpriteAtlasAsset {
@@ -258,7 +259,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
 
         let asset_id = ctx.register_or_update_child_asset(
             &asset_group_id,
-            peridot_asset_processing::AssetType::SpriteAtlas,
+            peridot::ASSET_TYPE_SPRITE_ATLAS,
             0,
         );
 

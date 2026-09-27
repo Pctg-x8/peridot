@@ -14,6 +14,7 @@ use crate::{
 pub struct AssetCore;
 impl LogicalAssetData for AssetCore {
     const EXT: &'static str = "pa1-mesh";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 
 /// メッシュアセット
@@ -29,6 +30,7 @@ pub struct Asset<Internal: AssetBlob> {
 }
 impl<Internal: AssetBlob> LogicalAssetData for Asset<Internal> {
     const EXT: &'static str = "pa1-mesh";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 impl<Internal: AssetBlob> Asset<Internal> {
     /// アセットを開いて読み込み
@@ -131,6 +133,7 @@ pub struct AssetAsync<Internal: AssetBlobAsync> {
 }
 impl<Internal: AssetBlobAsync> LogicalAssetData for AssetAsync<Internal> {
     const EXT: &'static str = "pa1-mesh";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 impl<Internal: AssetBlobAsync> AssetAsync<Internal> {
     pub async fn open(asset: Internal) -> Result<Self, std::io::Error> {

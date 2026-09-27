@@ -18,6 +18,9 @@ fn main() {
         .init();
 
     let args = Args::parse();
+    let odir = args
+        .out_dir
+        .unwrap_or_else(|| std::env::current_dir().expect("current_dir"));
     peridot_asset_processing::process(
         &[
             Box::new(peridot_rendering_configuration::AssetProcessor),
@@ -26,13 +29,12 @@ fn main() {
             Box::new(peridot_asset_processor_model::Processor),
         ],
         &mut peridot_asset_processing::AssetProcessContext {
-            assetdb: peridot::AssetDatabase::open("test.adb").expect("assetdb.open"),
+            assetdb: peridot::AssetDatabase::open(&odir).expect("assetdb.open"),
             asset_id_generator: peridot::AssetIDGenerator::new(),
         },
         args.source_path.parent().expect("not a regular input"),
         &args.source_path,
-        args.out_dir
-            .unwrap_or_else(|| std::env::current_dir().expect("current_dir")),
+        &odir,
         peridot_asset_processing::ProcessOptions {
             force_rebuild: args.force_rebuild,
         },
