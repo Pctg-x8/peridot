@@ -29,6 +29,7 @@ fn main() {
             assetdb: peridot::AssetDatabase::open("test.adb").expect("assetdb.open"),
             asset_id_generator: peridot::AssetIDGenerator::new(),
         },
+        args.source_path.parent().expect("not a regular input"),
         &args.source_path,
         args.out_dir
             .unwrap_or_else(|| std::env::current_dir().expect("current_dir")),

@@ -296,6 +296,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
             peridot_asset_processing::process(
                 processors,
                 process_ctx,
+                base_dir,
                 source_path,
                 output_path,
                 peridot_asset_processing::ProcessOptions {
