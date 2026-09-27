@@ -508,12 +508,12 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
     }
 }
 
-pub struct RawAssetCollection<'a, 'q, NL: NativeLinker, A: LogicalAssetData> {
+pub struct AssetCollection<'a, 'q, NL: NativeLinker, A: LogicalAssetData> {
     engine: &'a Engine<'q, NL>,
     ids: Vec<AssetID>,
     _marker: core::marker::PhantomData<A>,
 }
-impl<'a, 'q, NL: NativeLinker, A: LogicalAssetData> RawAssetCollection<'a, 'q, NL, A> {
+impl<'a, 'q, NL: NativeLinker, A: LogicalAssetData> AssetCollection<'a, 'q, NL, A> {
     pub const fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
@@ -614,16 +614,16 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
     }
 
     #[inline(always)]
-    pub fn open_raw_asset_collection<'a, A: LogicalAssetData>(
+    pub fn asset_collection<'a, A: LogicalAssetData>(
         &'a self,
         path: &str,
-    ) -> RawAssetCollection<'a, 'q, PL, A> {
+    ) -> AssetCollection<'a, 'q, PL, A> {
         let ids = self
             .native_link
             .asset_loader()
             .asset_db()
             .query_loadable_asset_ids_of_type(path, A::ASSET_TYPE);
-        RawAssetCollection {
+        AssetCollection {
             engine: self,
             ids,
             _marker: core::marker::PhantomData,
