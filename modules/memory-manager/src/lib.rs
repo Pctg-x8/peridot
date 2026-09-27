@@ -245,6 +245,66 @@ impl MemoryBlock {
                 .release_power_of_two_block(empty.block_info.0, empty.block_info.1);
         });
     }
+
+    #[inline]
+    fn map(
+        &mut self,
+        range: core::range::Range<br::DeviceSize>,
+        flags: br::vk::VkMemoryMapFlags,
+    ) -> br::Result<*mut core::ffi::c_void> {
+        unsafe {
+            br::vkfn_wrapper::map_memory(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                range.into(),
+                flags,
+            )
+        }
+    }
+
+    #[inline]
+    unsafe fn invalidate_single_range(
+        &mut self,
+        range: core::range::Range<br::DeviceSize>,
+    ) -> br::Result<()> {
+        unsafe {
+            br::vkfn_wrapper::invalidate_mapped_memory_ranges(
+                self.device.as_transparent_ref(),
+                &[br::MappedMemoryRange::new_raw(
+                    self.handle,
+                    range.start,
+                    range.end - range.start,
+                )],
+            )
+        }
+    }
+
+    #[inline]
+    unsafe fn flush_single_range(
+        &mut self,
+        range: core::range::Range<br::DeviceSize>,
+    ) -> br::Result<()> {
+        unsafe {
+            br::vkfn_wrapper::flush_mapped_memory_ranges(
+                self.device.as_transparent_ref(),
+                &[br::MappedMemoryRange::new_raw(
+                    self.handle,
+                    range.start,
+                    range.end - range.start,
+                )],
+            )
+        }
+    }
+
+    #[inline]
+    unsafe fn unmap(&mut self) {
+        unsafe {
+            br::vkfn_wrapper::unmap_memory(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+            );
+        }
+    }
 }
 
 struct OptimalBufferLinearImagePlacementInfo {
