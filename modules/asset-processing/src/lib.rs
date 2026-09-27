@@ -196,14 +196,16 @@ impl AssetProcessContext {
     }
 }
 
-pub struct ProcessOptions {
+pub struct ProcessOptions<'a> {
     pub force_rebuild: bool,
+    pub loadable_prefix: Option<&'a str>,
 }
-impl Default for ProcessOptions {
+impl Default for ProcessOptions<'_> {
     #[inline(always)]
     fn default() -> Self {
         Self {
             force_rebuild: false,
+            loadable_prefix: None,
         }
     }
 }
@@ -261,7 +263,7 @@ pub fn process(
     base_path: impl AsRef<Path>,
     source_path: impl AsRef<Path>,
     dest_dir: impl AsRef<Path>,
-    options: ProcessOptions,
+    options: &ProcessOptions,
 ) -> Result<(), ProcessError> {
     tracing::info!("Processing...");
     let source_path = source_path.as_ref();
@@ -405,7 +407,10 @@ pub fn process(
     }
 
     if let Some(load_identifier) = loadable_asset_identifier(source_path, base_path) {
-        ctx.register_loadable_asset(&load_identifier, &asset_group_id);
+        ctx.register_loadable_asset(
+            &format!("{}{load_identifier}", options.loadable_prefix.unwrap_or("")),
+            &asset_group_id,
+        );
     }
     match processor {
         None => {
