@@ -35,6 +35,12 @@ pub const SQLITE_OPEN_READONLY: c_int = 0x00000001;
 pub const SQLITE_OPEN_READWRITE: c_int = 0x00000002;
 pub const SQLITE_OPEN_CREATE: c_int = 0x00000004;
 
+pub const SQLITE_PREPARE_PERSISTENT: c_int = 0x01;
+pub const SQLITE_PREPARE_NORMALIZE: c_int = 0x02;
+pub const SQLITE_PREPARE_NO_VTAB: c_int = 0x04;
+pub const SQLITE_PREPARE_DONT_LOG: c_int = 0x10;
+pub const SQLITE_PREPARE_FROM_DDL: c_int = 0x20;
+
 unsafe extern "C" {
     pub fn sqlite3_open_v2(
         filename: *const c_char,
@@ -57,12 +63,20 @@ unsafe extern "C" {
     pub fn sqlite3_errmsg(db: *mut sqlite3) -> *const c_char;
     pub fn sqlite3_errstr(e: c_int) -> *const c_char;
 
-    pub fn sqlite3_prepare(
+    pub fn sqlite3_prepare_v2(
         db: *mut sqlite3,
         sql: *const c_char,
         bytes: c_int,
         ppstmt: *mut *mut sqlite3_stmt,
         ptail: *mut *const c_char,
+    ) -> c_int;
+    pub fn sqlite3_prepare_v3(
+        db: *mut sqlite3,
+        sql: *const c_char,
+        bytes: c_int,
+        prep_flags: c_uint,
+        stmt: *mut *mut sqlite3_stmt,
+        tail: *mut *const c_char,
     ) -> c_int;
 
     pub fn sqlite3_bind_blob(

@@ -41,6 +41,10 @@ impl<T: Resource> Owned<T> {
         NonNull::new(raw).map(Self)
     }
 
+    pub const unsafe fn from_ptr_unchecked(ptr: *mut T) -> Self {
+        Self(unsafe { NonNull::new_unchecked(ptr) })
+    }
+
     pub fn into_raw(self) -> *mut T {
         self.0.as_ptr()
     }
@@ -52,6 +56,17 @@ bitflags::bitflags! {
         const READONLY = raw::SQLITE_OPEN_READONLY;
         const READWRITE = raw::SQLITE_OPEN_READWRITE;
         const CREATE = raw::SQLITE_OPEN_CREATE;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct PrepareFlags : core::ffi::c_uint {
+        const PERSISTENT = raw::SQLITE_PREPARE_PERSISTENT.cast_unsigned();
+        const NORMALIZE = raw::SQLITE_PREPARE_NORMALIZE.cast_unsigned();
+        const NO_VTAB = raw::SQLITE_PREPARE_NO_VTAB.cast_unsigned();
+        const DONT_LOG = raw::SQLITE_PREPARE_DONT_LOG.cast_unsigned();
+        const FROM_DDL = raw::SQLITE_PREPARE_FROM_DDL.cast_unsigned();
     }
 }
 
@@ -83,7 +98,7 @@ impl DB {
         if r != raw::SQLITE_OK {
             Err(Error(r))
         } else {
-            Ok(unsafe { Owned::from_ptr(db.assume_init().cast()).expect("nul db returned") })
+            Ok(unsafe { Owned::from_ptr_unchecked(db.assume_init().cast()) })
         }
     }
 
@@ -127,21 +142,25 @@ impl DB {
         }
     }
 
-    pub fn prepare(&mut self, sql: &str) -> Result<Owned<Statement>, Error> {
+    pub fn prepare(&mut self, sql: &str, flags: PrepareFlags) -> Result<Owned<Statement>, Error> {
+        assert!(!sql.is_empty());
+
         let mut stmt = core::mem::MaybeUninit::uninit();
         let r = unsafe {
-            raw::sqlite3_prepare(
+            raw::sqlite3_prepare_v3(
                 self.0.get_mut(),
                 sql.as_ptr().cast(),
                 sql.len() as _,
+                flags.bits(),
                 stmt.as_mut_ptr(),
                 core::ptr::null_mut(),
             )
         };
+
         if r != raw::SQLITE_OK {
             Err(Error(r))
         } else {
-            Ok(unsafe { Owned::from_ptr(stmt.assume_init().cast()).expect("nul stmt returned") })
+            Ok(unsafe { Owned::from_ptr_unchecked(stmt.assume_init().cast()) })
         }
     }
 }

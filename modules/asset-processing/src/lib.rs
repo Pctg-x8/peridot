@@ -6,6 +6,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use peridot_tp_sqlite3::PrepareFlags;
+
 pub mod builtin;
 pub mod metadata;
 
@@ -60,20 +62,23 @@ impl AssetProcessContext {
             .inspect_err(|e| tracing::error!(reason = %e, "Invalid source asset last modified date"))
             .map_or(0, |x| x.as_millis()) as i64;
 
-        let mut stmt = self.assetdb.0.prepare("Insert into user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = excluded.last_processed where excluded.last_processed > last_processed returning group_id, last_processed").expect("assetdb op prepare");
+        let mut stmt = self.assetdb.0.prepare("Insert into user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = excluded.last_processed where excluded.last_processed > last_processed returning group_id, last_processed", PrepareFlags::empty()).expect("assetdb op prepare");
         stmt.bind_text(1, source_path.to_str().expect("invalid str"))
             .expect("stmt.bind_text");
         stmt.bind_blob(2, new_group_id.as_bytes())
             .expect("stmt.bind_blob");
         stmt.bind_i64(3, source_last_modified)
             .expect("stmt.bind_int");
-        let has_next = stmt.step().expect("stmt.step");
-        if !has_next {
+        let has_insertion = stmt.step().expect("stmt.step");
+        if !has_insertion {
             // no insertion occurred(file is too old)
             let mut stmt = self
                 .assetdb
                 .0
-                .prepare("Select group_id from user_asset where source_path = ?")
+                .prepare(
+                    "Select group_id from user_asset where source_path = ?",
+                    PrepareFlags::empty(),
+                )
                 .expect("assetdb op prepare");
             stmt.bind_text(1, source_path.to_str().expect("invalid str"))
                 .expect("stmt.bind_text");
@@ -109,6 +114,7 @@ impl AssetProcessContext {
             .0
             .prepare(
                 "Insert into asset_group (id, asset_type, local_id, runtime_asset_id) values (?, ?, ?, ?) on conflict do nothing returning runtime_asset_id",
+                PrepareFlags::empty()
             )
             .expect("prepare_cached failed");
         stmt.bind_blob(1, group_id.as_bytes())
@@ -117,13 +123,13 @@ impl AssetProcessContext {
         stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
         stmt.bind_blob(4, new_asset_id.as_bytes())
             .expect("stmt.bind_blob");
-        let r = stmt.step().expect("stmt.step");
-        if !r {
+        let has_insertion = stmt.step().expect("stmt.step");
+        if !has_insertion {
             // reuse existing entry
             let mut stmt = self
                 .assetdb
                 .0
-                .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?")
+                .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?", PrepareFlags::empty())
                 .expect("assetdb op prepare");
             stmt.bind_blob(1, group_id.as_bytes())
                 .expect("stmt.bind_blob");
