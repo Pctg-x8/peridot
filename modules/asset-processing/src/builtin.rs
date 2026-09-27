@@ -6,7 +6,7 @@ use std::{
 
 use ktx::Texture;
 
-use crate::{AssetProcessContext, build_runtime_asset_path};
+use crate::{AssetProcessContext, AssetType, build_runtime_asset_path};
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImageAssetProcessError {
@@ -39,11 +39,12 @@ impl crate::AssetProcessor for ImageAssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         metadata: &HashMap<crate::metadata::Key, String>,
         dest_dir: &Path,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let asset_id = ctx.asset_id_generator.generate();
+        let asset_id = ctx.register_or_update_child_asset(&asset_group_id, AssetType::Image2D, 0);
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
 
         let uastc_level_flag = metadata
@@ -144,12 +145,13 @@ impl crate::AssetProcessor for SoundAssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         _metadata: &HashMap<crate::metadata::Key, String>,
         dest_dir: &Path,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
-        let asset_id = ctx.asset_id_generator.generate();
+        let asset_id = ctx.register_or_update_child_asset(&asset_group_id, AssetType::Sound, 0);
         std::fs::copy(source_path, build_runtime_asset_path(dest_dir, &asset_id))
             .map_err(SoundAssetProcessError::CopyFailed)?;
 

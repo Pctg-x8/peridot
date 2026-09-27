@@ -29,12 +29,11 @@ impl AssetProcessor for Processor {
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
         dest_dir: &Path,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let asset_group_id = ctx.register_or_update_asset_group(source_path);
-
         let mut r = BufReader::new(File::open(source_path)?);
         if peridot_tp_gltf::binary::try_verify_magic(&mut r) {
             return glb::process(r, dest_dir, asset_group_id, ctx).map_err(From::from);

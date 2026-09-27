@@ -25,6 +25,7 @@ pub trait AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         metadata: &HashMap<metadata::Key, String>,
         dest_dir: &Path,
         ctx: &mut AssetProcessContext,
@@ -45,62 +46,32 @@ pub struct AssetProcessContext {
     pub asset_id_generator: peridot::AssetIDGenerator,
 }
 impl AssetProcessContext {
-    pub fn register_or_update_asset_group(&mut self, source_path: &Path) -> peridot::AssetID {
+    fn register_or_update_asset_group(
+        &mut self,
+        source_path: &Path,
+        to_be_processed: i64,
+    ) -> (peridot::AssetID, i64, bool) {
         let new_group_id = self.asset_id_generator.generate();
-        let source_last_modified = source_path
-            .metadata()
-            .inspect_err(|e| tracing::error!(reason = %e, "Failed to query source asset metadata"))
-            .ok()
-            .and_then(
-                |x| x
-                    .modified()
-                    .inspect_err(|e| tracing::error!(reason = %e, "Failed to query source asset last modified time"))
-                    .ok()
-            )
-            .unwrap_or_else(std::time::SystemTime::now)
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .inspect_err(|e| tracing::error!(reason = %e, "Invalid source asset last modified date"))
-            .map_or(0, |x| x.as_millis()) as i64;
 
-        let mut stmt = self.assetdb.0.prepare("Insert into user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = excluded.last_processed where excluded.last_processed > last_processed returning group_id, last_processed", PrepareFlags::empty()).expect("assetdb op prepare");
+        let mut stmt = self.assetdb.0.prepare(
+            "Insert into user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed) returning group_id, last_processed",
+            PrepareFlags::empty(),
+        ).expect("assetdb op prepare");
         stmt.bind_text(1, source_path.to_str().expect("invalid str"))
             .expect("stmt.bind_text");
         stmt.bind_blob(2, new_group_id.as_bytes())
             .expect("stmt.bind_blob");
-        stmt.bind_i64(3, source_last_modified)
-            .expect("stmt.bind_int");
+        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
         let has_insertion = stmt.step().expect("stmt.step");
-        if !has_insertion {
-            // no insertion occurred(file is too old)
-            let mut stmt = self
-                .assetdb
-                .0
-                .prepare(
-                    "Select group_id from user_asset where source_path = ?",
-                    PrepareFlags::empty(),
-                )
-                .expect("assetdb op prepare");
-            stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-                .expect("stmt.bind_text");
-            let has_next = stmt.step().expect("stmt.step");
-            assert!(has_next);
-            let group_id_len = stmt.column_bytes(0);
-            assert_eq!(group_id_len, 16);
-            let group_id = stmt.column_blob(0);
+        assert!(has_insertion);
 
-            return unsafe { peridot::AssetID::from_bytes(*group_id.cast()) };
-        }
+        assert_eq!(stmt.column_bytes(0), 16);
+        let inserted_group_id =
+            unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) };
+        let inserted_last_processed = stmt.column_i64(1);
+        let new_inserted = inserted_group_id == new_group_id;
 
-        let group_id_len = stmt.column_bytes(0);
-        assert_eq!(group_id_len, 16);
-        let group_id = stmt.column_blob(0);
-        let last_processed = stmt.column_i64(1);
-
-        eprintln!(
-            "source_path: {source_path:?}, group_id: {:?}(new {new_group_id:?}), last_processed: {last_processed}",
-            unsafe { peridot::AssetID::from_bytes(*group_id.cast()) }
-        );
-        unsafe { peridot::AssetID::from_bytes(*group_id.cast()) }
+        (inserted_group_id, inserted_last_processed, new_inserted)
     }
 
     pub fn register_or_update_child_asset(
@@ -149,10 +120,15 @@ impl AssetProcessContext {
     }
 }
 
+/// アセット種別レジストリ
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum AssetType {
     Mesh = 1,
+    Image2D = 10,
+    SpriteAtlas = 19,
+    Sound = 20,
+    CompiledRenderingConfigurationVk = 100,
 }
 
 pub struct ProcessOptions<'p> {
@@ -177,11 +153,11 @@ pub fn process(
     options: ProcessOptions,
 ) -> Option<PathBuf> {
     tracing::info!("Processing...");
+    let source_path = source_path.as_ref();
 
-    let (Some(source_dir), Some(source_file_name)) = (
-        source_path.as_ref().parent(),
-        source_path.as_ref().file_name(),
-    ) else {
+    let (Some(source_dir), Some(source_file_name)) =
+        (source_path.parent(), source_path.file_name())
+    else {
         tracing::error!("invalid source file path provided");
         return None;
     };
@@ -207,77 +183,56 @@ pub fn process(
         return None;
     }
 
-    let metadata_path = source_path.as_ref().with_extension("p-meta");
+    let metadata_path = source_path.with_extension("p-meta");
     let dest_path = processor.dest_path(source_file_name, dest_dir);
 
-    'determine_rebuild: {
-        if options.force_rebuild {
-            // forced
-            break 'determine_rebuild;
+    let source_meta = source_path
+        .metadata()
+        .inspect_err(
+            |e| tracing::warn!(reason = %e, path = ?source_path, "retrieving file metadata failed"),
+        )
+        .ok();
+    let meta_meta = metadata_path
+        .metadata()
+        .inspect_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                // これはなくてもいいファイルなのでなかったらスルー
+                return;
+            }
+
+            tracing::warn!(reason = %e, path = ?metadata_path, "retrieving file metadata failed");
+        })
+        .ok();
+    let source_modtime = source_meta
+        .and_then(|m| {
+            m.modified()
+                .inspect_err(|e| tracing::warn!(reason = %e, path = ?source_path, "retrieving modified time failed"))
+                .ok()
+        });
+    let meta_modtime = meta_meta
+        .and_then(|m| {
+            m.modified()
+                .inspect_err(|e| tracing::warn!(reason = %e, path = ?metadata_path, "retrieving modified time failed"))
+                .ok()
+        });
+    let to_be_processed = match (source_modtime, meta_modtime) {
+        (Some(s), Some(m)) => s.max(m),
+        (Some(a), None) | (None, Some(a)) => a,
+        (None, None) => std::time::SystemTime::now(),
+    };
+    let to_be_processed = match to_be_processed.duration_since(std::time::SystemTime::UNIX_EPOCH) {
+        Ok(d) => d.as_millis(),
+        Err(_) => {
+            tracing::warn!(target = ?to_be_processed, "retrieving duration since unix epoch failed");
+            0
         }
-
-        let source_meta = match source_path.as_ref().metadata() {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving file metadata failed");
-                // cannot determine(force rebuild)
-                break 'determine_rebuild;
-            }
-        };
-        let meta_meta = match metadata_path.metadata() {
-            Ok(x) => Some(x),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-            Err(e) => {
-                tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving file metadata failed");
-                // cannot determine(force rebuild)
-                break 'determine_rebuild;
-            }
-        };
-        let dest_meta = match dest_path.metadata() {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(reason = ?e, path = ?dest_path, "retrieving file metadata failed");
-                // cannot determine(force rebuild)
-                break 'determine_rebuild;
-            }
-        };
-
-        let source_modtime = match source_meta.modified() {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(reason = ?e, path = ?source_path.as_ref(), "retrieving modified time failed");
-                // cannot determine(force rebuild)
-                break 'determine_rebuild;
-            }
-        };
-        let meta_modtime = match meta_meta.map(|x| x.modified()).transpose() {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(reason = ?e, path = ?metadata_path, "retrieving modified time failed");
-                // cannot determine(force rebuild)
-                break 'determine_rebuild;
-            }
-        };
-        let dest_modtime = match dest_meta.modified() {
-            Ok(x) => x,
-            Err(e) => {
-                tracing::warn!(reason = ?e, path = ?dest_path, "retrieving modified time failed");
-                // cannot determine(force rebuild)
-                break 'determine_rebuild;
-            }
-        };
-
-        if source_modtime <= dest_modtime && meta_modtime.is_some_and(|x| x <= dest_modtime) {
-            tracing::info!(reason = "modified time", "skip asset");
-            return Some(dest_path);
-        }
-    }
+    } as i64;
 
     let metadata = 'load_metadata: {
         match metadata_path.try_exists() {
             Ok(true) => (),
             Ok(false) => {
-                tracing::trace!(source_path = ?source_path.as_ref(), metadata_path = ?metadata_path, "no metadata exists for this asset");
+                tracing::trace!(source_path = ?source_path, metadata_path = ?metadata_path, "no metadata exists for this asset");
                 break 'load_metadata None;
             }
             Err(e) => {
@@ -307,7 +262,25 @@ pub fn process(
     };
     let metadata = metadata.unwrap_or_else(HashMap::new);
 
-    if let Err(e) = processor.process(source_path.as_ref(), &metadata, dest_dir, ctx) {
+    let (asset_group_id, db_last_processed, new_inserted) =
+        ctx.register_or_update_asset_group(source_path.as_ref(), to_be_processed);
+    let needs_build = options.force_rebuild || new_inserted || db_last_processed < to_be_processed;
+    if !needs_build {
+        tracing::info!(
+            last_processed = db_last_processed,
+            to_be_processed,
+            "skip asset"
+        );
+        return Some(dest_path);
+    }
+
+    if let Err(e) = processor.process(
+        source_path.as_ref(),
+        asset_group_id,
+        &metadata,
+        dest_dir,
+        ctx,
+    ) {
         tracing::error!(reason = ?e, "Failed to process asset");
         return None;
     }

@@ -11,15 +11,15 @@ impl core::fmt::Debug for AssetID {
         #[inline(always)]
         fn h(v: u8) -> char {
             match v {
-                0..=9 => ((v + b'0') as char),
-                10..=15 => ((v - 10 + b'a') as char),
+                0..=9 => (v + b'0') as char,
+                10..=15 => (v - 10 + b'a') as char,
                 _ => unreachable!(),
             }
         }
         #[inline(always)]
         fn h2(f: &mut core::fmt::Formatter<'_>, v: u8) -> core::fmt::Result {
-            f.write_char(h((v >> 4) as u8))?;
-            f.write_char(h((v & 0xf) as u8))?;
+            f.write_char(h(v >> 4))?;
+            f.write_char(h(v & 0xf))?;
 
             Ok(())
         }

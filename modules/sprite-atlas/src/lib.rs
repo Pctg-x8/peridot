@@ -259,13 +259,18 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn process(
         &self,
         source_path: &std::path::Path,
+        asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
         dest_dir: &std::path::Path,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use ktx::Texture;
 
-        let asset_id = ctx.asset_id_generator.generate();
+        let asset_id = ctx.register_or_update_child_asset(
+            &asset_group_id,
+            peridot_asset_processing::AssetType::SpriteAtlas,
+            0,
+        );
 
         let source = std::fs::read_to_string(source_path)?;
         let mut config = None;
