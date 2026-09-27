@@ -149,6 +149,27 @@ impl AssetDatabase {
         assert_eq!(stmt.column_bytes(0), 16);
         Some(AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() }))
     }
+
+    pub fn query_loadable_asset_ids_of_type(
+        &self,
+        identifier: &str,
+        ty: AssetType,
+    ) -> Vec<AssetID> {
+        const Q: &str = "Select runtime_asset_id from asset_group inner join loadable_asset on group_id = asset_group.id where loadable_asset.identifier = ? and asset_group.asset_type = ?";
+
+        // TODO: 本当は使いまわしたい（毎回コンパイルしたくない）がいまいちうまい方法が思いつかない（特にasyncで多重化してるのでスレッドローカルじゃなくて同一スレッドでの多重処理を考慮する必要がある）
+        let mut stmt = self.db.prepare(Q, PrepareFlags::empty()).expect("prepare");
+        stmt.bind_text(1, identifier).expect("bind");
+        stmt.bind_int(2, ty as _).expect("bind");
+
+        let mut results = Vec::new();
+        while stmt.step().expect("step") {
+            assert_eq!(stmt.column_bytes(0), 16);
+            results.push(AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() }));
+        }
+
+        results
+    }
 }
 
 pub trait InputStream: Read {

@@ -507,7 +507,74 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
         &self.audio_mixer
     }
 }
-impl<PL: NativeLinker> Engine<'_, PL> {
+
+pub struct RawAssetCollection<'a, 'q, NL: NativeLinker, A: LogicalAssetData> {
+    engine: &'a Engine<'q, NL>,
+    ids: Vec<AssetID>,
+    _marker: core::marker::PhantomData<A>,
+}
+impl<'a, 'q, NL: NativeLinker, A: LogicalAssetData> RawAssetCollection<'a, 'q, NL, A> {
+    pub const fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    pub const fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn open_at(&self, index: usize) -> std::io::Result<Option<impl AssetBlob + 'a>> {
+        match self.ids.get(index) {
+            Some(id) => self
+                .engine
+                .native_link
+                .asset_loader()
+                .get(id.clone())
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn open_at_async(
+        &self,
+        index: usize,
+    ) -> std::io::Result<Option<impl AssetBlobAsync + 'a>> {
+        match self.ids.get(index) {
+            Some(id) => self
+                .engine
+                .native_link
+                .asset_loader()
+                .get_async(id.clone())
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    #[inline(always)]
+    pub fn load_at(&self, index: usize) -> Result<Option<A>, A::Error>
+    where
+        A: FromAssetBlob,
+    {
+        let Some(a) = self.open_at(index)? else {
+            return Ok(None);
+        };
+        A::from_asset_blob(a).map(Some)
+    }
+
+    #[inline(always)]
+    pub async fn load_at_async(&self, index: usize) -> Result<Option<A>, A::Error>
+    where
+        A: FromAssetBlobAsync,
+    {
+        let Some(a) = self.open_at_async(index).await? else {
+            return Ok(None);
+        };
+
+        A::from_asset_blob_async(a).await.map(Some)
+    }
+}
+
+impl<'q, PL: NativeLinker> Engine<'q, PL> {
     #[inline(always)]
     pub fn internal_native_link_mut(&mut self) -> &mut PL {
         &mut self.native_link
@@ -544,6 +611,23 @@ impl<PL: NativeLinker> Engine<'_, PL> {
             })?;
 
         self.native_link.asset_loader().get_async(id).await
+    }
+
+    #[inline(always)]
+    pub fn open_raw_asset_collection<'a, A: LogicalAssetData>(
+        &'a self,
+        path: &str,
+    ) -> RawAssetCollection<'a, 'q, PL, A> {
+        let ids = self
+            .native_link
+            .asset_loader()
+            .asset_db()
+            .query_loadable_asset_ids_of_type(path, A::ASSET_TYPE);
+        RawAssetCollection {
+            engine: self,
+            ids,
+            _marker: core::marker::PhantomData,
+        }
     }
 
     #[inline(always)]
