@@ -92,6 +92,49 @@ impl AssetProcessContext {
         (inserted_group_id, inserted_last_processed, new_inserted)
     }
 
+    fn register_existing_asset_group(
+        &mut self,
+        source_path: &Path,
+        group_id: &peridot::AssetID,
+        to_be_processed: i64,
+    ) -> i64 {
+        let mut stmt = self.assetdb.db.prepare(
+            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed) returning last_processed",
+            PrepareFlags::empty(),
+        ).expect("assetdb op prepare");
+        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+            .expect("stmt.bind_text");
+        stmt.bind_blob(2, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
+        let has_insertion = stmt.step().expect("stmt.step");
+        assert!(has_insertion);
+
+        let inserted_last_processed = stmt.column_i64(0);
+
+        // update asset group info
+        let mut stmt = self
+            .assetdb
+            .db
+            .prepare(
+                "Replace into asset_group_info (id, name) values (?, ?)",
+                PrepareFlags::empty(),
+            )
+            .expect("assetdb op prepare");
+        stmt.bind_blob(1, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_text(
+            2,
+            source_path
+                .file_stem()
+                .map_or("", |x| x.to_str().expect("invalid str")),
+        )
+        .expect("stmt.bind_text");
+        stmt.step().expect("stmt.step");
+
+        inserted_last_processed
+    }
+
     fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &peridot::AssetID) {
         let mut stmt = self
             .assetdb
@@ -305,17 +348,59 @@ pub fn process(
                 .collect::<HashMap<_, _>>()
         )
     };
-    let metadata = metadata.unwrap_or_else(HashMap::new);
+    let mut metadata = metadata.unwrap_or_else(HashMap::new);
 
-    let (asset_group_id, db_last_processed, new_inserted) =
-        ctx.register_or_update_asset_group(source_path.as_ref(), to_be_processed);
-    let needs_build = options.force_rebuild || new_inserted || db_last_processed < to_be_processed;
-    if !needs_build {
-        tracing::info!(
-            last_processed = db_last_processed,
-            to_be_processed,
-            "skip asset"
-        );
+    let assigned_asset_id =
+        metadata
+            .get("id")
+            .and_then(|x| match peridot::AssetID::deserialize_text(x) {
+                Some(x) => Some(x),
+                None => {
+                    tracing::warn!("serialized asset id is invalid");
+                    None
+                }
+            });
+    let (asset_group_id, needs_build) = match assigned_asset_id {
+        Some(existing) => {
+            // use asset group id from metadata
+            let db_last_processed =
+                ctx.register_existing_asset_group(source_path.as_ref(), &existing, to_be_processed);
+            let needs_build = db_last_processed < to_be_processed;
+            (existing, needs_build)
+        }
+        None => {
+            // issue new group and write into metadata
+            let (asset_group_id, db_last_processed, new_inserted) =
+                ctx.register_or_update_asset_group(source_path.as_ref(), to_be_processed);
+
+            let mut asset_str = String::with_capacity(peridot::AssetID::SERIALIZE_TEXT_LEN);
+            asset_group_id
+                .serialize_text(&mut asset_str)
+                .expect("serialize_text failed");
+            metadata.insert("id".into(), asset_str);
+            'try_writeback_meta: {
+                let mut fp = std::io::BufWriter::new(match std::fs::File::create(&metadata_path) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing::error!(reason = %e, "Failed to open metadata file for writing");
+                        break 'try_writeback_meta;
+                    }
+                });
+                if let Err(e) = metadata::serialize_metadata(
+                    &mut fp,
+                    metadata.iter().map(|(k, v)| (k, v.as_str())),
+                ) {
+                    tracing::error!(reason = %e, "Failed to write metadata");
+                    break 'try_writeback_meta;
+                }
+            }
+
+            let needs_build = new_inserted || db_last_processed < to_be_processed;
+            (asset_group_id, needs_build)
+        }
+    };
+    if !options.force_rebuild && !needs_build {
+        tracing::info!("skip asset");
         return Ok(());
     }
 

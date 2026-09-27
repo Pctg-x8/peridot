@@ -126,6 +126,23 @@ impl<'s> Iterator for Parser<'s> {
     }
 }
 
+pub fn serialize_metadata<'s>(
+    sink: &mut (impl std::io::Write + ?Sized),
+    kvs: impl Iterator<Item = (&'s Key, &'s str)>,
+) -> std::io::Result<()> {
+    let mut sorted = kvs.into_iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|(key, _)| key.0.clone());
+
+    for (key, value) in sorted {
+        sink.write_all(key.0.as_bytes())?;
+        sink.write_all(b"=")?;
+        sink.write_all(value.as_bytes())?;
+        sink.write_all(b"\n")?;
+    }
+
+    Ok(())
+}
+
 #[repr(transparent)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Key(String);
@@ -151,5 +168,10 @@ impl core::borrow::Borrow<str> for Key {
     #[inline(always)]
     fn borrow(&self) -> &str {
         &self.0
+    }
+}
+impl From<&'_ str> for Key {
+    fn from(s: &str) -> Self {
+        Self(s.to_lowercase())
     }
 }

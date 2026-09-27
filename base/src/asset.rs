@@ -49,6 +49,56 @@ impl AssetID {
 
         runtime_asset_dir.as_ref().join(x)
     }
+
+    pub const SERIALIZE_TEXT_LEN: usize = 32;
+
+    pub fn serialize_text(&self, sink: &mut (impl core::fmt::Write + ?Sized)) -> core::fmt::Result {
+        for b in self.0 {
+            #[inline(always)]
+            fn h(v: u8) -> u8 {
+                match v {
+                    0..=9 => v + b'0',
+                    10..=15 => v - 10 + b'a',
+                    _ => unreachable!(),
+                }
+            }
+
+            sink.write_char(char::from(h(b >> 4)))?;
+            sink.write_char(char::from(h(b & 0x0f)))?;
+        }
+
+        Ok(())
+    }
+
+    pub fn deserialize_text(text: &str) -> Option<Self> {
+        if text.len() != 32 {
+            return None;
+        }
+        let mut bytes = [0u8; 16];
+        let mut wptr = 0;
+        let mut ub = None;
+        for c in text.chars() {
+            let v = match c {
+                '0'..='9' => c as u8 - b'0',
+                'a'..='f' => c as u8 - b'a' + 10,
+                _ => return None,
+            };
+
+            match ub {
+                None => {
+                    ub = Some(v);
+                }
+                Some(ub1) => {
+                    bytes[wptr] = (ub1 << 4) | v;
+
+                    ub = None;
+                    wptr += 1;
+                }
+            }
+        }
+
+        Some(Self(bytes))
+    }
 }
 
 #[inline(always)]
@@ -63,7 +113,7 @@ fn hex2(f: &mut (impl core::fmt::Write + ?Sized), v: u8) -> core::fmt::Result {
     }
 
     f.write_char(h(v >> 4))?;
-    f.write_char(h(v & 0xf))?;
+    f.write_char(h(v & 0x0f))?;
 
     Ok(())
 }
