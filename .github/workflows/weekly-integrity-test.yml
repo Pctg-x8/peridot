@@ -291,7 +291,7 @@ jobs:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
-          VK_SDK_PATH: ''
+          VULKAN_SDK: ''
         if: 'true'
         name: Run checks
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
@@ -299,7 +299,7 @@ jobs:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
-          VK_SDK_PATH: ''
+          VULKAN_SDK: ''
         if: 'true'
         name: Run checks for transparent-back
         run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
