@@ -4,6 +4,7 @@ use linux_epoll::{Epoll, EpollEventBits};
 use linux_eventfd::{EventFD, EventFDFlags};
 use parking_lot::RwLock;
 use peridot::mthelper::{make_shared_mutable_ref, DynamicMutabilityProvider, SharedMutableRef};
+use peridot::{AssetDatabase, AssetID};
 use presenter::PresenterProvider;
 use sound_backend::SoundBackend;
 use std::os::fd::AsRawFd;
@@ -20,8 +21,7 @@ mod userlib;
 
 pub struct PlatformAssetLoader {
     basedir: PathBuf,
-    #[cfg(feature = "IterationBuild")]
-    builtin_asset_basedir: PathBuf,
+    assetdb: AssetDatabase,
 }
 impl PlatformAssetLoader {
     fn new() -> Self {
@@ -36,32 +36,15 @@ impl PlatformAssetLoader {
         };
 
         tracing::trace!("Using Assets in {}", basedir.display());
-        PlatformAssetLoader {
-            basedir,
-            #[cfg(feature = "IterationBuild")]
-            builtin_asset_basedir: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH")),
-        }
-    }
+        let assetdb = match AssetDatabase::open(&basedir) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to open asset database");
+                std::process::abort();
+            }
+        };
 
-    #[tracing::instrument(skip(self), ret(level = tracing::Level::DEBUG))]
-    fn resolve_asset_realpath(&self, path: &str, ext: &str) -> PathBuf {
-        #[allow(unused_mut)]
-        let mut path_segments = path.split('.').peekable();
-
-        #[cfg(feature = "IterationBuild")]
-        if path_segments.peek().map_or(false, |&s| s == "builtin") {
-            let _ = path_segments.next();
-
-            let mut p = self.builtin_asset_basedir.clone();
-            p.extend(path_segments);
-            p.set_extension(ext);
-            return p;
-        }
-
-        let mut apath = self.basedir.clone();
-        apath.extend(path_segments);
-        apath.set_extension(ext);
-        apath
+        PlatformAssetLoader { basedir, assetdb }
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
@@ -71,26 +54,30 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         peridot::native_io::linux::NativeFileBlobRandomReader,
     >;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
+    #[inline(always)]
+    fn asset_db<'a>(&'a self) -> &'a AssetDatabase {
+        &self.assetdb
+    }
+
+    fn get<'a>(&'a self, id: AssetID) -> IOResult<Self::AssetBlob<'a>> {
         peridot::native_io::linux::NativeFileBlobRandomReader::open(
-            self.resolve_asset_realpath(path, ext),
+            id.build_runtime_asset_path(&self.basedir),
         )
     }
 
     fn get_async<'a>(
         &'a self,
-        path: &str,
-        ext: &str,
+        id: AssetID,
     ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
         async move {
             peridot::native_io::linux::NativeFileAsyncBlobRandomReader::open(
-                self.resolve_asset_realpath(path, ext),
+                id.build_runtime_asset_path(&self.basedir),
             )
         }
     }
 
-    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
-        self.get(path, ext)
+    fn get_streaming<'a>(&'a self, id: AssetID) -> IOResult<Self::StreamingAsset<'a>> {
+        self.get(id)
             .map(peridot::native_io::RandomBlobReadSeekAdapter::new)
     }
 }
