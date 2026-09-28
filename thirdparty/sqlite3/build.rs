@@ -155,3 +155,34 @@ fn query_regkey_osstr<const FAST_PASS_CHAR_COUNT: usize>(
     unsafe { buf.set_len((len as usize / 2) - 1) };
     Ok(std::os::windows::ffi::OsStringExt::from_wide(&buf))
 }
+
+#[cfg(unix)]
+fn main() {
+    let clib_build_path = std::env::current_dir()
+        .expect("current_dir")
+        .join("clib-build");
+
+    if !clib_build_path.exists() {
+        std::fs::create_dir_all(&clib_build_path).expect("create_dir");
+        let r = std::process::Command::new("/bin/sh")
+            .args(&["../source-repo/configure"])
+            .current_dir(&clib_build_path)
+            .status()
+            .expect("configure");
+        if !r.success() {
+            panic!("configure exited with code {r:?}");
+        }
+    }
+
+    let r = std::process::Command::new("make")
+        .args(&["lib"])
+        .current_dir(&clib_build_path)
+        .status()
+        .expect("make");
+    if !r.success() {
+        panic!("make exited with code {r:?}");
+    }
+
+    println!("cargo::rustc-link-search={}", clib_build_path.display());
+    println!("cargo::rustc-link-lib=sqlite3");
+}
