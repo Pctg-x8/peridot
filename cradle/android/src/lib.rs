@@ -357,7 +357,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
                 self.amgr
                     .write()
                     .open(
-                        &std::ffi::CString::new(id.build_runtime_asset_path_part())
+                        &std::ffi::CString::new(id.build_runtime_asset_path_relative())
                             .expect("converting path"),
                         AASSET_MODE_RANDOM,
                     )
@@ -377,7 +377,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
                     self.amgr
                         .write()
                         .open(
-                            &std::ffi::CString::new(id.build_runtime_asset_path_part())
+                            &std::ffi::CString::new(id.build_runtime_asset_path_relative())
                                 .expect("converting path"),
                             AASSET_MODE_RANDOM,
                         )
@@ -392,7 +392,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         self.amgr
             .write()
             .open(
-                &std::ffi::CString::new(id.build_runtime_asset_path_part())
+                &std::ffi::CString::new(id.build_runtime_asset_path_relative())
                     .expect("converting path"),
                 AASSET_MODE_STREAMING,
             )
