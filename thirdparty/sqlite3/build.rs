@@ -158,6 +158,8 @@ fn query_regkey_osstr<const FAST_PASS_CHAR_COUNT: usize>(
 
 #[cfg(unix)]
 fn main() {
+    println!("CC={:?}", std::env::var("CC"));
+
     let source_repo_path = std::env::current_dir()
         .expect("current_dir")
         .join("source-repo");
