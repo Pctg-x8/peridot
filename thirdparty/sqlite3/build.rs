@@ -158,15 +158,13 @@ fn query_regkey_osstr<const FAST_PASS_CHAR_COUNT: usize>(
 
 #[cfg(unix)]
 fn main() {
-    let clib_build_path = std::env::current_dir()
+    let source_repo_path = std::env::current_dir()
         .expect("current_dir")
-        .join("clib-build");
-
-    if !clib_build_path.exists() {
-        std::fs::create_dir_all(&clib_build_path).expect("create_dir");
+        .join("source-repo");
+    if !source_repo_path.join("Makefile").exists() {
         let r = std::process::Command::new("/bin/sh")
-            .args(&["../source-repo/configure"])
-            .current_dir(&clib_build_path)
+            .args(&["./configure"])
+            .current_dir(&source_repo_path)
             .status()
             .expect("configure");
         if !r.success() {
@@ -175,10 +173,30 @@ fn main() {
     }
 
     let r = std::process::Command::new("make")
-        .args(&["lib"])
-        .current_dir(&clib_build_path)
+        .args(&["sqlite3.c"])
+        .current_dir(&source_repo_path)
         .status()
         .expect("make");
+    if !r.success() {
+        panic!("make exited with code {r:?}");
+    }
+
+    let target = std::env::var("TARGET").expect("no target?");
+    let clib_build_path = std::env::current_dir()
+        .expect("current_dir")
+        .join(format!("clib-build/{target}"));
+    println!("build dir: {clib_build_path:?}");
+    let mut cmd = std::process::Command::new("make");
+    cmd.current_dir(&clib_build_path);
+    if target == "aarch64-linux-android" {
+        // TODO: linux-x86_64はホスト環境による
+        cmd.env(
+            "ANDROID_NDK_SYSROOT",
+            std::path::PathBuf::from(std::env::var_os("ANDROID_NDK").expect("no ANDROID_NDK"))
+                .join("toolchains/llvm/prebuilt/linux-x86_64/sysroot"),
+        );
+    }
+    let r = cmd.status().expect("platform make");
     if !r.success() {
         panic!("make exited with code {r:?}");
     }

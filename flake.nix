@@ -10,9 +10,10 @@
         "x86_64-linux"
         "aarch64-darwin"
       ];
-      NDK_PLATFORM_TARGET = "35";
+      NDK_PLATFORM_TARGET = "34";
       android-composition = pkgs: pkgs.androidenv.composeAndroidPackages {
         platformVersions = [NDK_PLATFORM_TARGET];
+        buildToolsVersions = ["34.0.0"];
         abiVersions = ["arm64-v8a"];
         includeNDK = true;
       };
