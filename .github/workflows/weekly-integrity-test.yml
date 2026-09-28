@@ -101,6 +101,8 @@ jobs:
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
+      - if: 'true'
+        run: cargo ndk-env --target aarch64-linux-android
       - env:
           LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           NDK_PLATFORM_TARGET: '28'

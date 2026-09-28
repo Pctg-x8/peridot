@@ -190,14 +190,6 @@ fn main() {
     println!("build dir: {clib_build_path:?}");
     let mut cmd = std::process::Command::new("make");
     cmd.current_dir(&clib_build_path);
-    if target == "aarch64-linux-android" {
-        // TODO: linux-x86_64はホスト環境による
-        cmd.env(
-            "ANDROID_NDK_SYSROOT",
-            std::path::PathBuf::from(std::env::var_os("ANDROID_NDK").expect("no ANDROID_NDK"))
-                .join("toolchains/llvm/prebuilt/linux-x86_64/sysroot"),
-        );
-    }
     let r = cmd.status().expect("platform make");
     if !r.success() {
         panic!("make exited with code {r:?}");
