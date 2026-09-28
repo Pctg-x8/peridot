@@ -26,3 +26,20 @@ impl PixelGeometryProvider for br::vk::VkExtent2D {
         )
     }
 }
+
+#[inline(always)]
+pub fn fmt_hex2(f: &mut (impl core::fmt::Write + ?Sized), v: u8) -> core::fmt::Result {
+    #[inline(always)]
+    fn h(v: u8) -> char {
+        match v {
+            0..=9 => (v + b'0') as char,
+            10..=15 => (v - 10 + b'a') as char,
+            _ => unreachable!(),
+        }
+    }
+
+    f.write_char(h(v >> 4))?;
+    f.write_char(h(v & 0x0f))?;
+
+    Ok(())
+}

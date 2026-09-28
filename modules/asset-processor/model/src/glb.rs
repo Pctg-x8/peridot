@@ -257,7 +257,7 @@ pub fn process(
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let asset_id = ctx.register_or_update_child_asset(
+            let asset_id = ctx.register_child_asset(
                 &asset_group_id,
                 peridot::ASSET_TYPE_MESH,
                 (mesh_index * 1000 + prim_index) as i32,

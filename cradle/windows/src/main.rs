@@ -432,7 +432,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
     #[tracing::instrument(name = "AssetProvider::get", skip(self))]
     fn get<'a>(&'a self, id: peridot::AssetID) -> std::io::Result<Self::AssetBlob<'a>> {
         peridot::native_io::windows::NativeFileBlobRandomReader::open(
-            &id.build_runtime_asset_path(&self.base),
+            &self.base.join(id.build_runtime_asset_path_relative()),
         )
     }
 
@@ -443,7 +443,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
     ) -> impl core::future::Future<Output = std::io::Result<Self::AssetBlobAsync<'a>>> {
         async move {
             peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(
-                &id.build_runtime_asset_path(&self.base),
+                &self.base.join(id.build_runtime_asset_path_relative()),
             )
         }
     }
@@ -452,7 +452,7 @@ impl peridot::PlatformAssetLoader for AssetProvider {
         &'a self,
         id: peridot::AssetID,
     ) -> std::io::Result<Self::StreamingAsset<'a>> {
-        std::fs::File::open(&id.build_runtime_asset_path(&self.base))
+        std::fs::File::open(&self.base.join(id.build_runtime_asset_path_relative()))
     }
 }
 

@@ -257,11 +257,8 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     ) -> Result<(), Box<dyn std::error::Error>> {
         use ktx::Texture;
 
-        let asset_id = ctx.register_or_update_child_asset(
-            &asset_group_id,
-            peridot::ASSET_TYPE_SPRITE_ATLAS,
-            0,
-        );
+        let asset_id =
+            ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SPRITE_ATLAS, 0);
 
         let source = std::fs::read_to_string(source_path)?;
         let mut config = None;

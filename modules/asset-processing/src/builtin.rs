@@ -34,8 +34,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
         dest_dir: &Path,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let asset_id =
-            ctx.register_or_update_child_asset(&asset_group_id, peridot::ASSET_TYPE_IMAGE2D, 0);
+        let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_IMAGE2D, 0);
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
 
         let uastc_level_flag = metadata
@@ -136,8 +135,7 @@ impl crate::AssetProcessor for SoundAssetProcessor {
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
-        let asset_id =
-            ctx.register_or_update_child_asset(&asset_group_id, peridot::ASSET_TYPE_SOUND, 0);
+        let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SOUND, 0);
         std::fs::copy(
             source_path,
             prepare_runtime_asset_output(dest_dir, &asset_id),

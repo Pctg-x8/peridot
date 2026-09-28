@@ -5,8 +5,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use peridot_tp_sqlite3::PrepareFlags;
-
 pub mod builtin;
 pub mod metadata;
 
@@ -29,7 +27,7 @@ pub trait AssetProcessor {
 }
 
 pub fn prepare_runtime_asset_output(dest_dir: &Path, asset_id: &peridot::AssetID) -> PathBuf {
-    let path = asset_id.build_runtime_asset_path(dest_dir);
+    let path = dest_dir.join(asset_id.build_runtime_asset_path_relative());
     if let Some(p) = path.parent()
         && let Err(e) = std::fs::create_dir_all(p)
     {
@@ -44,156 +42,43 @@ pub struct AssetProcessContext {
     pub asset_id_generator: peridot::AssetIDGenerator,
 }
 impl AssetProcessContext {
-    fn register_or_update_asset_group(
+    fn try_process_new_asset_group(
         &mut self,
         source_path: &Path,
         to_be_processed: i64,
     ) -> (peridot::AssetID, i64, bool) {
         let new_group_id = self.asset_id_generator.generate();
-
-        let mut stmt = self.assetdb.db.prepare(
-            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning group_id, last_processed, is_new_insertion",
-            PrepareFlags::empty(),
-        ).expect("assetdb op prepare");
-        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-            .expect("stmt.bind_text");
-        stmt.bind_blob(2, new_group_id.as_bytes())
-            .expect("stmt.bind_blob");
-        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
-        let has_insertion = stmt.step().expect("stmt.step");
-        assert!(has_insertion);
-
-        assert_eq!(stmt.column_bytes(0), 16);
-        let inserted_group_id =
-            unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) };
-        let inserted_last_processed = stmt.column_i64(1);
-        let new_inserted = stmt.column_int(2) != 0;
-
-        // update asset group info
-        let mut stmt = self
-            .assetdb
-            .db
-            .prepare(
-                "Replace into asset_group_info (id, name) values (?, ?)",
-                PrepareFlags::empty(),
-            )
-            .expect("assetdb op prepare");
-        stmt.bind_blob(1, new_group_id.as_bytes())
-            .expect("stmt.bind_blob");
-        stmt.bind_text(
-            2,
-            source_path
-                .file_stem()
-                .map_or("", |x| x.to_str().expect("invalid str")),
-        )
-        .expect("stmt.bind_text");
-        stmt.step().expect("stmt.step");
-
-        (inserted_group_id, inserted_last_processed, new_inserted)
+        self.assetdb
+            .try_process_new_asset_group(source_path, &new_group_id, to_be_processed)
     }
 
-    fn register_existing_asset_group(
+    fn try_process_new_asset_group_with_existing_id(
         &mut self,
         source_path: &Path,
         group_id: &peridot::AssetID,
         to_be_processed: i64,
     ) -> (i64, bool) {
-        let mut stmt = self.assetdb.db.prepare(
-            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning last_processed, is_new_insertion",
-            PrepareFlags::empty(),
-        ).expect("assetdb op prepare");
-        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-            .expect("stmt.bind_text");
-        stmt.bind_blob(2, group_id.as_bytes())
-            .expect("stmt.bind_blob");
-        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
-        let has_insertion = stmt.step().expect("stmt.step");
-        assert!(has_insertion);
-
-        let inserted_last_processed = stmt.column_i64(0);
-        let new_inserted = stmt.column_int(1) != 0;
-
-        // update asset group info
-        let mut stmt = self
-            .assetdb
-            .db
-            .prepare(
-                "Replace into asset_group_info (id, name) values (?, ?)",
-                PrepareFlags::empty(),
-            )
-            .expect("assetdb op prepare");
-        stmt.bind_blob(1, group_id.as_bytes())
-            .expect("stmt.bind_blob");
-        stmt.bind_text(
-            2,
-            source_path
-                .file_stem()
-                .map_or("", |x| x.to_str().expect("invalid str")),
+        self.assetdb.try_process_new_asset_group_with_existing_id(
+            source_path,
+            group_id,
+            to_be_processed,
         )
-        .expect("stmt.bind_text");
-        stmt.step().expect("stmt.step");
-
-        (inserted_last_processed, new_inserted)
     }
 
     fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &peridot::AssetID) {
-        let mut stmt = self
-            .assetdb
-            .db
-            .prepare(
-                "Replace into loadable_asset (identifier, group_id) values (?, ?)",
-                PrepareFlags::empty(),
-            )
-            .expect("assetdb op prepare");
-        stmt.bind_text(1, load_identifier).expect("stmt.bind_text");
-        stmt.bind_blob(2, group_id.as_bytes())
-            .expect("stmt.bind_blob");
-        stmt.step().expect("stmt.step");
+        self.assetdb
+            .register_loadable_asset(load_identifier, group_id)
     }
 
-    pub fn register_or_update_child_asset(
+    pub fn register_child_asset(
         &mut self,
         group_id: &peridot::AssetID,
         asset_type: peridot::AssetType,
         local_id: i32,
     ) -> peridot::AssetID {
         let new_asset_id = self.asset_id_generator.generate();
-        let mut stmt = self.assetdb
-            .db
-            .prepare(
-                "Insert into asset_group (id, asset_type, local_id, runtime_asset_id) values (?, ?, ?, ?) on conflict do nothing returning runtime_asset_id",
-                PrepareFlags::empty()
-            )
-            .expect("prepare_cached failed");
-        stmt.bind_blob(1, group_id.as_bytes())
-            .expect("stmt.bind_blob");
-        stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
-        stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
-        stmt.bind_blob(4, new_asset_id.as_bytes())
-            .expect("stmt.bind_blob");
-        let has_insertion = stmt.step().expect("stmt.step");
-        if !has_insertion {
-            // reuse existing entry
-            let mut stmt = self
-                .assetdb
-                .db
-                .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?", PrepareFlags::empty())
-                .expect("assetdb op prepare");
-            stmt.bind_blob(1, group_id.as_bytes())
-                .expect("stmt.bind_blob");
-            stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
-            stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
-            let has_next = stmt.step().expect("stmt.step");
-            assert!(has_next);
-
-            let runtime_asset_id_len = stmt.column_bytes(0);
-            assert_eq!(runtime_asset_id_len, 16);
-            return unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) };
-        }
-
-        let runtime_asset_id_len = stmt.column_bytes(0);
-        assert_eq!(runtime_asset_id_len, 16);
-        unsafe { peridot::AssetID::from_bytes(*stmt.column_blob(0).cast()) }
+        self.assetdb
+            .register_child_asset(group_id, &new_asset_id, asset_type, local_id)
     }
 }
 
@@ -359,7 +244,7 @@ pub fn process(
     let assigned_asset_id =
         metadata
             .get("id")
-            .and_then(|x| match peridot::AssetID::deserialize_text(x) {
+            .and_then(|x| match peridot::AssetID::deserialize_chars(x.chars()) {
                 Some(x) => Some(x),
                 None => {
                     tracing::warn!("serialized asset id is invalid");
@@ -369,20 +254,21 @@ pub fn process(
     let (asset_group_id, needs_build) = match assigned_asset_id {
         Some(existing) => {
             // use asset group id from metadata
-            let (db_last_processed, new_inserted) =
-                ctx.register_existing_asset_group(source_path.as_ref(), &existing, to_be_processed);
+            let (db_last_processed, new_inserted) = ctx
+                .try_process_new_asset_group_with_existing_id(
+                    source_path.as_ref(),
+                    &existing,
+                    to_be_processed,
+                );
             let needs_build = new_inserted || db_last_processed < to_be_processed;
             (existing, needs_build)
         }
         None => {
             // issue new group and write into metadata
             let (asset_group_id, db_last_processed, new_inserted) =
-                ctx.register_or_update_asset_group(source_path.as_ref(), to_be_processed);
+                ctx.try_process_new_asset_group(source_path.as_ref(), to_be_processed);
 
-            let mut asset_str = String::with_capacity(peridot::AssetID::SERIALIZE_TEXT_LEN);
-            asset_group_id
-                .serialize_text(&mut asset_str)
-                .expect("serialize_text failed");
+            let asset_str = asset_group_id.serialize_chars().collect::<String>();
             metadata.insert("id".into(), asset_str);
             'try_writeback_meta: {
                 let mut fp = std::io::BufWriter::new(match std::fs::File::create(&metadata_path) {
@@ -421,8 +307,7 @@ pub fn process(
         None => {
             // Raw Asset Processing
             tracing::warn!("unknown assets(processed as raw)");
-            let asset_id =
-                ctx.register_or_update_child_asset(&asset_group_id, peridot::ASSET_TYPE_RAW, 0);
+            let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_RAW, 0);
 
             std::fs::copy(
                 source_path,

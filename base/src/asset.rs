@@ -1,8 +1,7 @@
-use std::collections::HashMap;
 use std::fmt::Write;
 use std::io::prelude::{Read, Seek};
 use std::io::{Error as IOError, Result as IOResult, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[repr(transparent)]
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -10,19 +9,19 @@ pub struct AssetID([u8; 16]);
 impl core::fmt::Debug for AssetID {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for &b in &self.0[0..4] {
-            hex2(f, b)?;
+            fmt_hex2(f, b)?;
         }
         f.write_char('-')?;
         for &b in &self.0[4..8] {
-            hex2(f, b)?;
+            fmt_hex2(f, b)?;
         }
         f.write_char('-')?;
         for &b in &self.0[8..12] {
-            hex2(f, b)?;
+            fmt_hex2(f, b)?;
         }
         f.write_char('-')?;
         for &b in &self.0[12..16] {
-            hex2(f, b)?;
+            fmt_hex2(f, b)?;
         }
 
         Ok(())
@@ -37,91 +36,58 @@ impl AssetID {
         &self.0
     }
 
-    pub fn build_runtime_asset_path_part(&self) -> String {
+    pub fn build_runtime_asset_path_relative(&self) -> String {
         let mut x = String::with_capacity(16 * 2 + 1);
         for &b in &self.0[..2] {
-            let _ = hex2(&mut x, b);
+            let _ = fmt_hex2(&mut x, b);
         }
         x.push('/');
         for &b in &self.0[2..] {
-            let _ = hex2(&mut x, b);
+            let _ = fmt_hex2(&mut x, b);
         }
 
         x
     }
 
-    pub fn build_runtime_asset_path(&self, runtime_asset_dir: impl AsRef<Path>) -> PathBuf {
-        runtime_asset_dir
-            .as_ref()
-            .join(self.build_runtime_asset_path_part())
-    }
-
     pub const SERIALIZE_TEXT_LEN: usize = 32;
-
-    pub fn serialize_text(&self, sink: &mut (impl core::fmt::Write + ?Sized)) -> core::fmt::Result {
-        for b in self.0 {
+    pub fn serialize_chars<'a>(&'a self) -> impl Iterator<Item = char> + 'a {
+        self.0.iter().flat_map(|&b| {
             #[inline(always)]
-            fn h(v: u8) -> u8 {
+            const fn h(v: u8) -> char {
                 match v {
-                    0..=9 => v + b'0',
-                    10..=15 => v - 10 + b'a',
-                    _ => unreachable!(),
+                    0..=9 => (v + b'0') as _,
+                    _ => (v - 10 + b'a') as _,
                 }
             }
 
-            sink.write_char(char::from(h(b >> 4)))?;
-            sink.write_char(char::from(h(b & 0x0f)))?;
-        }
-
-        Ok(())
+            [h(b >> 4), h(b & 0x0f)]
+        })
     }
 
-    pub fn deserialize_text(text: &str) -> Option<Self> {
-        if text.len() != 32 {
-            return None;
-        }
+    pub fn deserialize_chars(chars: impl Iterator<Item = char>) -> Option<Self> {
         let mut bytes = [0u8; 16];
         let mut wptr = 0;
         let mut ub = None;
-        for c in text.chars() {
+        for c in chars {
             let v = match c {
                 '0'..='9' => c as u8 - b'0',
                 'a'..='f' => c as u8 - b'a' + 10,
                 _ => return None,
             };
 
-            match ub {
-                None => {
-                    ub = Some(v);
-                }
+            ub = match ub {
+                None => Some(v),
                 Some(ub1) => {
                     bytes[wptr] = (ub1 << 4) | v;
 
-                    ub = None;
                     wptr += 1;
+                    None
                 }
-            }
+            };
         }
 
         Some(Self(bytes))
     }
-}
-
-#[inline(always)]
-fn hex2(f: &mut (impl core::fmt::Write + ?Sized), v: u8) -> core::fmt::Result {
-    #[inline(always)]
-    fn h(v: u8) -> char {
-        match v {
-            0..=9 => (v + b'0') as char,
-            10..=15 => (v - 10 + b'a') as char,
-            _ => unreachable!(),
-        }
-    }
-
-    f.write_char(h(v >> 4))?;
-    f.write_char(h(v & 0x0f))?;
-
-    Ok(())
 }
 
 #[repr(transparent)]
@@ -139,6 +105,7 @@ impl AssetIDGenerator {
         }
     }
 
+    #[inline(always)]
     pub fn generate(&mut self) -> AssetID {
         let mut buf = [0u8; 16];
         self.0.fill_bytes(&mut buf);
@@ -234,6 +201,154 @@ impl AssetDatabase {
 
         results
     }
+
+    fn nonatomic_update_asset_group_info(&mut self, id: &AssetID, name: &str) {
+        let mut stmt = self
+            .db
+            .prepare(
+                "Replace into asset_group_info (id, name) values (?, ?)",
+                PrepareFlags::empty(),
+            )
+            .expect("assetdb op prepare");
+        stmt.bind_blob(1, id.as_bytes()).expect("stmt.bind_blob");
+        stmt.bind_text(2, name).expect("stmt.bind_text");
+        stmt.step().expect("stmt.step");
+    }
+
+    pub fn try_process_new_asset_group(
+        &mut self,
+        source_path: &Path,
+        new_group_id: &AssetID,
+        to_be_processed: i64,
+    ) -> (AssetID, i64, bool) {
+        let mut stmt = self.db.prepare(
+            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning group_id, last_processed, is_new_insertion",
+            PrepareFlags::empty(),
+        ).expect("assetdb op prepare");
+        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+            .expect("stmt.bind_text");
+        stmt.bind_blob(2, new_group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
+        let has_insertion = stmt.step().expect("stmt.step");
+        assert!(has_insertion);
+
+        assert_eq!(stmt.column_bytes(0), 16);
+        let inserted_group_id = AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
+        let inserted_last_processed = stmt.column_i64(1);
+        let new_inserted = stmt.column_int(2) != 0;
+
+        let asset_group_name = match source_path.file_stem() {
+            None => "",
+            Some(x) => match x.to_str() {
+                Some(x) => x,
+                None => {
+                    tracing::error!(
+                        "cannot determine asset group name(invalid str in source path)"
+                    );
+                    ""
+                }
+            },
+        };
+        self.nonatomic_update_asset_group_info(&inserted_group_id, asset_group_name);
+
+        (inserted_group_id, inserted_last_processed, new_inserted)
+    }
+
+    pub fn try_process_new_asset_group_with_existing_id(
+        &mut self,
+        source_path: &Path,
+        group_id: &AssetID,
+        to_be_processed: i64,
+    ) -> (i64, bool) {
+        let mut stmt = self.db.prepare(
+            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning last_processed, is_new_insertion",
+            PrepareFlags::empty(),
+        ).expect("assetdb op prepare");
+        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+            .expect("stmt.bind_text");
+        stmt.bind_blob(2, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
+        let has_insertion = stmt.step().expect("stmt.step");
+        assert!(has_insertion);
+
+        let inserted_last_processed = stmt.column_i64(0);
+        let new_inserted = stmt.column_int(1) != 0;
+
+        let asset_group_name = match source_path.file_stem() {
+            None => "",
+            Some(x) => match x.to_str() {
+                Some(x) => x,
+                None => {
+                    tracing::error!(
+                        "cannot determine asset group name(invalid str in source path)"
+                    );
+                    ""
+                }
+            },
+        };
+        self.nonatomic_update_asset_group_info(group_id, asset_group_name);
+
+        (inserted_last_processed, new_inserted)
+    }
+
+    pub fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &AssetID) {
+        let mut stmt = self
+            .db
+            .prepare(
+                "Replace into loadable_asset (identifier, group_id) values (?, ?)",
+                PrepareFlags::empty(),
+            )
+            .expect("assetdb op prepare");
+        stmt.bind_text(1, load_identifier).expect("stmt.bind_text");
+        stmt.bind_blob(2, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.step().expect("stmt.step");
+    }
+
+    pub fn register_child_asset(
+        &mut self,
+        group_id: &AssetID,
+        new_asset_id: &AssetID,
+        asset_type: AssetType,
+        local_id: i32,
+    ) -> AssetID {
+        let mut stmt = self
+            .db
+            .prepare(
+                "Insert or ignore into asset_group (id, asset_type, local_id, runtime_asset_id) values (?, ?, ?, ?) returning runtime_asset_id",
+                PrepareFlags::empty()
+            )
+            .expect("prepare_cached failed");
+        stmt.bind_blob(1, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
+        stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
+        stmt.bind_blob(4, new_asset_id.as_bytes())
+            .expect("stmt.bind_blob");
+        let has_insertion = stmt.step().expect("stmt.step");
+        if has_insertion {
+            // runtime asset id in the db returned
+            assert_eq!(stmt.column_bytes(0), 16);
+            return AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
+        }
+
+        // reuse existing entry
+        let mut stmt = self
+            .db
+            .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?", PrepareFlags::empty())
+            .expect("assetdb op prepare");
+        stmt.bind_blob(1, group_id.as_bytes())
+            .expect("stmt.bind_blob");
+        stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
+        stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
+        let has_next = stmt.step().expect("stmt.step");
+        assert!(has_next);
+
+        assert_eq!(stmt.column_bytes(0), 16);
+        return AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
+    }
 }
 
 pub trait InputStream: Read {
@@ -312,6 +427,8 @@ pub trait FromAssetBlobAsync: LogicalAssetData {
 use bedrock as br;
 use peridot_tp_sqlite3::PrepareFlags;
 use rand::{Rng, SeedableRng};
+
+use crate::fmt_hex2;
 
 /// An shader blob representation as Asset
 pub struct SpirvShaderBlob(Vec<u32>);

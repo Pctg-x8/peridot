@@ -78,7 +78,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             std::fs::read_to_string(source_path).map_err(AssetProcessError::ReadingFailed)?;
         let asset =
             compilation::compile(&content).ok_or(AssetProcessError::GeneratingAssetFailure)?;
-        let asset_id = ctx.register_or_update_child_asset(
+        let asset_id = ctx.register_child_asset(
             &asset_group_id,
             peridot::ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK,
             0,

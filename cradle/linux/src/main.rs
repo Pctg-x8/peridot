@@ -61,7 +61,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
 
     fn get<'a>(&'a self, id: AssetID) -> IOResult<Self::AssetBlob<'a>> {
         peridot::native_io::linux::NativeFileBlobRandomReader::open(
-            id.build_runtime_asset_path(&self.basedir),
+            self.basedir.join(id.build_runtime_asset_path_relative()),
         )
     }
 
@@ -71,7 +71,7 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
         async move {
             peridot::native_io::linux::NativeFileAsyncBlobRandomReader::open(
-                id.build_runtime_asset_path(&self.basedir),
+                self.basedir.join(id.build_runtime_asset_path_relative())),
             )
         }
     }
