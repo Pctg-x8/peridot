@@ -6,9 +6,9 @@ use std::io::{Read, Write};
 use bedrock as br;
 use futures_io::AsyncRead;
 
-#[cfg(feature = "with-peridot")]
+#[cfg(feature = "with-loader-impl")]
 mod asset;
-#[cfg(feature = "with-peridot")]
+#[cfg(feature = "with-loader-impl")]
 pub use asset::{Asset, AssetAsync, AssetCore};
 
 /// ファイルシグネチャ

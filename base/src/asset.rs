@@ -384,7 +384,6 @@ pub trait PlatformAssetLoader {
     fn get_streaming<'a>(&'a self, id: AssetID) -> IOResult<Self::StreamingAsset<'a>>;
 }
 pub trait LogicalAssetData: Sized {
-    const EXT: &'static str;
     const ASSET_TYPE: AssetType;
 }
 
@@ -443,7 +442,6 @@ impl SpirvShaderBlob {
     }
 }
 impl LogicalAssetData for SpirvShaderBlob {
-    const EXT: &'static str = "spv";
     const ASSET_TYPE: u16 = 0; // raw asset
 }
 impl FromAssetBlob for SpirvShaderBlob {

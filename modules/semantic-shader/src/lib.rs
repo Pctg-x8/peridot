@@ -212,7 +212,6 @@ impl ShaderPackAsset {
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for ShaderPackAsset {
-    const EXT: &'static str = "pss";
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_RAW;
 }
 #[cfg(feature = "with-loader-impl")]

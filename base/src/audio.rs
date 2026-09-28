@@ -403,7 +403,6 @@ pub struct PreloadedPlayableWav {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for PreloadedPlayableWav {
-    const EXT: &'static str = "pa1-audio";
     const ASSET_TYPE: AssetType = ASSET_TYPE_SOUND;
 }
 impl super::FromAssetBlob for PreloadedPlayableWav {
@@ -471,7 +470,6 @@ pub struct StreamingPlayableWav<'a> {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for StreamingPlayableWav<'_> {
-    const EXT: &'static str = "pa1-audio";
     const ASSET_TYPE: AssetType = ASSET_TYPE_SOUND;
 }
 impl<'a> super::FromStreamingAsset<'a> for StreamingPlayableWav<'a> {

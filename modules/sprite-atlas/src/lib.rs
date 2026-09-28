@@ -213,7 +213,6 @@ impl SpriteAtlasAsset {
 
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for SpriteAtlasAsset {
-    const EXT: &'static str = "pa1-sprite-atlas";
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SPRITE_ATLAS;
 }
 #[cfg(feature = "with-loader-impl")]

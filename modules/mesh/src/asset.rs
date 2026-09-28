@@ -13,7 +13,6 @@ use crate::{
 /// アセット共通データ（これはインスタンス化できない [`Asset`]もしくは[`AssetAsync`]を使うこと）
 pub struct AssetCore;
 impl LogicalAssetData for AssetCore {
-    const EXT: &'static str = "pa1-mesh";
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 
@@ -29,7 +28,6 @@ pub struct Asset<Internal: AssetBlob> {
     pub internal: Internal,
 }
 impl<Internal: AssetBlob> LogicalAssetData for Asset<Internal> {
-    const EXT: &'static str = "pa1-mesh";
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 impl<Internal: AssetBlob> Asset<Internal> {
@@ -132,7 +130,6 @@ pub struct AssetAsync<Internal: AssetBlobAsync> {
     internal: Internal,
 }
 impl<Internal: AssetBlobAsync> LogicalAssetData for AssetAsync<Internal> {
-    const EXT: &'static str = "pa1-mesh";
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 impl<Internal: AssetBlobAsync> AssetAsync<Internal> {
