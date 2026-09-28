@@ -102,36 +102,25 @@ impl DB {
         }
     }
 
-    pub fn exec<F>(&mut self, sql: &str, mut callback: F) -> Result<(), Error>
-    where
-        F: FnMut(
-            core::ffi::c_int,
-            *mut *mut core::ffi::c_char,
-            *mut *mut core::ffi::c_char,
-        ) -> core::ffi::c_int,
-    {
-        extern "C" fn wrapper<
-            F: FnMut(
-                core::ffi::c_int,
-                *mut *mut core::ffi::c_char,
-                *mut *mut core::ffi::c_char,
-            ) -> core::ffi::c_int,
-        >(
-            f: *mut core::ffi::c_void,
-            a: core::ffi::c_int,
-            b: *mut *mut core::ffi::c_char,
-            c: *mut *mut core::ffi::c_char,
-        ) -> core::ffi::c_int {
-            let f = unsafe { &mut *(f as *mut F) };
-            f(a, b, c)
+    #[inline(always)]
+    pub fn errmsg(&self) -> Option<&core::ffi::CStr> {
+        let p = unsafe { raw::sqlite3_errmsg(self.0.get()) };
+        if p.is_null() {
+            None
+        } else {
+            Some(unsafe { core::ffi::CStr::from_ptr(p) })
         }
+    }
 
+    pub fn exec(&mut self, sql: &str) -> Result<(), Error> {
         let r = unsafe {
             raw::sqlite3_exec(
                 self.0.get_mut(),
-                sql.as_ptr().cast(),
-                wrapper::<F>,
-                core::ptr::from_mut(&mut callback).cast(),
+                std::ffi::CString::new(sql)
+                    .expect("sql has nul byte")
+                    .as_ptr(),
+                None,
+                core::ptr::null_mut(),
                 core::ptr::null_mut(),
             )
         };

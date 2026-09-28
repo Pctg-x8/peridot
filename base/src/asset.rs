@@ -169,8 +169,8 @@ impl AssetDatabase {
             peridot_tp_sqlite3::OpenFlags::READWRITE | peridot_tp_sqlite3::OpenFlags::CREATE,
         )?;
         if needs_initialization {
-            if let Err(e) = con.exec(include_str!("../assetdb.sql"), |_, _, _| 0) {
-                tracing::error!(reason = ?e, "assetdb initialization failed");
+            if let Err(e) = con.exec(include_str!("../assetdb.sql")) {
+                tracing::error!(reason = ?e, msg = ?con.errmsg(), "assetdb initialization failed");
             }
         }
 
