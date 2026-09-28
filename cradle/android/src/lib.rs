@@ -1,11 +1,11 @@
 //! peridot-cradle for android platform
 
 use std::ffi::CStr;
-use std::ffi::CString;
 use std::io::{ErrorKind, Result as IOResult};
 use std::pin::Pin;
 use std::sync::Arc;
 
+mod aasset_sqlite3_vfs;
 mod native_wrapper;
 #[allow(dead_code)]
 mod userlib;
@@ -14,6 +14,8 @@ use android::{AASSET_MODE_RANDOM, AASSET_MODE_STREAMING};
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo, VkHandle};
 use parking_lot::RwLock;
 use peridot::mthelper::{DynamicMut, DynamicMutabilityProvider, SharedRef};
+use peridot::AssetDatabase;
+use peridot::AssetID;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -58,6 +60,7 @@ fn launch<F: core::future::Future>(
     usercode_launcher: impl FnOnce(peridot::Engine<'static, NativeLink>) -> F,
 ) -> JNIBridge {
     let bgio_worker = peridot::native_io::android::BackgroundIoWorkerPool::spawn();
+    aasset_sqlite3_vfs::register(&asset_manager);
 
     let (event_sender, event_receiver) = async_std::channel::unbounded();
     let (_, frame_timing_receiver) = async_std::channel::bounded(1);
@@ -313,13 +316,28 @@ impl peridot::PlatformPresenter for Presenter {
 
 struct PlatformAssetLoader {
     amgr: RwLock<native_wrapper::AssetManager>,
+    assetdb: AssetDatabase,
 }
 unsafe impl Sync for PlatformAssetLoader {}
 unsafe impl Send for PlatformAssetLoader {}
 impl PlatformAssetLoader {
     fn new(amgr: native_wrapper::AssetManager) -> Self {
+        let assetdb = match peridot_tp_sqlite3::DB::open_vfs(
+            c"db",
+            peridot_tp_sqlite3::OpenFlags::READONLY,
+            aasset_sqlite3_vfs::VFS_NAME,
+        ) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "asset database not packaged?");
+                std::process::abort();
+            }
+        };
+        let assetdb = AssetDatabase::from_raw_connection(assetdb, false);
+
         PlatformAssetLoader {
             amgr: RwLock::new(amgr),
+            assetdb,
         }
     }
 }
@@ -328,16 +346,21 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
     type AssetBlobAsync<'a> = peridot::native_io::android::BundledAssetAsyncRandomReader;
     type StreamingAsset<'a> = native_wrapper::Asset;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::AssetBlob<'a>> {
-        let mut path_str = path.replace(".", "/");
-        path_str.push('.');
-        path_str.push_str(ext);
-        let path_str = CString::new(path_str).expect("converting path");
+    #[inline(always)]
+    fn asset_db<'a>(&'a self) -> &'a AssetDatabase {
+        &self.assetdb
+    }
+
+    fn get<'a>(&'a self, id: AssetID) -> IOResult<Self::AssetBlob<'a>> {
         Ok(
             peridot::native_io::android::BundledAssetRandomReader::from_asset_ptr(
                 self.amgr
                     .write()
-                    .open(&path_str, AASSET_MODE_RANDOM)
+                    .open(
+                        &std::ffi::CString::new(id.build_runtime_asset_path_part())
+                            .expect("converting path"),
+                        AASSET_MODE_RANDOM,
+                    )
                     .ok_or(ErrorKind::NotFound)?
                     .leak(),
             ),
@@ -346,19 +369,18 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
 
     fn get_async<'a>(
         &'a self,
-        path: &str,
-        ext: &str,
+        id: AssetID,
     ) -> impl core::future::Future<Output = IOResult<Self::AssetBlobAsync<'a>>> {
         async move {
-            let mut path_str = path.replace(".", "/");
-            path_str.push('.');
-            path_str.push_str(ext);
-            let path_str = CString::new(path_str).expect("converting path");
             Ok(
                 peridot::native_io::android::BundledAssetAsyncRandomReader::from_asset_ptr(
                     self.amgr
                         .write()
-                        .open(&path_str, AASSET_MODE_RANDOM)
+                        .open(
+                            &std::ffi::CString::new(id.build_runtime_asset_path_part())
+                                .expect("converting path"),
+                            AASSET_MODE_RANDOM,
+                        )
                         .ok_or(ErrorKind::NotFound)?
                         .leak(),
                 ),
@@ -366,14 +388,14 @@ impl peridot::PlatformAssetLoader for PlatformAssetLoader {
         }
     }
 
-    fn get_streaming<'a>(&'a self, path: &str, ext: &str) -> IOResult<Self::StreamingAsset<'a>> {
-        let mut path_str = path.replace(".", "/");
-        path_str.push('.');
-        path_str.push_str(ext);
-        let path_str = CString::new(path_str).expect("converting path");
+    fn get_streaming<'a>(&'a self, id: AssetID) -> IOResult<Self::StreamingAsset<'a>> {
         self.amgr
             .write()
-            .open(&path_str, AASSET_MODE_STREAMING)
+            .open(
+                &std::ffi::CString::new(id.build_runtime_asset_path_part())
+                    .expect("converting path"),
+                AASSET_MODE_STREAMING,
+            )
             .ok_or(ErrorKind::NotFound.into())
     }
 }

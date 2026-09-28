@@ -37,7 +37,7 @@ impl AssetID {
         &self.0
     }
 
-    pub fn build_runtime_asset_path(&self, runtime_asset_dir: impl AsRef<Path>) -> PathBuf {
+    pub fn build_runtime_asset_path_part(&self) -> String {
         let mut x = String::with_capacity(16 * 2 + 1);
         for &b in &self.0[..2] {
             let _ = hex2(&mut x, b);
@@ -47,7 +47,13 @@ impl AssetID {
             let _ = hex2(&mut x, b);
         }
 
-        runtime_asset_dir.as_ref().join(x)
+        x
+    }
+
+    pub fn build_runtime_asset_path(&self, runtime_asset_dir: impl AsRef<Path>) -> PathBuf {
+        runtime_asset_dir
+            .as_ref()
+            .join(self.build_runtime_asset_path_part())
     }
 
     pub const SERIALIZE_TEXT_LEN: usize = 32;
@@ -164,17 +170,25 @@ impl AssetDatabase {
     pub fn open(runtime_asset_dir: impl AsRef<Path>) -> Result<Self, peridot_tp_sqlite3::Error> {
         let path = runtime_asset_dir.as_ref().join("db");
         let needs_initialization = !path.exists();
-        let mut con = peridot_tp_sqlite3::DB::open(
+        let con = peridot_tp_sqlite3::DB::open(
             path,
             peridot_tp_sqlite3::OpenFlags::READWRITE | peridot_tp_sqlite3::OpenFlags::CREATE,
         )?;
+
+        Ok(Self::from_raw_connection(con, needs_initialization))
+    }
+
+    pub fn from_raw_connection(
+        mut con: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::DB>,
+        needs_initialization: bool,
+    ) -> Self {
         if needs_initialization {
             if let Err(e) = con.exec(include_str!("../assetdb.sql")) {
                 tracing::error!(reason = ?e, msg = ?con.errmsg(), "assetdb initialization failed");
             }
         }
 
-        Ok(Self { db: con })
+        Self { db: con }
     }
 
     #[tracing::instrument(skip(self))]

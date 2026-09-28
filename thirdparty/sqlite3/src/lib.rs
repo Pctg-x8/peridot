@@ -102,6 +102,28 @@ impl DB {
         }
     }
 
+    pub fn open_vfs(
+        path: &core::ffi::CStr,
+        flags: OpenFlags,
+        vfs_name: &core::ffi::CStr,
+    ) -> Result<Owned<Self>, Error> {
+        let mut db = core::mem::MaybeUninit::uninit();
+        let r = unsafe {
+            raw::sqlite3_open_v2(
+                path.as_ptr(),
+                db.as_mut_ptr(),
+                flags.bits(),
+                vfs_name.as_ptr(),
+            )
+        };
+
+        if r != raw::SQLITE_OK {
+            Err(Error(r))
+        } else {
+            Ok(unsafe { Owned::from_ptr_unchecked(db.assume_init().cast()) })
+        }
+    }
+
     #[inline(always)]
     pub fn errmsg(&self) -> Option<&core::ffi::CStr> {
         let p = unsafe { raw::sqlite3_errmsg(self.0.get()) };
