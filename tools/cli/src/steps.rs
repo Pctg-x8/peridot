@@ -239,7 +239,6 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         process_opts: &peridot_asset_processing::ProcessOptions,
         target_dir: &Path,
         base_dir: &Path,
-        output_path: &Path,
     ) {
         for e in std::fs::read_dir(target_dir).expect("std::fs::read_dir failed") {
             let e = e.expect("std::fs::read_dir failed entry");
@@ -252,7 +251,6 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
                     process_opts,
                     &source_path,
                     base_dir,
-                    output_path,
                 );
                 continue;
             }
@@ -275,7 +273,6 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
                 process_ctx,
                 base_dir,
                 source_path,
-                output_path,
                 &process_opts,
             )
             .expect("Failed to process asset");
@@ -284,6 +281,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
 
     std::fs::create_dir_all(output_path).expect("Failed to create runtime-asset-path");
     let mut process_context = peridot_asset_processing::AssetProcessContext {
+        dest_dir: output_path,
         assetdb: peridot::AssetDatabase::open(output_path).expect("assetdb.open"),
         asset_id_generator: peridot::AssetIDGenerator::new(),
     };
@@ -298,7 +296,6 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
             },
             &asset_path,
             &asset_path,
-            output_path,
         );
     }
 
@@ -314,6 +311,5 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         },
         &builtin_assets_path,
         &builtin_assets_path,
-        output_path,
     );
 }

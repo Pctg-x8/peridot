@@ -21,27 +21,27 @@ pub trait AssetProcessor {
         source_path: &Path,
         asset_group_id: peridot::AssetID,
         metadata: &HashMap<metadata::Key, String>,
-        dest_dir: &Path,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-pub fn prepare_runtime_asset_output(dest_dir: &Path, asset_id: &peridot::AssetID) -> PathBuf {
-    let path = dest_dir.join(asset_id.build_runtime_asset_path_relative());
-    if let Some(p) = path.parent()
-        && let Err(e) = std::fs::create_dir_all(p)
-    {
-        tracing::error!(reason = %e, path = ?p, "Failed to prepare output directory");
-    }
-
-    path
-}
-
-pub struct AssetProcessContext {
+pub struct AssetProcessContext<'a> {
+    pub dest_dir: &'a Path,
     pub assetdb: peridot::AssetDatabase,
     pub asset_id_generator: peridot::AssetIDGenerator,
 }
-impl AssetProcessContext {
+impl<'a> AssetProcessContext<'a> {
+    pub fn prepare_runtime_asset_output(&self, id: &peridot::AssetID) -> PathBuf {
+        let path = self.dest_dir.join(id.build_runtime_asset_path_relative());
+        if let Some(p) = path.parent()
+            && let Err(e) = std::fs::create_dir_all(p)
+        {
+            tracing::error!(reason = %e, path = ?p, "Failed to prepare output directory");
+        }
+
+        path
+    }
+
     fn try_process_new_asset_group(
         &mut self,
         source_path: &Path,
@@ -146,17 +146,15 @@ pub fn is_metadata_file(path: impl AsRef<Path>) -> bool {
     path.as_ref().extension().is_some_and(|e| e == "p-meta")
 }
 
-#[tracing::instrument(skip(processors, ctx, base_path, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?dest_dir.as_ref()), err)]
+#[tracing::instrument(skip(processors, ctx, base_path, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?ctx.dest_dir), err)]
 pub fn process(
     processors: &[Box<dyn AssetProcessor>],
     ctx: &mut AssetProcessContext,
     base_path: impl AsRef<Path>,
     source_path: impl AsRef<Path>,
-    dest_dir: impl AsRef<Path>,
     options: &ProcessOptions,
 ) -> Result<(), ProcessError> {
     let source_path = source_path.as_ref();
-    let dest_dir = dest_dir.as_ref();
     let metadata_path = source_path.with_extension("p-meta");
 
     let mut matching_processors_iter = processors.iter().filter(|x| x.can_process(source_path));
@@ -309,21 +307,13 @@ pub fn process(
             tracing::warn!("unknown assets(processed as raw)");
             let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_RAW, 0);
 
-            std::fs::copy(
-                source_path,
-                prepare_runtime_asset_output(dest_dir, &asset_id),
-            )
-            .map_err(ProcessError::RawAssetCopyFailed)
-            .map(drop)
+            let dest_path = ctx.prepare_runtime_asset_output(&asset_id);
+            std::fs::copy(source_path, dest_path)
+                .map_err(ProcessError::RawAssetCopyFailed)
+                .map(drop)
         }
         Some(p) => p
-            .process(
-                source_path.as_ref(),
-                asset_group_id,
-                &metadata,
-                dest_dir,
-                ctx,
-            )
+            .process(source_path.as_ref(), asset_group_id, &metadata, ctx)
             .map_err(ProcessError::ProcessorFailure),
     }
 }

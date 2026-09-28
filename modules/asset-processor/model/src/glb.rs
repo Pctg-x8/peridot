@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    path::Path,
 };
 
 use peridot_mesh::{
@@ -39,7 +38,6 @@ pub enum ProcessError {
 
 pub fn process(
     mut r: BufReader<File>,
-    dest_dir: &Path,
     asset_group_id: peridot::AssetID,
     ctx: &mut peridot_asset_processing::AssetProcessContext,
 ) -> Result<(), ProcessError> {
@@ -262,9 +260,8 @@ pub fn process(
                 peridot::ASSET_TYPE_MESH,
                 (mesh_index * 1000 + prim_index) as i32,
             );
-            let mut mesh_out = BufWriter::new(File::create(
-                peridot_asset_processing::prepare_runtime_asset_output(dest_dir, &asset_id),
-            )?);
+            let mut mesh_out =
+                BufWriter::new(File::create(ctx.prepare_runtime_asset_output(&asset_id))?);
             mesh_out.write_all(&SIGNATURE.to_ne_bytes())?;
             Header {
                 primitive_topology: topo,

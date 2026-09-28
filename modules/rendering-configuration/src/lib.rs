@@ -70,7 +70,6 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path: &Path,
         asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
-        dest_dir: &Path,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let content =
@@ -87,9 +86,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(peridot_asset_processing::prepare_runtime_asset_output(
-                    dest_dir, &asset_id,
-                ))
+                .open(ctx.prepare_runtime_asset_output(&asset_id))
                 .map_err(AssetProcessError::DestWriteOpenFailed)?,
             asset,
         )

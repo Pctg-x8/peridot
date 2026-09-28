@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::Path};
 
 use ktx::Texture;
 
-use crate::{AssetProcessContext, prepare_runtime_asset_output};
+use crate::AssetProcessContext;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImageAssetProcessError {
@@ -31,7 +31,6 @@ impl crate::AssetProcessor for ImageAssetProcessor {
         source_path: &Path,
         asset_group_id: peridot::AssetID,
         metadata: &HashMap<crate::metadata::Key, String>,
-        dest_dir: &Path,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_IMAGE2D, 0);
@@ -100,7 +99,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
             .map_err(|e| ImageAssetProcessError::Ktx2OperationFailure("deflate_zstd", e))?;
         ktx.write_to_named_file(
             &std::ffi::CString::new(
-                prepare_runtime_asset_output(dest_dir, &asset_id)
+                ctx.prepare_runtime_asset_output(&asset_id)
                     .to_str()
                     .ok_or(ImageAssetProcessError::InvalidOutPath)?,
             )
@@ -131,16 +130,12 @@ impl crate::AssetProcessor for SoundAssetProcessor {
         source_path: &Path,
         asset_group_id: peridot::AssetID,
         _metadata: &HashMap<crate::metadata::Key, String>,
-        dest_dir: &Path,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
         let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SOUND, 0);
-        std::fs::copy(
-            source_path,
-            prepare_runtime_asset_output(dest_dir, &asset_id),
-        )
-        .map_err(SoundAssetProcessError::CopyFailed)?;
+        std::fs::copy(source_path, ctx.prepare_runtime_asset_output(&asset_id))
+            .map_err(SoundAssetProcessError::CopyFailed)?;
 
         Ok(())
     }
