@@ -14,17 +14,18 @@ fn build_cdeps() {
         return;
     }
 
-    // source-repo: https://github.com/KhronosGroup/KTX-Software
-    let source_repo_path = std::env::current_dir()
-        .expect("Failed to get current dir")
-        .join("source-repo");
+    let build_dir = std::env::current_dir().expect("current_dir").join(format!(
+        "cdeps-build/{}",
+        std::env::var("TARGET").expect("no target?")
+    ));
+    std::fs::create_dir_all(&build_dir).expect("create_dir_all");
 
     if !peridot_build_switch_enable!("TP_KTX_SKIP_CMAKE") {
         let mut cmd = std::process::Command::new("cmake");
         cmd.args(&[
-            ".",
+            "../../source-repo",
             "-B",
-            "build",
+            ".",
             "-DKTX_FEATURE_TESTS=OFF",
             "-DKTX_FEATURE_VK_UPLOAD=OFF",
             "-DKTX_FEATURE_GL_UPLOAD=OFF",
@@ -39,6 +40,11 @@ fn build_cdeps() {
                 std::env::var("NDK_PLATFORM_TARGET").expect("no NDK_PLATFORM_TARGET")
             ))
             .arg("-DANDROID_ABI=arm64-v8a")
+            .arg("-DANDROID_STL=c++_static")
+            .arg(format!(
+                "-DANDROID_NDK={}",
+                std::env::var("ANDROID_NDK").expect("no ANDROID_NDK")
+            ))
             .arg(format!(
                 "-DCMAKE_TOOLCHAIN_FILE={}",
                 PathBuf::from(std::env::var_os("ANDROID_NDK").expect("no ANDROID_NDK"))
@@ -53,7 +59,7 @@ fn build_cdeps() {
         }
 
         let r = cmd
-            .current_dir(&source_repo_path)
+            .current_dir(&build_dir)
             .spawn()
             .expect("Failed to spwan cmake")
             .wait()
@@ -63,8 +69,8 @@ fn build_cdeps() {
         }
 
         let r = std::process::Command::new("cmake")
-            .args(&["--build", "build"])
-            .current_dir(&source_repo_path)
+            .args(&["--build", "."])
+            .current_dir(&build_dir)
             .spawn()
             .expect("Failed to spawn cmake")
             .wait()
@@ -78,12 +84,9 @@ fn build_cdeps() {
         // どうやらWindows(厳密にはおそらくmsvc)だと出力先が微妙に違うらしい
         println!(
             "cargo::rustc-link-search={}",
-            source_repo_path.join("build\\Debug").display()
+            build_dir.join("Debug").display()
         );
     } else {
-        println!(
-            "cargo::rustc-link-search={}",
-            source_repo_path.join("build").display()
-        );
+        println!("cargo::rustc-link-search={}", build_dir.display());
     }
 }
