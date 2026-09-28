@@ -190,6 +190,14 @@ fn main() {
     println!("build dir: {clib_build_path:?}");
     let mut cmd = std::process::Command::new("make");
     cmd.current_dir(&clib_build_path);
+    if let Some(cc) = std::env::var_os(&format!("CC_{target}")).or_else(|| std::env::var_os("CC")) {
+        cmd.env("CC", cc);
+    }
+    if let Some(cflags) =
+        std::env::var_os(&format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLAGS"))
+    {
+        cmd.env("CFLAGS", cflags);
+    }
     let r = cmd.status().expect("platform make");
     if !r.success() {
         panic!("make exited with code {r:?}");
