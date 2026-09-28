@@ -131,7 +131,7 @@ pub const ASSET_TYPE_SOUND: AssetType = 20;
 pub const ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK: AssetType = 100;
 
 pub struct AssetDatabase {
-    pub db: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::DB>,
+    db: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::DB>,
 }
 impl AssetDatabase {
     pub fn open(runtime_asset_dir: impl AsRef<Path>) -> Result<Self, peridot_tp_sqlite3::Error> {
