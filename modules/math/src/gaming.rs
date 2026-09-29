@@ -1,6 +1,6 @@
 //! Peridot Extended Mathematics: Gaming Utils(Camera, ModelMatrix)
 
-use crate::linarg::*;
+use crate::{linarg::*, Ray3};
 use crate::{One, Zero};
 use std::ops::Range;
 
@@ -52,6 +52,7 @@ pub enum PhysicalScreenFitting {
 /// assert_eq!(mv.clone() * Vector3(5.0, 0.0, 1.0), Vector4(5.0, 0.0, 1.0, 1.0));
 /// assert_eq!(mp * mv * Vector3(5.0, 0.0, 1.0), Vector4(1.0, 0.0, 0.0, 1.0));
 /// ```
+#[derive(Clone)]
 pub struct Camera {
     /// Projection method of the camera. `None` indicates no projection(only adjust aspect ratio)
     pub projection: Option<ProjectionMethod>,
@@ -203,19 +204,139 @@ impl Camera {
         (self.view_matrix(), self.projection_matrix(aspect_wh))
     }
 
-    /// Sets rotation of the camera to look at a point
-    pub fn look_at(&mut self, target: Vector3F32) {
-        let eyedir = (target - self.position).normalize();
-        let basedir = Vector3(0.0f32, 0.0, 1.0);
+    #[inline(always)]
+    /// Right direction of the camera
+    pub fn right(&self) -> Vector3F32 {
+        Matrix3::from(self.rotation) * Vector3F32::right()
+    }
 
-        let axis = basedir.cross(&eyedir);
-        if axis.len2() == 0.0 {
-            // same direction as basedir
-            self.rotation = Quaternion::<f32>::ONE;
-            return;
-        }
-        let angle = basedir.dot(eyedir).acos();
-        self.rotation = Quaternion::<f32>::new(-angle, axis.normalize());
+    #[inline(always)]
+    /// Up direction of the camera
+    pub fn up(&self) -> Vector3F32 {
+        Matrix3::from(self.rotation) * Vector3F32::up()
+    }
+
+    #[inline(always)]
+    /// Forward direction of the camera
+    pub fn forward(&self) -> Vector3F32 {
+        Matrix3::from(self.rotation) * Vector3F32::forward()
+    }
+
+    /// Sets rotation of the camera to look at a point
+    pub fn look_at(&mut self, target: Vector3F32, upvec: Option<Vector3F32>) {
+        self.rotation = match upvec {
+            None => {
+                // upfree rotation
+                let eyedir = (target - self.position).normalize();
+                let basedir = Vector3(0.0f32, 0.0, 1.0);
+
+                let axis = basedir.cross(&eyedir);
+                if axis.len2() == 0.0 {
+                    // same direction as basedir
+                    self.rotation = Quaternion::<f32>::ONE;
+                    return;
+                }
+                let angle = basedir.dot(eyedir).acos();
+                Quaternion::<f32>::new(-angle, axis.normalize())
+            }
+            Some(up) => {
+                // upfixed rotation(traditional)
+                let forward = (target - self.position).normalize();
+                let right = up.cross(&forward);
+                let up = forward.cross(&right);
+                let m = Matrix3(
+                    [right.0, right.1, right.2],
+                    [up.0, up.1, up.2],
+                    [forward.0, forward.1, forward.2],
+                );
+
+                // mat -> quat: https://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/
+                let trace = m.0[0] + m.1[1] + m.2[2];
+                if trace > 0.0 {
+                    let s = (trace + 1.0).sqrt() * 2.0;
+                    Quaternion(
+                        (m.2[1] - m.1[2]) / s,
+                        (m.0[2] - m.2[0]) / s,
+                        (m.1[0] - m.0[1]) / s,
+                        0.25 * s,
+                    )
+                } else if m.0[0] > m.1[1] && m.0[0] > m.2[2] {
+                    let s = (1.0f32 + m.0[0] - m.1[1] - m.2[2]).sqrt() * 2.0;
+                    Quaternion(
+                        0.25 * s,
+                        (m.0[1] + m.1[0]) / s,
+                        (m.0[2] + m.2[0]) / s,
+                        (m.2[1] - m.1[2]) / s,
+                    )
+                } else if m.1[1] > m.2[2] {
+                    let s = (1.0f32 + m.1[1] - m.0[0] - m.2[2]).sqrt() * 2.0;
+                    Quaternion(
+                        (m.0[1] + m.1[0]) / s,
+                        0.25 * s,
+                        (m.1[2] + m.2[1]) / s,
+                        (m.0[2] - m.2[0]) / s,
+                    )
+                } else {
+                    let s = (1.0f32 + m.2[2] - m.0[0] - m.1[1]).sqrt() * 2.0;
+                    Quaternion(
+                        (m.0[2] + m.2[0]) / s,
+                        (m.1[2] + m.2[1]) / s,
+                        0.25 * s,
+                        (m.1[0] - m.0[1]) / s,
+                    )
+                }
+            }
+        };
+    }
+
+    /// Converts a viewport point to a world point.
+    ///
+    /// `viewport_point` is in normalized viewport coordinates(`(0, 0)` for left-top of the viewport, `(1, 1)` for right-bottom)
+    pub fn viewport_point_to_world_point(
+        &self,
+        viewport_point: Vector2<f32>,
+        viewport_aspect_wh: f32,
+    ) -> Vector3<f32> {
+        let pos_clip = Vector3(
+            2.0 * viewport_point.0 - 1.0,
+            2.0 * viewport_point.1 - 1.0,
+            0.0,
+        );
+
+        let vp_inv = self
+            .view_projection_matrix(viewport_aspect_wh)
+            .inverse()
+            .expect("cannot inverse?");
+        Vector3::from(vp_inv.clone() * pos_clip)
+    }
+
+    /// Converts a viewport point to a world ray.
+    ///
+    /// `viewport_point` is in normalized viewport coordinates(`(0, 0)` for left-top of the viewport, `(1, 1)` for right-bottom)
+    pub fn viewport_point_to_world_ray(
+        &self,
+        viewport_point: Vector2<f32>,
+        viewport_aspect_wh: f32,
+    ) -> Ray3<f32> {
+        let pos_clip_near = Vector3(
+            2.0 * viewport_point.0 - 1.0,
+            2.0 * viewport_point.1 - 1.0,
+            1.0,
+        );
+        let pos_clip_far = Vector3(
+            2.0 * viewport_point.0 - 1.0,
+            2.0 * viewport_point.1 - 1.0,
+            -1.0,
+        );
+
+        let vp_inv = self
+            .view_projection_matrix(viewport_aspect_wh)
+            .inverse()
+            .expect("cannot inverse?");
+        let pos_world_near = Vector3::from(vp_inv.clone() * pos_clip_near);
+        let pos_world_far = Vector3::from(vp_inv * pos_clip_far);
+
+        Ray3::from_origin_to(pos_world_near, pos_world_far)
     }
 }
 impl Default for Camera {

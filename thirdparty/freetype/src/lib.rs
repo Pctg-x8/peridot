@@ -13,6 +13,7 @@ pub type Fixed = raw::FT_Fixed;
 pub type F26Dot6 = raw::FT_F26Dot6;
 pub type Matrix = raw::FT_Matrix;
 
+pub type Library = raw::FT_Library;
 pub type Face = raw::FT_Face;
 pub type Outline = raw::FT_Outline;
 
@@ -21,12 +22,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 pub struct Error(pub(crate) raw::FT_Error);
 impl core::fmt::Debug for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FT_Error({})", self.0)
+        write!(f, "FT_Error({})", self.0,)
     }
 }
 impl core::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let str = unsafe { core::ffi::CStr::from_ptr(raw::FT_Error_String(self.0)) };
+        let p = unsafe { raw::FT_Error_String(self.0) };
+        if p.is_null() {
+            return write!(f, "Unknown error(FT_Error_String() == 0)");
+        }
+
+        let str = unsafe { core::ffi::CStr::from_ptr(p) };
         write!(f, "{}", str.to_str().unwrap_or("Unknown error"))
     }
 }
@@ -37,23 +43,23 @@ pub const fn ft_error_to_result(e: raw::FT_Error) -> Result<()> {
 }
 
 #[inline(always)]
-pub fn init_freetype() -> Result<raw::FT_Library> {
+pub fn init_freetype() -> Result<Library> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe { raw::FT_Init_FreeType(inst.as_mut_ptr()) })?;
     Ok(unsafe { inst.assume_init() })
 }
 
 #[inline(always)]
-pub unsafe fn done_freetype(lib: raw::FT_Library) -> Result<()> {
+pub unsafe fn done_freetype(lib: Library) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Done_FreeType(lib) })
 }
 
 #[inline(always)]
 pub unsafe fn new_face(
-    lib: raw::FT_Library,
+    lib: Library,
     filepathname: &core::ffi::CStr,
     face_index: Long,
-) -> Result<raw::FT_Face> {
+) -> Result<Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
         raw::FT_New_Face(lib, filepathname.as_ptr(), face_index, inst.as_mut_ptr())
@@ -63,10 +69,10 @@ pub unsafe fn new_face(
 
 #[inline(always)]
 pub unsafe fn new_memory_face(
-    lib: raw::FT_Library,
+    lib: Library,
     file_base: &[raw::FT_Byte],
     face_index: Long,
-) -> Result<raw::FT_Face> {
+) -> Result<Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe {
         raw::FT_New_Memory_Face(
@@ -81,11 +87,7 @@ pub unsafe fn new_memory_face(
 }
 
 #[inline(always)]
-pub unsafe fn open_face(
-    lib: raw::FT_Library,
-    args: &raw::FT_Open_Args,
-    face_index: Long,
-) -> Result<raw::FT_Face> {
+pub unsafe fn open_face(lib: Library, args: &raw::FT_Open_Args, face_index: Long) -> Result<Face> {
     let mut inst = MaybeUninit::uninit();
     ft_error_to_result(unsafe { raw::FT_Open_Face(lib, args, face_index, inst.as_mut_ptr()) })?;
     Ok(unsafe { inst.assume_init() })
@@ -152,6 +154,11 @@ pub unsafe fn set_char_size(
 #[inline(always)]
 pub unsafe fn set_pixel_sizes(face: Face, pixel_width: UInt, pixel_height: UInt) -> Result<()> {
     ft_error_to_result(unsafe { raw::FT_Set_Pixel_Sizes(face, pixel_width, pixel_height) })
+}
+
+#[inline(always)]
+pub unsafe fn get_char_index(face: Face, charcode: ULong) -> UInt {
+    unsafe { raw::FT_Get_Char_Index(face, charcode) }
 }
 
 #[inline(always)]

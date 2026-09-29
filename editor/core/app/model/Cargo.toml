@@ -1,0 +1,9 @@
+[package]
+name = "peridot-marble-editor-model"
+description = "application state/logic model of the Peridot Marble Editor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot-marble-editor-shared.path = "../shared"
+peridot-math.path = "../../../../modules/math"
