@@ -55,22 +55,22 @@ pub struct HDR {
 }
 
 impl LogicalAssetData for PNG {
-    const EXT: &'static str = "png";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl LogicalAssetData for TGA {
-    const EXT: &'static str = "tga";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl LogicalAssetData for TIFF {
-    const EXT: &'static str = "tiff";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl LogicalAssetData for WebP {
-    const EXT: &'static str = "webp";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl LogicalAssetData for BMP {
-    const EXT: &'static str = "bmp";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl LogicalAssetData for HDR {
-    const EXT: &'static str = "hdr";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl FromAssetBlob for PNG {
     type Error = ImageError;
@@ -173,7 +173,7 @@ pub struct StdTexture2DAsset(
     #[allow(dead_code)] Pin<Box<[u8]>>,
 );
 impl LogicalAssetData for StdTexture2DAsset {
-    const EXT: &'static str = "pa1-texture2d";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_IMAGE2D;
 }
 impl FromAssetBlob for StdTexture2DAsset {
     type Error = std::io::Error;

@@ -387,6 +387,7 @@ struct AssetProvider {
     base: PathBuf,
     #[cfg(feature = "IterationBuild")]
     builtin_assets_base: PathBuf,
+    assetdb: peridot::AssetDatabase,
 }
 impl AssetProvider {
     fn new() -> Self {
@@ -401,10 +402,20 @@ impl AssetProvider {
             exe
         };
         trace!("Asset BaseDirectory={}", base.display());
+
+        let assetdb = match peridot::AssetDatabase::open(&base) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to open asset database");
+                std::process::abort();
+            }
+        };
+
         AssetProvider {
             base,
             #[cfg(feature = "IterationBuild")]
             builtin_assets_base: PathBuf::from(env!("PERIDOT_BUILTIN_ASSET_PATH")),
+            assetdb,
         }
     }
 }
@@ -413,86 +424,35 @@ impl peridot::PlatformAssetLoader for AssetProvider {
     type AssetBlobAsync<'a> = peridot::native_io::windows::NativeFileBlobAsyncRandomReader;
     type StreamingAsset<'a> = std::fs::File;
 
+    #[inline(always)]
+    fn asset_db<'a>(&'a self) -> &'a peridot::AssetDatabase {
+        &self.assetdb
+    }
+
     #[tracing::instrument(name = "AssetProvider::get", skip(self))]
-    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::AssetBlob<'a>> {
-        #[allow(unused_mut)]
-        let mut segments = path.split('.').peekable();
-
-        #[cfg(feature = "IterationBuild")]
-        if segments.peek().map_or(false, |&s| s == "builtin") {
-            let _ = segments.next();
-
-            let mut p = self.builtin_assets_base.clone();
-            p.extend(segments);
-            p.set_extension(ext);
-            tracing::debug!(realpath = ?p, "Loading Builtin Asset");
-
-            return peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p);
-        }
-
-        let mut p = self.base.clone();
-        p.extend(segments);
-        p.set_extension(ext);
-        tracing::debug!(realpath = ?p, "Loading Asset");
-
-        peridot::native_io::windows::NativeFileBlobRandomReader::open(&p)
+    fn get<'a>(&'a self, id: peridot::AssetID) -> std::io::Result<Self::AssetBlob<'a>> {
+        peridot::native_io::windows::NativeFileBlobRandomReader::open(
+            &self.base.join(id.build_runtime_asset_path_relative()),
+        )
     }
 
     #[tracing::instrument(name = "AssetProvider(windows)::get_async", skip(self))]
     fn get_async<'a>(
         &'a self,
-        path: &str,
-        ext: &str,
+        id: peridot::AssetID,
     ) -> impl core::future::Future<Output = std::io::Result<Self::AssetBlobAsync<'a>>> {
         async move {
-            #[allow(unused_mut)]
-            let mut segments = path.split('.').peekable();
-
-            #[cfg(feature = "IterationBuild")]
-            if segments.peek().map_or(false, |&s| s == "builtin") {
-                let _ = segments.next();
-
-                let mut p = self.builtin_assets_base.clone();
-                p.extend(segments);
-                p.set_extension(ext);
-                tracing::debug!(realpath = ?p, "Loading Builtin Asset");
-
-                return peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p);
-            }
-
-            let mut p = self.base.clone();
-            p.extend(segments);
-            p.set_extension(ext);
-            tracing::debug!(realpath = ?p, "Loading Asset");
-
-            peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(&p)
+            peridot::native_io::windows::NativeFileBlobAsyncRandomReader::open(
+                &self.base.join(id.build_runtime_asset_path_relative()),
+            )
         }
     }
 
     fn get_streaming<'a>(
         &'a self,
-        path: &str,
-        ext: &str,
+        id: peridot::AssetID,
     ) -> std::io::Result<Self::StreamingAsset<'a>> {
-        #[allow(unused_mut)]
-        let mut segments = path.split('.').peekable();
-
-        #[cfg(feature = "IterationBuild")]
-        if segments.peek().map_or(false, |&s| s == "builtin") {
-            let _ = segments.next();
-
-            let mut p = self.builtin_assets_base.clone();
-            p.extend(segments);
-            p.set_extension(ext);
-
-            return std::fs::File::open(&p);
-        }
-
-        let mut p = self.base.clone();
-        p.extend(segments);
-        p.set_extension(ext);
-
-        std::fs::File::open(&p)
+        std::fs::File::open(&self.base.join(id.build_runtime_asset_path_relative()))
     }
 }
 

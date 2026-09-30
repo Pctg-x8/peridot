@@ -335,7 +335,7 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
             Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
           ]
 
-    integratedTestStep = GHA.env "VK_SDK_PATH" "" . withBuilderEnv . skipCDeps . GHA.runStep
+    integratedTestStep = GHA.env "VULKAN_SDK" "" . withBuilderEnv . skipCDeps . GHA.runStep
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\

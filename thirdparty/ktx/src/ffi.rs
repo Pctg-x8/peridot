@@ -827,7 +827,8 @@ pub struct ktxAstcParams {
 #[cfg_attr(windows, link(name = "ktx", kind = "dylib"))]
 #[cfg_attr(target_os = "android", link(name = "ktx", kind = "static"))]
 #[cfg_attr(not(any(windows, target_os = "android")), link(name = "ktx"))]
-#[cfg_attr(target_os = "android", link(name = "c++_shared"))]
+#[cfg_attr(target_os = "android", link(name = "c++abi"))]
+#[cfg_attr(target_os = "android", link(name = "c++_static"))]
 unsafe extern "C" {
     pub static KTX_ETC1S_DEFAULT_COMPRESSION_LEVEL: u32;
 }

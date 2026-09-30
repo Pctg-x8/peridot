@@ -6,7 +6,7 @@ edition = "2024"
 [features]
 default = []
 with-loader-impl = ["dep:peridot"]
-with-asset-processing = ["dep:peridot-asset-processing", "compilation"]
+with-asset-processing = ["dep:peridot-asset-processing", "compilation", "dep:peridot"]
 compilation = ["dep:slang", "dep:thiserror"]
 debug-dumps = ["dep:spirv-tools"]
 

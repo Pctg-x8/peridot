@@ -10,9 +10,10 @@
         "x86_64-linux"
         "aarch64-darwin"
       ];
-      NDK_PLATFORM_TARGET = "35";
+      NDK_PLATFORM_TARGET = "34";
       android-composition = pkgs: pkgs.androidenv.composeAndroidPackages {
         platformVersions = [NDK_PLATFORM_TARGET];
+        buildToolsVersions = ["34.0.0"];
         abiVersions = ["arm64-v8a"];
         includeNDK = true;
       };
@@ -48,14 +49,6 @@
         pkgs.cargo-ndk
       ];
       native-deps = pkgs: [ pkgs.pkg-config ];
-      shell-set-common-env-vars = ''
-        export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
-        # set library search paths for thirdparty
-        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/source-repo/build
-        # peridot specific env vars for development
-        export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
-        export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
-      '';
       libclang-path = pkgs: "${pkgs.llvmPackages.libclang.lib}/lib";
     in
     { devShells = builtins.foldl' (a: b: a // b) { } (
@@ -83,6 +76,15 @@
               [ ];
           LIBCLANG_PATH = if system == "x86_64-linux" then libclang-path pkgs else "";
 
+          rustc-system-triple = if system == "x86_64-linux" then "x86_64-unknown-linux-gnu" else "aarch64-apple-darwin";
+          shell-set-common-env-vars = ''
+            export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
+            # set library search paths for thirdparty
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}
+            # peridot specific env vars for development
+            export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
+            export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
+          '';
           fishPrehook = pkgs.writeScriptBin "startup" ''
             # prepend devenv prompt
             functions -c fish_prompt __peridot_fish_prompt_org
