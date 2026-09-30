@@ -134,7 +134,9 @@ pub struct AssetDatabase {
     db: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::DB>,
 }
 impl AssetDatabase {
-    pub fn open(runtime_asset_dir: impl AsRef<Path>) -> Result<Self, peridot_tp_sqlite3::Error> {
+    pub fn open(
+        runtime_asset_dir: impl AsRef<Path>,
+    ) -> Result<Self, peridot_tp_sqlite3::OpenError> {
         let path = runtime_asset_dir.as_ref().join("db");
         let needs_initialization = !path.exists();
         let con = peridot_tp_sqlite3::DB::open(
@@ -150,7 +152,13 @@ impl AssetDatabase {
         needs_initialization: bool,
     ) -> Self {
         if needs_initialization {
-            if let Err(e) = con.exec(include_str!("../assetdb.sql")) {
+            if let Err(e) = con
+                .exec(
+                    &std::ffi::CString::new(include_str!("../assetdb.sql"))
+                        .expect("content has nul"),
+                )
+                .into_result()
+            {
                 tracing::error!(reason = ?e, msg = ?con.errmsg(), "assetdb initialization failed");
             }
         }
@@ -168,7 +176,9 @@ impl AssetDatabase {
 
         // TODO: 本当は使いまわしたい（毎回コンパイルしたくない）がいまいちうまい方法が思いつかない（特にasyncで多重化してるのでスレッドローカルじゃなくて同一スレッドでの多重処理を考慮する必要がある）
         let mut stmt = self.db.prepare(Q, PrepareFlags::empty()).expect("prepare");
-        stmt.bind_text(1, identifier).expect("bind");
+        unsafe {
+            stmt.bind_text(1, identifier).expect("bind");
+        }
         stmt.bind_int(2, ty as _).expect("bind");
         let has_next = stmt.step().expect("step");
         if !has_next {
@@ -177,7 +187,7 @@ impl AssetDatabase {
             return None;
         }
 
-        assert_eq!(stmt.column_bytes(0), 16);
+        assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
         Some(AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() }))
     }
 
@@ -190,12 +200,14 @@ impl AssetDatabase {
 
         // TODO: 本当は使いまわしたい（毎回コンパイルしたくない）がいまいちうまい方法が思いつかない（特にasyncで多重化してるのでスレッドローカルじゃなくて同一スレッドでの多重処理を考慮する必要がある）
         let mut stmt = self.db.prepare(Q, PrepareFlags::empty()).expect("prepare");
-        stmt.bind_text(1, identifier).expect("bind");
+        unsafe {
+            stmt.bind_text(1, identifier).expect("bind");
+        }
         stmt.bind_int(2, ty as _).expect("bind");
 
         let mut results = Vec::new();
         while stmt.step().expect("step") {
-            assert_eq!(stmt.column_bytes(0), 16);
+            assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
             results.push(AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() }));
         }
 
@@ -210,8 +222,12 @@ impl AssetDatabase {
                 PrepareFlags::empty(),
             )
             .expect("assetdb op prepare");
-        stmt.bind_blob(1, id.as_bytes()).expect("stmt.bind_blob");
-        stmt.bind_text(2, name).expect("stmt.bind_text");
+        unsafe {
+            stmt.bind_blob(1, id.as_bytes()).expect("stmt.bind_blob");
+        }
+        unsafe {
+            stmt.bind_text(2, name).expect("stmt.bind_text");
+        }
         stmt.step().expect("stmt.step");
     }
 
@@ -225,18 +241,22 @@ impl AssetDatabase {
             "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning group_id, last_processed, is_new_insertion",
             PrepareFlags::empty(),
         ).expect("assetdb op prepare");
-        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-            .expect("stmt.bind_text");
-        stmt.bind_blob(2, new_group_id.as_bytes())
-            .expect("stmt.bind_blob");
+        unsafe {
+            stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+                .expect("stmt.bind_text");
+        }
+        unsafe {
+            stmt.bind_blob(2, new_group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
         let has_insertion = stmt.step().expect("stmt.step");
         assert!(has_insertion);
 
-        assert_eq!(stmt.column_bytes(0), 16);
+        assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
         let inserted_group_id = AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
-        let inserted_last_processed = stmt.column_i64(1);
-        let new_inserted = stmt.column_int(2) != 0;
+        let inserted_last_processed = unsafe { stmt.column_i64(1) };
+        let new_inserted = unsafe { stmt.column_int(2) } != 0;
 
         let asset_group_name = match source_path.file_stem() {
             None => "",
@@ -265,16 +285,20 @@ impl AssetDatabase {
             "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning last_processed, is_new_insertion",
             PrepareFlags::empty(),
         ).expect("assetdb op prepare");
-        stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-            .expect("stmt.bind_text");
-        stmt.bind_blob(2, group_id.as_bytes())
-            .expect("stmt.bind_blob");
+        unsafe {
+            stmt.bind_text(1, source_path.to_str().expect("invalid str"))
+                .expect("stmt.bind_text");
+        }
+        unsafe {
+            stmt.bind_blob(2, group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
         let has_insertion = stmt.step().expect("stmt.step");
         assert!(has_insertion);
 
-        let inserted_last_processed = stmt.column_i64(0);
-        let new_inserted = stmt.column_int(1) != 0;
+        let inserted_last_processed = unsafe { stmt.column_i64(0) };
+        let new_inserted = unsafe { stmt.column_int(1) } != 0;
 
         let asset_group_name = match source_path.file_stem() {
             None => "",
@@ -301,9 +325,13 @@ impl AssetDatabase {
                 PrepareFlags::empty(),
             )
             .expect("assetdb op prepare");
-        stmt.bind_text(1, load_identifier).expect("stmt.bind_text");
-        stmt.bind_blob(2, group_id.as_bytes())
-            .expect("stmt.bind_blob");
+        unsafe {
+            stmt.bind_text(1, load_identifier).expect("stmt.bind_text");
+        }
+        unsafe {
+            stmt.bind_blob(2, group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         stmt.step().expect("stmt.step");
     }
 
@@ -321,16 +349,20 @@ impl AssetDatabase {
                 PrepareFlags::empty()
             )
             .expect("prepare_cached failed");
-        stmt.bind_blob(1, group_id.as_bytes())
-            .expect("stmt.bind_blob");
+        unsafe {
+            stmt.bind_blob(1, group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
         stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
-        stmt.bind_blob(4, new_asset_id.as_bytes())
-            .expect("stmt.bind_blob");
+        unsafe {
+            stmt.bind_blob(4, new_asset_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         let has_insertion = stmt.step().expect("stmt.step");
         if has_insertion {
             // runtime asset id in the db returned
-            assert_eq!(stmt.column_bytes(0), 16);
+            assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
             return AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
         }
 
@@ -339,15 +371,17 @@ impl AssetDatabase {
             .db
             .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?", PrepareFlags::empty())
             .expect("assetdb op prepare");
-        stmt.bind_blob(1, group_id.as_bytes())
-            .expect("stmt.bind_blob");
+        unsafe {
+            stmt.bind_blob(1, group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
         stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
         let has_next = stmt.step().expect("stmt.step");
         assert!(has_next);
 
-        assert_eq!(stmt.column_bytes(0), 16);
-        return AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
+        assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
+        AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() })
     }
 }
 

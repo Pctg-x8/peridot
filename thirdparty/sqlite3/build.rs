@@ -165,7 +165,7 @@ fn main() {
         .join("source-repo");
     if !source_repo_path.join("Makefile").exists() {
         let r = std::process::Command::new("/bin/sh")
-            .args(&["./configure"])
+            .args(["./configure"])
             .current_dir(&source_repo_path)
             .status()
             .expect("configure");
@@ -175,7 +175,7 @@ fn main() {
     }
 
     let r = std::process::Command::new("make")
-        .args(&["sqlite3.c"])
+        .args(["sqlite3.c"])
         .current_dir(&source_repo_path)
         .status()
         .expect("make");
@@ -190,11 +190,11 @@ fn main() {
     println!("build dir: {clib_build_path:?}");
     let mut cmd = std::process::Command::new("make");
     cmd.current_dir(&clib_build_path);
-    if let Some(cc) = std::env::var_os(&format!("CC_{target}")).or_else(|| std::env::var_os("CC")) {
+    if let Some(cc) = std::env::var_os(format!("CC_{target}")).or_else(|| std::env::var_os("CC")) {
         cmd.env("CC", cc);
     }
     if let Some(cflags) =
-        std::env::var_os(&format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLAGS"))
+        std::env::var_os(format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLAGS"))
     {
         cmd.env("CFLAGS", cflags);
     }

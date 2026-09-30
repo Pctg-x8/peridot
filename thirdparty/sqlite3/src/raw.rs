@@ -15,10 +15,12 @@ pub struct sqlite3_stmt(FFIOpaqueStruct);
 
 pub const SQLITE_OK: c_int = 0;
 pub const SQLITE_ERROR: c_int = 1;
-pub const SQLITE_ROW: c_int = 100;
-pub const SQLITE_DONE: c_int = 101;
+pub const SQLITE_ABORT: c_int = 4;
+pub const SQLITE_NOMEM: c_int = 7;
 pub const SQLITE_IOERR: c_int = 10;
 pub const SQLITE_NOTFOUND: c_int = 12;
+pub const SQLITE_ROW: c_int = 100;
+pub const SQLITE_DONE: c_int = 101;
 
 pub const SQLITE_IOERR_READ: c_int = SQLITE_IOERR | (1 << 8);
 pub const SQLITE_IOERR_SHORT_READ: c_int = SQLITE_IOERR | (2 << 8);
