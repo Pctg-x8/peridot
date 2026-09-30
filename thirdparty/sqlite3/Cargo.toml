@@ -11,4 +11,3 @@ tracing = "0.1"
 [target.'cfg(windows)'.build-dependencies]
 vswhere.path = "../../platform/windows/vswhere"
 win10-sdk-locator.path = "../../platform/windows/win10-sdk-locator"
-windows = { version = "0.62", features = ["Win32_System_Registry"] }
