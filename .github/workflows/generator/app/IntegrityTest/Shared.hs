@@ -417,7 +417,6 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
             Step $ GHA.namedAs "Setup Java" $ SetupJavaAction.step "adopt" & SetupJavaAction.javaVersion "17",
             Step $ GHA.namedAs "install cargo-ndk" $ GHA.runStep "cargo install cargo-ndk",
             Step cliBuildStep,
-            Step $ GHA.runStep "cargo ndk-env --target aarch64-linux-android",
             Step integratedTestStep
           ]
 
