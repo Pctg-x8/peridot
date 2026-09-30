@@ -158,7 +158,13 @@ fn query_regkey_osstr<const FAST_PASS_CHAR_COUNT: usize>(
 
 #[cfg(unix)]
 fn main() {
-    println!("CC={:?}", std::env::var("CC"));
+    let target = std::env::var("TARGET").expect("no target?");
+    let clib_build_path = std::env::current_dir()
+        .expect("current_dir")
+        .join(format!("clib-build/{target}"));
+    let cc = std::env::var_os(format!("CC_{target}")).or_else(|| std::env::var_os("CC"));
+    let cflags = std::env::var_os(format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLGS"));
+    println!("build dir: {}", clib_build_path.display());
 
     let source_repo_path = std::env::current_dir()
         .expect("current_dir")
@@ -183,22 +189,15 @@ fn main() {
         panic!("make exited with code {r:?}");
     }
 
-    let target = std::env::var("TARGET").expect("no target?");
-    let clib_build_path = std::env::current_dir()
-        .expect("current_dir")
-        .join(format!("clib-build/{target}"));
-    println!("build dir: {clib_build_path:?}");
-    let mut cmd = std::process::Command::new("make");
-    cmd.current_dir(&clib_build_path);
-    if let Some(cc) = std::env::var_os(format!("CC_{target}")).or_else(|| std::env::var_os("CC")) {
-        cmd.env("CC", cc);
-    }
-    if let Some(cflags) =
-        std::env::var_os(format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLAGS"))
-    {
-        cmd.env("CFLAGS", cflags);
-    }
-    let r = cmd.status().expect("platform make");
+    let r = std::process::Command::new("make")
+        .current_dir(&clib_build_path)
+        .envs(
+            [cc.map(|x| ("CC", x)), cflags.map(|x| ("CFLAGS", x))]
+                .into_iter()
+                .flatten(),
+        )
+        .status()
+        .expect("platform make");
     if !r.success() {
         panic!("make exited with code {r:?}");
     }
