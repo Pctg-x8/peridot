@@ -1,60 +1,91 @@
 #[cfg(windows)]
 fn main() {
-    // detect msvc installation
-    let res = std::process::Command::new(
-        std::path::PathBuf::from(
-            std::env::var_os("ProgramFiles(x86)").expect("no program files x86"),
-        )
-        .join("Microsoft Visual Studio/Installer/vswhere.exe"),
-    )
-    .args(["-latest", "-property", "resolvedInstallationPath"])
-    .output()
-    .expect("failed");
-    if !res.status.success() {
-        panic!("vswhere exited with status: {}", res.status);
-    }
-    let vs_installation = std::path::Path::new(
-        std::str::from_utf8(res.stdout.trim_ascii_end()).expect("invalid output from vswhere"),
-    );
+    use vswhere::VSWhere;
+    use win10_sdk_locator::Windows10SdkInstallationRegistry;
+
+    let source_repo_path = std::env::current_dir()
+        .expect("current_dir")
+        .join("source-repo");
+
+    // locate visual studio
+    let vs_installation = VSWhere::default()
+        .latest()
+        .property("resolvedInstallationPath")
+        .get_output()
+        .expect("vswhere");
+    let vs_installation = vs_installation
+        .extract_single_path()
+        .expect("invalid output from vswher");
 
     // locate win10 sdk
-    let mut regkey = core::mem::MaybeUninit::uninit();
-    unsafe {
-        windows::Win32::System::Registry::RegOpenKeyExW(
-            windows::Win32::System::Registry::HKEY_LOCAL_MACHINE,
-            // TODO: 32bitマシンの場合はWoW6432Nodeにないので注意（でもサポートする必要あるか？）
-            windows::core::w!("SOFTWARE\\WOW6432Node\\Microsoft\\Microsoft SDKs\\Windows\\v10.0"),
-            None,
-            windows::Win32::System::Registry::KEY_READ,
-            regkey.as_mut_ptr(),
-        )
-        .ok()
-        .expect("failed to open registry key")
-    };
-    let regkey = unsafe { regkey.assume_init() };
-    let installation_folder = std::path::PathBuf::from(
-        query_regkey_osstr::<256>(regkey, windows::core::w!("InstallationFolder"))
-            .expect("failed to read installation folder"),
-    );
-    let product_version = query_regkey_osstr::<32>(regkey, windows::core::w!("ProductVersion"))
-        .expect("failed to read product version");
+    let sdk_registry =
+        Windows10SdkInstallationRegistry::open().expect("failed to open registry key");
+    let installation_folder = sdk_registry
+        .installation_folder()
+        .expect("failed to read installation folder");
+    let product_version = sdk_registry
+        .product_version()
+        .expect("failed to read product version")
+        .into_string()
+        .expect("invalid product version string");
 
-    // TODO: バージョン番号やプラットフォームは固定値じゃなくて別のところから取得する必要がある
-    let vs_buildtool_path = vs_installation.join("VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64");
-    let vs_include_path = vs_installation.join("VC\\Tools\\MSVC\\14.51.36231\\include");
-    let vs_lib_path = vs_installation.join("VC\\Tools\\MSVC\\14.51.36231\\lib\\x64");
-    let ucrt_include_path =
-        installation_folder.join(format!("Include\\{}.0\\ucrt", product_version.display()));
-    let um_include_path =
-        installation_folder.join(format!("Include\\{}.0\\um", product_version.display()));
+    let target = std::env::var("TARGET").expect("target unspecified?");
+    let build_tools_base_dir = vs_installation.join(r#"VC\Tools\MSVC"#);
+    // Note: とりあえず特定ディレクトリ直下のフォルダ名を辞書順で並べて最大のものを最新のBuildToolsとする この出し方が正しいのかは不明
+    let latest_installed_build_tool_path = build_tools_base_dir.join(
+        std::fs::read_dir(&build_tools_base_dir)
+            .expect("buildtool installation enumeration failed")
+            .filter_map(|x| {
+                let x = match x {
+                    Ok(x) => x,
+                    Err(e) => {
+                        eprintln!("erroneous entry: {e:?}");
+                        return None;
+                    }
+                };
+
+                if !x.metadata().is_ok_and(|x| x.is_dir()) {
+                    return None;
+                }
+
+                Some(x.path())
+            })
+            .fold(None, |a, b| match a {
+                None => Some(b),
+                Some(a) => Some(a.max(b)),
+            })
+            .expect("no build tool installation found"),
+    );
+    let host_dir_name = if cfg!(target_arch = "x86") {
+        "Hostx86"
+    } else if cfg!(target_arch = "x86_64") {
+        "Hostx64"
+    } else if cfg!(target_arch = "aarch64") {
+        "HostArm64"
+    } else {
+        unreachable!("unsupported host arch");
+    };
+    let target_dir_name = if target.starts_with("x86-") {
+        "x86"
+    } else if target.starts_with("x86_64-") {
+        "x64"
+    } else if target.starts_with("aarch64-") {
+        "arm64"
+    } else {
+        unreachable!("unsupported target arch");
+    };
+
+    let vs_buildtool_path =
+        latest_installed_build_tool_path.join(format!(r#"bin\{host_dir_name}\{target_dir_name}"#));
+    let vs_include_path = latest_installed_build_tool_path.join(format!(r#"include"#));
+    let vs_lib_path = latest_installed_build_tool_path.join(format!(r#"lib\{target_dir_name}"#));
+    let ucrt_include_path = installation_folder.join(format!("Include\\{product_version}.0\\ucrt"));
+    let um_include_path = installation_folder.join(format!("Include\\{product_version}.0\\um"));
     let shared_include_path =
-        installation_folder.join(format!("Include\\{}.0\\shared", product_version.display()));
-    let um_lib_path =
-        installation_folder.join(format!("Lib\\{}.0\\um\\x64", product_version.display()));
-    let ucrt_lib_path =
-        installation_folder.join(format!("Lib\\{}.0\\ucrt\\x64", product_version.display()));
-    let win10sdk_bin_path =
-        installation_folder.join(format!("bin\\{}.0\\x64", product_version.display()));
+        installation_folder.join(format!("Include\\{product_version}.0\\shared"));
+    let um_lib_path = installation_folder.join(format!("Lib\\{product_version}.0\\um\\x64"));
+    let ucrt_lib_path = installation_folder.join(format!("Lib\\{product_version}.0\\ucrt\\x64"));
+    let win10sdk_bin_path = installation_folder.join(format!("bin\\{product_version}.0\\x64"));
 
     let newenv_path = std::env::var("PATH").unwrap_or_default()
         + &format!(
@@ -64,13 +95,18 @@ fn main() {
         );
     let res = std::process::Command::new("nmake")
         .args(["/f", "Makefile.msc", "libsqlite3.lib"])
-        .current_dir(
-            std::env::current_dir()
-                .expect("current_dir")
-                .join("source-repo"),
+        .current_dir(&source_repo_path)
+        // Note: cargoかなんかがこれを設定していてMakefile.msc内の条件式がエラーになるので上書きする
+        .env(
+            "DEBUG",
+            std::env::var("DEBUG").map_or("0", |x| {
+                if x.eq_ignore_ascii_case("true") {
+                    "1"
+                } else {
+                    "0"
+                }
+            }),
         )
-        // Note: cargoかなんかがこれを設定していてMakefile.msc内の条件式がエラーになるので消す
-        .env_remove("DEBUG")
         .env("PATH", newenv_path)
         .env(
             "INCLUDE",
@@ -97,63 +133,8 @@ fn main() {
         panic!("nmake exited with status: {}", res);
     }
 
-    println!(
-        "cargo::rustc-link-search=static={}",
-        std::env::current_dir()
-            .expect("current_dir")
-            .join("source-repo")
-            .display()
-    );
+    println!("cargo::rustc-link-search={}", source_repo_path.display());
     println!("cargo::rustc-link-lib=libsqlite3");
-}
-
-#[cfg(windows)]
-fn query_regkey_osstr<const FAST_PASS_CHAR_COUNT: usize>(
-    key: windows::Win32::System::Registry::HKEY,
-    name: windows::core::PCWSTR,
-) -> windows::core::Result<std::ffi::OsString> {
-    let mut buf = Vec::<u16>::with_capacity(FAST_PASS_CHAR_COUNT);
-    let mut len = size_of_val(buf.spare_capacity_mut()) as u32;
-    let r = unsafe {
-        windows::Win32::System::Registry::RegGetValueW(
-            key,
-            None,
-            name,
-            windows::Win32::System::Registry::RRF_RT_REG_SZ,
-            None,
-            Some(buf.spare_capacity_mut().as_mut_ptr().cast()),
-            Some(&mut len),
-        )
-        .ok()
-    };
-    match r {
-        Ok(_) => {
-            unsafe {
-                buf.set_len((len as usize / 2) - 1);
-            }
-            return Ok(std::os::windows::ffi::OsStringExt::from_wide(&buf));
-        }
-        Err(e) if e != windows::Win32::Foundation::ERROR_MORE_DATA.into() => {
-            return Err(e);
-        }
-        _ => (),
-    }
-
-    buf.reserve(len as _);
-    unsafe {
-        windows::Win32::System::Registry::RegGetValueW(
-            key,
-            None,
-            name,
-            windows::Win32::System::Registry::RRF_RT_REG_SZ,
-            None,
-            Some(buf.spare_capacity_mut().as_mut_ptr().cast()),
-            Some(&mut len),
-        )
-        .ok()?;
-    }
-    unsafe { buf.set_len((len as usize / 2) - 1) };
-    Ok(std::os::windows::ffi::OsStringExt::from_wide(&buf))
 }
 
 #[cfg(unix)]
