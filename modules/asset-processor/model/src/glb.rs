@@ -350,7 +350,7 @@ pub fn process(
                             Buffer::Internal { byte_length } => {
                                 let offset_in_buffer = a.2.buffer_range.start + n * a.2.byte_stride;
                                 assert!(
-                                    offset_in_buffer + dest_stride <= byte_length,
+                                    offset_in_buffer + dest_stride < byte_length,
                                     "internal buffer read may out of range"
                                 );
 
