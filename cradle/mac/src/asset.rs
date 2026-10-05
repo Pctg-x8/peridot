@@ -1,143 +1,154 @@
-use crate::native_interface::nsbundle_path_for_resource;
-
 pub struct PlatformAssetLoader {
-    par_path: String,
-    par: peridot_archive::Archive,
-    par_async: Option<peridot_archive::ArchiveAsync>,
+    assetdb: peridot::AssetDatabase,
 }
 impl PlatformAssetLoader {
     pub fn new() -> Self {
-        const PAR_PATH: &str = "assets";
-        const PAR_EXT: &str = "par";
-
-        let mut par_path_short = [0u8; 256];
-        let mut par_path_len = par_path_short.len();
-        let par_path = if unsafe {
-            nsbundle_path_for_resource(
-                PAR_PATH.as_ptr(),
-                PAR_PATH.len(),
-                PAR_EXT.as_ptr(),
-                PAR_EXT.len(),
-                par_path_short.as_mut_ptr(),
-                &mut par_path_len,
-            )
-        } {
-            unsafe { String::from_utf8_unchecked(par_path_short[..par_path_len].into()) }
-        } else {
-            let mut buf = Vec::with_capacity(par_path_len);
-            unsafe {
-                nsbundle_path_for_resource(
-                    PAR_PATH.as_ptr(),
-                    PAR_PATH.len(),
-                    PAR_EXT.as_ptr(),
-                    PAR_EXT.len(),
-                    buf.spare_capacity_mut().as_mut_ptr().cast(),
-                    &mut par_path_len,
-                );
+        let assetdb_path = nsbundle_path_for_resource(".runtime-assets", "");
+        eprintln!("path resolved: {assetdb_path:?}");
+        let assetdb = match peridot::AssetDatabase::open(assetdb_path) {
+            Ok(db) => db,
+            Err(e) => {
+                tracing::error!(reason = ?e, "Failed to open asset database");
+                std::process::abort();
             }
-            unsafe { String::from_utf8_unchecked(buf) }
         };
-        println!("par_path: {par_path}");
 
-        PlatformAssetLoader {
-            par: peridot_archive::Archive::new(
-                peridot::native_io::PlatformNativeFileReader::open(&par_path)
-                    .expect("Failed to open primary asset"),
-                false,
-            )
-            .map_err(|e| match e {
-                peridot::archive::ArchiveReadError::IO(e) => e,
-                peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                    tracing::error!("PrimaryArchive integrity check failed!");
-                    std::io::Error::other("PrimaryArchive read error")
-                }
-                peridot::archive::ArchiveReadError::SignatureMismatch => {
-                    tracing::error!("PrimaryArchive signature mismatch!");
-                    std::io::Error::other("PrimaryArchive read error")
-                }
-                peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                    tracing::error!(reason = ?e, "lz4 decompress error");
-                    std::io::Error::other("PrimaryArchive read error")
-                }
-                _ => std::io::Error::other("PrimaryArchive read error"),
-            })
-            .expect("Failed to intiialize primary asset reader"),
-            par_path,
-            par_async: None,
-        }
-    }
-
-    pub async fn post_init(&mut self) {
-        self.par_async = Some(
-            peridot_archive::ArchiveAsync::new(
-                peridot::native_io::PlatformNativeFileReaderAsync::open(&self.par_path)
-                    .expect("Failed to open primary asset"),
-                false,
-            )
-            .await
-            .map_err(|e| match e {
-                peridot::archive::ArchiveReadError::IO(e) => e,
-                peridot::archive::ArchiveReadError::IntegrityCheckFailed => {
-                    tracing::error!("PrimaryArchive integrity check failed!");
-                    std::io::Error::other("PrimaryArchive read error")
-                }
-                peridot::archive::ArchiveReadError::SignatureMismatch => {
-                    tracing::error!("PrimaryArchive signature mismatch!");
-                    std::io::Error::other("PrimaryArchive read error")
-                }
-                peridot::archive::ArchiveReadError::Lz4DecompressError(e) => {
-                    tracing::error!(reason = ?e, "lz4 decompress error");
-                    std::io::Error::other("PrimaryArchive read error")
-                }
-                _ => std::io::Error::other("PrimaryArchive read error"),
-            })
-            .expect("Failed to intiialize primary asset reader"),
-        );
+        PlatformAssetLoader { assetdb }
     }
 }
 impl peridot::PlatformAssetLoader for PlatformAssetLoader {
-    type AssetBlob<'a> =
-        peridot_archive::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
-    type AssetBlobAsync<'a> = peridot_archive::ArchiveBinReaderAsync<
-        'a,
-        peridot::native_io::PlatformNativeFileReaderAsync,
-    >;
+    type AssetBlob<'a> = peridot::native_io::PlatformNativeFileReader;
+    type AssetBlobAsync<'a> = peridot::native_io::PlatformNativeFileReaderAsync;
     type StreamingAsset<'a> =
-        peridot_archive::ArchiveBinReader<'a, peridot::native_io::PlatformNativeFileReader>;
+        peridot::native_io::RandomBlobReadSeekAdapter<peridot::native_io::PlatformNativeFileReader>;
 
-    fn get<'a>(&'a self, path: &str, ext: &str) -> std::io::Result<Self::AssetBlob<'a>> {
-        let entry = self.par.find_entry(path, ext).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "not in primary package")
-        })?;
+    #[inline(always)]
+    fn asset_db<'a>(&'a self) -> &'a peridot::AssetDatabase {
+        &self.assetdb
+    }
 
-        Ok(self.par.read_bin(entry))
+    fn get<'a>(&'a self, id: peridot::AssetID) -> std::io::Result<Self::AssetBlob<'a>> {
+        peridot::native_io::PlatformNativeFileReader::open(resolve_nsbundle_path(
+            std::path::Path::new(".runtime-assets").join(id.build_runtime_asset_path_relative()),
+        ))
     }
 
     fn get_async<'a>(
         &'a self,
-        path: &str,
-        ext: &str,
+        id: peridot::AssetID,
     ) -> impl core::future::Future<Output = std::io::Result<Self::AssetBlobAsync<'a>>> {
         async move {
-            let par_async = unsafe { self.par_async.as_ref().unwrap_unchecked() };
-
-            let entry = par_async.find_entry(path, ext).ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::NotFound, "not in primary asset package")
-            })?;
-
-            Ok(par_async.read_bin(entry))
+            peridot::native_io::PlatformNativeFileReaderAsync::open(resolve_nsbundle_path(
+                std::path::Path::new(".runtime-assets")
+                    .join(id.build_runtime_asset_path_relative()),
+            ))
         }
     }
 
     fn get_streaming<'a>(
         &'a self,
-        path: &str,
-        ext: &str,
+        id: peridot::AssetID,
     ) -> std::io::Result<Self::StreamingAsset<'a>> {
-        let entry = self.par.find_entry(path, ext).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::NotFound, "not in primary asset package")
-        })?;
+        peridot::native_io::PlatformNativeFileReader::open(resolve_nsbundle_path(
+            std::path::Path::new(".runtime-assets").join(id.build_runtime_asset_path_relative()),
+        ))
+        .map(peridot::native_io::RandomBlobReadSeekAdapter::new)
+    }
+}
 
-        Ok(self.par.read_bin(entry))
+fn resolve_nsbundle_path(path: impl AsRef<std::path::Path>) -> String {
+    let path = path.as_ref();
+    match path.parent() {
+        Some(p) => nsbundle_path_for_resource_in_subdirectory(
+            path.file_name()
+                .expect("no filename")
+                .to_str()
+                .expect("invalid str"),
+            path.extension()
+                .map_or("", |x| x.to_str().expect("invalid str")),
+            p.to_str().expect("invalid str"),
+        ),
+        None => nsbundle_path_for_resource(
+            path.file_name()
+                .expect("no filename")
+                .to_str()
+                .expect("invalid str"),
+            path.extension()
+                .map_or("", |x| x.to_str().expect("invalid str")),
+        ),
+    }
+}
+
+fn nsbundle_path_for_resource(path: &str, ext: &str) -> String {
+    let mut buf = [core::mem::MaybeUninit::<u8>::uninit(); 256];
+    let mut len = 256;
+    if unsafe {
+        crate::native_interface::nsbundle_path_for_resource(
+            path.as_ptr(),
+            path.len(),
+            ext.as_ptr(),
+            ext.len(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    } {
+        unsafe {
+            str::from_utf8_unchecked(core::mem::transmute::<&[core::mem::MaybeUninit<_>], &[_]>(
+                &buf[..len],
+            ))
+            .to_owned()
+        }
+    } else {
+        let mut buf = Vec::with_capacity(len);
+        unsafe {
+            crate::native_interface::nsbundle_path_for_resource(
+                path.as_ptr(),
+                path.len(),
+                ext.as_ptr(),
+                ext.len(),
+                buf.spare_capacity_mut().as_mut_ptr().cast(),
+                &mut len,
+            );
+        }
+        unsafe { String::from_utf8_unchecked(buf) }
+    }
+}
+
+fn nsbundle_path_for_resource_in_subdirectory(path: &str, ext: &str, subdir: &str) -> String {
+    let mut buf = [core::mem::MaybeUninit::<u8>::uninit(); 256];
+    let mut len = 256;
+    if unsafe {
+        crate::native_interface::nsbundle_path_for_resource_in_subdirectory(
+            path.as_ptr(),
+            path.len(),
+            ext.as_ptr(),
+            ext.len(),
+            subdir.as_ptr(),
+            subdir.len(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    } {
+        unsafe {
+            str::from_utf8_unchecked(core::mem::transmute::<&[core::mem::MaybeUninit<_>], &[_]>(
+                &buf[..len],
+            ))
+            .to_owned()
+        }
+    } else {
+        let mut buf = Vec::with_capacity(len);
+        unsafe {
+            crate::native_interface::nsbundle_path_for_resource_in_subdirectory(
+                path.as_ptr(),
+                path.len(),
+                ext.as_ptr(),
+                ext.len(),
+                subdir.as_ptr(),
+                subdir.len(),
+                buf.spare_capacity_mut().as_mut_ptr().cast(),
+                &mut len,
+            );
+        }
+        unsafe { String::from_utf8_unchecked(buf) }
     }
 }

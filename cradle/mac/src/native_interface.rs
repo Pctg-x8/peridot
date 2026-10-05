@@ -49,6 +49,16 @@ unsafe extern "C" {
         out_path: *mut u8,
         out_path_length: *mut usize,
     ) -> bool;
+    pub fn nsbundle_path_for_resource_in_subdirectory(
+        path: *const u8,
+        path_length: usize,
+        ext: *const u8,
+        ext_lenght: usize,
+        subdir: *const u8,
+        subdir_length: usize,
+        out_path: *mut u8,
+        out_path_length: *mut usize,
+    ) -> bool;
     pub fn nsscreen_backing_scale_factor() -> f32;
     fn ni_obtain_mouse_pointer_position(
         rt_view: *const core::ffi::c_void,
@@ -97,7 +107,6 @@ pub unsafe fn obtain_mouse_pointer_position(view: *const core::ffi::c_void) -> O
 #[no_mangle]
 pub extern "C" fn launch_game(swift_context: SwiftContext, rt_layer: *mut core::ffi::c_void) {
     crate::launch_f(swift_context, rt_layer, |mut engine| async move {
-        engine.internal_native_link_mut().al.post_init().await;
         crate::userlib::game_main(&mut engine).await;
     });
 }

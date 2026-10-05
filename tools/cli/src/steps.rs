@@ -282,7 +282,7 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
     std::fs::create_dir_all(output_path).expect("Failed to create runtime-asset-path");
     let mut process_context = peridot_asset_processing::AssetProcessContext {
         dest_dir: output_path,
-        assetdb: peridot::AssetDatabase::open(output_path).expect("assetdb.open"),
+        assetdb: peridot::AssetDatabase::open_rw(output_path).expect("assetdb.open"),
         asset_id_generator: peridot::AssetIDGenerator::new(),
     };
     if let Some(asset_path) = asset_path {

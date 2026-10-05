@@ -49,32 +49,32 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-    #[cfg(not(target_os = "android"))]
-    #[cfg(not(target_os = "macos"))]
-    let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot::native_io::PlatformNativeFileReaderAsync::open(
-            "../../examples/image-plane/assets/resources.par",
-        )
-        .expect("open resources.par"),
-        true,
-    )
-    .await
-    .expect("load resources.par");
-    #[cfg(not(target_os = "android"))]
-    #[cfg(target_os = "macos")]
-    let mut resource_container = peridot_archive::ArchiveAsync::new(
-        peridot::native_io::PlatformNativeFileReaderAsync::open(
-            std::env::current_exe()
-                .expect("current_exe")
-                .parent()
-                .expect("no parent")
-                .join("../Resources/assets.par"),
-        )
-        .expect("open resources.par"),
-        true,
-    )
-    .await
-    .expect("load resources.par");
+    // #[cfg(not(target_os = "android"))]
+    // #[cfg(not(target_os = "macos"))]
+    // let mut resource_container = peridot_archive::ArchiveAsync::new(
+    //     peridot::native_io::PlatformNativeFileReaderAsync::open(
+    //         "../../examples/image-plane/assets/resources.par",
+    //     )
+    //     .expect("open resources.par"),
+    //     true,
+    // )
+    // .await
+    // .expect("load resources.par");
+    // #[cfg(not(target_os = "android"))]
+    // #[cfg(target_os = "macos")]
+    // let mut resource_container = peridot_archive::ArchiveAsync::new(
+    //     peridot::native_io::PlatformNativeFileReaderAsync::open(
+    //         std::env::current_exe()
+    //             .expect("current_exe")
+    //             .parent()
+    //             .expect("no parent")
+    //             .join("../Resources/assets.par"),
+    //     )
+    //     .expect("open resources.par"),
+    //     true,
+    // )
+    // .await
+    // .expect("load resources.par");
 
     let (mut image_data, bgm): (peridot_image::StdTexture2DAsset, PreloadedPlayableWav) =
         futures_util::try_join!(e.load_async("images.example"), e.load_async("bgm"))

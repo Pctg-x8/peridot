@@ -22,7 +22,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
     "VK_EXT_metal_surface",
 ] }
 peridot = { path = "../../base" }
-peridot-archive = { path = "../../modules/archive" }
 parking_lot = "0.12"
 tracing = { version = "0.1.37" }
 tracing-subscriber = { version = "0.3.17", features = ["fmt", "env-filter"] }

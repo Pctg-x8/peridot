@@ -139,6 +139,16 @@ impl AssetDatabase {
     ) -> Result<Self, peridot_tp_sqlite3::OpenError> {
         let path = runtime_asset_dir.as_ref().join("db");
         let needs_initialization = !path.exists();
+        let con = peridot_tp_sqlite3::DB::open(path, peridot_tp_sqlite3::OpenFlags::READONLY)?;
+
+        Ok(Self::from_raw_connection(con, needs_initialization))
+    }
+
+    pub fn open_rw(
+        runtime_asset_dir: impl AsRef<Path>,
+    ) -> Result<Self, peridot_tp_sqlite3::OpenError> {
+        let path = runtime_asset_dir.as_ref().join("db");
+        let needs_initialization = !path.exists();
         let con = peridot_tp_sqlite3::DB::open(
             path,
             peridot_tp_sqlite3::OpenFlags::READWRITE | peridot_tp_sqlite3::OpenFlags::CREATE,
