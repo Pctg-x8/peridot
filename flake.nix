@@ -33,11 +33,10 @@
         pkgs.rustup
         # for building cdeps
         pkgs.cmake
+        pkgs.ninja
         pkgs.python3
         # required libs for building engine
         pkgs.vulkan-loader
-        # required for some asset processing
-        pkgs.shaderc
         # required for workflow generator(also included in githooks)
         pkgs.stack
         # helper scripts
