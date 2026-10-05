@@ -144,7 +144,8 @@ fn main() {
         .expect("current_dir")
         .join(format!("clib-build/{target}"));
     let cc = std::env::var_os(format!("CC_{target}")).or_else(|| std::env::var_os("CC"));
-    let cflags = std::env::var_os(format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLGS"));
+    let cflags =
+        std::env::var_os(format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLAGS"));
     println!("build dir: {}", clib_build_path.display());
 
     let source_repo_path = std::env::current_dir()
@@ -184,5 +185,10 @@ fn main() {
     }
 
     println!("cargo::rustc-link-search={}", clib_build_path.display());
-    println!("cargo::rustc-link-lib=sqlite3");
+    // macのtoolchainはstatic=を認識するけどLinuxのはそうじゃない（じゃなかったはず）ので分岐
+    if cfg!(target_os = "macos") {
+        println!("cargo::rustc-link-lib=static=sqlite3");
+    } else {
+        println!("cargo::rustc-link-lib=sqlite3");
+    }
 }
