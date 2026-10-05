@@ -17,5 +17,11 @@ fn main() {
                 .join("../../thirdparty/ktx/source-repo/build")
                 .display()
         );
+        println!(
+            "cargo::rustc-link-arg-bins=-Wl,-rpath,{}",
+            std::path::PathBuf::from(std::env::var_os("VULKAN_SDK").expect("no VULKAN_SDK"))
+                .join("lib")
+                .display()
+        );
     }
 }
