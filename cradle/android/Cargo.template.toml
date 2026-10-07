@@ -34,3 +34,4 @@ tracing-android = "0.2.0"
 tracing-subscriber = { version = "0.3.18", features = ["registry"] }
 tracing = "0.1.40"
 thiserror = "2.0"
+peridot-tp-sqlite3.path = "../../thirdparty/sqlite3"

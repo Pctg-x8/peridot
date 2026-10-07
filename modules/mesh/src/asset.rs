@@ -13,7 +13,7 @@ use crate::{
 /// アセット共通データ（これはインスタンス化できない [`Asset`]もしくは[`AssetAsync`]を使うこと）
 pub struct AssetCore;
 impl LogicalAssetData for AssetCore {
-    const EXT: &'static str = "pa1-mesh";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 
 /// メッシュアセット
@@ -25,10 +25,10 @@ pub struct Asset<Internal: AssetBlob> {
     /// 頂点データ
     pub vertex_streams: Vec<(VertexStream, Vec<(Attribute, AttributeData)>)>,
     /// バッファ読み取り用のファイルポインタ
-    internal: Internal,
+    pub internal: Internal,
 }
 impl<Internal: AssetBlob> LogicalAssetData for Asset<Internal> {
-    const EXT: &'static str = "pa1-mesh";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 impl<Internal: AssetBlob> Asset<Internal> {
     /// アセットを開いて読み込み
@@ -130,7 +130,7 @@ pub struct AssetAsync<Internal: AssetBlobAsync> {
     internal: Internal,
 }
 impl<Internal: AssetBlobAsync> LogicalAssetData for AssetAsync<Internal> {
-    const EXT: &'static str = "pa1-mesh";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_MESH;
 }
 impl<Internal: AssetBlobAsync> AssetAsync<Internal> {
     pub async fn open(asset: Internal) -> Result<Self, std::io::Error> {

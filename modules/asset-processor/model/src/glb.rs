@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs::File,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
-    path::Path,
 };
 
 use peridot_mesh::{
@@ -37,7 +36,11 @@ pub enum ProcessError {
     TooManyVertexStreams,
 }
 
-pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(), ProcessError> {
+pub fn process(
+    mut r: BufReader<File>,
+    asset_group_id: peridot::AssetID,
+    ctx: &mut peridot_asset_processing::AssetProcessContext,
+) -> Result<(), ProcessError> {
     let _hdr = gltf::binary::Header::read(&mut r)?;
 
     let chunk0_hdr = gltf::binary::ChunkHeader::read(&mut r)?;
@@ -47,7 +50,9 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
     );
     let mut content = Vec::<u8>::with_capacity(chunk0_hdr.length as usize);
     r.read_exact(unsafe {
-        core::mem::transmute(&mut content.spare_capacity_mut()[..chunk0_hdr.length as usize])
+        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+            &mut content.spare_capacity_mut()[..chunk0_hdr.length as usize],
+        )
     })?;
     unsafe {
         content.set_len(chunk0_hdr.length as usize);
@@ -236,7 +241,7 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
                         VertexStream {
                             buffer: StreamBuffer {
                                 content_location: 0,
-                                byte_length: (attribute_count as usize * offset as usize) as _,
+                                byte_length: (attribute_count * offset as usize) as _,
                                 device_alignment_requirement,
                             },
                             attribute_count: attribute_data
@@ -252,15 +257,13 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let mut opath = primary_mesh_out_path.to_owned();
-            opath.set_file_name(format!(
-                "{}-mesh{mesh_index}-{prim_index}.pa1-mesh",
-                opath.file_stem().map_or("", |x| {
-                    let src = x.to_str().expect("filepath cannot process");
-                    &src[..src.len() - "-mesh0-0".len()]
-                })
-            ));
-            let mut mesh_out = BufWriter::new(File::create(opath)?);
+            let asset_id = ctx.register_child_asset(
+                &asset_group_id,
+                peridot::ASSET_TYPE_MESH,
+                (mesh_index * 1000 + prim_index) as i32,
+            );
+            let mut mesh_out =
+                BufWriter::new(File::create(ctx.prepare_runtime_asset_output(&asset_id))?);
             mesh_out.write_all(&SIGNATURE.to_ne_bytes())?;
             Header {
                 primitive_topology: topo,
@@ -324,7 +327,9 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
                     ))?;
                     let mut buffer = Vec::with_capacity(dest_stride);
                     r.read_exact(unsafe {
-                        core::mem::transmute(&mut buffer.spare_capacity_mut()[..dest_stride])
+                        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+                            &mut buffer.spare_capacity_mut()[..dest_stride],
+                        )
                     })?;
                     unsafe {
                         buffer.set_len(dest_stride);
@@ -340,25 +345,32 @@ pub fn process(mut r: BufReader<File>, primary_mesh_out_path: &Path) -> Result<(
                     .map(|a| a.1.element_type.size())
                     .collect::<Vec<_>>();
                 for n in 0..attribute_count {
-                    for (a, dest_stride) in attrs.iter().zip(dest_strides.iter()) {
+                    for (a, &dest_stride) in attrs.iter().zip(dest_strides.iter()) {
                         let reader = match buffers[a.2.buffer_index] {
-                            Buffer::Internal { .. } => {
+                            Buffer::Internal { byte_length } => {
+                                let offset_in_buffer = a.2.buffer_range.start + n * a.2.byte_stride;
+                                assert!(
+                                    offset_in_buffer + dest_stride < byte_length,
+                                    "internal buffer read may out of range"
+                                );
+
                                 r.seek(SeekFrom::Start(
                                     internal_buffer_start.expect("no internal buffer chunk found?")
-                                        + a.2.buffer_range.start as u64
-                                        + (n * a.2.byte_stride) as u64,
+                                        + offset_in_buffer as u64,
                                 ))?;
                                 &mut r
                             }
                             Buffer::External(_) => todo!("external buffer support"),
                         };
 
-                        let mut buffer = Vec::<u8>::with_capacity(*dest_stride);
+                        let mut buffer = Vec::<u8>::with_capacity(dest_stride);
                         reader.read_exact(unsafe {
-                            core::mem::transmute(&mut buffer.spare_capacity_mut()[..*dest_stride])
+                            core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+                                &mut buffer.spare_capacity_mut()[..dest_stride],
+                            )
                         })?;
                         unsafe {
-                            buffer.set_len(*dest_stride);
+                            buffer.set_len(dest_stride);
                         }
 
                         if matches!(
@@ -394,23 +406,23 @@ fn attribute_try_from_gltf_attr_name(name: &str) -> Option<Attribute> {
         return Some(Attribute::Tangent);
     }
 
-    if name.starts_with("TEXCOORD_") {
-        return Some(Attribute::Texcoord(name["TEXCOORD_".len()..].parse().ok()?));
+    if let Some(left) = name.strip_prefix("TEXCOORD_") {
+        return Some(Attribute::Texcoord(left.parse().ok()?));
     }
 
-    if name.starts_with("COLOR_") {
-        return Some(Attribute::Color(name["COLOR_".len()..].parse().ok()?));
+    if let Some(left) = name.strip_prefix("COLOR_") {
+        return Some(Attribute::Color(left.parse().ok()?));
     }
 
-    if name.starts_with("JOINTS_") {
-        return Some(Attribute::Joints(name["JOINTS_".len()..].parse().ok()?));
+    if let Some(left) = name.strip_prefix("JOINTS_") {
+        return Some(Attribute::Joints(left.parse().ok()?));
     }
 
-    if name.starts_with("WEIGHTS_") {
-        return Some(Attribute::Weights(name["WEIGHTS_".len()..].parse().ok()?));
+    if let Some(left) = name.strip_prefix("WEIGHTS_") {
+        return Some(Attribute::Weights(left.parse().ok()?));
     }
 
-    return None;
+    None
 }
 
 fn primitive_topology_from_gltf(mesh_primitive: &gltf::json::MeshPrimitive) -> PrimitiveTopology {
@@ -428,8 +440,44 @@ fn primitive_topology_from_gltf(mesh_primitive: &gltf::json::MeshPrimitive) -> P
 
 fn buffer_element_type_from_accessor(a: &gltf::json::Accessor) -> BufferElementType {
     match (a.r#type, a.component_type, a.normalized) {
+        (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte
+        }
+        (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte2
+        }
+        (gltf::json::AccessorType::Vec3, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte3
+        }
+        (gltf::json::AccessorType::Vec4, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, false) => {
+            BufferElementType::Byte4
+        }
+        (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::ByteNormalized
+        }
+        (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::Byte2Normalized
+        }
+        (gltf::json::AccessorType::Vec3, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::Byte3Normalized
+        }
+        (gltf::json::AccessorType::Vec4, gltf::json::COMPONENT_TYPE_UNSIGNED_BYTE, true) => {
+            BufferElementType::Byte4Normalized
+        }
         (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, false) => {
             BufferElementType::Ushort
+        }
+        (gltf::json::AccessorType::Scalar, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::UshortNormalized
+        }
+        (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::Ushort2Normalized
+        }
+        (gltf::json::AccessorType::Vec3, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::Ushort3Normalized
+        }
+        (gltf::json::AccessorType::Vec4, gltf::json::COMPONENT_TYPE_UNSIGNED_SHORT, true) => {
+            BufferElementType::Ushort4Normalized
         }
         (gltf::json::AccessorType::Vec2, gltf::json::COMPONENT_TYPE_FLOAT, false) => {
             BufferElementType::Float2

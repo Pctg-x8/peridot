@@ -81,6 +81,11 @@ impl AssetManager {
         Ok(Self(ptr, gref))
     }
 
+    #[inline(always)]
+    pub const fn as_ptr(&self) -> *mut AAssetManager {
+        self.0.as_ptr()
+    }
+
     #[inline]
     pub fn open(&mut self, filename: &core::ffi::CStr, mode: core::ffi::c_int) -> Option<Asset> {
         let ptr = core::ptr::NonNull::new(unsafe {

@@ -367,7 +367,7 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
         let last_rendering_completion = match LastRenderingCompletionFence::new(&g.gfx_device) {
             Ok(x) => x,
             Err(e) => {
-                tracing::error!(cause = ?e, "Faield to create last rendering completion fence");
+                tracing::error!(cause = ?e, "Failed to create last rendering completion fence");
                 std::process::abort();
             }
         };
@@ -507,7 +507,74 @@ impl<'q, NL: NativeLinker> Engine<'q, NL> {
         &self.audio_mixer
     }
 }
-impl<PL: NativeLinker> Engine<'_, PL> {
+
+pub struct AssetCollection<'a, 'q, NL: NativeLinker, A: LogicalAssetData> {
+    engine: &'a Engine<'q, NL>,
+    ids: Vec<AssetID>,
+    _marker: core::marker::PhantomData<A>,
+}
+impl<'a, 'q, NL: NativeLinker, A: LogicalAssetData> AssetCollection<'a, 'q, NL, A> {
+    pub const fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
+    pub const fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    pub fn open_at(&self, index: usize) -> std::io::Result<Option<impl AssetBlob + 'a>> {
+        match self.ids.get(index) {
+            Some(id) => self
+                .engine
+                .native_link
+                .asset_loader()
+                .get(id.clone())
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn open_at_async(
+        &self,
+        index: usize,
+    ) -> std::io::Result<Option<impl AssetBlobAsync + 'a>> {
+        match self.ids.get(index) {
+            Some(id) => self
+                .engine
+                .native_link
+                .asset_loader()
+                .get_async(id.clone())
+                .await
+                .map(Some),
+            None => Ok(None),
+        }
+    }
+
+    #[inline(always)]
+    pub fn load_at(&self, index: usize) -> Result<Option<A>, A::Error>
+    where
+        A: FromAssetBlob,
+    {
+        let Some(a) = self.open_at(index)? else {
+            return Ok(None);
+        };
+        A::from_asset_blob(a).map(Some)
+    }
+
+    #[inline(always)]
+    pub async fn load_at_async(&self, index: usize) -> Result<Option<A>, A::Error>
+    where
+        A: FromAssetBlobAsync,
+    {
+        let Some(a) = self.open_at_async(index).await? else {
+            return Ok(None);
+        };
+
+        A::from_asset_blob_async(a).await.map(Some)
+    }
+}
+
+impl<'q, PL: NativeLinker> Engine<'q, PL> {
     #[inline(always)]
     pub fn internal_native_link_mut(&mut self) -> &mut PL {
         &mut self.native_link
@@ -518,7 +585,15 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         &'a self,
         path: &str,
     ) -> std::io::Result<impl AssetBlob + 'a> {
-        self.native_link.asset_loader().get(path, A::EXT)
+        let id = self
+            .native_link
+            .asset_loader()
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(path, A::ASSET_TYPE)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "asset not found in assetdb")
+            })?;
+        self.native_link.asset_loader().get(id)
     }
 
     #[inline(always)]
@@ -526,35 +601,57 @@ impl<PL: NativeLinker> Engine<'_, PL> {
         &'a self,
         path: &str,
     ) -> std::io::Result<impl AssetBlobAsync + 'a> {
-        self.native_link
+        let id = self
+            .native_link
             .asset_loader()
-            .get_async(path, A::EXT)
-            .await
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(path, A::ASSET_TYPE)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "asset not found in assetdb")
+            })?;
+
+        self.native_link.asset_loader().get_async(id).await
+    }
+
+    #[inline(always)]
+    pub fn asset_collection<'a, A: LogicalAssetData>(
+        &'a self,
+        path: &str,
+    ) -> AssetCollection<'a, 'q, PL, A> {
+        let ids = self
+            .native_link
+            .asset_loader()
+            .asset_db()
+            .query_loadable_asset_ids_of_type(path, A::ASSET_TYPE);
+        AssetCollection {
+            engine: self,
+            ids,
+            _marker: core::marker::PhantomData,
+        }
     }
 
     #[inline(always)]
     pub fn load<A: FromAssetBlob>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset_blob(self.native_link.asset_loader().get(path, A::EXT)?)
+        A::from_asset_blob(self.open_raw_asset::<A>(path)?)
     }
 
     #[inline(always)]
     pub async fn load_async<A: FromAssetBlobAsync>(&self, path: &str) -> Result<A, A::Error> {
-        A::from_asset_blob_async(
-            self.native_link
-                .asset_loader()
-                .get_async(path, A::EXT)
-                .await?,
-        )
-        .await
+        A::from_asset_blob_async(self.open_raw_asset_async::<A>(path).await?).await
     }
 
     #[inline(always)]
     pub fn streaming<'a, A: FromStreamingAsset<'a>>(&'a self, path: &str) -> Result<A, A::Error> {
-        A::from_asset(
-            self.native_link
-                .asset_loader()
-                .get_streaming(path, A::EXT)?,
-        )
+        let id = self
+            .native_link
+            .asset_loader()
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(path, A::ASSET_TYPE)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::NotFound, "asset not found in assetdb")
+            })?;
+
+        A::from_asset(self.native_link.asset_loader().get_streaming(id)?)
     }
 
     #[inline(always)]

@@ -345,125 +345,129 @@ impl Buffer {
     }
 
     #[inline(always)]
-    pub fn map<'b>(&'b mut self, mode: BufferMapMode) -> br::Result<BufferMapGuard<'b>> {
-        BufferMapGuard::begin(self, mode)
-    }
-
-    pub fn guard_map<R>(
+    pub fn map_and_invalidate_raw_with_mode(
         &mut self,
         mode: BufferMapMode,
-        op: impl FnOnce(AnyPointer) -> R,
-    ) -> br::Result<R> {
+    ) -> br::Result<AnyPointer> {
+        let requires_explicit_sync = self.requires_explicit_sync();
+        let mapped_range = core::range::Range::from(self.offset..self.offset + self.size as u64);
+
         match self.memory_block {
             BackingMemory::Managed(ref m) => {
-                let locked = m.borrow_mut();
+                let mut locked = m.borrow_mut();
 
-                let ptr = unsafe {
-                    br::vkfn_wrapper::map_memory(
-                        locked.device.as_transparent_ref(),
-                        br::VkHandleRefMut::dangling(locked.handle),
-                        self.offset..self.offset + self.size as u64,
-                        0,
-                    )?
-                };
-                if self.requires_explicit_sync() && mode.is_read() {
+                let ptr = locked.map(mapped_range, 0)?;
+                if requires_explicit_sync && mode.is_read() {
                     unsafe {
-                        self.device().invalidate_memory_range(&[
-                            br::MappedMemoryRange::new_raw(
-                                locked.handle,
-                                self.offset,
-                                self.size as _,
-                            ),
-                        ])?;
+                        locked.invalidate_single_range(mapped_range)?;
                     }
                 }
-                let r = op(AnyPointer(unsafe {
-                    core::ptr::NonNull::new_unchecked(ptr as _)
-                }));
-                if self.requires_explicit_sync() && mode.is_write() {
-                    unsafe {
-                        self.device().flush_mapped_memory_ranges(&[
-                            br::MappedMemoryRange::new_raw(
-                                locked.handle,
-                                self.offset,
-                                self.size as _,
-                            ),
-                        ])?;
-                    }
-                }
-                unsafe {
-                    br::vkfn_wrapper::unmap_memory(
-                        locked.device.as_transparent_ref(),
-                        br::VkHandleRefMut::dangling(locked.handle),
-                    );
-                }
 
-                Ok(r)
+                Ok(AnyPointer(unsafe {
+                    core::ptr::NonNull::new_unchecked(ptr.cast())
+                }))
             }
             BackingMemory::Native(ref mut m) => {
-                let ptr = unsafe {
-                    m.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
-                };
-                if self.requires_flushing && mode.is_read() {
+                let ptr = unsafe { m.map_raw(mapped_range.into())? };
+                if requires_explicit_sync && mode.is_read() {
                     unsafe {
                         m.device()
                             .invalidate_memory_range(&[br::MappedMemoryRange::new(
                                 m,
-                                self.offset..self.offset + self.size as br::DeviceSize,
+                                mapped_range.into(),
                             )])?;
                     }
                 }
-                let r = op(AnyPointer(unsafe {
-                    core::ptr::NonNull::new_unchecked(ptr as _)
-                }));
-                if self.requires_flushing && mode.is_write() {
+
+                Ok(AnyPointer(unsafe {
+                    core::ptr::NonNull::new_unchecked(ptr.cast())
+                }))
+            }
+            BackingMemory::NativeShared(ref m) => {
+                let mut locked = m.borrow_mut();
+                let ptr = unsafe { locked.map_raw(mapped_range.into())? };
+                if requires_explicit_sync && mode.is_read() {
+                    unsafe {
+                        self.device
+                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                &locked,
+                                mapped_range.into(),
+                            )])?;
+                    }
+                }
+
+                Ok(AnyPointer(unsafe {
+                    core::ptr::NonNull::new_unchecked(ptr.cast())
+                }))
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn flush_and_unmap_raw_with_mode(&mut self, mode: BufferMapMode) -> br::Result<()> {
+        let requires_explicit_sync = self.requires_explicit_sync();
+        let mapped_range = core::range::Range::from(self.offset..self.offset + self.size as u64);
+
+        match self.memory_block {
+            BackingMemory::Managed(ref b) => {
+                let mut locked = b.borrow_mut();
+
+                if requires_explicit_sync && mode.is_write() {
+                    unsafe {
+                        locked.flush_single_range(mapped_range)?;
+                    }
+                }
+                unsafe {
+                    locked.unmap();
+                }
+            }
+            BackingMemory::Native(ref mut m) => {
+                if requires_explicit_sync && mode.is_write() {
                     unsafe {
                         m.device()
                             .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
                                 m,
-                                self.offset..self.offset + self.size as br::DeviceSize,
+                                mapped_range.into(),
                             )])?;
                     }
                 }
                 unsafe {
                     m.unmap();
                 }
-
-                Ok(r)
             }
-            BackingMemory::NativeShared(ref m) => {
-                let mut locked = m.borrow_mut();
-                let ptr = unsafe {
-                    locked.map_raw(self.offset..self.offset + self.size as br::vk::VkDeviceSize)?
-                };
-                if self.requires_explicit_sync() && mode.is_read() {
+            BackingMemory::NativeShared(ref b) => {
+                let mut locked = b.borrow_mut();
+
+                if requires_explicit_sync && mode.is_write() {
                     unsafe {
-                        self.device()
-                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
-                                &locked,
-                                self.offset..self.offset + self.size as br::DeviceSize,
-                            )])?;
-                    }
-                }
-                let r = op(AnyPointer(unsafe {
-                    core::ptr::NonNull::new_unchecked(ptr as _)
-                }));
-                if self.requires_explicit_sync() && mode.is_write() {
-                    unsafe {
-                        self.device()
+                        self.device
                             .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
                                 &locked,
-                                self.offset..self.offset + self.size as br::DeviceSize,
+                                mapped_range.into(),
                             )])?;
                     }
                 }
                 unsafe {
                     locked.unmap();
                 }
-
-                Ok(r)
             }
         }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn map<'b>(&'b mut self, mode: BufferMapMode) -> br::Result<BufferMapGuard<'b>> {
+        BufferMapGuard::begin(self, mode)
+    }
+
+    #[inline(always)]
+    pub fn guard_map<R>(
+        &mut self,
+        mode: BufferMapMode,
+        op: impl FnOnce(AnyPointer) -> R,
+    ) -> br::Result<R> {
+        Ok(op(self.map(mode)?.ptr))
     }
 
     /// Writes value as buffer content. checked whether value size and buffer size are equal.
@@ -598,25 +602,12 @@ impl<'b> BufferMapGuard<'b> {
         let (ptr, memlock) =
             match target.memory_block {
                 BackingMemory::Managed(ref m) => {
-                    let locked = m.borrow_mut();
+                    let mut locked = m.borrow_mut();
 
-                    let ptr = unsafe {
-                        br::vkfn_wrapper::map_memory(
-                            locked.device.as_transparent_ref(),
-                            br::VkHandleRefMut::dangling(locked.handle),
-                            mapped_range.into(),
-                            0,
-                        )?
-                    };
+                    let ptr = locked.map(mapped_range, 0)?;
                     if requires_explicit_sync && mode.is_read() {
                         unsafe {
-                            target.device().invalidate_memory_range(&[
-                                br::MappedMemoryRange::new_raw(
-                                    locked.handle,
-                                    mapped_range.start,
-                                    mapped_range.end - mapped_range.start,
-                                ),
-                            ])?;
+                            locked.invalidate_single_range(mapped_range)?;
                         }
                     }
 
@@ -663,23 +654,14 @@ impl<'b> BufferMapGuard<'b> {
 
     fn flush_and_unmap(&mut self) -> br::Result<()> {
         match self.memlock {
-            BufferMapGuardUnderlyingGuard::Managed(ref locked) => {
+            BufferMapGuardUnderlyingGuard::Managed(ref mut locked) => {
                 if self.requires_explicit_sync && self.mode.is_write() {
                     unsafe {
-                        self.device.flush_mapped_memory_ranges(&[
-                            br::MappedMemoryRange::new_raw(
-                                locked.handle,
-                                self.mapped_range.start,
-                                self.mapped_range.end - self.mapped_range.start,
-                            ),
-                        ])?;
+                        locked.flush_single_range(self.mapped_range)?;
                     }
                 }
                 unsafe {
-                    br::vkfn_wrapper::unmap_memory(
-                        locked.device.as_transparent_ref(),
-                        br::VkHandleRefMut::dangling(locked.handle),
-                    );
+                    locked.unmap();
                 }
             }
             BufferMapGuardUnderlyingGuard::Native(ref mut m) => {

@@ -1,11 +1,11 @@
-import Foundation
-import Cocoa
 import AVFAudio
+import Cocoa
+import Foundation
 
 struct NativeGameDriver {
     private let callbacks: UnsafeMutablePointer<GameDriverCallbacks>
     private let contextPtr: UnsafeMutableRawPointer
-    
+
     init(
         callbacks: UnsafeMutablePointer<GameDriverCallbacks>,
         contextPtr: UnsafeMutableRawPointer
@@ -13,50 +13,50 @@ struct NativeGameDriver {
         self.callbacks = callbacks
         self.contextPtr = contextPtr
     }
-    
+
     func terminate(viewController: PeridotRenderableViewController) {
         self.callbacks.pointee.terminate(
             self.contextPtr,
             unsafeBitCast(viewController, to: UnsafeMutableRawPointer.self)
         )
     }
-    
+
     func update() {
         self.callbacks.pointee.update(self.contextPtr)
     }
-    
+
     func resize(_ size: NSSize) {
         self.callbacks.pointee.resize(self.contextPtr, UInt32(size.width), UInt32(size.height))
     }
-    
+
     func handleKeyDown(character c: UniChar) {
         self.callbacks.pointee.handle_character_keydown(self.contextPtr, UInt8(c))
     }
-    
+
     func handleKeyUp(character c: UniChar) {
         self.callbacks.pointee.handle_character_keyup(self.contextPtr, UInt8(c))
     }
-    
+
     func handleKeyDown(mod code: UInt8) {
         self.callbacks.pointee.handle_keymod_down(self.contextPtr, code)
     }
-    
+
     func handleKeyUp(mod code: UInt8) {
         self.callbacks.pointee.handle_keymod_up(self.contextPtr, code)
     }
-    
+
     func handleMouseButtonDown(_ index: UInt8) {
         self.callbacks.pointee.handle_mouse_button_down(self.contextPtr, index)
     }
-    
+
     func handleMouseButtonUp(_ index: UInt8) {
         self.callbacks.pointee.handle_mouse_button_up(self.contextPtr, index)
     }
-    
+
     func reportMouseMoveAbs(x: Float, y: Float) {
         self.callbacks.pointee.report_mouse_move_abs(self.contextPtr, x, y)
     }
-    
+
     func pollUsercodeTask() {
         self.callbacks.pointee.poll_usercode_task(self.contextPtr)
     }
@@ -77,7 +77,7 @@ func nslogUtf8(ptr: UnsafePointer<UInt8>, len: size_t) {
 func captionbarText() -> String? {
     var len = 0
     let p = withUnsafeMutablePointer(to: &len) { ptr in captionbar_text(ptr) }
-    
+
     return String(
         bytes: UnsafeBufferPointer(
             start: unsafeBitCast(p, to: UnsafePointer<UInt8>.self),
@@ -94,7 +94,7 @@ func acquireLayerSize(
     height: UnsafeMutablePointer<UInt32>,
 ) {
     let rect = unsafeBitCast(layer, to: CALayer.self).contentsRect
-    
+
     width.pointee = UInt32(rect.size.width)
     height.pointee = UInt32(rect.size.height)
 }
@@ -113,20 +113,65 @@ func nsBundlePathForResource(
     outPath: UnsafeMutablePointer<UInt8>,
     outPathLength: UnsafeMutablePointer<size_t>
 ) -> Bool {
-    guard let path = Bundle.main.path(
-        forResource: String(
-            bytes: UnsafeBufferPointer(start: path, count: pathLength),
-            encoding: .utf8
-        ),
-        ofType: String(
-            bytes: UnsafeBufferPointer(start: ext, count: extLength),
-            encoding: .utf8
+    guard
+        let path = Bundle.main.path(
+            forResource: String(
+                bytes: UnsafeBufferPointer(start: path, count: pathLength),
+                encoding: .utf8
+            ),
+            ofType: String(
+                bytes: UnsafeBufferPointer(start: ext, count: extLength),
+                encoding: .utf8
+            )
         )
-    ) else {
+    else {
         outPathLength.pointee = 0
         return true
     }
-    
+
+    let pathData = Data(path.utf8)
+    if outPathLength.pointee < pathData.count {
+        // insufficient storage
+        outPathLength.pointee = pathData.count
+        return false
+    } else {
+        pathData.copyBytes(to: outPath, count: pathData.count)
+        outPathLength.pointee = pathData.count
+        return true
+    }
+}
+
+@_cdecl("nsbundle_path_for_resource_in_subdirectory")
+func nsBundlePathForResourceInSubdirectory(
+    path: UnsafePointer<UInt8>,
+    pathLength: size_t,
+    ext: UnsafePointer<UInt8>,
+    extLength: size_t,
+    subdir: UnsafePointer<UInt8>,
+    subdirLength: size_t,
+    outPath: UnsafeMutablePointer<UInt8>,
+    outPathLength: UnsafeMutablePointer<size_t>
+) -> Bool {
+    guard
+        let path = Bundle.main.path(
+            forResource: String(
+                bytes: UnsafeBufferPointer(start: path, count: pathLength),
+                encoding: .utf8
+            ),
+            ofType: String(
+                bytes: UnsafeBufferPointer(start: ext, count: extLength),
+                encoding: .utf8
+            ),
+            inDirectory: String(
+                bytes: UnsafeBufferPointer(start: subdir, count: subdirLength),
+                encoding: .utf8
+            )
+        )
+    else {
+        outPathLength.pointee = 0
+        return true
+    }
+
     let pathData = Data(path.utf8)
     if outPathLength.pointee < pathData.count {
         // insufficient storage
@@ -158,10 +203,10 @@ func obtainMousePointerPosition(
         pl.y += 5.0
         x.pointee = Float32(pl.x) * nsScreenBackingScaleFactor()
         y.pointee = Float32(h - pl.y) * nsScreenBackingScaleFactor()
-        
+
         return true
     }
-    
+
     return false
 }
 
@@ -194,18 +239,19 @@ func launchAudio(
         swiftContext,
         to: PeridotRenderableViewController.self
     )
-    
+
     let format = viewController.audioFormat()
     formatCallback(callbackContext, format.channelCount, format.sampleRate)
-    
+
     try! viewController.bindAudioRenderStream(format: format) {
         (isSilence, timestamp, frameCount, outputData) -> OSStatus in
-            isSilence.pointee = renderCallback(
+        isSilence.pointee =
+            renderCallback(
                 callbackContext,
                 frameCount,
                 outputData
-            ) != 0 ? true : false;
-            return noErr
+            ) != 0 ? true : false
+        return noErr
     }
     try! viewController.startAudio()
 }
@@ -216,7 +262,7 @@ func teardownAudio(swiftContext: UnsafeMutableRawPointer) {
         swiftContext,
         to: PeridotRenderableViewController.self
     )
-    
+
     viewController.stopAudio()
     viewController.unbindAudioRenderStream()
 }

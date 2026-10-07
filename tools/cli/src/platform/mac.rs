@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use pbxproj::{Decodable, ElementWrite};
 
 use crate::manifest::*;
+use crate::path::vulkan_sdk_path;
 use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
@@ -51,10 +52,10 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
-    steps::package_assets(
+    steps::process_assets(
         &ctx,
         options.ext_asset_path.as_deref(),
-        &ctx.cradle_directory.join("assets.par"),
+        &ctx.cradle_directory.join(".runtime-assets"),
     );
 
     ctx.within_cradle_dir(|| {
@@ -89,9 +90,7 @@ pub fn build(
 fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, identifier: &str) {
     ctx.print_step("Building app bundle...");
 
-    let system_vk_sdk_path =
-        std::path::PathBuf::from(std::env::var_os("VULKAN_SDK").expect("VULKAN_SDK not set"));
-
+    let system_vk_sdk_path = vulkan_sdk_path();
     let xcode_project_dir_path = ctx.cradle_directory.join("peridot-cradle");
     let xcode_project_template_dir_path = ctx.cradle_directory.join("peridot-cradle.template");
 
@@ -110,12 +109,7 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
         .expect("Failed to spawn sh_mirror"),
     );
 
-    // copy assets/binaries
-    std::fs::rename(
-        ctx.cradle_directory.join("assets.par"),
-        xcode_project_dir_path.join("assets.par"),
-    )
-    .expect("Failed to move assets archive");
+    // copy binaries
     let rust_library_path = xcode_project_dir_path.join("rlibs");
     rust_library_path
         .ensure_directory()

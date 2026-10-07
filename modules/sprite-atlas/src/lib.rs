@@ -213,7 +213,7 @@ impl SpriteAtlasAsset {
 
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for SpriteAtlasAsset {
-    const EXT: &'static str = "pa1-sprite-atlas";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SPRITE_ATLAS;
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::FromAssetBlob for SpriteAtlasAsset {
@@ -241,28 +241,22 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path.extension().is_some_and(|x| x == "spratlas")
     }
 
-    fn dest_path(
-        &self,
-        source_file_name: &std::ffi::OsStr,
-        out_dir_path: &std::path::Path,
-    ) -> std::path::PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-sprite-atlas")
-    }
-
     #[tracing::instrument(
         name = "AssetProcessor::process",
-        skip(self, _metadata),
+        skip(self, _metadata, ctx),
         fields(atlas_width, atlas_height)
     )]
     fn process(
         &self,
         source_path: &std::path::Path,
+        asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
-        out_path: &std::path::Path,
+        ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         use ktx::Texture;
+
+        let asset_id =
+            ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SPRITE_ATLAS, 0);
 
         let source = std::fs::read_to_string(source_path)?;
         let mut config = None;
@@ -443,7 +437,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(out_path)
+                .open(ctx.prepare_runtime_asset_output(&asset_id))
                 .inspect_err(|e| tracing::error!(reason = ?e, "Failed to open output"))?,
         )
         .inspect_err(|e| tracing::error!(reason = ?e, "Failed to write asset data"))?;

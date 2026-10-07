@@ -13,3 +13,6 @@
 [submodule "thirdparty/budoux/source-repo"]
 	path = thirdparty/budoux/source-repo
 	url = https://github.com/google/budoux
+[submodule "thirdparty/sqlite3/source-repo"]
+	path = thirdparty/sqlite3/source-repo
+	url = https://github.com/sqlite/sqlite
