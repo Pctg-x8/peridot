@@ -512,7 +512,7 @@ impl TextInputViewCore {
             .add_child(ct_text_clip, ct_preedit_underline);
         ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
-        let eh = Rc::new(TextInputViewCoreEventHandler {
+        let eh = Rc::new_cyclic(|this| TextInputViewCoreEventHandler {
             delegated_view_id,
             ht_root,
             ct_root,
@@ -530,6 +530,8 @@ impl TextInputViewCore {
             #[cfg(windows)]
             native_text_input_context: crate::platform::windows::NativeTextInputContext::new(
                 ctx.system_link,
+                ht_root,
+                this,
             ),
             #[cfg(target_os = "macos")]
             ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
@@ -543,9 +545,6 @@ impl TextInputViewCore {
         #[cfg(windows)]
         ctx.ht_manager
             .set_native_text_deferrable_event_handler(eh.ht_root, &eh);
-        #[cfg(windows)]
-        eh.native_text_input_context
-            .bind_action(ctx.system_link, &eh, eh.ht_root);
 
         eh.update_text(ctx.composite_tree);
 
@@ -596,7 +595,7 @@ pub struct TextInputViewCoreEventHandler {
     text_edit_state: RefCell<SingleLineTextEditState>,
     pending_update_mask: core::cell::Cell<TextInputViewUpdateMask>,
     #[cfg(windows)]
-    native_text_input_context: crate::platform::windows::NativeTextInputContext,
+    native_text_input_context: crate::platform::windows::NativeTextInputContext<Self>,
     #[cfg(target_os = "macos")]
     ht_manager_ptr: *const HitTestTreeManager,
     #[cfg(target_os = "macos")]
@@ -1326,7 +1325,7 @@ impl crate::platform::windows::TextProvider for TextInputViewCoreEventHandler {
 impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewCoreEventHandler {
     fn layout(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &crate::platform::windows::CoreTextLayoutContext,
         req: &windows::UI::Text::Core::CoreTextLayoutRequest,
     ) -> windows_core::Result<()> {
         let range = req.Range()?;
@@ -1357,12 +1356,12 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
         let o = TextLayout::measure_total_advances(
             &state.content[..start_bytes],
             FontID::UIDefault,
-            ctx.system_link.font_set(),
+            ctx.font_set,
         );
         let w = TextLayout::measure_total_advances(
             &state.content[start_bytes..end_bytes],
             FontID::UIDefault,
-            ctx.system_link.font_set(),
+            ctx.font_set,
         );
 
         tracing::debug!(?r, "ScreenRect");
@@ -1386,7 +1385,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
 
     fn text_updating(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &mut crate::platform::windows::CoreTextUpdateContext,
         e: &windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
     ) -> windows_core::Result<()> {
         let range = e.Range()?;
@@ -1400,19 +1399,13 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             "edit_context.text_updating"
         );
 
-        let update_mask = TextInputViewUpdateMask::translate(
-            self.text_edit_state
-                .borrow_mut()
-                .winct_update_text(&range, &text, &new_selection),
-        );
-
-        self.update_views(
-            update_mask,
-            ctx.composite_tree,
-            ctx.system_link,
-            ctx.ht_manager,
-            ctx.current_sec,
-        );
+        self.lazy_update_and_schedule(ctx.view_render_queue, |this| {
+            TextInputViewUpdateMask::translate(this.text_edit_state.borrow_mut().winct_update_text(
+                &range,
+                &text,
+                &new_selection,
+            ))
+        });
 
         e.SetResult(windows::UI::Text::Core::CoreTextTextUpdatingResult::Succeeded)?;
         Ok(())
@@ -1420,7 +1413,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
 
     fn format_updating(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &mut crate::platform::windows::CoreTextUpdateContext,
         e: &windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
     ) -> windows_core::Result<()> {
         let underline_type = e.UnderlineType()?.Value()?;
@@ -1436,18 +1429,13 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for TextInputViewC
             "edit_context.format_updating"
         );
 
-        let update_mask = TextInputViewUpdateMask::translate(
-            self.text_edit_state
-                .borrow_mut()
-                .winct_update_format(underline_type, &range),
-        );
-        self.update_views(
-            update_mask,
-            ctx.composite_tree,
-            ctx.system_link,
-            ctx.ht_manager,
-            ctx.current_sec,
-        );
+        self.lazy_update_and_schedule(ctx.view_render_queue, |this| {
+            TextInputViewUpdateMask::translate(
+                this.text_edit_state
+                    .borrow_mut()
+                    .winct_update_format(underline_type, &range),
+            )
+        });
         Ok(())
     }
 }
@@ -2561,18 +2549,19 @@ impl View for MultilineTextInputView {
                     .add_child(ct_text_clip, ct_preedit_underline);
                 ctx.composite_tree.add_child(ct_root, ct_text_clip);
 
-                let eh = Rc::new(MultilineTextInputEventHandler {
+                let ht_root = ctx.ht_manager.create(HitTestTreeData {
+                    left: layout_rect.left,
+                    top: layout_rect.top,
+                    width: layout_rect.width,
+                    height: layout_rect.height,
+                    cursor_shape: CursorShape::IBeam,
+                    keyboard_focus: Some(kf_token),
+                    ..Default::default()
+                });
+                let eh = Rc::new_cyclic(|this| MultilineTextInputEventHandler {
                     view_id: self.id,
                     kf_token,
-                    ht_root: ctx.ht_manager.create(HitTestTreeData {
-                        left: layout_rect.left,
-                        top: layout_rect.top,
-                        width: layout_rect.width,
-                        height: layout_rect.height,
-                        cursor_shape: CursorShape::IBeam,
-                        keyboard_focus: Some(kf_token),
-                        ..Default::default()
-                    }),
+                    ht_root,
                     ct_root,
                     ct_text,
                     ct_cursor,
@@ -2592,7 +2581,11 @@ impl View for MultilineTextInputView {
                     selection_begin_bytes: core::cell::Cell::new(0),
                     #[cfg(windows)]
                     native_text_input_context:
-                        crate::platform::windows::NativeTextInputContext::new(ctx.system_link),
+                        crate::platform::windows::NativeTextInputContext::new(
+                            ctx.system_link,
+                            ht_root,
+                            this,
+                        ),
                     #[cfg(target_os = "macos")]
                     ht_manager_ptr: core::ptr::from_mut(ctx.ht_manager).cast(),
                     #[cfg(target_os = "macos")]
@@ -2607,9 +2600,6 @@ impl View for MultilineTextInputView {
                 #[cfg(windows)]
                 ctx.ht_manager
                     .set_native_text_deferrable_event_handler(eh.ht_root, &eh);
-                #[cfg(windows)]
-                eh.native_text_input_context
-                    .bind_action(ctx.system_link, &eh, eh.ht_root);
 
                 eh.update_text(ctx.composite_tree);
 
@@ -2680,7 +2670,7 @@ struct MultilineTextInputEventHandler {
     preedit_range_end_bytes: core::cell::Cell<usize>,
     selection_begin_bytes: core::cell::Cell<usize>,
     #[cfg(windows)]
-    native_text_input_context: crate::platform::windows::NativeTextInputContext,
+    native_text_input_context: crate::platform::windows::NativeTextInputContext<Self>,
     #[cfg(target_os = "macos")]
     ht_manager_ptr: *const HitTestTreeManager,
     #[cfg(target_os = "macos")]
@@ -3839,7 +3829,7 @@ impl crate::platform::windows::TextProvider for MultilineTextInputEventHandler {
 impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextInputEventHandler {
     fn layout(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &crate::platform::windows::CoreTextLayoutContext,
         req: &windows::UI::Text::Core::CoreTextLayoutRequest,
     ) -> windows_core::Result<()> {
         let range = req.Range()?;
@@ -3867,7 +3857,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
             &content,
             start_bytes..end_bytes,
             FontID::UIDefault,
-            ctx.system_link.font_set(),
+            ctx.font_set,
         );
 
         let x_min = rects
@@ -3913,7 +3903,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
 
     fn text_updating(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &mut crate::platform::windows::CoreTextUpdateContext,
         e: &windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
     ) -> windows_core::Result<()> {
         let range = e.Range()?;
@@ -3951,14 +3941,8 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
         drop(content);
         let update_mask = self.select_range(new_cursor_start_bytes..new_cursor_end_bytes)
             | TextInputViewUpdateMask::TEXT;
-
-        self.update_views(
-            update_mask,
-            ctx.composite_tree,
-            ctx.system_link,
-            ctx.ht_manager,
-            ctx.current_sec,
-        );
+        self.pending_update_mask.set(update_mask);
+        ctx.schedule_view_render(self.view_id);
 
         e.SetResult(windows::UI::Text::Core::CoreTextTextUpdatingResult::Succeeded)?;
         Ok(())
@@ -3966,7 +3950,7 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
 
     fn format_updating(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &mut crate::platform::windows::CoreTextUpdateContext,
         e: &windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
     ) -> windows_core::Result<()> {
         let underline_type = e.UnderlineType()?.Value()?;
@@ -4005,7 +3989,10 @@ impl crate::platform::windows::CoreTextDeferrableEventHandler for MultilineTextI
             );
         }
 
-        self.update_preedit_underline(ctx.composite_tree, ctx.system_link);
+        self.pending_update_mask
+            .set(TextInputViewUpdateMask::PREEDIT);
+        ctx.schedule_view_render(self.view_id);
+
         Ok(())
     }
 }

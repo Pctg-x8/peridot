@@ -247,6 +247,10 @@ pub fn launch() {
                 &dx_context,
                 &context_menu_delayed_action_timer,
             ),
+            native_text_input_context_create_context:
+                platform::windows::NativeTextInputContextCreateContext {
+                    coreloop: core::ptr::null_mut(),
+                }
         },
         #[cfg(not(windows))]
         SystemLink {
@@ -284,6 +288,12 @@ pub fn launch() {
     unsafe {
         let cl = coreloop.as_mut().get_unchecked_mut();
         cl.syslink.flyout_surface_context.coreloop = cl;
+    }
+    #[cfg(windows)]
+    unsafe {
+        let cl = coreloop.as_mut().get_unchecked_mut();
+        cl.syslink.native_text_input_context_create_context.coreloop =
+            core::ptr::from_mut(cl).cast::<CoreLoop<'static>>();
     }
 
     profiler::sample_memory!();
@@ -369,6 +379,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     app_event_dispatcher.poll_init();
     unsafe { Pin::new_unchecked(&mut *cl_ptr) }.init();
+    unsafe { &*cl_ptr }
+        .syslink
+        .prelaunch(unsafe { &*cl_ptr }.main_window);
 
     let sync_event_bus = SyncEventBus::new();
     let shutdown = std::sync::atomic::AtomicBool::new(false);
@@ -690,24 +703,6 @@ pub enum Event {
     ScheduleViewRenderExt {
         id: ViewIdentifier,
     },
-    #[cfg(windows)]
-    CoreTextLayoutRequested {
-        ht: HitTestTreeRef,
-        request: windows::UI::Text::Core::CoreTextLayoutRequest,
-        deferral: Option<windows::Foundation::Deferral>,
-    },
-    #[cfg(windows)]
-    CoreTextTextUpdating {
-        ht: HitTestTreeRef,
-        e: windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
-        deferral: Option<windows::Foundation::Deferral>,
-    },
-    #[cfg(windows)]
-    CoreTextFormatUpdating {
-        ht: HitTestTreeRef,
-        e: windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
-        deferral: Option<windows::Foundation::Deferral>,
-    },
 }
 impl Event {
     /// Profilerに表示するEvent名
@@ -721,13 +716,6 @@ impl Event {
             Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
-            #[cfg(not(target_os = "macos"))]
-            #[cfg(windows)]
-            Self::CoreTextLayoutRequested { .. } => "CoreTextLayoutRequested",
-            #[cfg(windows)]
-            Self::CoreTextTextUpdating { .. } => "CoreTextTextUpdating",
-            #[cfg(windows)]
-            Self::CoreTextFormatUpdating { .. } => "CoreTextFormatUpdating",
         }
     }
 }
@@ -1398,6 +1386,18 @@ profiler::section!(PROCESS_EVENT = "LogicFiber.ProcessEvent");
 profiler::section!(PROCESS_SYNC_EVENT = "CoreLoop.ProcessSyncEvent");
 profiler::section!(LOCK_WAIT = "Mutex.LockWait");
 
+struct ExclusiveUseHandle<'sys> {
+    #[cfg(debug_assertions)]
+    target: *mut CoreLoop<'sys>,
+}
+#[cfg(debug_assertions)]
+impl Drop for ExclusiveUseHandle<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { &mut *self.target }.using = false;
+    }
+}
+
 pub struct CoreLoop<'sys> {
     syslink: SystemLink<'sys>,
     fs: &'sys FileSystem,
@@ -1446,6 +1446,9 @@ pub struct CoreLoop<'sys> {
     // preview
     preview_input_state: core::pin::Pin<Box<ui::pane::preview::InputState>>,
     preview_state: ui::pane::preview::MainThreadState,
+    // debug reuse detection
+    #[cfg(debug_assertions)]
+    using: bool,
     // should be pinned
     _marker: core::marker::PhantomPinned,
 }
@@ -1511,13 +1514,31 @@ impl<'sys> CoreLoop<'sys> {
             // preview
             preview_input_state: Box::pin(ui::pane::preview::InputState::new()),
             preview_state: ui::pane::preview::MainThreadState::new(),
+            // debug reuse detection
+            #[cfg(debug_assertions)]
+            using: false,
             // should pinned
             _marker: core::marker::PhantomPinned,
         }
     }
 
+    #[cfg(debug_assertions)]
+    #[inline(always)]
+    fn exclusive_use(self: Pin<&mut Self>) -> ExclusiveUseHandle<'sys> {
+        let this = unsafe { self.get_unchecked_mut() };
+        debug_assert_eq!(this.using, false, "CoreLoop is using");
+        this.using = true;
+        ExclusiveUseHandle { target: this }
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    fn exclusive_use(self: Pin<&mut Self>) {}
+
     #[profiler::instrument("CoreLoop.Initialize")]
     pub fn init(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
         #[cfg(windows)]
         unsafe {
@@ -1932,10 +1953,11 @@ impl<'sys> CoreLoop<'sys> {
 
         let this = unsafe { self.get_unchecked_mut() };
         this.ht_manager.dump(this.main_window.ht_root());
-        this.syslink.prelaunch(this.main_window);
     }
 
-    pub fn close_sub_window(mut self: core::pin::Pin<&mut Self>, mut target: WindowHandle) {
+    pub fn close_sub_window(mut self: Pin<&mut Self>, mut target: WindowHandle) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let wd = unsafe { target.take_extra_data::<ui::PerWindowData>() };
         struct LocalContext<'a, 'sys>(ViewInitContext<'a, 'sys>);
         impl ViewDestructionContext for LocalContext<'_, '_> {
@@ -1990,11 +2012,9 @@ impl<'sys> CoreLoop<'sys> {
         self.as_mut().sync_threads();
     }
 
-    pub fn resize_window(
-        mut self: core::pin::Pin<&mut Self>,
-        target: WindowHandle,
-        size: Size<LogicalUnit>,
-    ) {
+    pub fn resize_window(mut self: Pin<&mut Self>, target: WindowHandle, size: Size<LogicalUnit>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         let wd = unsafe { target.extra_data_ref::<ui::PerWindowData>() };
         wd.docking_manager.resize(
@@ -2011,10 +2031,12 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     pub fn handle_window_move(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         mut target: WindowHandle,
         pos: Point<LogicalUnit>,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         let wd = unsafe { target.extra_data_mut::<ui::PerWindowData>() };
         let mut input_context = InputEventContext {
@@ -2093,21 +2115,21 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn rescale_popup_of_window(
-        self: core::pin::Pin<&mut Self>,
-        target: WindowHandle,
-        new_scale: f32,
-    ) {
+    fn rescale_popup_of_window(mut self: Pin<&mut Self>, target: WindowHandle, new_scale: f32) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.popup_manager
             .rescale(target, new_scale, &mut this.composite_tree);
     }
 
     fn handle_window_maximize_state_changes(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         is_maximized: bool,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         struct LocalContext<'a> {
             view_render_queue: &'a mut ViewRenderQueue,
             view_instance_store: &'a mut ViewInstanceStore,
@@ -2141,7 +2163,7 @@ impl<'sys> CoreLoop<'sys> {
             }
         }
 
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
         unsafe { target.extra_data_ref::<ui::PerWindowData>() }
             .header
             .set_maximize_state(
@@ -2153,7 +2175,13 @@ impl<'sys> CoreLoop<'sys> {
             );
     }
 
-    fn handle_window_focus_changed(self: Pin<&mut Self>, mut target: WindowHandle, focused: bool) {
+    fn handle_window_focus_changed(
+        mut self: Pin<&mut Self>,
+        mut target: WindowHandle,
+        focused: bool,
+    ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         let mut input_context = InputEventContext {
             composite_tree: &mut this.composite_tree,
@@ -2211,10 +2239,12 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn handle_flyout_focus_changed(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         mut target: FlyoutSurfaceHandle,
         focused: bool,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         let mut input_context = InputEventContext {
             composite_tree: &mut this.composite_tree,
@@ -2248,10 +2278,12 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn handle_window_activation_state_changed(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         activated: bool,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         if !activated {
             if let Some(c) = this
@@ -2288,6 +2320,8 @@ impl<'sys> CoreLoop<'sys> {
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         tracing::trace!(?target, ?button, "pointer down");
 
         // #[cfg(target_os = "macos")]
@@ -2338,12 +2372,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn handle_pointer_move(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         pointer_id: PointerID,
         client_pos: Point<LogicalUnit>,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_move(
             NativeDesktopSurface::Window(target),
@@ -2378,10 +2414,12 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn handle_pointer_move_relative(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         pointer_id: PointerID,
         relative: Point<LogicalUnit>,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_move_relative(
             pointer_id,
@@ -2410,12 +2448,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn handle_pointer_up(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         tracing::trace!(?target, ?button, "pointer up");
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -2447,7 +2487,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn handle_pointer_leave_window(self: core::pin::Pin<&mut Self>, pointer_id: PointerID) {
+    fn handle_pointer_leave_window(mut self: Pin<&mut Self>, pointer_id: PointerID) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_leave(
             pointer_id,
@@ -2474,7 +2516,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn handle_pointer_hover_timeout(self: core::pin::Pin<&mut Self>) {
+    fn handle_pointer_hover_timeout(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.syslink.kill_pointer_hovering_timeout();
         this.pointer_input_manager
@@ -2500,11 +2544,9 @@ impl<'sys> CoreLoop<'sys> {
             });
     }
 
-    fn dispatch_scroll_wheel(
-        self: core::pin::Pin<&mut Self>,
-        amount: f32,
-        key_modifier: ModifierKey,
-    ) {
+    fn dispatch_scroll_wheel(mut self: Pin<&mut Self>, amount: f32, key_modifier: ModifierKey) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_scroll_wheel(
             amount,
@@ -2533,10 +2575,12 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn switch_focus_by_key(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         mut target: WindowHandle,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let Some(next_focus) = (if key_modifier.contains(ModifierKey::SHIFT) {
             target
                 .keyboard_focus_state()
@@ -2577,11 +2621,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_key_down(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         code: KeyInputCode,
         modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_keydown(
             code,
@@ -2611,11 +2657,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_flyout_key_down(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         code: KeyInputCode,
         modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_keydown(
             code,
@@ -2645,11 +2693,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_key_up(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         code: KeyInputCode,
         modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_keyup(
             code,
@@ -2679,11 +2729,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_flyout_key_up(
-        self: core::pin::Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         code: KeyInputCode,
         modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_keyup(
             code,
@@ -2713,11 +2765,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_key_char(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         ch: char,
         modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_char(
             ch,
@@ -2747,11 +2801,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_flyout_key_char(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         ch: char,
         modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_char(
             ch,
@@ -2787,6 +2843,8 @@ impl<'sys> CoreLoop<'sys> {
         preedit_string: Option<String>,
         committed_string: Option<String>,
     ) {
+        let _exclusive_use = self.exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         target.keyboard_focus_state().handle_ime_state_changes(
             committed_string.as_deref(),
@@ -2815,7 +2873,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn destroy_popup(self: core::pin::Pin<&mut Self>, id: PopupID) {
+    fn destroy_popup(mut self: Pin<&mut Self>, id: PopupID) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.popup_manager.teardown(
             id,
@@ -2833,7 +2893,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn open_alert_dialog(self: Pin<&mut Self>, target_window: WindowHandle, message: String) {
+    fn open_alert_dialog(mut self: Pin<&mut Self>, target_window: WindowHandle, message: String) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         let opened_id = this.popup_manager.open(
             &mut ViewInitContext {
@@ -2882,7 +2944,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn close_all_menus(self: Pin<&mut Self>) {
+    fn close_all_menus(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(c) = this.current_active_menu_session.take() {
             if let Some(ref a) = unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu {
@@ -2906,7 +2970,9 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn rescale_menu(self: Pin<&mut Self>, new_scale: f32) {
+    fn rescale_menu(mut self: Pin<&mut Self>, new_scale: f32) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(ref c) = this.custom_view_flyout_session {
             c.rescale(
@@ -2918,7 +2984,9 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn handle_menu_item_selection(self: Pin<&mut Self>, depth: usize, index: usize) {
+    fn handle_menu_item_selection(mut self: Pin<&mut Self>, depth: usize, index: usize) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(c) = this.current_active_menu_session.as_mut() {
             c.select_item(
@@ -2932,7 +3000,9 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn handle_menu_item_deselection(self: Pin<&mut Self>, depth: usize) {
+    fn handle_menu_item_deselection(mut self: Pin<&mut Self>, depth: usize) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(c) = this.current_active_menu_session.as_mut() {
             c.deselect_item(
@@ -2946,6 +3016,8 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn perform_menu_delayed_action(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         this.syslink
             .flyout_surface_context
@@ -2959,12 +3031,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_menu_pointer_down(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_down(
             pointer_id,
@@ -2996,12 +3070,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn handle_menu_pointer_move(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_move(
             NativeDesktopSurface::ContextMenu(target),
@@ -3036,12 +3112,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_menu_pointer_up(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_up(
             pointer_id,
@@ -3071,7 +3149,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn dispatch_menu_pointer_leave(self: Pin<&mut Self>, pointer_id: PointerID) {
+    fn dispatch_menu_pointer_leave(mut self: Pin<&mut Self>, pointer_id: PointerID) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_leave(
             pointer_id,
@@ -3098,7 +3178,9 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn perform_select_menu_command(self: Pin<&mut Self>, id: u64) {
+    fn perform_select_menu_command(mut self: Pin<&mut Self>, id: u64) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
 
         if let Some(ch) = this
@@ -3124,6 +3206,8 @@ impl<'sys> CoreLoop<'sys> {
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(r) = receiver.upgrade() {
             struct LocalContext<'env> {
@@ -3219,10 +3303,12 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn move_redock_preview(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         dest_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(ref mut state) = this.docking_preview_state {
             let popover_rect = ui::dock::move_preview(
@@ -3243,6 +3329,8 @@ impl<'sys> CoreLoop<'sys> {
         mut destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(state) = this.docking_preview_state.take() {
             let dm = &mut unsafe { destination_window.extra_data_mut::<ui::PerWindowData>() }
@@ -3407,7 +3495,9 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn update_preview(self: Pin<&mut Self>) {
+    fn update_preview(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
 
         this.preview_state.update(
@@ -3424,11 +3514,13 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn perform_drop(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         data: DragData,
         target_window: WindowHandle,
         client_pos: Point<LogicalUnit>,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.perform_drop(
             data,
@@ -3439,12 +3531,16 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn schedule_view_render(self: Pin<&mut Self>, id: ViewIdentifier) {
+    fn schedule_view_render(mut self: Pin<&mut Self>, id: ViewIdentifier) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
         this.view_render_queue.schedule(id);
     }
 
     fn perform_menu_closes(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if core::mem::replace(&mut this.close_menu_requested, false) {
             if let Some(c) = this.current_active_menu_session.take() {
@@ -3477,6 +3573,8 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn perform_menu_opens(mut self: Pin<&mut Self>) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         assert!(
             this.menu_open_requests.len() <= 1,
@@ -3813,45 +3911,27 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     #[cfg(windows)]
-    pub fn core_text_layout_requested(
-        self: Pin<&mut Self>,
+    pub fn core_text_compute_layout(
+        &self,
         req: windows::UI::Text::Core::CoreTextLayoutRequest,
         deferral: Option<windows::Foundation::Deferral>,
         ht: HitTestTreeRef,
     ) {
-        let this = unsafe { self.get_unchecked_mut() };
-
         if deferral.is_none()
             || req
                 .IsCanceled()
                 .inspect_err(|e| tracing::error!(reason = %e, "request.is_canceled"))
                 == Ok(false)
         {
-            if let Some(w) = this
+            if let Some(w) = self
                 .ht_manager
                 .get_data(ht)
                 .native_text_deferrable_event_handler()
             {
                 if let Err(e) = w.layout(
-                    &mut InputEventContext {
-                        composite_tree: &mut this.composite_tree,
-                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut this.syslink,
-                        ht_manager: &this.ht_manager,
-                        dock_store: &mut this.dock_store,
-                        view_instance_store: &mut this.view_instance_store,
-                        view_tree_relation_store: &this.view_tree_relation_store,
-                        view_group_relation_store: &this.view_group_relation_store,
-                        view_render_queue: &mut this.view_render_queue,
-                        menu_open_requests: &mut this.menu_open_requests,
-                        menu_reopen_request: &mut this.menu_reopen_request,
-                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                        application: ApplicationMutation {
-                            state: &mut this.application,
-                            view_feedbacks: &mut this.view_feedback_store,
-                        },
-                        popup_manager: &mut this.popup_manager,
-                        docking_preview_state: &mut this.docking_preview_state,
+                    &crate::platform::windows::CoreTextLayoutContext {
+                        ht_manager: &self.ht_manager,
+                        font_set: self.syslink.font_set(),
                     },
                     &req,
                 ) {
@@ -3873,12 +3953,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     #[cfg(windows)]
-    pub fn core_text_text_updating(
-        self: Pin<&mut Self>,
+    pub fn core_text_update_text(
+        mut self: Pin<&mut Self>,
         args: windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
         deferral: Option<windows::Foundation::Deferral>,
         ht: HitTestTreeRef,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
 
         if deferral.is_none()
@@ -3893,25 +3975,8 @@ impl<'sys> CoreLoop<'sys> {
                 .native_text_deferrable_event_handler()
             {
                 if let Err(e) = w.text_updating(
-                    &mut InputEventContext {
-                        composite_tree: &mut this.composite_tree,
-                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut this.syslink,
-                        ht_manager: &this.ht_manager,
-                        dock_store: &mut this.dock_store,
-                        view_instance_store: &mut this.view_instance_store,
-                        view_tree_relation_store: &this.view_tree_relation_store,
-                        view_group_relation_store: &this.view_group_relation_store,
+                    &mut platform::windows::CoreTextUpdateContext {
                         view_render_queue: &mut this.view_render_queue,
-                        menu_open_requests: &mut this.menu_open_requests,
-                        menu_reopen_request: &mut this.menu_reopen_request,
-                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                        application: ApplicationMutation {
-                            state: &mut this.application,
-                            view_feedbacks: &mut this.view_feedback_store,
-                        },
-                        popup_manager: &mut this.popup_manager,
-                        docking_preview_state: &mut this.docking_preview_state,
                     },
                     &args,
                 ) {
@@ -3933,12 +3998,14 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     #[cfg(windows)]
-    pub fn core_text_format_updating(
-        self: Pin<&mut Self>,
+    pub fn core_text_update_format(
+        mut self: Pin<&mut Self>,
         args: windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
         deferral: Option<windows::Foundation::Deferral>,
         ht: HitTestTreeRef,
     ) {
+        let _exclusive_use = self.as_mut().exclusive_use();
+
         let this = unsafe { self.get_unchecked_mut() };
 
         if deferral.is_none()
@@ -3953,25 +4020,8 @@ impl<'sys> CoreLoop<'sys> {
                 .native_text_deferrable_event_handler()
             {
                 if let Err(e) = w.format_updating(
-                    &mut InputEventContext {
-                        composite_tree: &mut this.composite_tree,
-                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                        system_link: &mut this.syslink,
-                        ht_manager: &this.ht_manager,
-                        dock_store: &mut this.dock_store,
-                        view_instance_store: &mut this.view_instance_store,
-                        view_tree_relation_store: &this.view_tree_relation_store,
-                        view_group_relation_store: &this.view_group_relation_store,
+                    &mut platform::windows::CoreTextUpdateContext {
                         view_render_queue: &mut this.view_render_queue,
-                        menu_open_requests: &mut this.menu_open_requests,
-                        menu_reopen_request: &mut this.menu_reopen_request,
-                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                        application: ApplicationMutation {
-                            state: &mut this.application,
-                            view_feedbacks: &mut this.view_feedback_store,
-                        },
-                        popup_manager: &mut this.popup_manager,
-                        docking_preview_state: &mut this.docking_preview_state,
                     },
                     &args,
                 ) {
@@ -4016,22 +4066,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
                 .as_mut()
                 .perform_dropdown_menu_select_item(id, receiver),
             Event::ScheduleViewRenderExt { id } => inst.as_mut().schedule_view_render(id),
-            #[cfg(windows)]
-            Event::CoreTextLayoutRequested {
-                ht,
-                request,
-                deferral,
-            } => inst
-                .as_mut()
-                .core_text_layout_requested(request, deferral, ht),
-            #[cfg(windows)]
-            Event::CoreTextTextUpdating { ht, e, deferral } => {
-                inst.as_mut().core_text_text_updating(e, deferral, ht)
-            }
-            #[cfg(windows)]
-            Event::CoreTextFormatUpdating { ht, e, deferral } => {
-                inst.as_mut().core_text_format_updating(e, deferral, ht)
-            }
         }
 
         // after-input common update phase

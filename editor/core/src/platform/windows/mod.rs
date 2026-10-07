@@ -105,15 +105,15 @@ use windows_core::{BOOL, HRESULT, HSTRING, IInspectable, Interface, PCWSTR, h, i
 use windows_numerics::{Vector2, Vector3};
 
 use core::cell::{Cell, UnsafeCell};
-use std::{cell::OnceCell, rc::Rc, sync::Mutex};
+use std::{cell::OnceCell, sync::Mutex};
 
 use crate::{
     CoreLoop, Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{Graphics, VulkanSurface},
     input::{
-        InputEventContext, KeyInputCode, KeyboardFocusGroupRef, ModifierKey,
-        PerWindowKeyboardFocusState, PointerInputManager, PointerInputUnit, ShellPointerActions,
+        KeyInputCode, KeyboardFocusGroupRef, ModifierKey, PerWindowKeyboardFocusState,
+        PointerInputManager, PointerInputUnit, ShellPointerActions,
         hittest::{
             CursorShape, DragDropFlags, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
             PointerButton,
@@ -125,6 +125,7 @@ use crate::{
         composite::{CompositeRect, CompositeTreeRef},
         text::FontSet,
     },
+    uicore::{ViewIdentifier, ViewRenderQueue, ViewRenderer},
     utils::platform::windows::{
         EnumerateDisplayMonitorContinuous, WaitableTimer, current_instance_handle,
         enumerate_display_monitors, point_from_win32, point_to_win32, primary_monitor,
@@ -523,27 +524,29 @@ impl NativeWindow {
                     state: WindowState {
                         r#type: window_type,
                         content_scale: GetDpiForWindow(w) as f32 / 96.0,
-                        composite_root: CompositeRect::build().expand_full().create(
-                            &mut unsafe { coreloop.as_mut().get_unchecked_mut() }.composite_tree,
-                        ),
-                        ht_root: unsafe { coreloop.as_mut().get_unchecked_mut() }
-                            .ht_manager
-                            .create(HitTestTreeData {
+                        composite_root: CompositeRect::build()
+                            .expand_full()
+                            .create(&mut coreloop.as_mut().get_unchecked_mut().composite_tree),
+                        ht_root: coreloop.as_mut().get_unchecked_mut().ht_manager.create(
+                            HitTestTreeData {
                                 width_adjustment_factor: 1.0,
                                 height_adjustment_factor: 1.0,
                                 root_of_window: Some(WindowHandle(w)),
                                 ..Default::default()
-                            }),
+                            },
+                        ),
                         latest_ui_scale_changes: Mutex::new(None),
                         keyboard_focus_state: PerWindowKeyboardFocusState::new(
-                            unsafe { coreloop.as_mut().get_unchecked_mut() }
+                            coreloop
+                                .as_mut()
+                                .get_unchecked_mut()
                                 .keyboard_focus_registry
                                 .acquire_group(),
                         ),
                         destroying: false,
                     },
                     app_context,
-                    coreloop: unsafe { coreloop.get_unchecked_mut() },
+                    coreloop: coreloop.get_unchecked_mut(),
                     modifier_key_state: ModifierKeyRecorder::new(),
                 }))
                 .addr()
@@ -1988,6 +1991,7 @@ pub struct SystemLink<'sys> {
     pub app_context: &'sys ApplicationContext,
     pub pointer_hovering_timer_handle: HANDLE,
     pub flyout_surface_context: flyout_surface::SharedState,
+    pub native_text_input_context_create_context: NativeTextInputContextCreateContext,
 }
 impl<'sys> SystemLink<'sys> {
     #[inline(always)]
@@ -2105,6 +2109,25 @@ impl<'sys> SystemLink<'sys> {
     }
 }
 
+pub struct NativeTextInputContextCreateContext {
+    pub coreloop: *mut CoreLoop<'static>,
+}
+
+pub struct CoreTextLayoutContext<'env> {
+    pub ht_manager: &'env HitTestTreeManager,
+    pub font_set: &'env FontSet,
+}
+
+pub struct CoreTextUpdateContext<'env> {
+    pub view_render_queue: &'env mut ViewRenderQueue,
+}
+impl<'env> ViewRenderer for CoreTextUpdateContext<'env> {
+    #[inline(always)]
+    fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
+        self.view_render_queue.schedule(target)
+    }
+}
+
 pub trait TextProvider {
     fn text(&self, range: CoreTextRange) -> windows_core::Result<HSTRING>;
     fn selection(&self, req: &CoreTextSelectionRequest) -> windows_core::Result<()>;
@@ -2112,48 +2135,50 @@ pub trait TextProvider {
 pub trait CoreTextDeferrableEventHandler {
     fn layout(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &CoreTextLayoutContext,
         req: &CoreTextLayoutRequest,
     ) -> windows_core::Result<()>;
     fn text_updating(
         &self,
-        ctx: &mut InputEventContext,
+        ctx: &mut CoreTextUpdateContext,
         e: &CoreTextTextUpdatingEventArgs,
     ) -> windows_core::Result<()>;
     fn format_updating<'x>(
         &'x self,
-        ctx: &mut InputEventContext,
+        ctx: &mut CoreTextUpdateContext,
         e: &CoreTextFormatUpdatingEventArgs,
     ) -> windows_core::Result<()>;
 }
-pub struct NativeTextInputContext {
+pub struct NativeTextInputContext<T: TextProvider + 'static> {
     edit_context: CoreTextEditContext,
+    _text_provider: Pin<Box<std::rc::Weak<T>>>,
 }
-impl NativeTextInputContext {
-    pub fn new(system_link: &SystemLink) -> Self {
+impl<T: TextProvider + 'static> NativeTextInputContext<T> {
+    pub fn new(
+        system_link: &SystemLink,
+        layout_provider_ht: HitTestTreeRef,
+        text_provider: &std::rc::Weak<T>,
+    ) -> Self {
         let edit_context = system_link
             .app_context
             .ctm
             .CreateEditContext()
             .expect("CoreTextServicesManager.CreateEditContext");
+        let text_provider = Box::pin(text_provider.clone());
+        let text_provider_ptr = core::ptr::from_ref(text_provider.as_ref().get_ref());
 
-        Self { edit_context }
-    }
-
-    pub fn bind_action<T: TextProvider + 'static>(
-        &self,
-        system_link: &SystemLink,
-        text_provider: &Rc<T>,
-        layout_provider_ht: HitTestTreeRef,
-    ) {
+        // TODO: CoreTextとRustの相性がありえん悪いのをなんかいい感じになんとかしたい
         let caller_thread_id = std::thread::current().id();
-        self.edit_context
+        edit_context
             .LayoutRequested(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextLayoutRequestedEventArgs,
             >::new({
-                let event_dispatcher =
-                    std::sync::atomic::AtomicPtr::new(system_link.event_dispatcher);
+                let coreloop = std::sync::atomic::AtomicPtr::new(
+                    system_link
+                        .native_text_input_context_create_context
+                        .coreloop,
+                );
                 move |_sender, e| {
                     let e = e.ok().expect("event_args.null");
                     let req = e.Request().expect("layout_requested.event_args.request");
@@ -2163,35 +2188,23 @@ impl NativeTextInputContext {
                         caller_thread_id,
                         "not main thread"
                     );
-
-                    let ed_ref = unsafe { &**event_dispatcher.as_ptr() };
-                    if ed_ref.can_immediate_dispatch() {
-                        ed_ref.dispatch(Event::CoreTextLayoutRequested {
-                            ht: layout_provider_ht,
-                            request: req,
-                            deferral: None,
-                        });
-                    } else {
-                        let deferral = req.GetDeferral()?;
-                        ed_ref.dispatch(Event::CoreTextLayoutRequested {
-                            ht: layout_provider_ht,
-                            request: req,
-                            deferral: Some(deferral),
-                        });
-                    }
+                    unsafe { &**coreloop.as_ptr() }.core_text_compute_layout(
+                        req,
+                        None,
+                        layout_provider_ht,
+                    );
 
                     Ok(())
                 }
             }))
             .expect("edit_context.layout_requested");
-        self.edit_context
+        edit_context
             .TextRequested(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextTextRequestedEventArgs,
             >::new({
-                let text_provider = std::sync::atomic::AtomicPtr::new(Rc::as_ptr(&text_provider)
-                    as *const T
-                    as *mut T);
+                let text_provider_ptr =
+                    std::sync::atomic::AtomicPtr::new(text_provider_ptr.cast_mut());
                 move |_sender, e| {
                     let e = e.ok().expect("event_args.null");
                     let req = e.Request().expect("text_requested.event_args.request");
@@ -2206,18 +2219,26 @@ impl NativeTextInputContext {
                         "not main thread"
                     );
 
-                    req.SetText(&unsafe { &**text_provider.as_ptr() }.text(req.Range()?)?)?;
+                    let Some(text_provider) = unsafe { &**text_provider_ptr.as_ptr() }.upgrade()
+                    else {
+                        tracing::warn!("text provider has defunct!");
+                        return Ok(());
+                    };
+                    req.SetText(&text_provider.text(req.Range()?)?)?;
                     Ok(())
                 }
             }))
             .expect("edit_context.text_requested");
-        self.edit_context
+        edit_context
             .TextUpdating(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextTextUpdatingEventArgs,
             >::new({
-                let event_dispatcher =
-                    std::sync::atomic::AtomicPtr::new(system_link.event_dispatcher);
+                let coreloop = std::sync::atomic::AtomicPtr::new(
+                    system_link
+                        .native_text_input_context_create_context
+                        .coreloop,
+                );
                 move |_sender, e| {
                     let e = e.cloned().expect("event_args.null");
 
@@ -2227,27 +2248,17 @@ impl NativeTextInputContext {
                         "not main thread"
                     );
 
-                    let ed_ref = unsafe { &**event_dispatcher.as_ptr() };
-                    if ed_ref.can_immediate_dispatch() {
-                        ed_ref.dispatch(Event::CoreTextTextUpdating {
-                            ht: layout_provider_ht,
-                            e,
-                            deferral: None,
-                        });
-                    } else {
-                        let deferral = e.GetDeferral()?;
-                        ed_ref.dispatch(Event::CoreTextTextUpdating {
-                            ht: layout_provider_ht,
-                            e,
-                            deferral: Some(deferral),
-                        });
-                    }
+                    unsafe { Pin::new_unchecked(&mut **coreloop.as_ptr()) }.core_text_update_text(
+                        e,
+                        None,
+                        layout_provider_ht,
+                    );
 
                     Ok(())
                 }
             }))
             .expect("edit_context.text_updating");
-        self.edit_context
+        edit_context
             .CompositionStarted(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextCompositionStartedEventArgs,
@@ -2257,7 +2268,7 @@ impl NativeTextInputContext {
                 Ok(())
             }))
             .expect("edit_context.composition_started");
-        self.edit_context
+        edit_context
             .CompositionCompleted(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextCompositionCompletedEventArgs,
@@ -2280,13 +2291,16 @@ impl NativeTextInputContext {
                 Ok(())
             }))
             .expect("edit_context.composition_completed");
-        self.edit_context
+        edit_context
             .FormatUpdating(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextFormatUpdatingEventArgs,
             >::new({
-                let event_dispatcher =
-                    std::sync::atomic::AtomicPtr::new(system_link.event_dispatcher);
+                let coreloop = std::sync::atomic::AtomicPtr::new(
+                    system_link
+                        .native_text_input_context_create_context
+                        .coreloop,
+                );
                 move |_sender, e| {
                     let e = e.cloned().expect("event_args.null");
 
@@ -2296,27 +2310,14 @@ impl NativeTextInputContext {
                         "not main thread"
                     );
 
-                    let ed_ref = unsafe { &**event_dispatcher.as_ptr() };
-                    if ed_ref.can_immediate_dispatch() {
-                        ed_ref.dispatch(Event::CoreTextFormatUpdating {
-                            ht: layout_provider_ht,
-                            e,
-                            deferral: None,
-                        });
-                    } else {
-                        let deferral = e.GetDeferral()?;
-                        ed_ref.dispatch(Event::CoreTextFormatUpdating {
-                            ht: layout_provider_ht,
-                            e,
-                            deferral: Some(deferral),
-                        });
-                    }
+                    unsafe { Pin::new_unchecked(&mut **coreloop.as_ptr()) }
+                        .core_text_update_format(e, None, layout_provider_ht);
 
                     Ok(())
                 }
             }))
             .expect("edit_context.format_updating");
-        self.edit_context
+        edit_context
             .FocusRemoved(&TypedEventHandler::<
                 CoreTextEditContext,
                 windows_core::IInspectable,
@@ -2326,7 +2327,7 @@ impl NativeTextInputContext {
                 Ok(())
             }))
             .expect("edit_context.focus_removed");
-        self.edit_context
+        edit_context
             .NotifyFocusLeaveCompleted(
                 &TypedEventHandler::<CoreTextEditContext, IInspectable>::new(|_sender, e| {
                     tracing::trace!(e = ?e.ok(), "edit_context.notify_focus_leave_completed");
@@ -2335,14 +2336,13 @@ impl NativeTextInputContext {
                 }),
             )
             .expect("edit_context.notify_focus_leave_completed");
-        self.edit_context
+        edit_context
             .SelectionRequested(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextSelectionRequestedEventArgs,
             >::new({
-                let text_provider = std::sync::atomic::AtomicPtr::new(Rc::as_ptr(&text_provider)
-                    as *const T
-                    as *mut T);
+                let text_provider_ptr =
+                    std::sync::atomic::AtomicPtr::new(text_provider_ptr.cast_mut());
                 move |_sender, e| {
                     let e = e.ok().expect("event_args.null");
                     let req = e
@@ -2356,12 +2356,17 @@ impl NativeTextInputContext {
                         "not main thread"
                     );
 
-                    unsafe { &**text_provider.as_ptr() }.selection(&req)?;
+                    let Some(text_provider) = unsafe { &**text_provider_ptr.as_ptr() }.upgrade()
+                    else {
+                        tracing::warn!("text provider has defunct!");
+                        return Ok(());
+                    };
+                    text_provider.selection(&req)?;
                     Ok(())
                 }
             }))
             .expect("edit_context.selection_requested");
-        self.edit_context
+        edit_context
             .SelectionUpdating(&TypedEventHandler::<
                 CoreTextEditContext,
                 CoreTextSelectionUpdatingEventArgs,
@@ -2376,6 +2381,11 @@ impl NativeTextInputContext {
                 Ok(())
             }))
             .expect("edit_context.selection_updating");
+
+        Self {
+            edit_context,
+            _text_provider: text_provider,
+        }
     }
 
     pub fn notify_focus_enter(&self) {
