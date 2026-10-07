@@ -1565,8 +1565,6 @@ impl<'sys> CoreLoop<'sys> {
         this.main_window = main_window;
 
         let mut view_init_ctx = ViewInitContext {
-            composite_tree: &mut this.composite_tree,
-            ht_manager: &mut this.ht_manager,
             current_sec: this.global_time_base.elapsed().as_secs_f32(),
             keyboard_focus_registry: &mut this.keyboard_focus_registry,
             view_allocator: &mut this.view_allocator,
@@ -1581,8 +1579,7 @@ impl<'sys> CoreLoop<'sys> {
             application: &this.application,
         };
 
-        view_init_ctx
-            .composite_tree
+        this.composite_tree
             .begin_mod_chain(this.main_window.ct_root())
             .has_bitmap(true)
             .composite_mode(CompositeMode::FillCornerGradient(
@@ -1776,11 +1773,26 @@ impl<'sys> CoreLoop<'sys> {
                 ),
             }));
 
-        view_init_ctx.render_view_with_base(
+        crate::uicore::render_view_with_base(
             main_window_root_view.into_untyped(),
+            &mut RenderContext {
+                composite_tree: &mut this.composite_tree,
+                ht_manager: &mut this.ht_manager,
+                keyboard_focus_registry: &mut view_init_ctx.keyboard_focus_registry,
+                current_sec: view_init_ctx.current_sec,
+                system_link: view_init_ctx.system_link,
+                main_thread_texture_id_issuer: view_init_ctx.main_thread_texture_id_issuer,
+                application: view_init_ctx.application,
+                view_feedback_subscription_delayed_ops: view_init_ctx
+                    .view_feedback_subscription_delayed_ops,
+            },
             &this.main_window,
             this.main_window.keyboard_focus_group(),
             Rect::from_lt_size(Point::new_logical(0.0, 0.0), this.main_window.client_size()),
+            view_init_ctx.view_instance_store,
+            view_init_ctx.view_tree_relation_store,
+            view_init_ctx.view_layout_state_store,
+            view_init_ctx.view_render_state_store,
         );
 
         if let Some(ref last_window_state) = last_window_state {
@@ -1802,8 +1814,6 @@ impl<'sys> CoreLoop<'sys> {
                             .apply();
 
                         let mut view_init_ctx = ViewInitContext {
-                            composite_tree: &mut this.composite_tree,
-                            ht_manager: &mut this.ht_manager,
                             current_sec: this.global_time_base.elapsed().as_secs_f32(),
                             keyboard_focus_registry: &mut this.keyboard_focus_registry,
                             view_allocator: &mut this.view_allocator,
@@ -1832,11 +1842,27 @@ impl<'sys> CoreLoop<'sys> {
                             root_view.into_untyped(),
                         );
 
-                        view_init_ctx.render_view_with_base(
+                        crate::uicore::render_view_with_base(
                             root_view.into_untyped(),
+                            &mut RenderContext {
+                                composite_tree: &mut this.composite_tree,
+                                ht_manager: &mut this.ht_manager,
+                                keyboard_focus_registry: &mut view_init_ctx.keyboard_focus_registry,
+                                current_sec: view_init_ctx.current_sec,
+                                system_link: view_init_ctx.system_link,
+                                main_thread_texture_id_issuer: view_init_ctx
+                                    .main_thread_texture_id_issuer,
+                                application: view_init_ctx.application,
+                                view_feedback_subscription_delayed_ops: view_init_ctx
+                                    .view_feedback_subscription_delayed_ops,
+                            },
                             &w,
                             w.keyboard_focus_group(),
                             Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                            view_init_ctx.view_instance_store,
+                            view_init_ctx.view_tree_relation_store,
+                            view_init_ctx.view_layout_state_store,
+                            view_init_ctx.view_render_state_store,
                         );
 
                         w.associate_extra_data(Box::new(ui::PerWindowData {
@@ -1936,26 +1962,26 @@ impl<'sys> CoreLoop<'sys> {
         let _exclusive_use = self.as_mut().exclusive_use();
 
         let wd = unsafe { target.take_extra_data::<ui::PerWindowData>() };
-        struct LocalContext<'a, 'sys>(ViewInitContext<'a, 'sys>);
-        impl ViewDestructionContext for LocalContext<'_, '_> {
+        struct LocalContext<'a> {
+            pub teardown_context: TeardownContext<'a>,
+            pub view_allocator: &'a mut ViewIdentifierAllocator,
+            pub view_instance_store: &'a mut ViewInstanceStore,
+            pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
+            pub view_group_relation_store: &'a mut ViewGroupRelationStore,
+            pub view_layout_state_store: &'a mut ViewLayoutStateStore,
+            pub view_render_state_store: &'a mut ViewRenderStateStore,
+        }
+        impl ViewDestructionContext for LocalContext<'_> {
             fn destruct_view_recursive_untyped(&mut self, target: ViewIdentifier) {
                 uicore::destruct_view_recursive(
                     target,
-                    &mut TeardownContext {
-                        composite_tree: &mut self.0.composite_tree,
-                        ht_manager: &mut self.0.ht_manager,
-                        keyboard_focus_registry: &mut self.0.keyboard_focus_registry,
-                        current_sec: self.0.current_sec,
-                        view_feedback_subscription_delayed_ops: &mut self
-                            .0
-                            .view_feedback_subscription_delayed_ops,
-                    },
-                    self.0.view_allocator,
-                    self.0.view_instance_store,
-                    self.0.view_tree_relation_store,
-                    self.0.view_group_relation_store,
-                    self.0.view_layout_state_store,
-                    self.0.view_render_state_store,
+                    &mut self.teardown_context,
+                    self.view_allocator,
+                    self.view_instance_store,
+                    self.view_tree_relation_store,
+                    self.view_group_relation_store,
+                    self.view_layout_state_store,
+                    self.view_render_state_store,
                 );
             }
         }
@@ -1963,23 +1989,22 @@ impl<'sys> CoreLoop<'sys> {
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         wd.docking_manager.teardown(
             &mut this.dock_store,
-            &mut LocalContext(ViewInitContext {
-                composite_tree: &mut this.composite_tree,
-                ht_manager: &mut this.ht_manager,
-                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut this.keyboard_focus_registry,
+            &mut LocalContext {
+                teardown_context: TeardownContext {
+                    composite_tree: &mut this.composite_tree,
+                    ht_manager: &mut this.ht_manager,
+                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                    view_feedback_subscription_delayed_ops: &mut this
+                        .view_feedback_registry_delayed_ops,
+                },
                 view_allocator: &mut this.view_allocator,
                 view_instance_store: &mut this.view_instance_store,
                 view_tree_relation_store: &mut this.view_tree_relation_store,
                 view_group_relation_store: &mut this.view_group_relation_store,
                 view_layout_state_store: &mut this.view_layout_state_store,
                 view_render_state_store: &mut this.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut this
-                    .view_feedback_registry_delayed_ops,
-                system_link: &this.syslink,
-                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
-                application: &this.application,
-            }),
+            },
         );
         this.sub_windows.remove(&target);
         close_sub_window(target);
@@ -2893,8 +2918,6 @@ impl<'sys> CoreLoop<'sys> {
         let this = unsafe { self.get_unchecked_mut() };
         let opened_id = this.popup_manager.open(
             &mut ViewInitContext {
-                composite_tree: &mut this.composite_tree,
-                ht_manager: &mut this.ht_manager,
                 current_sec: this.global_time_base.elapsed().as_secs_f32(),
                 keyboard_focus_registry: &mut this.keyboard_focus_registry,
                 view_allocator: &mut this.view_allocator,
@@ -3358,8 +3381,6 @@ impl<'sys> CoreLoop<'sys> {
                             .apply();
 
                         let mut view_init_ctx = ViewInitContext {
-                            composite_tree: &mut this.composite_tree,
-                            ht_manager: &mut this.ht_manager,
                             current_sec: this.global_time_base.elapsed().as_secs_f32(),
                             keyboard_focus_registry: &mut this.keyboard_focus_registry,
                             view_allocator: &mut this.view_allocator,
@@ -3388,11 +3409,27 @@ impl<'sys> CoreLoop<'sys> {
                             root_view.into_untyped(),
                         );
 
-                        view_init_ctx.render_view_with_base(
+                        crate::uicore::render_view_with_base(
                             root_view.into_untyped(),
+                            &mut RenderContext {
+                                composite_tree: &mut this.composite_tree,
+                                ht_manager: &mut this.ht_manager,
+                                keyboard_focus_registry: &mut view_init_ctx.keyboard_focus_registry,
+                                current_sec: view_init_ctx.current_sec,
+                                system_link: view_init_ctx.system_link,
+                                main_thread_texture_id_issuer: view_init_ctx
+                                    .main_thread_texture_id_issuer,
+                                application: view_init_ctx.application,
+                                view_feedback_subscription_delayed_ops: view_init_ctx
+                                    .view_feedback_subscription_delayed_ops,
+                            },
                             &w,
                             w.keyboard_focus_group(),
                             Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
+                            view_init_ctx.view_instance_store,
+                            view_init_ctx.view_tree_relation_store,
+                            view_init_ctx.view_layout_state_store,
+                            view_init_ctx.view_render_state_store,
                         );
 
                         w.associate_extra_data(Box::new(ui::PerWindowData {

@@ -8,8 +8,8 @@ use crate::{
     rendering::composite::CompositeTree,
     uicore::{
         TeardownContext, ViewDestructionContext, ViewGroupRelationStore, ViewIdentifier,
-        ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext, ViewInstanceStore,
-        ViewLayoutStateStore, ViewRenderStateStore, ViewTreeRelationStore,
+        ViewIdentifierAllocator, ViewInitContext, ViewInstanceStore, ViewLayoutStateStore,
+        ViewRenderStateStore, ViewTreeRelationStore,
     },
 };
 
@@ -60,8 +60,6 @@ impl CustomViewFlyoutSession {
 
         let cl = unsafe { cl.get_unchecked_mut() };
         let mut view_init_ctx = ViewInitContext {
-            composite_tree: &mut cl.composite_tree,
-            ht_manager: &mut cl.ht_manager,
             current_sec: cl.global_time_base.elapsed().as_secs_f32(),
             keyboard_focus_registry: &mut cl.keyboard_focus_registry,
             view_allocator: &mut cl.view_allocator,
@@ -76,11 +74,26 @@ impl CustomViewFlyoutSession {
             application: &cl.application,
         };
         let content = content_ctor.create(&mut view_init_ctx);
-        view_init_ctx.render_view_with_base(
+        crate::uicore::render_view_with_base(
             content.root_view_id(),
+            &mut crate::uicore::RenderContext {
+                composite_tree: &mut cl.composite_tree,
+                ht_manager: &mut cl.ht_manager,
+                keyboard_focus_registry: &mut view_init_ctx.keyboard_focus_registry,
+                current_sec: view_init_ctx.current_sec,
+                system_link: view_init_ctx.system_link,
+                main_thread_texture_id_issuer: view_init_ctx.main_thread_texture_id_issuer,
+                application: view_init_ctx.application,
+                view_feedback_subscription_delayed_ops: view_init_ctx
+                    .view_feedback_subscription_delayed_ops,
+            },
             &surface,
             surface.keyboard_focus_state().root_group(),
             Rect::from_lt_size(Point::new_logical(0.0, 0.0), content_ctor.size()),
+            view_init_ctx.view_instance_store,
+            view_init_ctx.view_tree_relation_store,
+            view_init_ctx.view_layout_state_store,
+            view_init_ctx.view_render_state_store,
         );
 
         Self {

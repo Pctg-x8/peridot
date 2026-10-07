@@ -71,10 +71,6 @@ impl ViewFeedbackRegisterable for RenderContext<'_, '_> {
 }
 
 pub struct ViewInitContext<'a, 'sys> {
-    #[deprecated = "direct render element creation will be removed in the future"]
-    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
-    #[deprecated = "direct hit test tree manipulation will be removed in the future"]
-    pub ht_manager: &'a mut HitTestTreeManager,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,
     pub view_allocator: &'a mut ViewIdentifierAllocator,
@@ -150,36 +146,6 @@ impl ViewInstanceQueryableMut for ViewInitContext<'_, '_> {
     #[inline(always)]
     fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
         view_layout_mut(id, self.view_instance_store)
-    }
-}
-impl ViewImmediateRenderable for ViewInitContext<'_, '_> {
-    fn render_view_with_base(
-        &mut self,
-        id: ViewIdentifier,
-        mount_on: &(impl MountTarget + ?Sized),
-        keyboard_focus_group: KeyboardFocusGroupRef,
-        layout_rect: Rect<LogicalUnit>,
-    ) {
-        render_view_with_base(
-            id,
-            &mut RenderContext {
-                composite_tree: &mut self.composite_tree,
-                ht_manager: &mut self.ht_manager,
-                keyboard_focus_registry: &mut self.keyboard_focus_registry,
-                current_sec: self.current_sec,
-                system_link: self.system_link,
-                main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
-                application: self.application,
-                view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
-            },
-            mount_on,
-            keyboard_focus_group,
-            layout_rect,
-            self.view_instance_store,
-            self.view_tree_relation_store,
-            self.view_layout_state_store,
-            self.view_render_state_store,
-        )
     }
 }
 impl ViewFeedbackRegisterable for ViewInitContext<'_, '_> {
