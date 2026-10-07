@@ -1,15 +1,15 @@
 use core::cell::Cell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 
 use shared::{LogicalUnit, Point, Rect, Size};
 
 use crate::{
-    PointerID, SystemLink, WindowHandle,
+    PointerID, SyncEvent, SystemLink, WindowHandle,
     input::{
-        InputEventContext,
-        hittest::{HitTestTreeData, HitTestTreeRef},
+        InputEventContext, KeyboardFocusTokenRegistry,
+        hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef},
     },
-    rendering::composite::{CompositeRect, CompositeTreeRef},
+    rendering::composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     ui::{
         WindowRootView,
         dock::tab::{
@@ -19,11 +19,12 @@ use crate::{
     },
     uicore::{
         DeriveTeardownContext, MeasureContext, RenderContext, SystemLinkAccess, TeardownContext,
-        TypedViewIdentifier, View, ViewConstructor, ViewDestructionContext, ViewIdentifier,
-        ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
+        TypedViewIdentifier, View, ViewConstructor, ViewDestructionContext,
+        ViewFeedbackRegistryDelayedOps, ViewGroupRelationStore, ViewIdentifier,
+        ViewIdentifierAllocator, ViewImmediateTeardownable, ViewInitContext, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewLayoutStateStore,
         ViewRegisterable, ViewRelationControllable, ViewRelationQueryable, ViewRenderElements,
-        ViewRenderQueue, ViewRenderer, ViewSize, ViewTreeRelationStore,
+        ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
 };
 
@@ -77,6 +78,10 @@ pub trait PaneContentPresenter {
     #[allow(unused_variables)]
     #[inline(always)]
     fn resize(&self, new_size: &Size<LogicalUnit>, context: &mut PaneContentResizeContext) {}
+}
+
+pub trait PaneContentResizeContextDerivative {
+    fn derive_pane_content_resize_context<'env>(&'env mut self) -> PaneContentResizeContext<'env>;
 }
 
 pub struct PaneContentResizeContext<'env> {
@@ -523,7 +528,18 @@ pub enum UndockResult {
 }
 
 pub struct RedockingContext<'a, 'sys> {
-    pub view_init_ctx: ViewInitContext<'a, 'sys>,
+    pub composite_tree: &'a mut CompositeTree<SyncEvent>,
+    pub ht_manager: &'a mut HitTestTreeManager,
+    pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
+    pub current_sec: f32,
+    pub view_allocator: &'a mut ViewIdentifierAllocator,
+    pub view_instance_store: &'a mut ViewInstanceStore,
+    pub view_tree_relation_store: &'a mut ViewTreeRelationStore,
+    pub view_group_relation_store: &'a mut ViewGroupRelationStore,
+    pub view_layout_state_store: &'a mut ViewLayoutStateStore,
+    pub view_render_state_store: &'a mut ViewRenderStateStore,
+    pub view_feedback_subscription_delayed_ops: &'a mut VecDeque<ViewFeedbackRegistryDelayedOps>,
+    pub system_link: &'a SystemLink<'sys>,
     pub view_render_queue: &'a mut ViewRenderQueue,
 }
 impl ViewRegisterable for RedockingContext<'_, '_> {
@@ -532,23 +548,39 @@ impl ViewRegisterable for RedockingContext<'_, '_> {
         &mut self,
         ctor: impl FnOnce(TypedViewIdentifier<T>) -> Box<T>,
     ) -> TypedViewIdentifier<T> {
-        self.view_init_ctx.construct_view_direct(ctor)
+        crate::uicore::construct_view(
+            ctor,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_layout_state_store,
+            self.view_render_state_store,
+        )
     }
 
     #[inline(always)]
     fn free_view_untyped(&mut self, id: ViewIdentifier) {
-        self.view_init_ctx.free_view_untyped(id)
+        crate::uicore::free_view(
+            id,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_layout_state_store,
+            self.view_render_state_store,
+        );
     }
 }
 impl ViewRelationControllable for RedockingContext<'_, '_> {
     #[inline(always)]
     fn view_set_parent_untyped(&mut self, id: ViewIdentifier, parent: ViewIdentifier) {
-        crate::uicore::view_set_parent(id, parent, self.view_init_ctx.view_tree_relation_store)
+        crate::uicore::view_set_parent(id, parent, self.view_tree_relation_store)
     }
 
     #[inline(always)]
     fn view_detach_parent_untyped(&mut self, id: ViewIdentifier) {
-        crate::uicore::view_detach_parent(id, self.view_init_ctx.view_tree_relation_store)
+        crate::uicore::view_detach_parent(id, self.view_tree_relation_store)
     }
 }
 impl ViewRenderer for RedockingContext<'_, '_> {
@@ -563,17 +595,15 @@ impl ViewImmediateTeardownable for RedockingContext<'_, '_> {
         crate::uicore::teardown_view_recursive(
             target,
             &mut TeardownContext {
-                composite_tree: self.view_init_ctx.composite_tree,
-                ht_manager: self.view_init_ctx.ht_manager,
-                keyboard_focus_registry: self.view_init_ctx.keyboard_focus_registry,
-                current_sec: self.view_init_ctx.current_sec,
-                view_feedback_subscription_delayed_ops: self
-                    .view_init_ctx
-                    .view_feedback_subscription_delayed_ops,
+                composite_tree: self.composite_tree,
+                ht_manager: self.ht_manager,
+                keyboard_focus_registry: self.keyboard_focus_registry,
+                current_sec: self.current_sec,
+                view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
             },
-            self.view_init_ctx.view_instance_store,
-            self.view_init_ctx.view_tree_relation_store,
-            self.view_init_ctx.view_render_state_store,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_render_state_store,
         );
     }
 }
@@ -583,48 +613,46 @@ impl ViewDestructionContext for RedockingContext<'_, '_> {
         crate::uicore::destruct_view_recursive(
             target,
             &mut TeardownContext {
-                composite_tree: self.view_init_ctx.composite_tree,
-                ht_manager: self.view_init_ctx.ht_manager,
-                keyboard_focus_registry: self.view_init_ctx.keyboard_focus_registry,
-                current_sec: self.view_init_ctx.current_sec,
-                view_feedback_subscription_delayed_ops: self
-                    .view_init_ctx
-                    .view_feedback_subscription_delayed_ops,
+                composite_tree: self.composite_tree,
+                ht_manager: self.ht_manager,
+                keyboard_focus_registry: self.keyboard_focus_registry,
+                current_sec: self.current_sec,
+                view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
             },
-            self.view_init_ctx.view_allocator,
-            self.view_init_ctx.view_instance_store,
-            self.view_init_ctx.view_tree_relation_store,
-            self.view_init_ctx.view_group_relation_store,
-            self.view_init_ctx.view_layout_state_store,
-            self.view_init_ctx.view_render_state_store,
+            self.view_allocator,
+            self.view_instance_store,
+            self.view_tree_relation_store,
+            self.view_group_relation_store,
+            self.view_layout_state_store,
+            self.view_render_state_store,
         );
     }
 }
 impl ViewInstanceQueryable for RedockingContext<'_, '_> {
     #[inline(always)]
     fn view_instance_of<T: View + 'static>(&self, id: ViewIdentifier) -> Option<&T> {
-        crate::uicore::view_instance(id, self.view_init_ctx.view_instance_store)
+        crate::uicore::view_instance(id, self.view_instance_store)
     }
 
     #[inline(always)]
     fn view_layout_untyped(&self, id: ViewIdentifier) -> Option<&ViewLayout> {
-        crate::uicore::view_layout(id, self.view_init_ctx.view_instance_store)
+        crate::uicore::view_layout(id, self.view_instance_store)
     }
 }
 impl ViewInstanceQueryableMut for RedockingContext<'_, '_> {
     #[inline(always)]
     fn view_instance_mut_of<T: View + 'static>(&mut self, id: ViewIdentifier) -> Option<&mut T> {
-        crate::uicore::view_instance_mut(id, self.view_init_ctx.view_instance_store)
+        crate::uicore::view_instance_mut(id, self.view_instance_store)
     }
 
     #[inline(always)]
     fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-        crate::uicore::view_set_visibility(id, visible, self.view_init_ctx.view_instance_store);
+        crate::uicore::view_set_visibility(id, visible, self.view_instance_store);
     }
 
     #[inline(always)]
     fn view_layout_mut_untyped(&mut self, id: ViewIdentifier) -> Option<&mut ViewLayout> {
-        crate::uicore::view_layout_mut(id, self.view_init_ctx.view_instance_store)
+        crate::uicore::view_layout_mut(id, self.view_instance_store)
     }
 }
 impl DerivePaneContentResizeContext for RedockingContext<'_, '_> {
@@ -632,29 +660,37 @@ impl DerivePaneContentResizeContext for RedockingContext<'_, '_> {
         &'env2 mut self,
     ) -> PaneContentResizeContext<'env2> {
         PaneContentResizeContext {
-            view_instance_store: self.view_init_ctx.view_instance_store,
+            view_instance_store: self.view_instance_store,
             view_render_queue: self.view_render_queue,
-            view_tree_relation_store: self.view_init_ctx.view_tree_relation_store,
+            view_tree_relation_store: self.view_tree_relation_store,
         }
     }
 }
 impl DeriveTeardownContext for RedockingContext<'_, '_> {
     fn derive_teardown_context<'env>(&'env mut self) -> TeardownContext<'env> {
         TeardownContext {
-            composite_tree: self.view_init_ctx.composite_tree,
-            ht_manager: self.view_init_ctx.ht_manager,
-            keyboard_focus_registry: self.view_init_ctx.keyboard_focus_registry,
-            current_sec: self.view_init_ctx.current_sec,
-            view_feedback_subscription_delayed_ops: self
-                .view_init_ctx
-                .view_feedback_subscription_delayed_ops,
+            composite_tree: self.composite_tree,
+            ht_manager: self.ht_manager,
+            keyboard_focus_registry: self.keyboard_focus_registry,
+            current_sec: self.current_sec,
+            view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
         }
     }
 }
 impl<'sys> SystemLinkAccess<'sys> for RedockingContext<'_, 'sys> {
     #[inline(always)]
     fn system_link<'a>(&'a self) -> &'a SystemLink<'sys> {
-        self.view_init_ctx.system_link
+        self.system_link
+    }
+}
+impl PaneContentResizeContextDerivative for RedockingContext<'_, '_> {
+    #[inline(always)]
+    fn derive_pane_content_resize_context<'env>(&'env mut self) -> PaneContentResizeContext<'env> {
+        PaneContentResizeContext {
+            view_instance_store: &mut self.view_instance_store,
+            view_render_queue: &mut self.view_render_queue,
+            view_tree_relation_store: &self.view_tree_relation_store,
+        }
     }
 }
 
@@ -835,39 +871,38 @@ impl WindowDockingManager {
 }
 
 /// Dockを新規に分割する
-fn split_new(
+fn split_new<'sys>(
     store: &mut DockStore,
     manager: &WindowDockingManager,
-    view_init_ctx: &mut ViewInitContext,
-    view_render_queue: &mut ViewRenderQueue,
     new_rest: DockID,
     content: Box<dyn PaneContentPresenter>,
     direction: DockDirection,
+    ctx: &mut (
+             impl ViewRegisterable
+             + ViewRelationControllable
+             + ViewInstanceQueryableMut
+             + ViewRenderer
+             + SystemLinkAccess<'sys>
+             + PaneContentResizeContextDerivative
+             + ?Sized
+         ),
 ) {
     let onto = store.get(new_rest).parent().expect("no parent?");
     let new_dock = store.alloc_recurse(|parent_id, store| {
-        let splitter = view_init_ctx.construct_view(
+        let splitter = ctx.construct_view(
             splitter::ViewInit {
                 dir: direction.splitter_direction(),
                 controlling_dock: parent_id,
             },
             |_| [],
         );
-        view_init_ctx.view_set_parent(splitter, manager.root_view_id);
+        ctx.view_set_parent(splitter, manager.root_view_id);
 
         Dock::Splitted {
             parent: onto,
             docked: store.alloc(|id| {
-                let vc = PaneGroupViewController::new(
-                    &mut PaneGroupCreateContext {
-                        view_init_context: view_init_ctx,
-                        view_render_queue,
-                    },
-                    manager.root_view_id,
-                    vec![content],
-                    id,
-                    0,
-                );
+                let vc =
+                    PaneGroupViewController::new(ctx, manager.root_view_id, vec![content], id, 0);
 
                 Dock::Fill {
                     parent: parent_id,
@@ -890,11 +925,7 @@ fn split_new(
         onto,
         store,
         relayout_base_rect,
-        &mut PaneContentResizeContext {
-            view_instance_store: view_init_ctx.view_instance_store,
-            view_render_queue,
-            view_tree_relation_store: view_init_ctx.view_tree_relation_store,
-        },
+        &mut ctx.derive_pane_content_resize_context(),
     );
 }
 
@@ -1025,9 +1056,9 @@ fn redock(
                 store,
                 target_rect,
                 &mut PaneContentResizeContext {
-                    view_instance_store: ctx.view_init_ctx.view_instance_store,
+                    view_instance_store: ctx.view_instance_store,
                     view_render_queue: ctx.view_render_queue,
-                    view_tree_relation_store: ctx.view_init_ctx.view_tree_relation_store,
+                    view_tree_relation_store: ctx.view_tree_relation_store,
                 },
             );
             None
@@ -1059,9 +1090,9 @@ fn redock(
                 store,
                 target_rect,
                 &mut PaneContentResizeContext {
-                    view_instance_store: ctx.view_init_ctx.view_instance_store,
+                    view_instance_store: ctx.view_instance_store,
                     view_render_queue: ctx.view_render_queue,
-                    view_tree_relation_store: ctx.view_init_ctx.view_tree_relation_store,
+                    view_tree_relation_store: ctx.view_tree_relation_store,
                 },
             );
             None
@@ -1070,11 +1101,10 @@ fn redock(
             split_new(
                 store,
                 manager,
-                &mut ctx.view_init_ctx,
-                ctx.view_render_queue,
                 target,
                 content,
                 DockDirection::ToLeft(Cell::new(suggested_rect.width)),
+                ctx,
             );
             None
         }
@@ -1082,11 +1112,10 @@ fn redock(
             split_new(
                 store,
                 manager,
-                &mut ctx.view_init_ctx,
-                ctx.view_render_queue,
                 target,
                 content,
                 DockDirection::ToRight(Cell::new(suggested_rect.width)),
+                ctx,
             );
             None
         }
@@ -1094,11 +1123,10 @@ fn redock(
             split_new(
                 store,
                 manager,
-                &mut ctx.view_init_ctx,
-                ctx.view_render_queue,
                 target,
                 content,
                 DockDirection::ToTop(Cell::new(suggested_rect.height)),
+                ctx,
             );
             None
         }
@@ -1106,11 +1134,10 @@ fn redock(
             split_new(
                 store,
                 manager,
-                &mut ctx.view_init_ctx,
-                ctx.view_render_queue,
                 target,
                 content,
                 DockDirection::ToBottom(Cell::new(suggested_rect.height)),
+                ctx,
             );
             None
         }
@@ -1820,8 +1847,15 @@ pub struct PaneGroupViewController {
 }
 impl PaneGroupViewController {
     /// 生成
-    pub fn new(
-        ctx: &mut PaneGroupCreateContext,
+    pub fn new<'sys>(
+        ctx: &mut (
+                 impl ViewRegisterable
+                 + SystemLinkAccess<'sys>
+                 + ViewRelationControllable
+                 + ViewInstanceQueryableMut
+                 + ViewRenderer
+                 + ?Sized
+             ),
         parent_view: TypedViewIdentifier<WindowDockRootView>,
         contents: Vec<Box<dyn PaneContentPresenter>>,
         dock: DockID,
