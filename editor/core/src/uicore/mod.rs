@@ -11,7 +11,7 @@ use shared::{LogicalUnit, Rect, Size};
 use crate::{
     SyncEvent, SystemLink,
     input::{
-        FocusTargetToken, InputEventContext, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
+        FocusTargetToken, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeManager, HitTestTreeRef},
     },
     rendering::{
@@ -219,63 +219,6 @@ impl ViewGroupRelationControllable for ViewInitContext<'_, '_> {
     #[inline(always)]
     fn leave_view_group_untyped(&mut self, id: ViewIdentifier) {
         leave_view_group(id, self.view_group_relation_store);
-    }
-}
-impl<'a, 'sys> ViewInitContext<'a, 'sys> {
-    #[deprecated = "use render-teardown based view lifecycle"]
-    pub fn alloc_view_id_without_instance(&mut self) -> ViewIdentifier {
-        alloc_view_id_without_instance(
-            self.view_allocator,
-            self.view_instance_store,
-            self.view_tree_relation_store,
-            self.view_group_relation_store,
-            self.view_layout_state_store,
-            self.view_render_state_store,
-        )
-    }
-
-    pub const fn make_teardown_context<'a2>(&'a2 mut self) -> TeardownContext<'a2> {
-        TeardownContext {
-            composite_tree: &mut self.composite_tree,
-            ht_manager: &mut self.ht_manager,
-            keyboard_focus_registry: &mut self.keyboard_focus_registry,
-            current_sec: self.current_sec,
-            view_feedback_subscription_delayed_ops: &mut self
-                .view_feedback_subscription_delayed_ops,
-        }
-    }
-
-    pub const fn make_render_context<'env>(&'env mut self) -> RenderContext<'env, 'sys> {
-        RenderContext {
-            composite_tree: &mut self.composite_tree,
-            ht_manager: &mut self.ht_manager,
-            keyboard_focus_registry: &mut self.keyboard_focus_registry,
-            current_sec: self.current_sec,
-            system_link: self.system_link,
-            main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
-            application: self.application,
-            view_feedback_subscription_delayed_ops: self.view_feedback_subscription_delayed_ops,
-        }
-    }
-
-    pub const fn derive<'a2>(&'a2 mut self) -> ViewInitContext<'a2, 'sys> {
-        ViewInitContext {
-            composite_tree: &mut self.composite_tree,
-            ht_manager: &mut self.ht_manager,
-            keyboard_focus_registry: &mut self.keyboard_focus_registry,
-            current_sec: self.current_sec,
-            view_allocator: &mut self.view_allocator,
-            view_instance_store: &mut self.view_instance_store,
-            view_tree_relation_store: &mut self.view_tree_relation_store,
-            view_group_relation_store: &mut self.view_group_relation_store,
-            view_layout_state_store: &mut self.view_layout_state_store,
-            view_render_state_store: &mut self.view_render_state_store,
-            view_feedback_subscription_delayed_ops: &mut self
-                .view_feedback_subscription_delayed_ops,
-            system_link: self.system_link,
-            main_thread_texture_id_issuer: self.main_thread_texture_id_issuer,
-            application: self.application,
-        }
     }
 }
 
@@ -676,45 +619,6 @@ impl ViewGroupRelationStore {
             participants: Vec::new(),
         }
     }
-}
-
-#[deprecated = "use render-teardown based view lifecycle"]
-pub fn alloc_view_id_without_instance(
-    allocator: &mut ViewIdentifierAllocator,
-    instance_store: &mut ViewInstanceStore,
-    tree_relation_store: &mut ViewTreeRelationStore,
-    group_relation_store: &mut ViewGroupRelationStore,
-    layout_state_store: &mut ViewLayoutStateStore,
-    render_state_store: &mut ViewRenderStateStore,
-) -> ViewIdentifier {
-    if let Some(id) = allocator.free_identifier.pop_first() {
-        // reuse
-        instance_store.instances[id.into_array_index()] = ViewInstanceCell::new(None);
-        tree_relation_store.relations[id.into_array_index()] = ViewTreeRelation {
-            parent: None,
-            children: Vec::new(),
-        };
-        group_relation_store.joining_group[id.into_array_index()] = None;
-        layout_state_store.set_empty(id);
-        render_state_store.0[id.into_array_index()] = ViewRenderState::EMPTY;
-
-        return id;
-    }
-
-    let id = ViewIdentifier(allocator.last_free_identifier);
-    allocator.last_free_identifier = allocator
-        .last_free_identifier
-        .checked_add(1)
-        .expect("too many views!");
-    instance_store.instances.push(ViewInstanceCell::new(None));
-    tree_relation_store.relations.push(ViewTreeRelation {
-        parent: None,
-        children: Vec::new(),
-    });
-    group_relation_store.joining_group.push(None);
-    layout_state_store.push_empty();
-    render_state_store.0.push(ViewRenderState::EMPTY);
-    id
 }
 
 pub fn construct_view<T: View + 'static>(
