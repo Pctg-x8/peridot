@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+make -C .github/workflows/generator
+git add .github/workflows

@@ -1,0 +1,11 @@
+[package]
+name = "peridot-tp-fontconfig"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+with-freetype = ["dep:peridot-tp-freetype"]
+
+[dependencies]
+libc = "0.2"
+peridot-tp-freetype = { path = "../freetype", optional = true }

@@ -1,5 +1,7 @@
 .DS_Store
 src/userlib
 src/userlib.rs
-peridot-cradle/assets.par
 Cargo.toml
+/peridot-cradle
+/.runtime-assets
+

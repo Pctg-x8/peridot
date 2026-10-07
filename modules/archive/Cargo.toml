@@ -1,0 +1,29 @@
+[package]
+name = "peridot-archive"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2024"
+
+[features]
+default = []
+
+async-rt-async-std = [
+    "peridot-serialization-utils/async-rt-async-std",
+    "dep:async-std",
+]
+
+[lints]
+workspace = true
+
+[dependencies]
+crc = "1.8"
+lz4-compression = "0.6"
+libflate = "0.1"
+zstd = "0.4"
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot-native-io = { path = "../native-io" }
+async-std = { workspace = true, optional = true }
+futures-io = { workspace = true }
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+bitflags = "2.8"
+pin-project = "1.1"

@@ -1,0 +1,33 @@
+[workspace]
+members = ["generator"]
+
+[package]
+name = "peridot-tp-wayland"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+tracing = ["dep:tracing"]
+
+# wayland extensions as feature
+# stable
+viewporter = []
+xdg-shell = []
+tablet-v2 = []
+
+# staging
+fractional-scale-v1 = []
+cursor-shape-v1 = ["tablet-v2"]
+content-type-v1 = []
+
+# unstable
+xdg-decoration-unstable-v1 = []
+xdg-foreign-unstable-v2 = []
+
+# external
+gtk-shell = []
+
+[dependencies]
+bitflags = "2.9.3"
+tracing = { version = "0.1", optional = true }
