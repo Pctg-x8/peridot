@@ -171,6 +171,11 @@ impl HitTestTreeBuilder {
         self
     }
 
+    pub const fn root_of_window(mut self, handle: WindowHandle) -> Self {
+        self.0.root_of_window = Some(handle);
+        self
+    }
+
     // presets //
 
     pub const fn interactive_defaults(self) -> Self {

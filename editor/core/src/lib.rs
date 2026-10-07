@@ -1539,15 +1539,6 @@ impl<'sys> CoreLoop<'sys> {
     pub fn init(mut self: Pin<&mut Self>) {
         let _exclusive_use = self.as_mut().exclusive_use();
 
-        // WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタで参照もたせる（実際どうするかはあとで考える）
-        #[cfg(windows)]
-        unsafe {
-            platform::windows::locate_non_client_hittest_managers(
-                &self.pointer_input_manager,
-                &self.ht_manager,
-            );
-        }
-
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         this.context_menu_common_resources = MenuItemCommonResources::new(
             &mut this.composite_tree,
@@ -4074,10 +4065,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
 
     inst.save_window_state();
     tracing::info!("app finish");
-    #[cfg(windows)]
-    unsafe {
-        platform::windows::unlocate_non_client_hittest_managers();
-    }
 }
 
 pub struct MenuOpenRequest {

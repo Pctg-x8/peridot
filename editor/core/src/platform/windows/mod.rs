@@ -527,14 +527,10 @@ impl NativeWindow {
                         composite_root: CompositeRect::build()
                             .expand_full()
                             .create(&mut coreloop.as_mut().get_unchecked_mut().composite_tree),
-                        ht_root: coreloop.as_mut().get_unchecked_mut().ht_manager.create(
-                            HitTestTreeData {
-                                width_adjustment_factor: 1.0,
-                                height_adjustment_factor: 1.0,
-                                root_of_window: Some(WindowHandle(w)),
-                                ..Default::default()
-                            },
-                        ),
+                        ht_root: HitTestTreeData::build()
+                            .expand_full()
+                            .root_of_window(WindowHandle(w))
+                            .create(&mut coreloop.as_mut().get_unchecked_mut().ht_manager),
                         latest_ui_scale_changes: Mutex::new(None),
                         keyboard_focus_state: PerWindowKeyboardFocusState::new(
                             coreloop
@@ -598,25 +594,6 @@ pub struct WindowState {
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
     pub keyboard_focus_state: PerWindowKeyboardFocusState,
     destroying: bool,
-}
-
-// WindowsではWM_NCHITTESTの返り値の計算に必要なので一旦生ポインタをグローバルにおいて参照もたせる（実際どうするかはあとで考える）
-static mut POINTER_INPUT_MANAGER_PTR: *const PointerInputManager = core::ptr::null();
-static mut HIT_TEST_TREE_MANAGER_PTR: *const HitTestTreeManager = core::ptr::null();
-pub unsafe fn locate_non_client_hittest_managers(
-    pointer_input_manager: &PointerInputManager,
-    ht_manager: &HitTestTreeManager,
-) {
-    unsafe {
-        POINTER_INPUT_MANAGER_PTR = pointer_input_manager;
-        HIT_TEST_TREE_MANAGER_PTR = core::mem::transmute(ht_manager);
-    }
-}
-pub unsafe fn unlocate_non_client_hittest_managers() {
-    unsafe {
-        POINTER_INPUT_MANAGER_PTR = core::ptr::null();
-        HIT_TEST_TREE_MANAGER_PTR = core::ptr::null();
-    }
 }
 
 #[repr(transparent)]
@@ -942,20 +919,15 @@ impl<'sys> WindowEventHandler<'sys> {
             return Some(HTTOP);
         }
 
-        if unsafe { POINTER_INPUT_MANAGER_PTR.is_null() } {
-            // unlinked from logic fiber
-            return Some(HTCLIENT);
-        }
-
-        let pointer_input_manager = unsafe { &*POINTER_INPUT_MANAGER_PTR };
-        match pointer_input_manager.role(
+        let coreloop = self.coreloop();
+        match coreloop.pointer_input_manager.role(
             &client_pos.to_logical(self.state.content_scale),
             &Size::new_pixels(
                 (client_size.right - client_size.left) as _,
                 (client_size.bottom - client_size.top) as _,
             )
             .to_logical(self.state.content_scale),
-            unsafe { &*HIT_TEST_TREE_MANAGER_PTR },
+            &coreloop.ht_manager,
             self.state.ht_root,
         ) {
             None => Some(HTCLIENT),
@@ -2554,7 +2526,10 @@ impl IDropTarget_Impl for DropTarget_Impl {
         unsafe { MapWindowPoints(None, Some(self.hwnd), &mut client_pos) };
         let [client_pos] = client_pos;
 
-        let offerred_flags = unsafe { &*POINTER_INPUT_MANAGER_PTR }.offer_accepting_drop(
+        let state = WindowEventHandler::get_for_window(self.hwnd);
+        let coreloop = state.coreloop();
+
+        let offerred_flags = coreloop.pointer_input_manager.offer_accepting_drop(
             &DragData {
                 obj: dataobj.clone(),
                 is_file_drop: OnceCell::new(),
@@ -2562,7 +2537,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
             point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
             WindowHandle(self.hwnd).state().ht_root,
             WindowHandle(self.hwnd).client_size(),
-            unsafe { &*HIT_TEST_TREE_MANAGER_PTR },
+            &coreloop.ht_manager,
         );
         let mut effects = DROPEFFECT_NONE;
         if offerred_flags.contains(DragDropFlags::COPY) {
@@ -2593,7 +2568,10 @@ impl IDropTarget_Impl for DropTarget_Impl {
         unsafe { MapWindowPoints(None, Some(self.hwnd), &mut client_pos) };
         let [client_pos] = client_pos;
 
-        let offerred_flags = unsafe { &*POINTER_INPUT_MANAGER_PTR }.offer_accepting_drop(
+        let state = WindowEventHandler::get_for_window(self.hwnd);
+        let coreloop = state.coreloop();
+
+        let offerred_flags = coreloop.pointer_input_manager.offer_accepting_drop(
             &DragData {
                 obj: dataobj.clone(),
                 is_file_drop: OnceCell::new(),
@@ -2601,7 +2579,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
             point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
             WindowHandle(self.hwnd).state().ht_root,
             WindowHandle(self.hwnd).client_size(),
-            unsafe { &*HIT_TEST_TREE_MANAGER_PTR },
+            &coreloop.ht_manager,
         );
         let mut effects = DROPEFFECT_NONE;
         if offerred_flags.contains(DragDropFlags::COPY) {
