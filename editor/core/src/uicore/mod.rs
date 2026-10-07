@@ -71,7 +71,9 @@ impl ViewFeedbackRegisterable for RenderContext<'_, '_> {
 }
 
 pub struct ViewInitContext<'a, 'sys> {
+    #[deprecated = "direct render element creation will be removed in the future"]
     pub composite_tree: &'a mut CompositeTree<SyncEvent>,
+    #[deprecated = "direct hit test tree manipulation will be removed in the future"]
     pub ht_manager: &'a mut HitTestTreeManager,
     pub keyboard_focus_registry: &'a mut KeyboardFocusTokenRegistry,
     pub current_sec: f32,

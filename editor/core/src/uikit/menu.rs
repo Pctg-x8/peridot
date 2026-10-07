@@ -1,10 +1,9 @@
-use std::rc::Rc;
-
 use shared::{LogicalUnit, SafeF32, Size};
 
 use crate::{
-    Event, FlyoutSurfaceHandle,
-    input::hittest::{CursorShape, HitTestTreeActionHandler, HitTestTreeData, HitTestTreeRef},
+    input::hittest::{
+        HitTestTreeActionHandler, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
+    },
     model::ApplicationMutation,
     rendering::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture, RenderMessage,
@@ -17,7 +16,6 @@ use crate::{
         },
         text::{FontID, FontSet, TextLayout},
     },
-    uicore::{MountTarget, ViewInitContext},
 };
 
 pub const DELAYED_ACTION_TIMEOUT_MS: u32 = 400;
@@ -32,26 +30,6 @@ pub enum MenuItem {
 
 pub trait MenuCommandSelectionHandler {
     fn on_select_command(&mut self, command_id: u64, context: &mut ApplicationMutation);
-}
-
-pub enum MenuItemInteractableElement {
-    Command(CommandView),
-    SubMenu(SubMenuView),
-}
-impl MenuItemInteractableElement {
-    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        match self {
-            MenuItemInteractableElement::Command(x) => x.lit(composite_tree, current_sec),
-            MenuItemInteractableElement::SubMenu(x) => x.lit(composite_tree, current_sec),
-        }
-    }
-
-    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        match self {
-            MenuItemInteractableElement::Command(x) => x.unlit(composite_tree, current_sec),
-            MenuItemInteractableElement::SubMenu(x) => x.unlit(composite_tree, current_sec),
-        }
-    }
 }
 
 pub struct MenuItemLayout {
@@ -93,7 +71,7 @@ impl MenuItemLayout {
                         required_width = SafeF32::new(
                             TextLayout::measure_visual_width(label, FontID::UIDefault, font_set)
                                 + TEXT_INLINE_MARGIN * 2.0
-                                + SubMenuView::ARROW.width,
+                                + ARROW_ICON.width,
                         )
                         .expect("invalid width measured")
                             + LR_TEXT_MINIMUM_MARGIN;
@@ -134,7 +112,7 @@ impl MenuItemLayout {
             .max(MINIMUM_WIDTH)
     }
 
-    pub fn instantiate(
+    /*pub fn instantiate(
         layout: impl Iterator<Item = Self>,
         depth: usize,
         ctx: &mut ViewInitContext,
@@ -201,6 +179,102 @@ impl MenuItemLayout {
         }
 
         (elements, eh)
+    }*/
+}
+
+pub fn instantiate_menu_render_elements<E>(
+    layout: Vec<MenuItemLayout>,
+    ct_root: CompositeTreeRef,
+    ht_root: HitTestTreeRef,
+    common_res: &CommonResources,
+    composite_tree: &mut CompositeTree<E>,
+    ht_manager: &mut HitTestTreeManager,
+    animation_base_sec: f32,
+) -> Vec<Option<InteractableElement>> {
+    let mut elements = Vec::with_capacity(layout.len());
+    let mut ad = 0.0;
+    for (n, x) in layout.into_iter().enumerate() {
+        let e = match x.item {
+            MenuItem::Heading { label } => {
+                create_heading_visual(label, x.placement_y, ct_root, composite_tree);
+                None
+            }
+            MenuItem::Command { label, command_id } => {
+                let e = create_command_element(
+                    label,
+                    n,
+                    command_id,
+                    x.placement_y,
+                    animation_base_sec + ad,
+                    (ct_root, ht_root),
+                    common_res,
+                    composite_tree,
+                    ht_manager,
+                );
+                ad += ANIMATION_DELAY_PER_ELEMENT;
+
+                Some(e)
+            }
+            MenuItem::SubMenu { label, .. } => {
+                let e = create_sub_menu_element(
+                    n,
+                    label,
+                    x.placement_y,
+                    animation_base_sec + ad,
+                    (ct_root, ht_root),
+                    common_res,
+                    composite_tree,
+                    ht_manager,
+                );
+                ad += ANIMATION_DELAY_PER_ELEMENT;
+
+                Some(e)
+            }
+            MenuItem::Separator => {
+                create_separator_visual(x.placement_y, ct_root, composite_tree);
+                None
+            }
+        };
+
+        elements.push(e);
+    }
+
+    elements
+}
+
+pub enum InteractableElementAction {
+    Command { index: usize, command_id: u64 },
+    SubMenu { index: usize },
+}
+
+pub struct InteractableElement {
+    pub action: InteractableElementAction,
+    pub ht: HitTestTreeRef,
+    pub placement_y: f32,
+    ct_light: CompositeTreeRef,
+}
+impl InteractableElement {
+    #[inline(always)]
+    pub fn bind_action_handler(
+        &self,
+        handler: &std::rc::Rc<impl HitTestTreeActionHandler + 'static>,
+        manager: &mut HitTestTreeManager,
+    ) {
+        manager.set_action_handler(self.ht, handler);
+    }
+
+    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree
+            .begin_mod_chain(self.ct_light)
+            .opacity_animated_from_template(&LIT_OPACITY_ANIM, current_sec)
+            .apply();
+    }
+
+    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
+        composite_tree
+            .begin_mod_chain(self.ct_light)
+            .opacity_animated_from_template(&UNLIT_OPACITY_ANIM, current_sec)
+            .apply();
     }
 }
 
@@ -224,7 +298,7 @@ impl CommonResources {
         rt_sender
             .send(RenderMessage::RegisterNormalized2DStaticMeshTexture {
                 id: tid_submenu_arrow,
-                data: SubMenuView::ARROW,
+                data: ARROW_ICON,
             })
             .expect("rt_sender.send");
 
@@ -238,6 +312,21 @@ impl CommonResources {
         CompositeMode::FillRadialGradient(self.light_gradient)
     }
 }
+
+const ARROW_ICON_SIZE: Size<LogicalUnit> = Size::new_logical(6.0, 8.0);
+const ARROW_ICON: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
+    vertices: &[
+        [0.0, 0.0],
+        [0.0 + 1.5 / ARROW_ICON_SIZE.width, 0.0],
+        [1.0 - 1.5 / ARROW_ICON_SIZE.width, 0.5],
+        [1.0, 0.5],
+        [0.0, 1.0],
+        [0.0 + 1.5 / ARROW_ICON_SIZE.width, 1.0],
+    ],
+    indices: &[0, 1, 2, 2, 1, 3, 2, 4, 5, 5, 3, 2],
+    width: ARROW_ICON_SIZE.width,
+    height: ARROW_ICON_SIZE.height,
+};
 
 const ITEM_HEIGHT: f32 = 20.0;
 const TEXT_INLINE_MARGIN: f32 = 8.0;
@@ -289,185 +378,135 @@ pub fn create_heading_visual<E>(
     composite_tree.add_child(onto, ct_root);
 }
 
-pub struct CommandView {
-    ht_root: HitTestTreeRef,
-    ct_light: CompositeTreeRef,
-}
-impl CommandView {
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        common_res: &CommonResources,
-        label: String,
-        animation_delay: f32,
-        placement_y: f32,
-        onto: (CompositeTreeRef, HitTestTreeRef),
-    ) -> Self {
-        let animation_base_time = ctx.current_sec + animation_delay;
+fn create_command_element<E>(
+    label: String,
+    index: usize,
+    command_id: u64,
+    placement_y: f32,
+    animation_start_sec: f32,
+    onto: (CompositeTreeRef, HitTestTreeRef),
+    common_res: &CommonResources,
+    composite_tree: &mut CompositeTree<E>,
+    ht_manager: &mut HitTestTreeManager,
+) -> InteractableElement {
+    let ht_root = HitTestTreeData::build()
+        .expand_width()
+        .height(ITEM_HEIGHT)
+        .top(placement_y)
+        .interactive_defaults()
+        .create(ht_manager);
+    let ct_root = CompositeRect::build()
+        .expand_width()
+        .size_imm(0.0, ITEM_HEIGHT)
+        .offset(
+            AnimatableFloat::from_template(&INTRO_X_ANIM, animation_start_sec),
+            AnimatableFloat::Value(placement_y),
+        )
+        .opacity_anim(&INTRO_OPACITY_ANIM, animation_start_sec)
+        .create(composite_tree);
+    let ct_label = CompositeRect::build()
+        .expand_full()
+        .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
+        .offset_imm(TEXT_INLINE_MARGIN, 0.0)
+        .text(
+            CompositeRectText::build()
+                .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                .vertical_middle(),
+        )
+        .create(composite_tree);
+    let ct_light = CompositeRect::build()
+        .expand_full()
+        .composite(common_res.composite_mode_light())
+        .opacity_imm(0.0)
+        .create(composite_tree);
+    composite_tree.add_child(ct_root, ct_light);
+    composite_tree.add_child(ct_root, ct_label);
 
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height: ITEM_HEIGHT,
-            top: placement_y,
-            cursor_shape: CursorShape::Pointer,
-            ..Default::default()
-        });
-        let ct_root = CompositeRect::build()
-            .expand_width()
-            .size_imm(0.0, ITEM_HEIGHT)
-            .offset(
-                AnimatableFloat::from_template(&INTRO_X_ANIM, animation_base_time),
-                AnimatableFloat::Value(placement_y),
-            )
-            .opacity_anim(&INTRO_OPACITY_ANIM, animation_base_time)
-            .create(ctx.composite_tree);
-        let ct_label = CompositeRect::build()
-            .expand_full()
-            .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
-            .offset_imm(TEXT_INLINE_MARGIN, 0.0)
-            .text(
-                CompositeRectText::build()
-                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
-                    .vertical_middle(),
-            )
-            .create(ctx.composite_tree);
-        let ct_light = CompositeRect::build()
-            .expand_full()
-            .composite(common_res.composite_mode_light())
-            .opacity_imm(0.0)
-            .create(ctx.composite_tree);
-        ctx.composite_tree.add_child(ct_root, ct_light);
-        ctx.composite_tree.add_child(ct_root, ct_label);
+    composite_tree.add_child(onto.0, ct_root);
+    ht_manager.add_child(onto.1, ht_root);
 
-        ctx.composite_tree.add_child(onto.0, ct_root);
-        ctx.ht_manager.add_child(onto.1, ht_root);
-
-        Self { ht_root, ct_light }
-    }
-
-    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree
-            .begin_mod_chain(self.ct_light)
-            .opacity_animated_from_template(&LIT_OPACITY_ANIM, current_sec)
-            .apply();
-    }
-
-    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree
-            .begin_mod_chain(self.ct_light)
-            .opacity_animated_from_template(&UNLIT_OPACITY_ANIM, current_sec)
-            .apply();
+    InteractableElement {
+        action: InteractableElementAction::Command { index, command_id },
+        ht: ht_root,
+        placement_y,
+        ct_light,
     }
 }
 
-pub struct SubMenuView {
-    ht_root: HitTestTreeRef,
-    ct_light: CompositeTreeRef,
-    pub placement_y: f32,
-}
-impl SubMenuView {
-    const ICON_SIZE: Size<LogicalUnit> = Size::new_logical(6.0, 8.0);
-    const ARROW: Normalized2DStaticMeshTexture = Normalized2DStaticMeshTexture {
-        vertices: &[
-            [0.0, 0.0],
-            [0.0 + 1.5 / Self::ICON_SIZE.width, 0.0],
-            [1.0 - 1.5 / Self::ICON_SIZE.width, 0.5],
-            [1.0, 0.5],
-            [0.0, 1.0],
-            [0.0 + 1.5 / Self::ICON_SIZE.width, 1.0],
-        ],
-        indices: &[0, 1, 2, 2, 1, 3, 2, 4, 5, 5, 3, 2],
-        width: Self::ICON_SIZE.width,
-        height: Self::ICON_SIZE.height,
-    };
+fn create_sub_menu_element<E>(
+    index: usize,
+    label: String,
+    placement_y: f32,
+    animation_start_sec: f32,
+    onto: (CompositeTreeRef, HitTestTreeRef),
+    common_res: &CommonResources,
+    composite_tree: &mut CompositeTree<E>,
+    ht_manager: &mut HitTestTreeManager,
+) -> InteractableElement {
+    let ht_root = HitTestTreeData::build()
+        .expand_width()
+        .height(ITEM_HEIGHT)
+        .top(placement_y)
+        .interactive_defaults()
+        .create(ht_manager);
+    let ct_root = CompositeRect::build()
+        .expand_width()
+        .size_imm(0.0, ITEM_HEIGHT)
+        .offset(
+            AnimatableFloat::from_template(&INTRO_X_ANIM, animation_start_sec),
+            AnimatableFloat::Value(placement_y),
+        )
+        .opacity_anim(&INTRO_OPACITY_ANIM, animation_start_sec)
+        .create(composite_tree);
+    let ct_label = CompositeRect::build()
+        .expand_full()
+        .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
+        .offset_imm(TEXT_INLINE_MARGIN, 0.0)
+        .text(
+            CompositeRectText::build()
+                .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
+                .vertical_middle(),
+        )
+        .create(composite_tree);
+    let ct_arrow = CompositeRect::build()
+        .relative_offset_adjustment(1.0, 0.5)
+        .offset_imm(
+            -ARROW_ICON.width - TEXT_INLINE_MARGIN,
+            -ARROW_ICON.height * 0.5,
+        )
+        .size_imm(ARROW_ICON.width, ARROW_ICON.height)
+        .composite(CompositeMode::ColorTint(
+            AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
+            CompositeTexture {
+                id: common_res.tid_submenu_arrow,
+                r#type: TextureType::Mask,
+                mapping: TextureMappingMode::Stretch,
+                slice_borders: [0.0; 4],
+            },
+        ))
+        .create(composite_tree);
+    let ct_light = CompositeRect::build()
+        .expand_full()
+        .composite(common_res.composite_mode_light())
+        .opacity_imm(0.0)
+        .create(composite_tree);
 
-    pub fn new(
-        ctx: &mut ViewInitContext,
-        common_res: &CommonResources,
-        label: String,
-        animation_delay: f32,
-        placement_y: f32,
-        onto: (CompositeTreeRef, HitTestTreeRef),
-    ) -> Self {
-        let animation_base_time = ctx.current_sec + animation_delay;
+    composite_tree.add_child(ct_root, ct_light);
+    composite_tree.add_child(ct_root, ct_label);
+    composite_tree.add_child(ct_root, ct_arrow);
 
-        let ht_root = ctx.ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height: ITEM_HEIGHT,
-            top: placement_y,
-            cursor_shape: CursorShape::Pointer,
-            ..Default::default()
-        });
-        let ct_root = CompositeRect::build()
-            .expand_width()
-            .size_imm(0.0, ITEM_HEIGHT)
-            .offset(
-                AnimatableFloat::from_template(&INTRO_X_ANIM, animation_base_time),
-                AnimatableFloat::Value(placement_y),
-            )
-            .opacity_anim(&INTRO_OPACITY_ANIM, animation_base_time)
-            .create(ctx.composite_tree);
-        let ct_label = CompositeRect::build()
-            .expand_full()
-            .size_imm(-TEXT_INLINE_MARGIN * 2.0, 0.0)
-            .offset_imm(TEXT_INLINE_MARGIN, 0.0)
-            .text(
-                CompositeRectText::build()
-                    .run(CompositeRectTextRun::build(label).color_imm([1.0, 1.0, 1.0, 1.0]))
-                    .vertical_middle(),
-            )
-            .create(ctx.composite_tree);
-        let ct_arrow = CompositeRect::build()
-            .relative_offset_adjustment(1.0, 0.5)
-            .offset_imm(
-                -Self::ICON_SIZE.width - TEXT_INLINE_MARGIN,
-                -Self::ICON_SIZE.height * 0.5,
-            )
-            .size_imm(Self::ICON_SIZE.width, Self::ICON_SIZE.height)
-            .composite(CompositeMode::ColorTint(
-                AnimatableColor::Value([1.0, 1.0, 1.0, 1.0]),
-                CompositeTexture {
-                    id: common_res.tid_submenu_arrow,
-                    r#type: TextureType::Mask,
-                    mapping: TextureMappingMode::Stretch,
-                    slice_borders: [0.0; 4],
-                },
-            ))
-            .create(ctx.composite_tree);
-        let ct_light = CompositeRect::build()
-            .expand_full()
-            .composite(common_res.composite_mode_light())
-            .opacity_imm(0.0)
-            .create(ctx.composite_tree);
-        ctx.composite_tree.add_child(ct_root, ct_light);
-        ctx.composite_tree.add_child(ct_root, ct_label);
-        ctx.composite_tree.add_child(ct_root, ct_arrow);
+    composite_tree.add_child(onto.0, ct_root);
+    ht_manager.add_child(onto.1, ht_root);
 
-        ctx.composite_tree.add_child(onto.0, ct_root);
-        ctx.ht_manager.add_child(onto.1, ht_root);
-
-        Self {
-            ht_root,
-            ct_light,
-            placement_y,
-        }
-    }
-
-    pub fn lit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree
-            .begin_mod_chain(self.ct_light)
-            .opacity_animated_from_template(&LIT_OPACITY_ANIM, current_sec)
-            .apply();
-    }
-
-    pub fn unlit<E>(&self, composite_tree: &mut CompositeTree<E>, current_sec: f32) {
-        composite_tree
-            .begin_mod_chain(self.ct_light)
-            .opacity_animated_from_template(&UNLIT_OPACITY_ANIM, current_sec)
-            .apply();
+    InteractableElement {
+        action: InteractableElementAction::SubMenu { index },
+        ht: ht_root,
+        placement_y,
+        ct_light,
     }
 }
 
-pub fn create_separator_visual<E>(
+fn create_separator_visual<E>(
     placement_y: f32,
     onto: CompositeTreeRef,
     composite_tree: &mut CompositeTree<E>,
@@ -480,72 +519,4 @@ pub fn create_separator_visual<E>(
         .create(composite_tree);
 
     composite_tree.add_child(onto, ct_root);
-}
-
-enum InteractableElement {
-    Command { index: usize, command_id: u64 },
-    SubMenu { index: usize },
-}
-
-pub struct EventHandler {
-    depth: usize,
-    child_hts: Vec<(HitTestTreeRef, InteractableElement)>,
-}
-impl HitTestTreeActionHandler for EventHandler {
-    fn on_pointer_enter(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        _args: &crate::input::hittest::PointerActionArgs,
-    ) -> crate::input::EventContinueControl {
-        for &(ht, ref x) in self.child_hts.iter() {
-            if ht == sender {
-                match x {
-                    &InteractableElement::Command { index, .. } => {
-                        context.system_link.dispatch_event(Event::MenuSelectItem {
-                            depth: self.depth,
-                            index,
-                        });
-                    }
-                    &InteractableElement::SubMenu { index } => {
-                        context.system_link.dispatch_event(Event::MenuSelectItem {
-                            depth: self.depth,
-                            index,
-                        });
-                    }
-                }
-
-                return crate::input::EventContinueControl::STOP_PROPAGATION;
-            }
-        }
-
-        context
-            .system_link
-            .dispatch_event(Event::MenuDeselectItem { depth: self.depth });
-
-        crate::input::EventContinueControl::STOP_PROPAGATION
-    }
-
-    fn on_click(
-        &self,
-        sender: HitTestTreeRef,
-        context: &mut crate::input::InputEventContext,
-        _args: &crate::input::hittest::PointerButtonActionArgs,
-    ) -> crate::input::EventContinueControl {
-        for &(ht, ref x) in self.child_hts.iter() {
-            if ht == sender {
-                match x {
-                    &InteractableElement::Command { command_id, .. } => {
-                        context
-                            .system_link
-                            .dispatch_event(Event::MenuSelectCommand { id: command_id });
-                        return crate::input::EventContinueControl::STOP_PROPAGATION;
-                    }
-                    InteractableElement::SubMenu { .. } => {}
-                }
-            }
-        }
-
-        crate::input::EventContinueControl::empty()
-    }
 }

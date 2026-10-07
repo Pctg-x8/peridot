@@ -113,7 +113,7 @@ use crate::{
     graphics::{Graphics, VulkanSurface},
     input::{
         KeyInputCode, KeyboardFocusGroupRef, ModifierKey, PerWindowKeyboardFocusState,
-        PointerInputManager, PointerInputUnit, ShellPointerActions,
+        PointerInputUnit, ShellPointerActions,
         hittest::{
             CursorShape, DragDropFlags, HitTestTreeData, HitTestTreeManager, HitTestTreeRef,
             PointerButton,
@@ -200,15 +200,6 @@ impl WindowHandle {
         }
 
         data
-    }
-
-    #[inline(always)]
-    fn event_handler<'a>(&'a self) -> &'a WindowEventHandler {
-        unsafe {
-            &*core::ptr::with_exposed_provenance(
-                GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
-            )
-        }
     }
 
     #[inline(always)]
@@ -1202,11 +1193,6 @@ impl<'sys> WindowEventHandler<'sys> {
                 return LRESULT(0);
             };
 
-            let p = Point::new_pixels(
-                (lparam.0 & 0xffff) as u16 as i16 as _,
-                ((lparam.0 >> 16) & 0xffff) as u16 as i16 as _,
-            );
-
             st.coreloop().close_all_menus();
             st.coreloop().update_view_all();
 
@@ -1928,8 +1914,7 @@ pub fn open_sub_window<'sys>(
 
 pub fn close_sub_window(mut window_handle: WindowHandle) {
     let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-    window_handle
-        .event_handler()
+    WindowEventHandler::get_for_window(window_handle.0)
         .coreloop()
         .syslink
         .rt_sender
@@ -1942,7 +1927,7 @@ pub fn close_sub_window(mut window_handle: WindowHandle) {
         .recv()
         .expect("done_event_receiver.recv");
 
-    let mut coreloop = window_handle.event_handler().coreloop();
+    let mut coreloop = WindowEventHandler::get_for_window(window_handle.0).coreloop();
     unsafe { coreloop.as_mut().get_unchecked_mut() }
         .composite_tree
         .free_all(window_handle.state().composite_root);
@@ -2613,8 +2598,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         unsafe { MapWindowPoints(None, Some(self.hwnd), &mut client_pos) };
         let [client_pos] = client_pos;
 
-        WindowHandle(self.hwnd)
-            .event_handler()
+        WindowEventHandler::get_for_window(self.hwnd)
             .coreloop()
             .perform_drop(
                 DragData {
@@ -2625,8 +2609,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
                 WindowHandle(self.hwnd),
                 point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
             );
-        WindowHandle(self.hwnd)
-            .event_handler()
+        WindowEventHandler::get_for_window(self.hwnd)
             .coreloop()
             .update_view_all();
 
@@ -2732,16 +2715,14 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
             }
             let [client_pos] = ps;
 
-            WindowHandle(dest_window)
-                .event_handler()
+            WindowEventHandler::get_for_window(dest_window)
                 .coreloop()
                 .move_redock_preview(
                     WindowHandle(dest_window),
                     point_from_win32(client_pos)
                         .to_logical(WindowHandle(dest_window).ui_scale_factor()),
                 );
-            WindowHandle(dest_window)
-                .event_handler()
+            WindowEventHandler::get_for_window(dest_window)
                 .coreloop()
                 .update_view_all();
 

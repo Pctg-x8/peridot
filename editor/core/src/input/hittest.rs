@@ -117,6 +117,11 @@ impl HitTestTreeBuilder {
         self
     }
 
+    pub const fn expand_width(mut self) -> Self {
+        self.0.width_adjustment_factor = 1.0;
+        self
+    }
+
     pub const fn expand_height(mut self) -> Self {
         self.0.height_adjustment_factor = 1.0;
         self

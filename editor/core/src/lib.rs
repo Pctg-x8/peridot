@@ -37,8 +37,8 @@ use crate::{
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
-            AnimatableColor, CompositeMode, CompositeTree, CompositeTreeSyncBuffer, Gradient,
-            GradientRef,
+            AnimatableColor, CompositeMode, CompositeTree, CompositeTreeRef,
+            CompositeTreeSyncBuffer, Gradient, GradientRef,
         },
         text::{FontSet, RootFontSet},
     },
@@ -55,11 +55,10 @@ use crate::{
         ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
     },
     uikit::{
-        ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuEventHandler, MenuItem,
-        MenuItemCommonResources, MenuItemInteractableElement, NumericInputViewIO,
-        NumericInputViewInit, RadioButtonView, ScrollContainer, ScrollContainerInit,
-        SimpleButtonEventHandler, SimpleButtonViewInit, StaticTextViewInit, TextInputView,
-        TextInputViewIO,
+        ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuItem,
+        MenuItemCommonResources, NumericInputViewIO, NumericInputViewInit, RadioButtonView,
+        ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler, SimpleButtonViewInit,
+        StaticTextViewInit, TextInputView, TextInputViewIO,
     },
 };
 
@@ -685,16 +684,6 @@ pub enum Event {
         target_window: WindowHandle,
         message: String,
     },
-    MenuSelectItem {
-        depth: usize,
-        index: usize,
-    },
-    MenuDeselectItem {
-        depth: usize,
-    },
-    MenuSelectCommand {
-        id: u64,
-    },
     DropdownMenuSelectItem {
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
@@ -711,9 +700,6 @@ impl Event {
         match self {
             Self::Quit => "Quit",
             Self::OpenAlertDialog { .. } => "OpenAlertDialog",
-            Self::MenuSelectItem { .. } => "MenuSelectItem",
-            Self::MenuDeselectItem { .. } => "MenuDeselectItem",
-            Self::MenuSelectCommand { .. } => "MenuSelectCommand",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
         }
@@ -2043,6 +2029,7 @@ impl<'sys> CoreLoop<'sys> {
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
@@ -2187,6 +2174,7 @@ impl<'sys> CoreLoop<'sys> {
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
@@ -2250,6 +2238,7 @@ impl<'sys> CoreLoop<'sys> {
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
                 state: &mut this.application,
                 view_feedbacks: &mut this.view_feedback_store,
@@ -2348,6 +2337,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2390,6 +2380,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2428,6 +2419,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2465,6 +2457,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2497,6 +2490,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2526,6 +2520,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2555,6 +2550,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2600,6 +2596,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2636,6 +2633,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2672,6 +2670,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2708,6 +2707,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2744,6 +2744,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2780,6 +2781,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2816,6 +2818,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2924,6 +2927,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -2975,37 +2979,6 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn handle_menu_item_selection(mut self: Pin<&mut Self>, depth: usize, index: usize) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-
-        let this = unsafe { self.get_unchecked_mut() };
-        if let Some(c) = this.current_active_menu_session.as_mut() {
-            c.select_item(
-                depth,
-                index,
-                &mut this.composite_tree,
-                this.global_time_base.elapsed().as_secs_f32(),
-            );
-
-            this.syslink.flyout_surface_context.reserve_delayed_action();
-        }
-    }
-
-    fn handle_menu_item_deselection(mut self: Pin<&mut Self>, depth: usize) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-
-        let this = unsafe { self.get_unchecked_mut() };
-        if let Some(c) = this.current_active_menu_session.as_mut() {
-            c.deselect_item(
-                depth,
-                &mut this.composite_tree,
-                this.global_time_base.elapsed().as_secs_f32(),
-            );
-
-            this.syslink.flyout_surface_context.reserve_delayed_action();
-        }
-    }
-
     fn perform_menu_delayed_action(mut self: Pin<&mut Self>) {
         let _exclusive_use = self.as_mut().exclusive_use();
 
@@ -3046,6 +3019,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -3088,6 +3062,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -3127,6 +3102,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -3159,6 +3135,7 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,
@@ -3167,29 +3144,6 @@ impl<'sys> CoreLoop<'sys> {
                 docking_preview_state: &mut this.docking_preview_state,
             },
         );
-    }
-
-    fn perform_select_menu_command(mut self: Pin<&mut Self>, id: u64) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-
-        let this = unsafe { self.get_unchecked_mut() };
-
-        if let Some(ch) = this
-            .current_active_menu_session
-            .as_mut()
-            .map(|x| &mut x.command_handler)
-        {
-            ch.on_select_command(
-                id,
-                &mut ApplicationMutation {
-                    state: &mut this.application,
-                    view_feedbacks: &mut this.view_feedback_store,
-                },
-            );
-        }
-
-        // コマンド選択したらとじる
-        this.close_menu_requested = true;
     }
 
     fn perform_dropdown_menu_select_item(
@@ -4048,11 +4002,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
                 target_window,
                 message,
             } => inst.as_mut().open_alert_dialog(target_window, message),
-            Event::MenuSelectItem { depth, index } => {
-                inst.as_mut().handle_menu_item_selection(depth, index)
-            }
-            Event::MenuDeselectItem { depth } => inst.as_mut().handle_menu_item_deselection(depth),
-            Event::MenuSelectCommand { id } => inst.as_mut().perform_select_menu_command(id),
             Event::DropdownMenuSelectItem { id, receiver } => inst
                 .as_mut()
                 .perform_dropdown_menu_select_item(id, receiver),
@@ -4076,8 +4025,7 @@ pub struct MenuOpenRequest {
 
 pub struct MenuSurface {
     handle: FlyoutSurfaceHandle,
-    item_views: Vec<Option<MenuItemInteractableElement>>,
-    _event_handler: Rc<MenuEventHandler>,
+    event_handler: Rc<MenuEventHandler>,
     parent_path: Vec<usize>,
     current_selecting: Option<usize>,
 }
@@ -4102,34 +4050,29 @@ impl MenuSurface {
         );
 
         let cl = unsafe { cl.get_unchecked_mut() };
-        let (item_views, eh) = crate::uikit::MenuItemLayout::instantiate(
-            layouted_items.into_iter(),
-            depth,
-            &mut ViewInitContext {
-                composite_tree: &mut cl.composite_tree,
-                ht_manager: &mut cl.ht_manager,
-                current_sec: cl.global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut cl.keyboard_focus_registry,
-                view_allocator: &mut cl.view_allocator,
-                view_instance_store: &mut cl.view_instance_store,
-                view_tree_relation_store: &mut cl.view_tree_relation_store,
-                view_group_relation_store: &mut cl.view_group_relation_store,
-                view_layout_state_store: &mut cl.view_layout_state_store,
-                view_render_state_store: &mut cl.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut cl.view_feedback_registry_delayed_ops,
-                system_link: &cl.syslink,
-                main_thread_texture_id_issuer: &mut cl.texture_id_issuer,
-                application: &cl.application,
-            },
+        let interactable_elements = crate::uikit::menu::instantiate_menu_render_elements(
+            layouted_items,
+            surface.ct_root(),
+            surface.ht_root(),
             &cl.context_menu_common_resources,
-            &surface,
+            &mut cl.composite_tree,
+            &mut cl.ht_manager,
+            cl.global_time_base.elapsed().as_secs_f32(),
         );
+
+        let eh = Rc::new(MenuEventHandler {
+            depth,
+            elements: interactable_elements,
+            cl: core::ptr::from_mut(cl).cast(),
+        });
+        for e in eh.elements.iter().filter_map(Option::as_ref) {
+            e.bind_action_handler(&eh, &mut cl.ht_manager);
+        }
         cl.ht_manager.set_action_handler(surface.ht_root(), &eh);
 
         Self {
             handle: surface,
-            item_views,
-            _event_handler: eh,
+            event_handler: eh,
             parent_path,
             current_selecting: None,
         }
@@ -4147,28 +4090,134 @@ impl MenuSurface {
         }
 
         if let Some(x) = self.current_selecting {
-            self.item_views[x]
+            self.event_handler.elements[x]
                 .as_ref()
-                .expect("not interactable")
+                .expect("unlit invalid item")
                 .unlit(composite_tree, current_sec);
         }
 
         self.current_selecting = Some(new_index);
-        self.item_views[new_index]
+        self.event_handler.elements[new_index]
             .as_ref()
-            .expect("not interactable")
+            .expect("lit invalid item")
             .lit(composite_tree, current_sec);
     }
 
     pub fn deselect(&mut self, composite_tree: &mut CompositeTree<SyncEvent>, current_sec: f32) {
         if let Some(x) = self.current_selecting {
-            self.item_views[x]
+            self.event_handler.elements[x]
                 .as_ref()
-                .expect("not interactable")
+                .expect("deselect invalid item")
                 .unlit(composite_tree, current_sec);
         }
 
         self.current_selecting = None;
+    }
+}
+
+pub struct MenuEventHandler {
+    depth: usize,
+    elements: Vec<Option<crate::uikit::menu::InteractableElement>>,
+    cl: *mut CoreLoop<'static>,
+}
+impl crate::input::hittest::HitTestTreeActionHandler for MenuEventHandler {
+    fn on_pointer_enter(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut InputEventContext,
+        _args: &crate::input::hittest::PointerActionArgs,
+    ) -> crate::input::EventContinueControl {
+        for e in self.elements.iter().filter_map(Option::as_ref) {
+            if e.ht == sender {
+                match e.action {
+                    crate::uikit::menu::InteractableElementAction::Command { index, .. } => {
+                        if let Some(c) = unsafe { &mut *self.cl }
+                            .current_active_menu_session
+                            .as_mut()
+                        {
+                            c.select_item(
+                                self.depth,
+                                index,
+                                context.composite_tree,
+                                context.current_sec,
+                            );
+
+                            context
+                                .system_link
+                                .flyout_surface_context
+                                .reserve_delayed_action();
+                        }
+                    }
+                    crate::uikit::menu::InteractableElementAction::SubMenu { index, .. } => {
+                        if let Some(c) = unsafe { &mut *self.cl }
+                            .current_active_menu_session
+                            .as_mut()
+                        {
+                            c.select_item(
+                                self.depth,
+                                index,
+                                context.composite_tree,
+                                context.current_sec,
+                            );
+
+                            context
+                                .system_link
+                                .flyout_surface_context
+                                .reserve_delayed_action();
+                        }
+                    }
+                }
+
+                return crate::input::EventContinueControl::STOP_PROPAGATION;
+            }
+        }
+
+        // deselect all
+        if let Some(c) = unsafe { &mut *self.cl }
+            .current_active_menu_session
+            .as_mut()
+        {
+            c.deselect_item(self.depth, context.composite_tree, context.current_sec);
+
+            context
+                .system_link
+                .flyout_surface_context
+                .reserve_delayed_action();
+        }
+
+        crate::input::EventContinueControl::STOP_PROPAGATION
+    }
+
+    fn on_click(
+        &self,
+        sender: HitTestTreeRef,
+        context: &mut crate::input::InputEventContext,
+        _args: &crate::input::hittest::PointerButtonActionArgs,
+    ) -> crate::input::EventContinueControl {
+        for e in self.elements.iter().filter_map(Option::as_ref) {
+            if e.ht == sender {
+                match e.action {
+                    crate::uikit::menu::InteractableElementAction::Command {
+                        command_id, ..
+                    } => {
+                        if let Some(ch) = unsafe { &mut *self.cl }
+                            .current_active_menu_session
+                            .as_mut()
+                            .map(|x| &mut x.command_handler)
+                        {
+                            ch.on_select_command(command_id, &mut context.application);
+                        }
+
+                        // コマンド選択したらとじる
+                        context.close_menu();
+                        return crate::input::EventContinueControl::STOP_PROPAGATION;
+                    }
+                    crate::uikit::menu::InteractableElementAction::SubMenu { .. } => {}
+                }
+            }
+        }
+
+        crate::input::EventContinueControl::empty()
     }
 }
 
@@ -4244,11 +4293,12 @@ impl MenuSession {
                 );
                 let latest_surface = self.opening_surfaces.last().expect("root?");
 
-                if let Some(MenuItemInteractableElement::SubMenu(ref submenu)) =
-                    latest_surface.item_views[index]
+                if let Some(ref active_element) = latest_surface.event_handler.elements[index]
+                    && let crate::uikit::menu::InteractableElementAction::SubMenu { .. } =
+                        active_element.action
                 {
                     // submenu delayed action
-                    let pos = latest_surface.handle.submenu_pop_position(submenu);
+                    let pos = latest_surface.handle.submenu_pop_position(active_element);
                     let parent_path = latest_surface
                         .parent_path
                         .iter()

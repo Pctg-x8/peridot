@@ -46,12 +46,11 @@ pub use self::label::*;
 mod button;
 pub use self::button::*;
 
-mod menu;
+pub mod menu;
 pub use self::menu::{
-    CommandView as MenuItemCommandView, CommonResources as MenuItemCommonResources,
-    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS, EventHandler as MenuEventHandler,
-    MenuCommandSelectionHandler, MenuItem, MenuItemInteractableElement, MenuItemLayout,
-    SubMenuView as MenuItemSubMenuView,
+    CommonResources as MenuItemCommonResources,
+    DELAYED_ACTION_TIMEOUT_MS as MENU_DELAYED_ACTION_TIMEOUT_MS, MenuCommandSelectionHandler,
+    MenuItem, MenuItemLayout,
 };
 
 mod text_input;

@@ -54,7 +54,6 @@ use crate::{
         NewContextMenuData, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::MenuItemSubMenuView,
     utils::platform::windows::{
         WaitableTimer, WindowByClassIter, point_from_win32, point_to_win32, register_class,
     },
@@ -153,7 +152,10 @@ impl Handle {
     }
 
     #[inline(always)]
-    pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
+    pub fn submenu_pop_position(
+        &self,
+        element: &crate::uikit::menu::InteractableElement,
+    ) -> Point<LogicalUnit> {
         let mut window_rect = core::mem::MaybeUninit::uninit();
         unsafe {
             GetClientRect(self.0, window_rect.as_mut_ptr()).expect("GetClientRect");
@@ -162,7 +164,7 @@ impl Handle {
 
         Point::new_pixels(
             window_rect.right - (SHADOW_SIZE * 2.0).round() as i32,
-            window_rect.top + (view.placement_y * self.render_scale()).round() as i32,
+            window_rect.top + (element.placement_y * self.render_scale()).round() as i32,
         )
         .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
         .with_offset(state(self.0).spawned_surface_pos)

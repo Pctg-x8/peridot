@@ -45,6 +45,7 @@ pub struct InputEventContext<'env, 'sys> {
     pub view_render_queue: &'env mut ViewRenderQueue,
     pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
     pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
+    pub close_menu_request: &'env mut bool,
     pub custom_flyout_view_open_request: &'env mut Option<CustomFlyoutViewOpenRequest>,
     pub popup_manager: &'env mut PopupManager,
     pub docking_preview_state: &'env mut Option<crate::ui::dock::DockingPreviewState>,
@@ -79,6 +80,11 @@ impl InputEventContext<'_, '_> {
             "custom flyout view open already requested in this event"
         );
         *self.custom_flyout_view_open_request = Some(req);
+    }
+
+    #[inline(always)]
+    pub fn close_menu(&mut self) {
+        *self.close_menu_request = true;
     }
 
     #[inline(always)]
