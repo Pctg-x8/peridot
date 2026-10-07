@@ -1,5 +1,7 @@
 //! Peridot EngineCore: AudioSection
 
+use crate::{AssetType, ASSET_TYPE_SOUND};
+
 use super::InputStream;
 use num_cpus;
 use parking_lot::RwLock;
@@ -401,7 +403,7 @@ pub struct PreloadedPlayableWav {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for PreloadedPlayableWav {
-    const EXT: &'static str = "pa1-audio";
+    const ASSET_TYPE: AssetType = ASSET_TYPE_SOUND;
 }
 impl super::FromAssetBlob for PreloadedPlayableWav {
     type Error = std::io::Error;
@@ -468,7 +470,7 @@ pub struct StreamingPlayableWav<'a> {
     state: PlayableAudioState,
 }
 impl super::LogicalAssetData for StreamingPlayableWav<'_> {
-    const EXT: &'static str = "pa1-audio";
+    const ASSET_TYPE: AssetType = ASSET_TYPE_SOUND;
 }
 impl<'a> super::FromStreamingAsset<'a> for StreamingPlayableWav<'a> {
     type Error = std::io::Error;

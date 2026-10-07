@@ -6,9 +6,9 @@ use std::io::{Read, Write};
 use bedrock as br;
 use futures_io::AsyncRead;
 
-#[cfg(feature = "with-peridot")]
+#[cfg(feature = "with-loader-impl")]
 mod asset;
-#[cfg(feature = "with-peridot")]
+#[cfg(feature = "with-loader-impl")]
 pub use asset::{Asset, AssetAsync, AssetCore};
 
 /// ファイルシグネチャ
@@ -25,7 +25,7 @@ fn try_validate_signature_core(sig: u32) -> Option<Endianness> {
 /// ファイルの先端を読み込み、シグネチャと合致するか、およびファイル内のエンディアンを検出して返す
 pub fn try_validate_signature(r: &mut (impl Read + ?Sized)) -> std::io::Result<Option<Endianness>> {
     let mut sig = 0u32;
-    r.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut sig) })?;
+    r.read_exact(unsafe { core::mem::transmute::<&mut u32, &mut [u8; 4]>(&mut sig) })?;
     Ok(try_validate_signature_core(sig))
 }
 /// ファイルの先端を読み込み、シグネチャと合致するか、およびファイル内のエンディアンを検出して返す
@@ -34,7 +34,7 @@ pub async fn try_validate_signature_async(
 ) -> std::io::Result<Option<Endianness>> {
     let mut sig = 0u32;
     pinned_futures_helper::read_exact_async_pinned(r, unsafe {
-        core::mem::transmute::<_, &mut [MaybeUninit<u8>; 4]>(&mut sig)
+        core::mem::transmute::<&mut u32, &mut [MaybeUninit<u8>; 4]>(&mut sig)
     })
     .await?;
     Ok(try_validate_signature_core(sig))
@@ -212,7 +212,7 @@ impl TryFrom<u8> for PrimitiveTopology {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if Self::Points as u8 <= value && value <= Self::TriangleFan as u8 {
-            Ok(unsafe { core::mem::transmute(value) })
+            Ok(unsafe { core::mem::transmute::<u8, Self>(value) })
         } else {
             Err(value)
         }
@@ -324,7 +324,7 @@ impl TryFrom<u8> for IndexType {
 
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         if Self::UInt16 as u8 <= value && value <= Self::UInt32 as u8 {
-            Ok(unsafe { core::mem::transmute(value) })
+            Ok(unsafe { core::mem::transmute::<u8, Self>(value) })
         } else {
             Err(value)
         }

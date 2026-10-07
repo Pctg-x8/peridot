@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */ = {isa = PBXBuildFile; fileRef = 4B40D4B621DCFB5B00C1B31F /* assets.par */; };
+		4B0DF1603073847700180709 /* .runtime-assets in Resources */ = {isa = PBXBuildFile; fileRef = 4B0DF15F3073846E00180709 /* .runtime-assets */; };
 		4B643A4430157D3D0024EF86 /* libvulkan.1.4.350.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; };
 		4B643A4530157D3D0024EF86 /* libvulkan.1.4.350.dylib in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		4B696EEE231BD4E000C2417C /* AudioUnit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4B696EED231BD4E000C2417C /* AudioUnit.framework */; };
@@ -43,6 +43,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		4B0DF15F3073846E00180709 /* .runtime-assets */ = {isa = PBXFileReference; lastKnownFileType = folder; name = ".runtime-assets"; path = "../.runtime-assets"; sourceTree = SOURCE_ROOT; };
 		4B40D4B621DCFB5B00C1B31F /* assets.par */ = {isa = PBXFileReference; lastKnownFileType = file; path = assets.par; sourceTree = "<group>"; };
 		4B643A4330157D3D0024EF86 /* libvulkan.1.4.350.dylib */ = {isa = PBXFileReference; lastKnownFileType = "compiled.mach-o.dylib"; name = libvulkan.1.4.350.dylib; path = lib/libvulkan.1.4.350.dylib; sourceTree = "<group>"; };
 		4B696EED231BD4E000C2417C /* AudioUnit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioUnit.framework; path = System/Library/Frameworks/AudioUnit.framework; sourceTree = SDKROOT; };
@@ -93,7 +94,6 @@
 			children = (
 				4B979FC830158835002CF562 /* vulkan */,
 			);
-			name = "extra-resources";
 			path = "extra-resources";
 			sourceTree = "<group>";
 		};
@@ -105,6 +105,7 @@
 				4BAF7A1521B2554B0006BE24 /* peridot-cradle */,
 				4BAF7A1421B2554B0006BE24 /* Products */,
 				4BAF7A3321B3C7380006BE24 /* Frameworks */,
+				4B0DF15F3073846E00180709 /* .runtime-assets */,
 			);
 			sourceTree = "<group>";
 		};
@@ -221,8 +222,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4B0DF1603073847700180709 /* .runtime-assets in Resources */,
 				4B979FC930158835002CF562 /* vulkan in Resources */,
-				4B40D4B721DCFB5B00C1B31F /* assets.par in Resources */,
 				4BAF7A1921B2554E0006BE24 /* Assets.xcassets in Resources */,
 				4BAF7A1C21B2554E0006BE24 /* MainMenu.xib in Resources */,
 			);
@@ -248,7 +249,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "TARGET_VERSIONED_LIB_NAME=libvulkan.1.4.350.dylib\n\ncd $BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH\nln -s ./$TARGET_VERSIONED_LIB_NAME libvulkan.1.dylib\nln -s ./$TARGET_VERSIONED_LIB_NAME libvulkan.dylib\n";
+			shellScript = "TARGET_VERSIONED_LIB_NAME=libvulkan.1.4.350.dylib\n\ncd $BUILT_PRODUCTS_DIR/$FRAMEWORKS_FOLDER_PATH\nln -sf ./$TARGET_VERSIONED_LIB_NAME libvulkan.1.dylib\nln -sf ./$TARGET_VERSIONED_LIB_NAME libvulkan.dylib\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -407,11 +408,11 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/cdeps-build/aarch64-apple-darwin",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(PROJECT_DIR)/rlibs",
-					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/cdeps-build/aarch64-apple-darwin",
 					"$(VULKAN_SDK)/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
@@ -440,11 +441,11 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
-					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/cdeps-build/aarch64-apple-darwin",
 				);
 				LIBRARY_SEARCH_PATHS = (
 					"$(PROJECT_DIR)/rlibs",
-					"$(PROJECT_DIR)/../../../thirdparty/ktx/source-repo/build",
+					"$(PROJECT_DIR)/../../../thirdparty/ktx/cdeps-build/aarch64-apple-darwin",
 					"$(VULKAN_SDK)/lib",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;

@@ -26,6 +26,11 @@ pub fn builtin_assets_path() -> PathBuf {
 }
 
 #[inline(always)]
+pub fn vulkan_sdk_path() -> PathBuf {
+    PathBuf::from(std::env::var_os("VULKAN_SDK").expect("VULKAN_SDK not set"))
+}
+
+#[inline(always)]
 fn current_exe() -> PathBuf {
     std::env::current_exe().expect("Failed to get exe path")
 }

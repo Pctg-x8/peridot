@@ -82,10 +82,14 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
     };
     camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
 
+    let asset_collection = e.asset_collection::<peridot_mesh::AssetCore>("test");
+    tracing::debug!(asset_count = asset_collection.len(), "asset collection");
     let asset = peridot_mesh::AssetAsync::open(
-        e.open_raw_asset_async::<peridot_mesh::AssetCore>("test-mesh0-1")
+        asset_collection
+            .open_at_async(1)
             .await
-            .expect("open asset"),
+            .expect("open asset")
+            .expect("no asset at index?"),
     )
     .await
     .expect("read contents");

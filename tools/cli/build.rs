@@ -14,7 +14,14 @@ fn main() {
             "cargo::rustc-link-arg-bins=-Wl,-rpath,{}",
             std::env::current_dir()
                 .expect("Failed to query current dir")
-                .join("../../thirdparty/ktx/source-repo/build")
+                .join("../../thirdparty/ktx/cdeps-build")
+                .join(std::env::var_os("TARGET").expect("no TARGET"))
+                .display()
+        );
+        println!(
+            "cargo::rustc-link-arg-bins=-Wl,-rpath,{}",
+            std::path::PathBuf::from(std::env::var_os("VULKAN_SDK").expect("no VULKAN_SDK"))
+                .join("lib")
                 .display()
         );
     }

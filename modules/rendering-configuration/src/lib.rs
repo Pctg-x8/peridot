@@ -1,11 +1,8 @@
+#[cfg(feature = "with-asset-processing")]
+use std::path::Path;
 use std::{
     collections::HashMap,
     io::{BufRead, Seek, SeekFrom, Write},
-};
-#[cfg(feature = "with-asset-processing")]
-use std::{
-    ffi::OsStr,
-    path::{Path, PathBuf},
 };
 
 pub use peridot_semantic_shader::VertexInputSemantic;
@@ -22,7 +19,7 @@ pub struct CompiledRenderingConfigurationVk {
 
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for CompiledRenderingConfigurationVk {
-    const EXT: &'static str = "pa1-rendering-configuration";
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK;
 }
 #[cfg(feature = "with-loader-impl")]
 impl peridot::FromAssetBlob for CompiledRenderingConfigurationVk {
@@ -68,28 +65,28 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path.extension().is_some_and(|x| x == "prc")
     }
 
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-rendering-configuration")
-    }
-
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
-        out_path: &Path,
+        ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let content =
             std::fs::read_to_string(source_path).map_err(AssetProcessError::ReadingFailed)?;
         let asset =
             compilation::compile(&content).ok_or(AssetProcessError::GeneratingAssetFailure)?;
+        let asset_id = ctx.register_child_asset(
+            &asset_group_id,
+            peridot::ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK,
+            0,
+        );
         write(
             &mut std::fs::File::options()
                 .write(true)
                 .truncate(true)
                 .create(true)
-                .open(out_path)
+                .open(ctx.prepare_runtime_asset_output(&asset_id))
                 .map_err(AssetProcessError::DestWriteOpenFailed)?,
             asset,
         )

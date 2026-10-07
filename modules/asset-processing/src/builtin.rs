@@ -1,10 +1,8 @@
-use std::{
-    collections::HashMap,
-    ffi::OsStr,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, path::Path};
 
 use ktx::Texture;
+
+use crate::AssetProcessContext;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImageAssetProcessError {
@@ -28,18 +26,14 @@ impl crate::AssetProcessor for ImageAssetProcessor {
             .is_some_and(|x| x == "png" || x == "jpg" || x == "tiff")
     }
 
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-texture2d")
-    }
-
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         metadata: &HashMap<crate::metadata::Key, String>,
-        out_path: &Path,
+        ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_IMAGE2D, 0);
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
 
         let uastc_level_flag = metadata
@@ -105,7 +99,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
             .map_err(|e| ImageAssetProcessError::Ktx2OperationFailure("deflate_zstd", e))?;
         ktx.write_to_named_file(
             &std::ffi::CString::new(
-                out_path
+                ctx.prepare_runtime_asset_output(&asset_id)
                     .to_str()
                     .ok_or(ImageAssetProcessError::InvalidOutPath)?,
             )
@@ -131,20 +125,17 @@ impl crate::AssetProcessor for SoundAssetProcessor {
             .is_some_and(|x| x == "wav" || x == "mp3" || x == "ogg" || x == "flac")
     }
 
-    fn dest_path(&self, source_file_name: &OsStr, out_dir_path: &Path) -> PathBuf {
-        out_dir_path
-            .join(source_file_name)
-            .with_extension("pa1-audio")
-    }
-
     fn process(
         &self,
         source_path: &Path,
+        asset_group_id: peridot::AssetID,
         _metadata: &HashMap<crate::metadata::Key, String>,
-        out_path: &Path,
+        ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // TODO: convert to what?
-        std::fs::copy(source_path, out_path).map_err(SoundAssetProcessError::CopyFailed)?;
+        let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SOUND, 0);
+        std::fs::copy(source_path, ctx.prepare_runtime_asset_output(&asset_id))
+            .map_err(SoundAssetProcessError::CopyFailed)?;
 
         Ok(())
     }

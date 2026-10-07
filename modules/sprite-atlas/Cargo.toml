@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-with-asset-processing = ["dep:peridot-asset-processing"]
+with-asset-processing = ["dep:peridot-asset-processing", "dep:peridot"]
 with-loader-impl = ["dep:peridot"]
 
 [dependencies]

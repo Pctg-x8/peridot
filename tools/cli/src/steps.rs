@@ -214,34 +214,7 @@ pub fn package_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
         .expect("Failed to wait peridot-archive");
     crate::shellutil::handle_process_result("peridot-archive", e);
 }
-#[cfg(not(feature = "process-assets"))]
-pub fn merge_assets(_: &BuildContext, _: &Path, _: Option<&Path>) {
-    eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
-}
-#[cfg(feature = "process-assets")]
-pub fn merge_assets(ctx: &BuildContext, stg_directory_path: &Path, user_assets: Option<&Path>) {
-    ctx.print_step("Merging assets...");
 
-    if !stg_directory_path.exists() {
-        std::fs::create_dir_all(stg_directory_path).expect("Failed to create asset stg directory");
-    }
-    if let Some(p) = user_assets {
-        crate::shellutil::handle_process_result(
-            "asset sync command",
-            crate::shellutil::sh_mirror(p, stg_directory_path, &[])
-                .expect("Failed to run mirror command"),
-        );
-    }
-    crate::shellutil::handle_process_result(
-        "builtin asset sync command",
-        crate::shellutil::sh_mirror(
-            &crate::path::builtin_assets_path(),
-            &stg_directory_path.join("builtin"),
-            &["Makefile"],
-        )
-        .expect("Failed to run mirror command"),
-    );
-}
 #[cfg(not(feature = "process-assets"))]
 pub fn process_assets(_: &BuildContext, _: Option<&Path>, _: &Path) {
     eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
@@ -249,9 +222,6 @@ pub fn process_assets(_: &BuildContext, _: Option<&Path>, _: &Path) {
 #[cfg(feature = "process-assets")]
 pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path: &Path) {
     // Pre-required built step
-    let stg_path = std::env::temp_dir().join(".peridot/build/assets");
-    merge_assets(ctx, &stg_path, asset_path);
-
     ctx.print_step("Processing assets...");
 
     let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
@@ -265,15 +235,23 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
     fn process_recursive(
         ctx: &BuildContext,
         processors: &[Box<dyn peridot_asset_processing::AssetProcessor>],
+        process_ctx: &mut peridot_asset_processing::AssetProcessContext,
+        process_opts: &peridot_asset_processing::ProcessOptions,
         target_dir: &Path,
         base_dir: &Path,
-        output_path: &Path,
     ) {
         for e in std::fs::read_dir(target_dir).expect("std::fs::read_dir failed") {
             let e = e.expect("std::fs::read_dir failed entry");
             let source_path = e.path();
             if source_path.is_dir() {
-                process_recursive(ctx, processors, &source_path, base_dir, output_path);
+                process_recursive(
+                    ctx,
+                    processors,
+                    process_ctx,
+                    process_opts,
+                    &source_path,
+                    base_dir,
+                );
                 continue;
             }
 
@@ -285,23 +263,53 @@ pub fn process_assets(ctx: &BuildContext, asset_path: Option<&Path>, output_path
                 continue;
             }
 
-            let relative_path = target_dir
-                .strip_prefix(base_dir)
-                .expect("not a path onto base_dir");
-            let runtime_path = output_path.join(relative_path);
+            if peridot_asset_processing::is_metadata_file(&source_path) {
+                // metadata file
+                continue;
+            }
 
-            std::fs::create_dir_all(&runtime_path).expect("Failed to create runtime-asset-path");
             peridot_asset_processing::process(
                 processors,
+                process_ctx,
+                base_dir,
                 source_path,
-                peridot_asset_processing::ProcessOptions {
-                    out_dir: Some(&runtime_path),
-                    force_rebuild: false,
-                },
+                &process_opts,
             )
             .expect("Failed to process asset");
         }
     }
 
-    process_recursive(ctx, &processors, &stg_path, &stg_path, output_path);
+    std::fs::create_dir_all(output_path).expect("Failed to create runtime-asset-path");
+    let mut process_context = peridot_asset_processing::AssetProcessContext {
+        dest_dir: output_path,
+        assetdb: peridot::AssetDatabase::open_rw(output_path).expect("assetdb.open"),
+        asset_id_generator: peridot::AssetIDGenerator::new(),
+    };
+    if let Some(asset_path) = asset_path {
+        process_recursive(
+            ctx,
+            &processors,
+            &mut process_context,
+            &peridot_asset_processing::ProcessOptions {
+                force_rebuild: false,
+                loadable_prefix: None,
+            },
+            &asset_path,
+            &asset_path,
+        );
+    }
+
+    ctx.print_step("Processing builtin assets...");
+    let builtin_assets_path = crate::path::builtin_assets_path();
+    process_recursive(
+        ctx,
+        &processors,
+        &mut process_context,
+        &peridot_asset_processing::ProcessOptions {
+            force_rebuild: false,
+            loadable_prefix: Some("builtin."),
+        },
+        &builtin_assets_path,
+        &builtin_assets_path,
+    );
 }
