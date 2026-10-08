@@ -224,8 +224,8 @@ pub fn launch() {
     let pointer_hovering_timer =
         utils::platform::windows::WaitableTimer::new(false).expect("pointer_hovering_timer.create");
     #[cfg(windows)]
-    let context_menu_delayed_action_timer = utils::platform::windows::WaitableTimer::new(false)
-        .expect("context_menu_delayed_action_timer.create");
+    let delayed_action_timer =
+        utils::platform::windows::WaitableTimer::new(false).expect("delayed_action_timer.create");
     #[cfg(target_os = "linux")]
     let pointer_hovering_timer = utils::platform::linux::TimerFD::new().expect("timerfd.new");
     #[cfg(feature = "wayland")]
@@ -245,7 +245,7 @@ pub fn launch() {
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
                 &app_context,
                 &dx_context,
-                &context_menu_delayed_action_timer,
+                &delayed_action_timer,
             ),
             native_text_input_context_create_context:
                 platform::windows::NativeTextInputContextCreateContext {
@@ -295,108 +295,48 @@ pub fn launch() {
         cl.syslink.native_text_input_context_create_context.coreloop =
             core::ptr::from_mut(cl).cast::<CoreLoop<'static>>();
     }
-
-    profiler::sample_memory!();
-    main_wrapper(
-        move |cl, eq| run(cl, eq),
-        &mut app_event_dispatcher,
-        coreloop,
-        &mut event_store,
-        &global_time_base,
-        &renderer_sync,
-        &gfx,
-        rt_receiver,
-        &root_font_set,
-        &preview_state,
-        #[cfg(windows)]
-        &dx_context,
-        #[cfg(windows)]
-        &pointer_hovering_timer,
-        #[cfg(windows)]
-        &context_menu_delayed_action_timer,
-        #[cfg(windows)]
-        #[cfg(feature = "enable-profiling")]
-        &memory_sample_timer,
-        #[cfg(feature = "wayland")]
-        &mut dp_context,
-        #[cfg(feature = "wayland")]
-        wl_global_msg,
-        #[cfg(feature = "wayland")]
-        &terminate_event,
-        #[cfg(target_os = "linux")]
-        &dbus,
-        #[cfg(target_os = "linux")]
-        &pointer_hovering_timer,
-        #[cfg(target_os = "linux")]
-        &delayed_action_timer_fd,
-        #[cfg(target_os = "linux")]
-        #[cfg(feature = "enable-profiling")]
-        &memory_sample_timer_fd,
-    );
-
-    profiler::fini_profiler();
-}
-
-fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-    run_app: impl FnOnce(Pin<&'sys mut CoreLoop<'sys>>, EventQueue) -> AppFuture,
-    app_event_dispatcher: &mut LogicFiberEventDispatcher,
-    mut coreloop: Pin<&'sys mut CoreLoop<'sys>>,
-    event_store: &mut VecDeque<Event>,
-    global_time_base: &'sys std::time::Instant,
-    renderer_sync: &'sys Mutex<RendererSync>,
-    gfx: &'sys Graphics,
-    rt_receiver: std::sync::mpsc::Receiver<RenderMessage>,
-    root_font_set: &'sys RootFontSet,
-    preview_state: &'sys Mutex<rendering::preview::CommittedState>,
-    #[cfg(windows)] dx_context: &'sys platform::windows::DxContext,
-    #[cfg(windows)] pointer_hovering_timer: &utils::platform::windows::WaitableTimer,
-    #[cfg(windows)] delayed_action_timer: &utils::platform::windows::WaitableTimer,
-    #[cfg(windows)]
-    #[cfg(feature = "enable-profiling")]
-    memory_sample_timer: &utils::platform::windows::WaitableTimer,
-    #[cfg(feature = "wayland")] dp_context: &'sys mut platform::unix::wayland::DisplayServerContext,
-    #[cfg(feature = "wayland")] mut wl_global_msg: Pin<
-        &'sys mut platform::unix::wayland::GlobalMessaging<'sys>,
-    >,
-    #[cfg(feature = "wayland")] terminate_event: &(impl AsRawFd + ?Sized),
-    #[cfg(target_os = "linux")] dbus: &'sys dbus::Connection,
-    #[cfg(target_os = "linux")] pointer_hovering_timer: &(impl AsRawFd + ?Sized),
-    #[cfg(target_os = "linux")] delayed_action_timer_fd: &(impl AsRawFd + ?Sized),
-    #[cfg(target_os = "linux")]
-    #[cfg(feature = "enable-profiling")]
-    memory_sample_timer_fd: &(impl AsRawFd + ?Sized),
-) {
-    let cl_ptr = core::ptr::from_mut(unsafe { coreloop.as_mut().get_unchecked_mut() });
-    let mut app = core::pin::pin!(run_app(
-        unsafe { Pin::new_unchecked(&mut *cl_ptr) },
-        EventQueue { event_store }
-    ));
-    app_event_dispatcher.future_ptr = unsafe { app.as_mut().get_unchecked_mut() as *mut _ as _ };
-    app_event_dispatcher.poll_fn_ptr =
-        unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) };
     #[cfg(feature = "wayland")]
     wl_global_msg.as_mut().bind_coreloop(coreloop.as_mut());
 
+    let mut app = core::pin::pin!(run(
+        unsafe {
+            Pin::new_unchecked(&mut *core::ptr::from_mut(
+                coreloop.as_mut().get_unchecked_mut(),
+            ))
+        },
+        EventQueue {
+            event_store: &mut event_store
+        }
+    ));
+    // 関数を経由してFutureの具象型をトラップする
+    fn launch_app_loop<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
+        _app: Pin<&mut AppFuture>,
+        app_event_dispatcher: &mut LogicFiberEventDispatcher,
+    ) {
+        app_event_dispatcher.poll_fn_ptr =
+            unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) };
+    }
+    app_event_dispatcher.future_ptr =
+        unsafe { core::ptr::from_mut(app.as_mut().get_unchecked_mut()).cast() };
+    launch_app_loop(app, &mut app_event_dispatcher);
     app_event_dispatcher.poll_init();
-    unsafe { Pin::new_unchecked(&mut *cl_ptr) }.init();
-    unsafe { &*cl_ptr }
-        .syslink
-        .prelaunch(unsafe { &*cl_ptr }.main_window);
+    coreloop.as_mut().init();
+    coreloop.syslink.prelaunch(coreloop.main_window);
 
     let sync_event_bus = SyncEventBus::new();
     let shutdown = std::sync::atomic::AtomicBool::new(false);
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
-            gfx,
+            gfx: &gfx,
             shutdown_signal: &shutdown,
-            renderer_sync,
-            global_time_base,
+            renderer_sync: &renderer_sync,
+            global_time_base: &global_time_base,
             event_bus: &sync_event_bus,
             message_receiver: rt_receiver,
-            root_font_set,
-            preview_state,
+            root_font_set: &root_font_set,
+            preview_state: &preview_state,
             #[cfg(windows)]
-            dx_context,
+            dx_context: &dx_context,
             #[cfg(windows)]
             d3d12_present_counter: 0,
         };
@@ -665,6 +605,7 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
 
     coreloop.save_window_state();
     tracing::info!("app finish");
+    profiler::fini_profiler();
 }
 
 #[derive(Clone, Debug, PartialEq)]
