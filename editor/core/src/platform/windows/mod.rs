@@ -2152,13 +2152,8 @@ impl<T: TextProvider + 'static> NativeTextInputContext<T> {
                         caller_thread_id,
                         "not main thread"
                     );
-                    unsafe { &**coreloop.as_ptr() }.core_text_compute_layout(
-                        req,
-                        None,
-                        layout_provider_ht,
-                    );
-
-                    Ok(())
+                    unsafe { &**coreloop.as_ptr() }
+                        .core_text_compute_layout(req, layout_provider_ht)
                 }
             }))
             .expect("edit_context.layout_requested");
@@ -2212,13 +2207,8 @@ impl<T: TextProvider + 'static> NativeTextInputContext<T> {
                         "not main thread"
                     );
 
-                    unsafe { Pin::new_unchecked(&mut **coreloop.as_ptr()) }.core_text_update_text(
-                        e,
-                        None,
-                        layout_provider_ht,
-                    );
-
-                    Ok(())
+                    unsafe { Pin::new_unchecked(&mut **coreloop.as_ptr()) }
+                        .core_text_update_text(e, layout_provider_ht)
                 }
             }))
             .expect("edit_context.text_updating");
@@ -2275,9 +2265,7 @@ impl<T: TextProvider + 'static> NativeTextInputContext<T> {
                     );
 
                     unsafe { Pin::new_unchecked(&mut **coreloop.as_ptr()) }
-                        .core_text_update_format(e, None, layout_provider_ht);
-
-                    Ok(())
+                        .core_text_update_format(e, layout_provider_ht)
                 }
             }))
             .expect("edit_context.format_updating");

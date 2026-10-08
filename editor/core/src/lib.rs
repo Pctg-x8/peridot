@@ -2899,7 +2899,6 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn destroy_popup(mut self: Pin<&mut Self>, id: PopupID) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -3023,7 +3022,6 @@ impl<'sys> CoreLoop<'sys> {
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -3067,7 +3065,6 @@ impl<'sys> CoreLoop<'sys> {
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -3114,7 +3111,6 @@ impl<'sys> CoreLoop<'sys> {
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -3151,7 +3147,6 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn dispatch_menu_pointer_leave(mut self: Pin<&mut Self>, pointer_id: PointerID) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -3184,65 +3179,6 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn perform_dropdown_menu_select_item(
-        mut self: Pin<&mut Self>,
-        id: usize,
-        receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
-    ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
-        let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if let Some(r) = receiver.upgrade() {
-            struct LocalContext<'env> {
-                view_instance_store: &'env mut ViewInstanceStore,
-                view_render_queue: &'env mut ViewRenderQueue,
-            }
-            impl ViewInstanceQueryableMut for LocalContext<'_> {
-                #[inline(always)]
-                fn view_instance_mut_of<T: View + 'static>(
-                    &mut self,
-                    id: ViewIdentifier,
-                ) -> Option<&mut T> {
-                    uicore::view_instance_mut(id, self.view_instance_store)
-                }
-
-                #[inline(always)]
-                fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
-                    uicore::view_set_visibility(id, visible, self.view_instance_store)
-                }
-
-                #[inline(always)]
-                fn view_layout_mut_untyped(
-                    &mut self,
-                    id: ViewIdentifier,
-                ) -> Option<&mut uicore::ViewLayout> {
-                    uicore::view_layout_mut(id, self.view_instance_store)
-                }
-            }
-            impl ViewRenderer for LocalContext<'_> {
-                #[inline(always)]
-                fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
-                    self.view_render_queue.schedule(target);
-                }
-            }
-            r.set_selection_id(
-                id,
-                &mut ApplicationMutation {
-                    state: &mut this.application,
-                    view_feedbacks: &mut this.view_feedback_store,
-                },
-                &mut LocalContext {
-                    view_instance_store: &mut this.view_instance_store,
-                    view_render_queue: &mut this.view_render_queue,
-                },
-            );
-        }
-
-        // 選択したら閉じる
-        this.close_current_custom_view_flyout_requested = true;
-    }
-
     fn begin_new_flyout_session(
         mut self: Pin<&mut Self>,
         req: uicore::CustomFlyoutViewOpenRequest,
@@ -3250,17 +3186,20 @@ impl<'sys> CoreLoop<'sys> {
         // terminate previous
         self.as_mut().terminate_flyout_session();
 
+        let exclusive_ht_use = self.as_mut().exclusive_ht_use();
         let custom_view_flyout_session = uicore::CustomViewFlyoutSession::begin(
             req.parent,
             req.pos,
             req.content_ctor,
             self.as_mut(),
         );
+        drop(exclusive_ht_use);
         unsafe { self.get_unchecked_mut() }.custom_view_flyout_session =
             Some(custom_view_flyout_session);
     }
 
-    fn terminate_flyout_session(self: Pin<&mut Self>) {
+    fn terminate_flyout_session(mut self: Pin<&mut Self>) {
+        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
         let this = unsafe { self.get_unchecked_mut() };
         let Some(c) = this.custom_view_flyout_session.take() else {
             // no active session
@@ -3287,13 +3226,10 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn move_redock_preview(
-        mut self: Pin<&mut Self>,
+        self: Pin<&mut Self>,
         dest_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
         let this = unsafe { self.get_unchecked_mut() };
         if let Some(ref mut state) = this.docking_preview_state {
             let popover_rect = ui::dock::move_preview(
@@ -3314,7 +3250,6 @@ impl<'sys> CoreLoop<'sys> {
         mut destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.as_mut().get_unchecked_mut() };
@@ -3491,10 +3426,7 @@ impl<'sys> CoreLoop<'sys> {
         }
     }
 
-    fn update_preview(mut self: Pin<&mut Self>) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
+    fn update_preview(self: Pin<&mut Self>) {
         let this = unsafe { self.get_unchecked_mut() };
 
         this.preview_state.update(
@@ -3516,7 +3448,6 @@ impl<'sys> CoreLoop<'sys> {
         target_window: WindowHandle,
         client_pos: Point<LogicalUnit>,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -3529,20 +3460,20 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn schedule_view_render(mut self: Pin<&mut Self>, id: ViewIdentifier) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
-        let this = unsafe { self.get_unchecked_mut() };
-        this.view_render_queue.schedule(id);
+    #[inline(always)]
+    pub fn schedule_view_render(self: Pin<&mut Self>, id: ViewIdentifier) {
+        unsafe { self.get_unchecked_mut() }
+            .view_render_queue
+            .schedule(id);
     }
 
     fn perform_menu_closes(mut self: Pin<&mut Self>) {
-        let _exclusive_use = self.as_mut().exclusive_use();
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
-        let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if core::mem::replace(&mut this.close_menu_requested, false) {
+        if core::mem::replace(
+            &mut unsafe { self.as_mut().get_unchecked_mut() }.close_menu_requested,
+            false,
+        ) {
+            let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
+            let this = unsafe { self.as_mut().get_unchecked_mut() };
             if let Some(c) = this.current_active_menu_session.take() {
                 if let Some(ref a) =
                     unsafe { c.parent.extra_data_ref::<ui::PerWindowData>() }.appmenu
@@ -3567,13 +3498,16 @@ impl<'sys> CoreLoop<'sys> {
             }
         }
 
-        if core::mem::replace(&mut this.close_current_custom_view_flyout_requested, false) {
+        if core::mem::replace(
+            &mut unsafe { self.as_mut().get_unchecked_mut() }
+                .close_current_custom_view_flyout_requested,
+            false,
+        ) {
             self.terminate_flyout_session();
         }
     }
 
     fn perform_menu_opens(mut self: Pin<&mut Self>) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.as_mut().get_unchecked_mut() };
@@ -3925,132 +3859,79 @@ impl<'sys> CoreLoop<'sys> {
     pub fn core_text_compute_layout(
         &self,
         req: windows::UI::Text::Core::CoreTextLayoutRequest,
-        deferral: Option<windows::Foundation::Deferral>,
         ht: HitTestTreeRef,
-    ) {
-        if deferral.is_none()
-            || req
-                .IsCanceled()
-                .inspect_err(|e| tracing::error!(reason = %e, "request.is_canceled"))
-                == Ok(false)
-        {
-            if let Some(w) = self
-                .ht_manager
-                .get_data(ht)
-                .native_text_deferrable_event_handler()
-            {
-                if let Err(e) = w.layout(
-                    &crate::platform::windows::CoreTextLayoutContext {
-                        ht_manager: &self.ht_manager,
-                        font_set: self.syslink.font_set(),
-                    },
-                    &req,
-                ) {
-                    tracing::error!(reason = %e, "CoreTextLayoutRequested");
-                    if let Some(d) = deferral {
-                        if let Err(e) = d.Close() {
-                            tracing::error!(reason = %e, "deferral.close");
-                        }
-                    }
-                } else {
-                    if let Some(d) = deferral {
-                        if let Err(e) = d.Complete() {
-                            tracing::error!(reason = %e, "deferral.complete");
-                        }
-                    }
-                }
-            }
-        }
+    ) -> windows_core::Result<()> {
+        let Some(w) = self
+            .ht_manager
+            .get_data(ht)
+            .native_text_deferrable_event_handler()
+        else {
+            tracing::warn!("no native text event handler to hit test tree");
+            return Ok(());
+        };
+
+        w.layout(
+            &crate::platform::windows::CoreTextLayoutContext {
+                ht_manager: &self.ht_manager,
+                font_set: self.syslink.font_set(),
+            },
+            &req,
+        )
+        .inspect_err(|e| tracing::error!(reason = %e, "CoreTextLayoutRequested"))
     }
 
     #[cfg(windows)]
     pub fn core_text_update_text(
         mut self: Pin<&mut Self>,
         args: windows::UI::Text::Core::CoreTextTextUpdatingEventArgs,
-        deferral: Option<windows::Foundation::Deferral>,
         ht: HitTestTreeRef,
-    ) {
+    ) -> windows_core::Result<()> {
         let _exclusive_use = self.as_mut().exclusive_use();
 
         let this = unsafe { self.get_unchecked_mut() };
+        let Some(w) = this
+            .ht_manager
+            .get_data(ht)
+            .native_text_deferrable_event_handler()
+        else {
+            tracing::warn!("no native text event handler to hit test tree");
+            return Ok(());
+        };
 
-        if deferral.is_none()
-            || args
-                .IsCanceled()
-                .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
-                == Ok(false)
-        {
-            if let Some(w) = this
-                .ht_manager
-                .get_data(ht)
-                .native_text_deferrable_event_handler()
-            {
-                if let Err(e) = w.text_updating(
-                    &mut platform::windows::CoreTextUpdateContext {
-                        view_render_queue: &mut this.view_render_queue,
-                    },
-                    &args,
-                ) {
-                    tracing::error!(reason = %e, "CoreTextTextUpdating");
-                    if let Some(d) = deferral {
-                        if let Err(e) = d.Close() {
-                            tracing::error!(reason = %e, "deferral.close");
-                        }
-                    }
-                } else {
-                    if let Some(d) = deferral {
-                        if let Err(e) = d.Complete() {
-                            tracing::error!(reason = %e, "deferral.complete");
-                        }
-                    }
-                }
-            }
-        }
+        w.text_updating(
+            &mut platform::windows::CoreTextUpdateContext {
+                view_render_queue: &mut this.view_render_queue,
+            },
+            &args,
+        )
+        .inspect_err(|e| tracing::error!(reason = %e, "CoreTextTextUpdating"))
     }
 
     #[cfg(windows)]
     pub fn core_text_update_format(
         mut self: Pin<&mut Self>,
         args: windows::UI::Text::Core::CoreTextFormatUpdatingEventArgs,
-        deferral: Option<windows::Foundation::Deferral>,
         ht: HitTestTreeRef,
-    ) {
+    ) -> windows_core::Result<()> {
         let _exclusive_use = self.as_mut().exclusive_use();
 
         let this = unsafe { self.get_unchecked_mut() };
+        let Some(w) = this
+            .ht_manager
+            .get_data(ht)
+            .native_text_deferrable_event_handler()
+        else {
+            tracing::warn!("no native text event handler to hit test tree");
+            return Ok(());
+        };
 
-        if deferral.is_none()
-            || args
-                .IsCanceled()
-                .inspect_err(|e| tracing::error!(reason = %e, "e.is_canceled"))
-                == Ok(false)
-        {
-            if let Some(w) = this
-                .ht_manager
-                .get_data(ht)
-                .native_text_deferrable_event_handler()
-            {
-                if let Err(e) = w.format_updating(
-                    &mut platform::windows::CoreTextUpdateContext {
-                        view_render_queue: &mut this.view_render_queue,
-                    },
-                    &args,
-                ) {
-                    tracing::error!(reason = %e, "CoreTextFormatUpdating");
-                    if let Some(d) = deferral {
-                        if let Err(e) = d.Close() {
-                            tracing::error!(reason = %e, "deferral.close");
-                        }
-                    }
-                } else {
-                    if let Some(d) = deferral {
-                        if let Err(e) = d.Complete() {
-                            tracing::error!(reason = %e, "deferral.complete");
-                        }
-                    }
-                }
-            }
-        }
+        w.format_updating(
+            &mut platform::windows::CoreTextUpdateContext {
+                view_render_queue: &mut this.view_render_queue,
+            },
+            &args,
+        )
+        .inspect_err(|e| tracing::error!(reason = %e, "CoreTextFormatUpdating"))
     }
 }
 
