@@ -788,7 +788,6 @@ impl<'sys> WindowEventHandler<'sys> {
             self.modifier_key_state.current,
         );
         self.coreloop().handle_pointer_down(
-            WindowHandle(hwnd),
             PointerID(),
             PointerButton::Primary,
             self.modifier_key_state.current,
@@ -803,7 +802,6 @@ impl<'sys> WindowEventHandler<'sys> {
         }
 
         self.coreloop().handle_pointer_up(
-            WindowHandle(hwnd),
             PointerID(),
             PointerButton::Primary,
             self.modifier_key_state.current,
@@ -821,7 +819,6 @@ impl<'sys> WindowEventHandler<'sys> {
             self.modifier_key_state.current,
         );
         self.coreloop().handle_pointer_down(
-            WindowHandle(hwnd),
             PointerID(),
             PointerButton::Secondary,
             self.modifier_key_state.current,
@@ -836,7 +833,6 @@ impl<'sys> WindowEventHandler<'sys> {
         }
 
         self.coreloop().handle_pointer_up(
-            WindowHandle(hwnd),
             PointerID(),
             PointerButton::Secondary,
             self.modifier_key_state.current,

@@ -2058,9 +2058,9 @@ impl<'sys> CoreLoop<'sys> {
         mut target: WindowHandle,
         pos: Point<LogicalUnit>,
     ) {
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
+        let exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
-        let this = unsafe { self.get_unchecked_mut() };
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
         let wd = unsafe { target.extra_data_mut::<ui::PerWindowData>() };
         let mut input_context = InputEventContext {
             composite_tree: &mut this.composite_tree,
@@ -2093,56 +2093,13 @@ impl<'sys> CoreLoop<'sys> {
             }
         }
 
+        drop(exclusive_ht_use);
+
         // ContextMenuはウィンドウ移動で消しちゃう（Explorerもこの挙動っぽい）
-        if let Some(c) = this
-            .current_active_menu_session
-            .take_if(|x| x.parent == target)
-        {
-            if let Some(ref a) = unsafe { target.extra_data_ref::<ui::PerWindowData>() }.appmenu {
-                uicore::view_instance::<ui::app_menu_bar::View>(
-                    a.into_untyped(),
-                    &this.view_instance_store,
-                )
-                .expect("query failed")
-                .on_close_all(
-                    &mut this.composite_tree,
-                    this.global_time_base.elapsed().as_secs_f32(),
-                );
-            }
-
-            c.terminate(
-                &this.syslink,
-                &mut this.composite_tree,
-                &mut this.ht_manager,
-                &mut this.keyboard_focus_registry,
-            );
-        }
-
-        if let Some(c) = this
-            .custom_view_flyout_session
-            .take_if(|x| x.is_child_of(target))
-        {
-            c.terminate(&mut uicore::FlyoutSurfaceSessionTerminateContext {
-                syslink: &this.syslink,
-                view_allocator: &mut this.view_allocator,
-                view_instance_store: &mut this.view_instance_store,
-                view_tree_relation_store: &mut this.view_tree_relation_store,
-                view_group_relation_store: &mut this.view_group_relation_store,
-                view_layout_state_store: &mut this.view_layout_state_store,
-                view_render_state_store: &mut this.view_render_state_store,
-                teardown_context: TeardownContext {
-                    composite_tree: &mut this.composite_tree,
-                    ht_manager: &mut this.ht_manager,
-                    keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                    current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                    view_feedback_subscription_delayed_ops: &mut this
-                        .view_feedback_registry_delayed_ops,
-                },
-            });
-        }
+        self.close_all_flyouts(target);
     }
 
-    fn rescale_popup_of_window(mut self: Pin<&mut Self>, target: WindowHandle, new_scale: f32) {
+    fn rescale_popup_of_window(self: Pin<&mut Self>, target: WindowHandle, new_scale: f32) {
         let this = unsafe { self.get_unchecked_mut() };
         this.popup_manager
             .rescale(target, new_scale, &mut this.composite_tree);
@@ -2298,7 +2255,6 @@ impl<'sys> CoreLoop<'sys> {
 
     fn handle_pointer_down(
         mut self: Pin<&mut Self>,
-        target: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
@@ -2306,24 +2262,10 @@ impl<'sys> CoreLoop<'sys> {
         let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
-        tracing::trace!(?target, ?button, "pointer down");
-
         // #[cfg(target_os = "macos")]
         // drag_preview_popover.bind_position_base_window_link(window);
 
         let this = unsafe { self.as_mut().get_unchecked_mut() };
-        if let Some(ref a) = unsafe { target.extra_data_ref::<ui::PerWindowData>() }.appmenu {
-            uicore::view_instance::<ui::app_menu_bar::View>(
-                a.into_untyped(),
-                &this.view_instance_store,
-            )
-            .expect("query failed")
-            .on_close_all(
-                &mut this.composite_tree,
-                this.global_time_base.elapsed().as_secs_f32(),
-            );
-        }
-
         this.close_menu_requested = true;
         this.close_current_custom_view_flyout_requested = true;
         this.pointer_input_manager.handle_mouse_down(
@@ -2354,7 +2296,6 @@ impl<'sys> CoreLoop<'sys> {
             },
             button,
             key_modifier,
-            target.ht_root(),
             &mut this.keyboard_focus_registry,
         );
     }
@@ -2366,7 +2307,6 @@ impl<'sys> CoreLoop<'sys> {
         client_pos: Point<LogicalUnit>,
         key_modifier: ModifierKey,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -2399,7 +2339,6 @@ impl<'sys> CoreLoop<'sys> {
                 popup_manager: &mut this.popup_manager,
                 docking_preview_state: &mut this.docking_preview_state,
             },
-            target.ht_root(),
         );
 
         let cursor_shape = this.pointer_input_manager.cursor_shape(&this.ht_manager);
@@ -2411,7 +2350,6 @@ impl<'sys> CoreLoop<'sys> {
         pointer_id: PointerID,
         relative: Point<LogicalUnit>,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -2447,15 +2385,11 @@ impl<'sys> CoreLoop<'sys> {
 
     fn handle_pointer_up(
         mut self: Pin<&mut Self>,
-        target: WindowHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
     ) {
-        let _exclusive_use = self.as_mut().exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
-        tracing::trace!(?target, ?button, "pointer up");
 
         let this = unsafe { self.get_unchecked_mut() };
         this.pointer_input_manager.handle_mouse_up(
@@ -2486,7 +2420,6 @@ impl<'sys> CoreLoop<'sys> {
             },
             button,
             key_modifier,
-            target.ht_root(),
         );
     }
 
@@ -3046,7 +2979,6 @@ impl<'sys> CoreLoop<'sys> {
 
     fn dispatch_menu_pointer_down(
         mut self: Pin<&mut Self>,
-        target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
@@ -3082,7 +3014,6 @@ impl<'sys> CoreLoop<'sys> {
             },
             button,
             key_modifier,
-            target.ht_root(),
             &mut this.keyboard_focus_registry,
         );
     }
@@ -3126,7 +3057,6 @@ impl<'sys> CoreLoop<'sys> {
                 popup_manager: &mut this.popup_manager,
                 docking_preview_state: &mut this.docking_preview_state,
             },
-            target.ht_root(),
         );
 
         let cursor_shape = this.pointer_input_manager.cursor_shape(&this.ht_manager);
@@ -3135,7 +3065,6 @@ impl<'sys> CoreLoop<'sys> {
 
     fn dispatch_menu_pointer_up(
         mut self: Pin<&mut Self>,
-        target: FlyoutSurfaceHandle,
         pointer_id: PointerID,
         button: PointerButton,
         key_modifier: ModifierKey,
@@ -3171,7 +3100,6 @@ impl<'sys> CoreLoop<'sys> {
             },
             button,
             key_modifier,
-            target.ht_root(),
         );
     }
 

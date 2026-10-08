@@ -17,8 +17,8 @@ use crate::{
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uicore::{
-        CustomFlyoutViewOpenRequest, PopupConstructor, PopupID, PopupManager, SystemLinkAccess,
-        View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
+        CustomFlyoutViewOpenRequest, MountTarget, PopupConstructor, PopupID, PopupManager,
+        SystemLinkAccess, View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRelationQueryable,
         ViewRenderQueue, ViewRenderer, ViewTreeRelationStore, view_iter_self_group_participants,
     },
@@ -260,6 +260,14 @@ impl ShellPointerActions for NativeDesktopSurface {
     }
 }
 impl NativeDesktopSurface {
+    #[inline(always)]
+    fn ht_root(&self) -> HitTestTreeRef {
+        match self {
+            Self::Window(w) => w.ht_root(),
+            Self::ContextMenu(w) => w.ht_root(),
+        }
+    }
+
     #[inline(always)]
     fn size(&self) -> Size<PointerInputUnit> {
         match self {
@@ -754,11 +762,11 @@ impl PointerInputManager {
         client_pos: Point<PointerInputUnit>,
         key_modifier: ModifierKey,
         action_context: &mut InputEventContext<'env, 'sys>,
-        ht_root: HitTestTreeRef,
     ) {
         self.last_client_pointer_pos
             .insert(pointer_id, (surface, client_pos));
         let ws = surface.size();
+        let ht_root = surface.ht_root();
 
         if !self.is_grabbing()
             && let PointerDownGestureState::Click {
@@ -946,7 +954,6 @@ impl PointerInputManager {
         action_context: &mut InputEventContext<'env, 'sys>,
         button: PointerButton,
         key_modifier: ModifierKey,
-        ht_root: HitTestTreeRef,
         kf_registry: &KeyboardFocusTokenRegistry,
     ) {
         let Some(&(mut entering_surface, client_pos)) =
@@ -956,6 +963,7 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
+        let ht_root = entering_surface.ht_root();
 
         self.down_gesture = PointerDownGestureState::Click {
             base_client_pos: client_pos,
@@ -1026,7 +1034,6 @@ impl PointerInputManager {
         action_context: &mut InputEventContext<'env, 'sys>,
         button: PointerButton,
         key_modifier: ModifierKey,
-        ht_root: HitTestTreeRef,
     ) {
         let Some(&(entering_surface, client_pos)) = self.last_client_pointer_pos.get(&pointer_id)
         else {
@@ -1034,6 +1041,7 @@ impl PointerInputManager {
             return;
         };
         let ws = entering_surface.size();
+        let ht_root = entering_surface.ht_root();
 
         if self.down_gesture.is_dragging() {
             // ドラッグ状態だった

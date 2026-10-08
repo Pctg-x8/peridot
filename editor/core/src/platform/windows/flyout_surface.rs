@@ -362,7 +362,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             state(hwnd).modifier_key_state.current,
         );
         state(hwnd).coreloop().dispatch_menu_pointer_down(
-            Handle(hwnd),
             super::PointerID(),
             PointerButton::Primary,
             state(hwnd).modifier_key_state.current,
@@ -391,7 +390,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             state(hwnd).modifier_key_state.current,
         );
         state(hwnd).coreloop().dispatch_menu_pointer_down(
-            Handle(hwnd),
             super::PointerID(),
             PointerButton::Primary,
             state(hwnd).modifier_key_state.current,
@@ -405,7 +403,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         || (msg == WM_NCLBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
         state(hwnd).coreloop().dispatch_menu_pointer_up(
-            Handle(hwnd),
             super::PointerID(),
             PointerButton::Primary,
             state(hwnd).modifier_key_state.current,
@@ -427,7 +424,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             state(hwnd).modifier_key_state.current,
         );
         state(hwnd).coreloop().dispatch_menu_pointer_down(
-            Handle(hwnd),
             super::PointerID(),
             PointerButton::Secondary,
             state(hwnd).modifier_key_state.current,
@@ -456,7 +452,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             state(hwnd).modifier_key_state.current,
         );
         state(hwnd).coreloop().dispatch_menu_pointer_down(
-            Handle(hwnd),
             super::PointerID(),
             PointerButton::Secondary,
             state(hwnd).modifier_key_state.current,
@@ -470,7 +465,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         || (msg == WM_NCRBUTTONUP && is_application_handled_hittest(wparam.0 as _))
     {
         state(hwnd).coreloop().dispatch_menu_pointer_up(
-            Handle(hwnd),
             super::PointerID(),
             PointerButton::Secondary,
             state(hwnd).modifier_key_state.current,
