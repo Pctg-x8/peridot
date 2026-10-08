@@ -8,13 +8,30 @@ use crate::{
     },
     uicore::{
         OverlayPopupBasicFrameView, OverlayPopupBasicFrameViewInit, OverlayPopupBasicMaskView,
-        OverlayPopupBasicMaskViewInit, Popup, PopupCloseContext, PopupID, TeardownContext,
-        TypedViewIdentifier, ViewIdentifier, ViewInitContext, ViewInstanceQueryableMut,
-        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
-        ViewLayoutOverflow, ViewRegisterable, ViewRelationControllable, ViewSize,
+        OverlayPopupBasicMaskViewInit, Popup, PopupCloseContext, PopupConstructor, PopupID,
+        TeardownContext, TypedViewIdentifier, ViewIdentifier, ViewInitContext,
+        ViewInstanceQueryableMut, ViewLayoutChild, ViewLayoutFlowAlignment,
+        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutOverflow, ViewRegisterable,
+        ViewRelationControllable, ViewSize,
     },
     uikit::{SimpleButtonEventHandler, SimpleButtonView, SimpleButtonViewInit, StaticTextViewInit},
 };
+
+pub struct AlertDialogConstructor {
+    pub message: String,
+    pub owner_window: WindowHandle,
+}
+impl PopupConstructor for AlertDialogConstructor {
+    #[inline(always)]
+    fn construct(&mut self, id: PopupID, context: &mut ViewInitContext) -> Box<dyn Popup> {
+        Box::new(AlertDialogPresenter::new(
+            context,
+            id,
+            core::mem::replace(&mut self.message, String::new()),
+            self.owner_window,
+        ))
+    }
+}
 
 pub struct AlertDialogPresenter {
     id: PopupID,

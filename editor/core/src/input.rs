@@ -17,10 +17,10 @@ use crate::{
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uicore::{
-        CustomFlyoutViewOpenRequest, PopupID, PopupManager, SystemLinkAccess, View,
-        ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable, ViewInstanceQueryableMut,
-        ViewInstanceStore, ViewLayout, ViewRelationQueryable, ViewRenderQueue, ViewRenderer,
-        ViewTreeRelationStore, view_iter_self_group_participants,
+        CustomFlyoutViewOpenRequest, PopupConstructor, PopupID, PopupManager, SystemLinkAccess,
+        View, ViewGroupRelationStore, ViewIdentifier, ViewInstanceQueryable,
+        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayout, ViewRelationQueryable,
+        ViewRenderQueue, ViewRenderer, ViewTreeRelationStore, view_iter_self_group_participants,
     },
 };
 
@@ -43,6 +43,7 @@ pub struct InputEventContext<'env, 'sys> {
     pub view_tree_relation_store: &'env ViewTreeRelationStore,
     pub view_group_relation_store: &'env ViewGroupRelationStore,
     pub view_render_queue: &'env mut ViewRenderQueue,
+    pub popup_open_requests: &'env mut Vec<(WindowHandle, Box<dyn PopupConstructor>)>,
     pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
     pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
     pub close_menu_request: &'env mut bool,
@@ -85,6 +86,11 @@ impl InputEventContext<'_, '_> {
     #[inline(always)]
     pub fn close_menu(&mut self) {
         *self.close_menu_request = true;
+    }
+
+    #[inline(always)]
+    pub fn open_popup(&mut self, target_window: WindowHandle, ctor: Box<dyn PopupConstructor>) {
+        self.popup_open_requests.push((target_window, ctor));
     }
 
     #[inline(always)]

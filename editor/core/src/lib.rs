@@ -44,9 +44,9 @@ use crate::{
     },
     ui::dock::{PaneContentResizeContext, PaneGroupCreateContext},
     uicore::{
-        MountTarget, PopupID, PopupManager, RenderContext, TeardownContext, TypedViewIdentifier,
-        View, ViewDestructionContext, ViewFeedbackContext, ViewFeedbackRegistry,
-        ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
+        MountTarget, PopupConstructor, PopupID, PopupManager, RenderContext, TeardownContext,
+        TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
+        ViewFeedbackRegistry, ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
         ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
         ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
@@ -680,10 +680,6 @@ impl SyncEvent {
 #[derive(Clone, Debug)]
 pub enum Event {
     Quit,
-    OpenAlertDialog {
-        target_window: WindowHandle,
-        message: String,
-    },
     DropdownMenuSelectItem {
         id: usize,
         receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
@@ -699,7 +695,6 @@ impl Event {
     pub const fn p_name(&self) -> &'static str {
         match self {
             Self::Quit => "Quit",
-            Self::OpenAlertDialog { .. } => "OpenAlertDialog",
             Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
         }
@@ -911,10 +906,13 @@ impl UIKitPreviewPanePresenter {
                 window: WindowHandle,
                 ctx: &mut InputEventContext,
             ) {
-                ctx.system_link.dispatch_event(Event::OpenAlertDialog {
-                    target_window: window,
-                    message: self.0.clone(),
-                })
+                ctx.open_popup(
+                    window,
+                    Box::new(crate::uikit::AlertDialogConstructor {
+                        message: self.0.clone(),
+                        owner_window: window,
+                    }),
+                );
             }
         }
 
@@ -1424,6 +1422,7 @@ pub struct CoreLoop<'sys> {
     custom_view_flyout_session: Option<uicore::CustomViewFlyoutSession>,
     docking_preview_state: Option<ui::dock::DockingPreviewState>,
     // delayed queues
+    popup_open_requests: Vec<(WindowHandle, Box<dyn PopupConstructor>)>,
     menu_open_requests: Vec<MenuOpenRequest>,
     menu_reopen_request: Option<MenuOpenRequest>,
     custom_view_flyout_open_request: Option<uicore::CustomFlyoutViewOpenRequest>,
@@ -1492,6 +1491,7 @@ impl<'sys> CoreLoop<'sys> {
             custom_view_flyout_session: None,
             docking_preview_state: None,
             // delayed queues
+            popup_open_requests: Vec::new(),
             menu_open_requests: Vec::new(),
             menu_reopen_request: None,
             custom_view_flyout_open_request: None,
@@ -2051,6 +2051,7 @@ impl<'sys> CoreLoop<'sys> {
             view_tree_relation_store: &this.view_tree_relation_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
+            popup_open_requests: &mut this.popup_open_requests,
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2196,6 +2197,7 @@ impl<'sys> CoreLoop<'sys> {
             view_tree_relation_store: &this.view_tree_relation_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
+            popup_open_requests: &mut this.popup_open_requests,
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2260,6 +2262,7 @@ impl<'sys> CoreLoop<'sys> {
             view_tree_relation_store: &this.view_tree_relation_store,
             view_group_relation_store: &this.view_group_relation_store,
             view_render_queue: &mut this.view_render_queue,
+            popup_open_requests: &mut this.popup_open_requests,
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2359,6 +2362,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2402,6 +2406,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2441,6 +2446,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2479,6 +2485,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2512,6 +2519,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2542,6 +2550,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2572,6 +2581,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2618,6 +2628,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2655,6 +2666,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2692,6 +2704,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2729,6 +2742,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2766,6 +2780,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2803,6 +2818,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2840,6 +2856,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -2912,54 +2929,67 @@ impl<'sys> CoreLoop<'sys> {
         );
     }
 
-    fn open_alert_dialog(mut self: Pin<&mut Self>, target_window: WindowHandle, message: String) {
+    fn process_popup_open_requests(mut self: Pin<&mut Self>) {
         let _exclusive_use = self.as_mut().exclusive_use();
 
-        let this = unsafe { self.get_unchecked_mut() };
-        let opened_id = this.popup_manager.open(
-            &mut ViewInitContext {
-                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                keyboard_focus_registry: &mut this.keyboard_focus_registry,
-                view_allocator: &mut this.view_allocator,
-                view_instance_store: &mut this.view_instance_store,
-                view_tree_relation_store: &mut this.view_tree_relation_store,
-                view_group_relation_store: &mut this.view_group_relation_store,
-                view_layout_state_store: &mut this.view_layout_state_store,
-                view_render_state_store: &mut this.view_render_state_store,
-                view_feedback_subscription_delayed_ops: &mut this
-                    .view_feedback_registry_delayed_ops,
-                system_link: &this.syslink,
-                main_thread_texture_id_issuer: &mut this.texture_id_issuer,
-                application: &this.application,
-            },
-            target_window,
-            |id, ctx| uikit::AlertDialogPresenter::new(ctx, id, message, target_window),
-        );
-        PopupManager::post_open_action(
-            opened_id,
-            &mut InputEventContext {
-                composite_tree: &mut this.composite_tree,
-                current_sec: this.global_time_base.elapsed().as_secs_f32(),
-                system_link: &mut this.syslink,
-                ht_manager: &this.ht_manager,
-                dock_store: &mut this.dock_store,
-                view_instance_store: &mut this.view_instance_store,
-                view_tree_relation_store: &this.view_tree_relation_store,
-                view_group_relation_store: &this.view_group_relation_store,
-                view_render_queue: &mut this.view_render_queue,
-                menu_open_requests: &mut this.menu_open_requests,
-                menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                close_menu_request: &mut this.close_menu_requested,
-                application: ApplicationMutation {
-                    state: &mut this.application,
-                    view_feedbacks: &mut this.view_feedback_store,
-                },
-                popup_manager: &mut this.popup_manager,
-                docking_preview_state: &mut this.docking_preview_state,
-            },
-            &this.keyboard_focus_registry,
-        );
+        let this = unsafe { self.as_mut().get_unchecked_mut() };
+        loop {
+            let mut recursive_opens = Vec::new();
+            for (target_window, ctor) in this.popup_open_requests.drain(..) {
+                let opened_id = this.popup_manager.open(
+                    &mut ViewInitContext {
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        keyboard_focus_registry: &mut this.keyboard_focus_registry,
+                        view_allocator: &mut this.view_allocator,
+                        view_instance_store: &mut this.view_instance_store,
+                        view_tree_relation_store: &mut this.view_tree_relation_store,
+                        view_group_relation_store: &mut this.view_group_relation_store,
+                        view_layout_state_store: &mut this.view_layout_state_store,
+                        view_render_state_store: &mut this.view_render_state_store,
+                        view_feedback_subscription_delayed_ops: &mut this
+                            .view_feedback_registry_delayed_ops,
+                        system_link: &this.syslink,
+                        main_thread_texture_id_issuer: &mut this.texture_id_issuer,
+                        application: &this.application,
+                    },
+                    target_window,
+                    ctor,
+                );
+                PopupManager::post_open_action(
+                    opened_id,
+                    &mut InputEventContext {
+                        composite_tree: &mut this.composite_tree,
+                        current_sec: this.global_time_base.elapsed().as_secs_f32(),
+                        system_link: &mut this.syslink,
+                        ht_manager: &this.ht_manager,
+                        dock_store: &mut this.dock_store,
+                        view_instance_store: &mut this.view_instance_store,
+                        view_tree_relation_store: &this.view_tree_relation_store,
+                        view_group_relation_store: &this.view_group_relation_store,
+                        view_render_queue: &mut this.view_render_queue,
+                        popup_open_requests: &mut recursive_opens,
+                        menu_open_requests: &mut this.menu_open_requests,
+                        menu_reopen_request: &mut this.menu_reopen_request,
+                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                        close_menu_request: &mut this.close_menu_requested,
+                        application: ApplicationMutation {
+                            state: &mut this.application,
+                            view_feedbacks: &mut this.view_feedback_store,
+                        },
+                        popup_manager: &mut this.popup_manager,
+                        docking_preview_state: &mut this.docking_preview_state,
+                    },
+                    &this.keyboard_focus_registry,
+                );
+            }
+
+            // 再帰的にopenされたPopupの処理（多分あんまないと思うが......）
+            if !recursive_opens.is_empty() {
+                this.popup_open_requests.extend(recursive_opens);
+            } else {
+                break;
+            }
+        }
     }
 
     fn close_all_menus(mut self: Pin<&mut Self>) {
@@ -3039,6 +3069,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -3082,6 +3113,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -3122,6 +3154,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -3155,6 +3188,7 @@ impl<'sys> CoreLoop<'sys> {
                 view_tree_relation_store: &this.view_tree_relation_store,
                 view_group_relation_store: &this.view_group_relation_store,
                 view_render_queue: &mut this.view_render_queue,
+                popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
@@ -3699,6 +3733,7 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     pub fn update_view_all(mut self: Pin<&mut Self>) {
+        self.as_mut().process_popup_open_requests();
         self.as_mut().perform_menu_closes();
         self.as_mut().perform_menu_opens();
         self.as_mut().dispatch_view_feedback();
@@ -4031,10 +4066,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
         profiler::scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
-            Event::OpenAlertDialog {
-                target_window,
-                message,
-            } => inst.as_mut().open_alert_dialog(target_window, message),
             Event::DropdownMenuSelectItem { id, receiver } => inst
                 .as_mut()
                 .perform_dropdown_menu_select_item(id, receiver),

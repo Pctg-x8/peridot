@@ -32,6 +32,10 @@ impl PopupID {
     }
 }
 
+pub trait PopupConstructor {
+    fn construct(&mut self, id: PopupID, context: &mut ViewInitContext) -> Box<dyn Popup>;
+}
+
 /// ポップアップ共通ライフサイクル
 pub trait Popup {
     fn root_view_id(&self) -> ViewIdentifier;
@@ -91,17 +95,17 @@ impl PopupManager {
         }
     }
 
-    pub fn open<P: Popup + 'static>(
+    pub fn open(
         &mut self,
         ctx: &mut ViewInitContext,
         window: WindowHandle,
-        ctor: impl FnOnce(PopupID, &mut ViewInitContext) -> P,
+        mut ctor: Box<dyn PopupConstructor>,
     ) -> PopupID {
         let id = PopupID::new();
         self.instance_by_id.insert(
             id,
             (
-                Box::new(ctor(id, ctx)),
+                ctor.construct(id, ctx),
                 window,
                 ctx.keyboard_focus_registry.acquire_group(),
             ),
