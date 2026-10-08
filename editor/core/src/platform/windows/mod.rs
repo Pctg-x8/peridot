@@ -108,7 +108,8 @@ use core::cell::{Cell, UnsafeCell};
 use std::{cell::OnceCell, sync::Mutex};
 
 use crate::{
-    CoreLoop, Event, LogicFiberEventDispatcher, MainWindowOpenMode, SubWindowOpenMode, WindowType,
+    CoreLoop, CoreLoopRunningContextFlags, Event, LogicFiberEventDispatcher, MainWindowOpenMode,
+    SubWindowOpenMode, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::{Graphics, VulkanSurface},
     input::{
@@ -876,8 +877,12 @@ impl<'sys> WindowEventHandler<'sys> {
         unsafe {
             SetForegroundWindow(dest_window.0).expect("dest_window.set_foreground");
         }
+        unsafe { &mut *self.coreloop }.running_context_flags |=
+            CoreLoopRunningContextFlags::DISABLE_SYNC_VIEW;
         self.coreloop()
             .confirm_redock(dest_window, client_pos_in_dest);
+        unsafe { &mut *self.coreloop }.running_context_flags &=
+            !CoreLoopRunningContextFlags::DISABLE_SYNC_VIEW;
         self.coreloop().update_view_all();
 
         true
@@ -1078,11 +1083,11 @@ impl<'sys> WindowEventHandler<'sys> {
             }
 
             if let Some(st) = Self::try_get_for_window(hwnd) {
-                st.coreloop().handle_window_activation_state_changed(
-                    WindowHandle(hwnd),
-                    wparam.0 != WA_INACTIVE as _,
-                );
-                st.coreloop().update_view_all();
+                if wparam.0 == WA_INACTIVE as _ {
+                    // deactivated window
+                    st.coreloop().close_all_flyouts(WindowHandle(hwnd));
+                    st.coreloop().update_view_all();
+                }
             }
 
             return LRESULT(0);
@@ -1105,8 +1110,7 @@ impl<'sys> WindowEventHandler<'sys> {
                 return LRESULT(0);
             }
 
-            st.coreloop()
-                .handle_window_focus_changed(WindowHandle(hwnd), true);
+            st.coreloop().notify_focus_changes(WindowHandle(hwnd), true);
             st.coreloop().update_view_all();
             return LRESULT(0);
         }
@@ -1119,7 +1123,8 @@ impl<'sys> WindowEventHandler<'sys> {
             }
 
             st.coreloop()
-                .handle_window_focus_changed(WindowHandle(hwnd), false);
+                .notify_focus_changes(WindowHandle(hwnd), false);
+            st.coreloop().close_all_flyouts(WindowHandle(hwnd)); // focus lost時はflyout系もcloseする
             st.coreloop().update_view_all();
             return LRESULT(0);
         }
@@ -1193,7 +1198,7 @@ impl<'sys> WindowEventHandler<'sys> {
                 return LRESULT(0);
             };
 
-            st.coreloop().close_all_menus();
+            st.coreloop().close_all_flyouts(WindowHandle(hwnd));
             st.coreloop().update_view_all();
 
             return LRESULT(0);
@@ -1827,6 +1832,7 @@ pub fn create_main_window<'sys>(
         }
     }
 
+    let exclusive_ht_use = coreloop.as_mut().exclusive_ht_use();
     let w = NativeWindow::new(
         coreloop.syslink.app_context,
         WindowType::Main {},
@@ -1835,6 +1841,7 @@ pub fn create_main_window<'sys>(
         initial_maximized,
         coreloop.as_mut(),
     );
+    drop(exclusive_ht_use);
     let h = w.make_handle();
 
     let vk_surface = w.create_vk_surface(unsafe { &*coreloop.syslink.gfx });
