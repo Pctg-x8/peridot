@@ -680,14 +680,8 @@ impl SyncEvent {
 #[derive(Clone, Debug)]
 pub enum Event {
     Quit,
-    DropdownMenuSelectItem {
-        id: usize,
-        receiver: std::rc::Weak<uikit::dropdown_box::EventHandler>,
-    },
     // TODO: これあんまりいい設計じゃないので使わない形にしたい（macOSでのIME入力によるView更新のためだけに必要）
-    ScheduleViewRenderExt {
-        id: ViewIdentifier,
-    },
+    ScheduleViewRenderExt { id: ViewIdentifier },
 }
 impl Event {
     /// Profilerに表示するEvent名
@@ -695,7 +689,6 @@ impl Event {
     pub const fn p_name(&self) -> &'static str {
         match self {
             Self::Quit => "Quit",
-            Self::DropdownMenuSelectItem { .. } => "DropdownMenuSelectItem",
             Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
         }
     }
@@ -2055,6 +2048,8 @@ impl<'sys> CoreLoop<'sys> {
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            custom_flyout_view_close_requested: &mut this
+                .close_current_custom_view_flyout_requested,
             close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
                 state: &mut this.application,
@@ -2201,6 +2196,8 @@ impl<'sys> CoreLoop<'sys> {
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            custom_flyout_view_close_requested: &mut this
+                .close_current_custom_view_flyout_requested,
             close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
                 state: &mut this.application,
@@ -2266,6 +2263,8 @@ impl<'sys> CoreLoop<'sys> {
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
             custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+            custom_flyout_view_close_requested: &mut this
+                .close_current_custom_view_flyout_requested,
             close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
                 state: &mut this.application,
@@ -2366,6 +2365,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2410,6 +2411,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2450,6 +2453,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2489,6 +2494,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2523,6 +2530,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2554,6 +2563,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2585,6 +2596,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2632,6 +2645,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2670,6 +2685,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2708,6 +2725,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2746,6 +2765,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2784,6 +2805,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2822,6 +2845,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2860,6 +2885,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -2971,6 +2998,8 @@ impl<'sys> CoreLoop<'sys> {
                         menu_open_requests: &mut this.menu_open_requests,
                         menu_reopen_request: &mut this.menu_reopen_request,
                         custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                        custom_flyout_view_close_requested: &mut this
+                            .close_current_custom_view_flyout_requested,
                         close_menu_request: &mut this.close_menu_requested,
                         application: ApplicationMutation {
                             state: &mut this.application,
@@ -3073,6 +3102,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -3117,6 +3148,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -3158,6 +3191,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -3192,6 +3227,8 @@ impl<'sys> CoreLoop<'sys> {
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
                 custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_flyout_view_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
@@ -4066,9 +4103,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
         profiler::scope!(PROCESS_EVENT, str e.p_name());
         match e {
             Event::Quit => break,
-            Event::DropdownMenuSelectItem { id, receiver } => inst
-                .as_mut()
-                .perform_dropdown_menu_select_item(id, receiver),
             Event::ScheduleViewRenderExt { id } => inst.as_mut().schedule_view_render(id),
         }
 

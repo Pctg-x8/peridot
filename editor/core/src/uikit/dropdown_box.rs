@@ -5,7 +5,6 @@ use peridot_math::Zero;
 use shared::{LogicalUnit, Point, Rect, SafeF32, Size};
 
 use crate::{
-    Event,
     input::{
         EventContinueControl, InputEventContext,
         hittest::{
@@ -663,12 +662,53 @@ impl HitTestTreeActionHandler for MenuFlyoutViewEntity {
                 continue;
             }
 
-            context
-                .system_link
-                .dispatch_event(Event::DropdownMenuSelectItem {
-                    id: v.id,
-                    receiver: self.receiver.clone(),
-                });
+            let Some(r) = self.receiver.upgrade() else {
+                tracing::warn!("dropdown menu has defunct");
+                return EventContinueControl::empty();
+            };
+
+            struct LocalContext<'env> {
+                view_instance_store: &'env mut crate::uicore::ViewInstanceStore,
+                view_render_queue: &'env mut crate::uicore::ViewRenderQueue,
+            }
+            impl ViewInstanceQueryableMut for LocalContext<'_> {
+                #[inline(always)]
+                fn view_instance_mut_of<T: crate::uicore::View + 'static>(
+                    &mut self,
+                    id: ViewIdentifier,
+                ) -> Option<&mut T> {
+                    crate::uicore::view_instance_mut(id, self.view_instance_store)
+                }
+
+                #[inline(always)]
+                fn view_set_visibility_untyped(&mut self, id: ViewIdentifier, visible: bool) {
+                    crate::uicore::view_set_visibility(id, visible, self.view_instance_store)
+                }
+
+                #[inline(always)]
+                fn view_layout_mut_untyped(
+                    &mut self,
+                    id: ViewIdentifier,
+                ) -> Option<&mut crate::uicore::ViewLayout> {
+                    crate::uicore::view_layout_mut(id, self.view_instance_store)
+                }
+            }
+            impl ViewRenderer for LocalContext<'_> {
+                #[inline(always)]
+                fn schedule_view_render_untyped(&mut self, target: ViewIdentifier) {
+                    self.view_render_queue.schedule(target);
+                }
+            }
+            r.set_selection_id(
+                v.id,
+                &mut context.application,
+                &mut LocalContext {
+                    view_instance_store: &mut context.view_instance_store,
+                    view_render_queue: &mut context.view_render_queue,
+                },
+            );
+            // 選択したら閉じる
+            context.close_custom_view_flyout();
             return EventContinueControl::STOP_PROPAGATION;
         }
 
