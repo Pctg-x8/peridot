@@ -3508,8 +3508,6 @@ impl<'sys> CoreLoop<'sys> {
     }
 
     fn perform_menu_opens(mut self: Pin<&mut Self>) {
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         assert!(
             this.menu_open_requests.len() <= 1,
@@ -3520,6 +3518,7 @@ impl<'sys> CoreLoop<'sys> {
                 this.current_active_menu_session.is_none(),
                 "another menu still active"
             );
+            let exclusive_ht_use = self.as_mut().exclusive_ht_use();
             let session = MenuSession::new(
                 req.parent,
                 req.items,
@@ -3527,13 +3526,19 @@ impl<'sys> CoreLoop<'sys> {
                 req.surface_pos,
                 self.as_mut(),
             );
+            drop(exclusive_ht_use);
             unsafe { self.as_mut().get_unchecked_mut() }.current_active_menu_session =
                 Some(session);
         }
 
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(req) = this.menu_reopen_request.take() {
-            if let Some(c) = this.current_active_menu_session.take() {
+            let exclusive_ht_use = self.as_mut().exclusive_ht_use();
+            if let Some(c) = unsafe { self.as_mut().get_unchecked_mut() }
+                .current_active_menu_session
+                .take()
+            {
+                let this = unsafe { self.as_mut().get_unchecked_mut() };
                 c.terminate(
                     &this.syslink,
                     &mut this.composite_tree,
@@ -3549,6 +3554,7 @@ impl<'sys> CoreLoop<'sys> {
                 req.surface_pos,
                 self.as_mut(),
             );
+            drop(exclusive_ht_use);
             unsafe { self.as_mut().get_unchecked_mut() }.current_active_menu_session =
                 Some(session);
         }
