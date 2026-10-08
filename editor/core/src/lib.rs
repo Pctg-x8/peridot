@@ -106,6 +106,7 @@ pub fn launch() {
         .init();
 
     profiler::init_profiler();
+    tracing::info!("app start");
 
     let mut event_store = VecDeque::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
@@ -661,6 +662,9 @@ fn main_wrapper<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
+
+    coreloop.save_window_state();
+    tracing::info!("app finish");
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -4095,8 +4099,6 @@ impl<'sys> CoreLoop<'sys> {
 
 #[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
 async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) {
-    tracing::info!("app start");
-
     loop {
         let e = event_queue.next_event().await;
         tracing::trace!(target: "event-trace", event = ?e);
@@ -4109,9 +4111,6 @@ async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) 
         // after-input common update phase
         // inst.as_mut().update_view_all();
     }
-
-    inst.save_window_state();
-    tracing::info!("app finish");
 }
 
 pub struct MenuOpenRequest {
