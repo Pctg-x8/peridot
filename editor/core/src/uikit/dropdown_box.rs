@@ -387,7 +387,7 @@ impl HitTestTreeActionHandler for EventHandler {
             w.client_size().height,
         );
 
-        context.request_open_custom_flyout_view(CustomFlyoutViewOpenRequest {
+        context.request_open_custom_view_flyout(CustomFlyoutViewOpenRequest {
             parent: w,
             pos: Point::new_logical(x, y),
             content_ctor: Box::new(FlyoutContentPresenterInit {

@@ -47,8 +47,8 @@ pub struct InputEventContext<'env, 'sys> {
     pub menu_open_requests: &'env mut Vec<MenuOpenRequest>,
     pub menu_reopen_request: &'env mut Option<MenuOpenRequest>,
     pub close_menu_request: &'env mut bool,
-    pub custom_flyout_view_open_request: &'env mut Option<CustomFlyoutViewOpenRequest>,
-    pub custom_flyout_view_close_requested: &'env mut bool,
+    pub custom_view_flyout_open_request: &'env mut Option<CustomFlyoutViewOpenRequest>,
+    pub custom_view_flyout_close_requested: &'env mut bool,
     pub popup_manager: &'env mut PopupManager,
     pub docking_preview_state: &'env mut Option<crate::ui::dock::DockingPreviewState>,
 }
@@ -76,17 +76,17 @@ impl InputEventContext<'_, '_> {
     }
 
     #[inline(always)]
-    pub fn request_open_custom_flyout_view(&mut self, req: CustomFlyoutViewOpenRequest) {
+    pub fn request_open_custom_view_flyout(&mut self, req: CustomFlyoutViewOpenRequest) {
         assert!(
-            self.custom_flyout_view_open_request.is_none(),
-            "custom flyout view open already requested in this event"
+            self.custom_view_flyout_open_request.is_none(),
+            "custom view flyout open already requested in this event"
         );
-        *self.custom_flyout_view_open_request = Some(req);
+        *self.custom_view_flyout_open_request = Some(req);
     }
 
     #[inline(always)]
     pub fn close_custom_view_flyout(&mut self) {
-        *self.custom_flyout_view_close_requested = true;
+        *self.custom_view_flyout_close_requested = true;
     }
 
     #[inline(always)]
@@ -342,7 +342,6 @@ impl PointerInputManager {
 
     fn dispatch_pointer_down(
         surface: &mut NativeDesktopSurface,
-        pointer: PointerID,
         action_args: &PointerButtonActionArgs,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
@@ -998,7 +997,6 @@ impl PointerInputManager {
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, new_captured) = Self::dispatch_pointer_down(
                     &mut entering_surface,
-                    pointer_id,
                     &args,
                     action_context,
                     ht_ref,

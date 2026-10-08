@@ -37,8 +37,8 @@ use crate::{
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
-            AnimatableColor, CompositeMode, CompositeTree, CompositeTreeRef,
-            CompositeTreeSyncBuffer, Gradient, GradientRef,
+            AnimatableColor, CompositeMode, CompositeTree, CompositeTreeSyncBuffer, Gradient,
+            GradientRef,
         },
         text::{FontSet, RootFontSet},
     },
@@ -48,11 +48,11 @@ use crate::{
         TypedViewIdentifier, View, ViewDestructionContext, ViewFeedbackContext,
         ViewFeedbackRegistry, ViewFeedbackRegistryDelayedOps, ViewGroupID, ViewGroupRegisterable,
         ViewGroupRelationControllable, ViewGroupRelationStore, ViewIdentifier,
-        ViewIdentifierAllocator, ViewImmediateRenderable, ViewInitContext,
-        ViewInstanceQueryableMut, ViewInstanceStore, ViewLayoutChild, ViewLayoutFlowAlignment,
-        ViewLayoutFlowDirection, ViewLayoutFlowJustify, ViewLayoutGridCell, ViewLayoutOverflow,
-        ViewLayoutStateStore, ViewRegisterable, ViewRelationControllable, ViewRenderQueue,
-        ViewRenderStateStore, ViewRenderer, ViewSize, ViewTreeRelationStore,
+        ViewIdentifierAllocator, ViewInitContext, ViewInstanceQueryableMut, ViewInstanceStore,
+        ViewLayoutChild, ViewLayoutFlowAlignment, ViewLayoutFlowDirection, ViewLayoutFlowJustify,
+        ViewLayoutGridCell, ViewLayoutOverflow, ViewLayoutStateStore, ViewRegisterable,
+        ViewRelationControllable, ViewRenderQueue, ViewRenderStateStore, ViewRenderer, ViewSize,
+        ViewTreeRelationStore,
     },
     uikit::{
         ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuItem,
@@ -1992,8 +1992,8 @@ impl<'sys> CoreLoop<'sys> {
             popup_open_requests: &mut this.popup_open_requests,
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
-            custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-            custom_flyout_view_close_requested: &mut this
+            custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+            custom_view_flyout_close_requested: &mut this
                 .close_current_custom_view_flyout_requested,
             close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
@@ -2140,8 +2140,8 @@ impl<'sys> CoreLoop<'sys> {
             popup_open_requests: &mut this.popup_open_requests,
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
-            custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-            custom_flyout_view_close_requested: &mut this
+            custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+            custom_view_flyout_close_requested: &mut this
                 .close_current_custom_view_flyout_requested,
             close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
@@ -2207,8 +2207,8 @@ impl<'sys> CoreLoop<'sys> {
             popup_open_requests: &mut this.popup_open_requests,
             menu_open_requests: &mut this.menu_open_requests,
             menu_reopen_request: &mut this.menu_reopen_request,
-            custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-            custom_flyout_view_close_requested: &mut this
+            custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+            custom_view_flyout_close_requested: &mut this
                 .close_current_custom_view_flyout_requested,
             close_menu_request: &mut this.close_menu_requested,
             application: ApplicationMutation {
@@ -2309,8 +2309,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2355,8 +2355,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2397,8 +2397,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2438,8 +2438,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2474,8 +2474,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2507,8 +2507,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2540,8 +2540,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2589,8 +2589,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2629,8 +2629,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2669,8 +2669,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2709,8 +2709,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2749,8 +2749,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2789,8 +2789,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2829,8 +2829,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -2942,8 +2942,8 @@ impl<'sys> CoreLoop<'sys> {
                         popup_open_requests: &mut recursive_opens,
                         menu_open_requests: &mut this.menu_open_requests,
                         menu_reopen_request: &mut this.menu_reopen_request,
-                        custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                        custom_flyout_view_close_requested: &mut this
+                        custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                        custom_view_flyout_close_requested: &mut this
                             .close_current_custom_view_flyout_requested,
                         close_menu_request: &mut this.close_menu_requested,
                         application: ApplicationMutation {
@@ -3046,8 +3046,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -3092,8 +3092,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -3135,8 +3135,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
@@ -3171,8 +3171,8 @@ impl<'sys> CoreLoop<'sys> {
                 popup_open_requests: &mut this.popup_open_requests,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
-                custom_flyout_view_close_requested: &mut this
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
                     .close_current_custom_view_flyout_requested,
                 close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {

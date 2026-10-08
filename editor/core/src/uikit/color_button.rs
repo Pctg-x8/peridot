@@ -181,7 +181,7 @@ impl HitTestTreeActionHandler for EditableColorButtonEventHandler {
             backing_store: self.thisref.clone(),
         });
         let (gl, gt, gw, gh, _) = context.ht_manager.compute_global_rect_autoroot(sender);
-        context.request_open_custom_flyout_view(CustomFlyoutViewOpenRequest {
+        context.request_open_custom_view_flyout(CustomFlyoutViewOpenRequest {
             parent: context
                 .ht_manager
                 .query_root_window(sender)
