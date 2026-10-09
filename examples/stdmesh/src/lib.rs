@@ -80,7 +80,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
         rotation: peridot::math::Quaternion::ONE,
         depth_range: 0.1..100.0,
     };
-    camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
+    camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0), None);
 
     let asset_collection = e.asset_collection::<peridot_mesh::AssetCore>("test");
     tracing::debug!(asset_count = asset_collection.len(), "asset collection");
