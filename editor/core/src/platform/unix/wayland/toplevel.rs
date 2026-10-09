@@ -599,7 +599,8 @@ impl<'sys> EventListener<'sys> {
                 .handle_window_maximize_state_changes(Handle(self.state.data.surface_ptr), x);
         }
         if window_deactivated {
-            self.coreloop().close_all_menus();
+            self.coreloop()
+                .close_all_flyouts(Handle(self.state.data.surface_ptr));
         }
 
         self.coreloop().update_view_all();

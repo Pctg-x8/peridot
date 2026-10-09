@@ -27,6 +27,8 @@ use std::{
 #[cfg(target_os = "macos")]
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+#[cfg(not(windows))]
+use crate::rendering::RenderMessageSender;
 use crate::{
     graphics::Graphics,
     input::{
@@ -356,7 +358,7 @@ pub fn launch() {
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
-            .add(terminate_event, EpollEventBits::IN, 1)
+            .add(&terminate_event, EpollEventBits::IN, 1)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
@@ -364,16 +366,16 @@ pub fn launch() {
             .expect("epoll.add");
         #[cfg(target_os = "linux")]
         epoll
-            .add(pointer_hovering_timer, EpollEventBits::IN, 3)
+            .add(&pointer_hovering_timer, EpollEventBits::IN, 3)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         epoll
-            .add(delayed_action_timer_fd, EpollEventBits::IN, 4)
+            .add(&delayed_action_timer_fd, EpollEventBits::IN, 4)
             .expect("epoll.add");
         #[cfg(feature = "wayland")]
         #[cfg(feature = "enable-profiling")]
         epoll
-            .add(memory_sample_timer_fd, EpollEventBits::IN, 5)
+            .add(&memory_sample_timer_fd, EpollEventBits::IN, 5)
             .expect("epoll.add");
         #[cfg(target_os = "linux")]
         let poll_id_to_watch_ref = core::cell::UnsafeCell::new(std::collections::HashMap::new());
@@ -448,7 +450,7 @@ pub fn launch() {
                     let mut b = [core::mem::MaybeUninit::<u8>::uninit(); 8];
                     if unsafe {
                         libc::read(
-                            std::os::fd::AsRawFd::as_raw_fd(memory_sample_timer_fd),
+                            std::os::fd::AsRawFd::as_raw_fd(&memory_sample_timer_fd),
                             b.as_mut_ptr().cast(),
                             8,
                         )
@@ -2824,12 +2826,11 @@ impl<'sys> CoreLoop<'sys> {
 
     #[cfg(feature = "wayland")]
     fn dispatch_ime_state_changes(
-        self: Pin<&mut Self>,
+        mut self: Pin<&mut Self>,
         target: WindowHandle,
         preedit_string: Option<String>,
         committed_string: Option<String>,
     ) {
-        let _exclusive_use = self.exclusive_use();
         let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
 
         let this = unsafe { self.get_unchecked_mut() };
@@ -2848,7 +2849,11 @@ impl<'sys> CoreLoop<'sys> {
                 view_render_queue: &mut this.view_render_queue,
                 menu_open_requests: &mut this.menu_open_requests,
                 menu_reopen_request: &mut this.menu_reopen_request,
-                custom_flyout_view_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_open_request: &mut this.custom_view_flyout_open_request,
+                custom_view_flyout_close_requested: &mut this
+                    .close_current_custom_view_flyout_requested,
+                popup_open_requests: &mut this.popup_open_requests,
+                close_menu_request: &mut this.close_menu_requested,
                 application: ApplicationMutation {
                     state: &mut this.application,
                     view_feedbacks: &mut this.view_feedback_store,

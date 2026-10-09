@@ -350,6 +350,7 @@ impl PointerInputManager {
 
     fn dispatch_pointer_down(
         surface: &mut NativeDesktopSurface,
+        pointer: &PointerID,
         action_args: &PointerButtonActionArgs,
         action_context: &mut InputEventContext,
         ht_target: HitTestTreeRef,
@@ -1005,6 +1006,7 @@ impl PointerInputManager {
             PointerFocusState::Entering(ht_ref) => {
                 let (needs_recompute_pointer_enter, new_captured) = Self::dispatch_pointer_down(
                     &mut entering_surface,
+                    &pointer_id,
                     &args,
                     action_context,
                     ht_ref,

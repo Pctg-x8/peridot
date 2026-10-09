@@ -19,7 +19,6 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     uicore::MountTarget,
-    uikit::MenuItemSubMenuView,
     utils::platform::linux::TimerFD,
 };
 
@@ -114,11 +113,14 @@ impl Handle {
             .buffer_scale
     }
 
-    pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
+    pub fn submenu_pop_position(
+        &self,
+        element: &crate::uikit::menu::InteractableElement,
+    ) -> Point<LogicalUnit> {
         let base = self.data().spawned_position;
         let size = self.data().committed_state.lock().expect("poisoned").size;
 
-        Point::new_logical(base.x + size.width, base.y + view.placement_y)
+        Point::new_logical(base.x + size.width, base.y + element.placement_y)
     }
 
     pub fn take_latest_ui_scale_change(&self) -> Option<f32> {

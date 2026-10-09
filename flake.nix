@@ -50,6 +50,8 @@
         # android
         (android-composition pkgs).androidsdk
         pkgs.cargo-ndk
+        # editor development deps
+        pkgs.shader-slang
       ];
       native-deps = pkgs: [ pkgs.pkg-config ];
       libclang-path = pkgs: "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -74,6 +76,11 @@
                 pkgs.pkg-config
                 pkgs.clang
                 pkgs.llvmPackages.libclang
+                # editor development deps(linux specific)
+                pkgs.harfbuzz
+                pkgs.icu76
+                pkgs.libxkbcommon
+                pkgs.dbus
               ]
             else
               [ ];
@@ -83,7 +90,7 @@
           shell-set-common-env-vars = ''
             export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
             # set library search paths for thirdparty
-            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}:${pkgs.vulkan-loader.outPath}/lib
             # peridot specific env vars for development
             export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
             export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
@@ -99,6 +106,13 @@
               __peridot_fish_prompt_org
             end
           '';
+          platform-extra-setup-script =
+            if system == "aarch64-darwin" then
+              ''
+                echo "export PATH=${pkgs.rustup.outPath}/bin:\$PATH" > editor/mac/marble-editor/.build.envrc
+              ''
+            else
+              "";
           # android vars
           ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
           ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
@@ -109,89 +123,33 @@
             default = mksh {
               buildInputs = common-deps pkgs ++ platform-deps;
               nativeBuildInputs = native-deps pkgs;
-              shellHook = shell-set-common-env-vars;
+              shellHook = ''
+                ${shell-set-common-env-vars}
+                ${platform-extra-setup-script}
+              '';
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
               # android
               inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
-            platform-deps =
-              if system == "x86_64-linux" then
-                [
-                  # required libs for building engine (linux specific)
-                  pkgs.udev
-                  pkgs.wayland
-                  pkgs.pulseaudio
-                  pkgs.pipewire
-                  pkgs.freetype
-                  pkgs.fontconfig
-                  # building cdeps(explicit compiler for linux)
-                  pkgs.ninja
-                  pkgs.pkg-config
-                  pkgs.clang
-                  pkgs.llvmPackages.libclang
-                ]
-              else
-                [ ];
-            platform-extra-setup-script =
-              if system == "aarch64-darwin" then
-                ''
-                  echo "export PATH=${pkgs.rustup.outPath}/bin:\$PATH" > editor/mac/marble-editor/.build.envrc
-                ''
-              else
-                "";
-            LIBCLANG_PATH = if system == "x86_64-linux" then libclang-path pkgs else "";
+            fish = mksh {
+              buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
+              nativeBuildInputs = native-deps pkgs;
+              shellHook = ''
+                ${shell-set-common-env-vars}
+                ${platform-extra-setup-script}
 
-            fishPrehook = pkgs.writeScriptBin "startup" ''
-              # prepend devenv prompt
-              functions -c fish_prompt __peridot_fish_prompt_org
-              function fish_prompt
-                # preserve status code
-                set -l last_status $status
-                printf "[Peridot] "
-                echo "exit $last_status" | .
-                __peridot_fish_prompt_org
-              end
-            '';
-            # android vars
-            ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
-            ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
-            mksh = if system == "x86_64-linux" then pkgs.mkShell else pkgs.mkShellNoCC;
-          in
-          {
-            "${system}" = {
-              default = mksh {
-                buildInputs = common-deps pkgs ++ platform-deps;
-                nativeBuildInputs = native-deps pkgs;
-                shellHook = ''
-                  ${shell-set-common-env-vars pkgs}
-                  ${platform-extra-setup-script}
-                '';
+                exec ${pkgs.fish.outPath}/bin/fish -C "source ${fishPrehook}/bin/startup"
+              '';
 
-                # このへんはないとエラーになる
-                inherit LIBCLANG_PATH;
-                # android
-                inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
-              };
-              fish = mksh {
-                buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
-                nativeBuildInputs = native-deps pkgs;
-                shellHook = ''
-                  ${shell-set-common-env-vars pkgs}
-                  ${platform-extra-setup-script}
-
-                  exec ${pkgs.fish.outPath}/bin/fish -C "source ${fishPrehook}/bin/startup"
-                '';
-
-                # このへんはないとエラーになる
-                inherit LIBCLANG_PATH;
-                # android
-                inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
-              };
+              # このへんはないとエラーになる
+              inherit LIBCLANG_PATH;
+              # android
+              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
-          }
-        ) target-systems
+          };
+        }) target-systems
       );
     };
 }

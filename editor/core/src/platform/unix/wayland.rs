@@ -1228,7 +1228,6 @@ impl wl::PointerEventListener for GlobalMessaging<'_> {
                 }
                 SurfaceStateTag::ToplevelWindow => {
                     unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_pointer_down(
-                        toplevel::Handle(enter_state.surface),
                         PointerID(pointer),
                         if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
@@ -1242,7 +1241,6 @@ impl wl::PointerEventListener for GlobalMessaging<'_> {
                 }
                 SurfaceStateTag::FlyoutSurface => {
                     unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_menu_pointer_down(
-                        flyout_surface::Handle(enter_state.surface),
                         PointerID(pointer),
                         if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
@@ -1268,7 +1266,6 @@ impl wl::PointerEventListener for GlobalMessaging<'_> {
                 SurfaceStateTag::ResizeEdge => (/* no pointer up event for resize edge */),
                 SurfaceStateTag::ToplevelWindow => {
                     unsafe { Pin::new_unchecked(&mut *self.coreloop) }.handle_pointer_up(
-                        toplevel::Handle(enter_state.surface),
                         PointerID(pointer),
                         if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
@@ -1282,7 +1279,6 @@ impl wl::PointerEventListener for GlobalMessaging<'_> {
                 }
                 SurfaceStateTag::FlyoutSurface => {
                     unsafe { Pin::new_unchecked(&mut *self.coreloop) }.dispatch_menu_pointer_up(
-                        flyout_surface::Handle(enter_state.surface),
                         PointerID(pointer),
                         if button == linux_input::Key::MouseLeft as u32 {
                             PointerButton::Primary
@@ -1768,7 +1764,7 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
             SurfaceStateTag::ToplevelWindow => {
                 tracing::debug!("keyboard enter surface: toplevel");
                 self.coreloop()
-                    .handle_window_focus_changed(toplevel::Handle::from_mut(surface), true);
+                    .notify_focus_changes(toplevel::Handle::from_mut(surface), true);
                 self.coreloop().update_view_all();
             }
             SurfaceStateTag::FlyoutSurface => {
@@ -1798,7 +1794,9 @@ impl wl::KeyboardEventListener for GlobalMessaging<'_> {
             match unsafe { &*s.user_data().cast::<SurfaceStateUntyped>() }.tag {
                 SurfaceStateTag::ToplevelWindow => {
                     self.coreloop()
-                        .handle_window_focus_changed(toplevel::Handle::from_mut(s), false);
+                        .notify_focus_changes(toplevel::Handle::from_mut(s), false);
+                    self.coreloop()
+                        .close_all_flyouts(toplevel::Handle::from_mut(s)); // フォーカスロストしたときにflyout系も閉じる
                     self.coreloop().update_view_all();
                 }
                 SurfaceStateTag::FlyoutSurface => {
