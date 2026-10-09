@@ -16,6 +16,7 @@ use crate::{
         KeyInputCode, ModifierKey,
         hittest::{CursorShape, DragDropFlags, PointerButton},
     },
+    platform::WindowHandleBase,
     rendering::RenderMessage,
     uicore::MountTarget,
     utils::platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},

@@ -2,6 +2,7 @@ use shared::Size;
 
 use crate::{
     SyncEvent, WindowHandle,
+    platform::WindowHandleBase,
     rendering::{
         composite::CompositeRectTextHorizontalAlignment,
         text::{FontID, TextLayout},

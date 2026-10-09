@@ -14,10 +14,14 @@ use crate::{
         KeyboardFocusGroupRef, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeRef},
     },
-    platform::unix::{
-        APPMENU_OBJECT_PATH,
-        wayland::{
-            DisplayServerContext, GlobalInterfaces, SurfaceScaling, SurfaceState, SurfaceStateTag,
+    platform::{
+        WindowHandleBase,
+        unix::{
+            APPMENU_OBJECT_PATH,
+            wayland::{
+                DisplayServerContext, GlobalInterfaces, SurfaceScaling, SurfaceState,
+                SurfaceStateTag,
+            },
         },
     },
     rendering::{
@@ -31,6 +35,139 @@ use crate::{
 pub struct Handle(pub(super) NonNull<wl::Surface>);
 unsafe impl Send for Handle {}
 unsafe impl Sync for Handle {}
+impl WindowHandleBase for Handle {
+    #[inline(always)]
+    fn associate_extra_data<T>(&mut self, data: Box<T>) {
+        self.state_mut().extra_data = Box::into_raw(data) as _;
+    }
+
+    #[inline(always)]
+    unsafe fn extra_data_ref<T>(&self) -> &T {
+        unsafe { &*self.state().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
+        unsafe { &mut *self.state_mut().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
+        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
+        self.state_mut().extra_data = core::ptr::null_mut();
+
+        r
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state<'a>(&'a self) -> &'a PerWindowKeyboardFocusState {
+        &self.state().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state_mut<'a>(&'a mut self) -> &'a mut PerWindowKeyboardFocusState {
+        &mut self.state_mut().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    fn root_keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
+        self.state().kf_root_group
+    }
+
+    fn close(&mut self) {
+        match self.event_listener().window_type {
+            WindowType::Main {
+                ref termination_event,
+            } => {
+                termination_event.inc(1).expect("termination_event.inc");
+            }
+            WindowType::Sub => {
+                self.event_listener().coreloop().close_sub_window(*self);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn maximize(&self) {
+        self.state()
+            .xdg_toplevel
+            .set_maximized()
+            .expect("xdg_toplevel.set_maximized");
+    }
+
+    #[inline(always)]
+    fn minimize(&self) {
+        self.state()
+            .xdg_toplevel
+            .set_minimized()
+            .expect("xdg_toplevel.set_maximized");
+    }
+
+    #[inline(always)]
+    fn restore(&self) {
+        self.state()
+            .xdg_toplevel
+            .unset_maximized()
+            .expect("xdg_toplevel.set_maximized");
+    }
+
+    #[inline(always)]
+    fn client_size(&self) -> Size<LogicalUnit> {
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .active_size_logical
+    }
+
+    #[inline(always)]
+    fn client_size_pixels(&self) -> Size<PixelsUnit> {
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .active_size
+    }
+
+    #[inline(always)]
+    fn ui_scale_factor(&self) -> f32 {
+        self.state()
+            .committed_state
+            .lock()
+            .expect("poisoned")
+            .active_buffer_scale
+    }
+
+    fn geometry_state_snapshot(
+        &self,
+        system_link: &crate::SystemLink,
+    ) -> crate::WindowGeometryState {
+        let committed_state = self.state().committed_state.lock().expect("poisoned");
+        if committed_state.maximized {
+            crate::WindowGeometryState::Maximized {
+                monitor_index: unsafe {
+                    (*system_link.display_server.context)
+                        .global_interfaces
+                        .outputs
+                        .iter()
+                        .position(|(o, _)| o.ref_eq(&*self.state().entering_output_ptr))
+                        .unwrap_or_else(|| {
+                            tracing::error!("Failed to find output index");
+                            0
+                        })
+                },
+            }
+        } else {
+            crate::WindowGeometryState::Restored {
+                // Note: Waylandではウィンドウの位置を取得することができないのでいったん0をいれておく
+                rect: Rect::from_lt_size(
+                    Point::new_logical(0.0, 0.0),
+                    committed_state.active_size_logical,
+                ),
+            }
+        }
+    }
+}
 impl Handle {
     #[inline(always)]
     pub(super) const fn from_mut(ptr: &mut wl::Surface) -> Self {
@@ -67,29 +204,6 @@ impl Handle {
     }
 
     #[inline(always)]
-    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
-        self.state_mut().extra_data = Box::into_raw(data) as _;
-    }
-
-    #[inline(always)]
-    pub unsafe fn extra_data_ref<T>(&self) -> &T {
-        unsafe { &*self.state().extra_data.cast() }
-    }
-
-    #[inline(always)]
-    pub unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
-        unsafe { &mut *self.state_mut().extra_data.cast() }
-    }
-
-    #[inline(always)]
-    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
-        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
-        self.state_mut().extra_data = core::ptr::null_mut();
-
-        r
-    }
-
-    #[inline(always)]
     pub fn needs_system_command_buttons(&self) -> bool {
         self.event_listener().needs_system_command_buttons
     }
@@ -106,48 +220,6 @@ impl Handle {
             .lock()
             .expect("poisoned")
             .maximized
-    }
-
-    #[inline(always)]
-    pub fn client_size(&self) -> Size<LogicalUnit> {
-        self.state()
-            .committed_state
-            .lock()
-            .expect("poisoned")
-            .active_size_logical
-    }
-
-    #[inline(always)]
-    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
-        self.state()
-            .committed_state
-            .lock()
-            .expect("poisoned")
-            .active_size
-    }
-
-    #[inline(always)]
-    pub fn ui_scale_factor(&self) -> f32 {
-        self.state()
-            .committed_state
-            .lock()
-            .expect("poisoned")
-            .active_buffer_scale
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
-        &self.state().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
-        &mut self.state_mut().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
-        self.state().kf_root_group
     }
 
     #[inline(always)]
@@ -174,40 +246,6 @@ impl Handle {
                 std::sync::atomic::Ordering::Relaxed,
             )
             == Ok(true)
-    }
-
-    pub fn on_click_sys_close_button(&self) {
-        match self.event_listener().window_type {
-            WindowType::Main {
-                ref termination_event,
-            } => {
-                termination_event.inc(1).expect("termination_event.inc");
-            }
-            WindowType::Sub => {
-                self.event_listener().coreloop().close_sub_window(*self);
-            }
-        }
-    }
-
-    pub fn on_click_sys_maximize_button(&self) {
-        self.state()
-            .xdg_toplevel
-            .set_maximized()
-            .expect("xdg_toplevel.set_maximized");
-    }
-
-    pub fn on_click_sys_minimize_button(&self) {
-        self.state()
-            .xdg_toplevel
-            .set_minimized()
-            .expect("xdg_toplevel.set_maximized");
-    }
-
-    pub fn on_click_sys_restore_button(&self) {
-        self.state()
-            .xdg_toplevel
-            .unset_maximized()
-            .expect("xdg_toplevel.set_maximized");
     }
 
     pub fn begin_drag(&self, pointer: &super::PointerID) {
@@ -238,36 +276,6 @@ impl Handle {
                 .xdg_toplevel
                 .set_maximized()
                 .expect("xdg_toplevel.set_maximized");
-        }
-    }
-
-    pub fn geometry_state_snapshot(
-        &self,
-        system_link: &crate::SystemLink,
-    ) -> crate::WindowGeometryState {
-        let committed_state = self.state().committed_state.lock().expect("poisoned");
-        if committed_state.maximized {
-            crate::WindowGeometryState::Maximized {
-                monitor_index: unsafe {
-                    (*system_link.display_server.context)
-                        .global_interfaces
-                        .outputs
-                        .iter()
-                        .position(|(o, _)| o.ref_eq(&*self.state().entering_output_ptr))
-                        .unwrap_or_else(|| {
-                            tracing::error!("Failed to find output index");
-                            0
-                        })
-                },
-            }
-        } else {
-            crate::WindowGeometryState::Restored {
-                // Note: Waylandではウィンドウの位置を取得することができないのでいったん0をいれておく
-                rect: Rect::from_lt_size(
-                    Point::new_logical(0.0, 0.0),
-                    committed_state.active_size_logical,
-                ),
-            }
         }
     }
 }

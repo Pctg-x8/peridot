@@ -13,6 +13,7 @@ use crate::{
         },
     },
     model::{Application, ApplicationMutation},
+    platform::WindowHandleBase,
     rendering::{
         Normalized2DStaticMeshTexture, Normalized2DStaticMeshTextureLazyInit,
         composite::{

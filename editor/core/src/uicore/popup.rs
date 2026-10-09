@@ -8,6 +8,7 @@ use crate::{
         InputEventContext, KeyboardFocusGroupRef, KeyboardFocusTokenRegistry,
         hittest::{HitTestTreeData, HitTestTreeRef},
     },
+    platform::WindowHandleBase,
     rendering::composite::{
         AnimatableColor, AnimatableFloat, AnimationCurve, Border, CompositeMode, CompositeRect,
         CompositeRectScaleFactor, CompositeTree, CompositeTreeRef, CornerRadius,

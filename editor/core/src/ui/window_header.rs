@@ -11,6 +11,7 @@ use crate::{
             PointerButtonActionArgs,
         },
     },
+    platform::WindowHandleBase,
     rendering::{
         MainThreadTextureIDIssuer, Normalized2DStaticMeshTexture,
         Normalized2DStaticMeshTextureLazyInit, RenderMessageSender, TextureID,
@@ -413,16 +414,16 @@ impl HitTestTreeActionHandler for SystemCommandButtonViewEntity {
         context: &mut InputEventContext,
         _args: &PointerButtonActionArgs,
     ) -> EventContinueControl {
-        let mounted_window = context
+        let mut mounted_window = context
             .ht_manager
             .query_root_window(self.ht_root)
             .expect("not mounted");
 
         match self.cmd.get() {
-            SystemCommand::Close => mounted_window.on_click_sys_close_button(),
-            SystemCommand::Minimize => mounted_window.on_click_sys_minimize_button(),
-            SystemCommand::Maximize => mounted_window.on_click_sys_maximize_button(),
-            SystemCommand::Restore => mounted_window.on_click_sys_restore_button(),
+            SystemCommand::Close => mounted_window.close(),
+            SystemCommand::Minimize => mounted_window.minimize(),
+            SystemCommand::Maximize => mounted_window.maximize(),
+            SystemCommand::Restore => mounted_window.restore(),
         }
 
         EventContinueControl::STOP_PROPAGATION

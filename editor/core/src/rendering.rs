@@ -19,6 +19,7 @@ use crate::{
         RASTER_STATE_DEFAULT_FILL_NOCULL, UnboundVulkanSurface, VI_STATE_EMPTY, VulkanSurface,
         VulkanSwapchain,
     },
+    platform::WindowHandleBase,
     rendering::{
         atlas::{AtlasRect, ColorTextureAtlas, TextureAtlas},
         composite::{
@@ -1780,7 +1781,7 @@ impl<'d> WindowRenderer<'d> {
         color_atlas: &ColorTextureAtlas,
     ) -> Self {
         let surface = unsafe { create_data.vk_surface.0.bound(device) };
-        let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.pixels_client_size());
+        let vk_swapchain = VulkanSwapchain::new(&surface, || create_data.key.client_size_pixels());
 
         let mut update_cp = br::CommandPoolObject::new(
             device,
@@ -1991,7 +1992,7 @@ impl<'d> WindowRenderer<'d> {
 
         self.surface.refresh_caps();
         self.swapchain
-            .recreate(&self.surface, || self.w.pixels_client_size());
+            .recreate(&self.surface, || self.w.client_size_pixels());
 
         // recrease rt resources
         self.composite_renderer.recreate_rt_resources(
@@ -2074,7 +2075,7 @@ impl<'d> WindowRenderer<'d> {
                     return r;
                 };
 
-                let rt_pixel_size = self.w.pixels_client_size();
+                let rt_pixel_size = self.w.client_size_pixels();
                 let rt_logical_size = self.w.client_size();
 
                 let r = if self

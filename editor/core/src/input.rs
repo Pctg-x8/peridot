@@ -14,6 +14,7 @@ use crate::{
         PointerActionArgs, PointerButton, PointerButtonActionArgs, Role, ScrollWheelActionArgs,
     },
     model::{Application, ApplicationAccess, ApplicationMutableAccess, ApplicationMutation},
+    platform::WindowHandleBase,
     rendering::composite::CompositeTree,
     ui::dock::DockStore,
     uicore::{

@@ -10,6 +10,7 @@ use crate::{
     input::{
         EventContinueControl, FocusTargetToken, InputEventContext, ModifierKey, PointerInputUnit,
     },
+    platform::WindowHandleBase,
 };
 
 pub struct HitTestTreeData {

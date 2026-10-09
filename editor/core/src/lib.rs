@@ -37,6 +37,7 @@ use crate::{
         hittest::{HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
     persistence::{DockState, PersistStateWindowData, WindowGeometryState, WindowState},
+    platform::WindowHandleBase,
     rendering::{
         MainThreadTextureIDIssuer, RenderMessage, RenderThread, RendererSync,
         composite::{
@@ -1752,7 +1753,7 @@ impl<'sys> CoreLoop<'sys> {
                                 None => &initial_dock_state,
                                 Some(ref x) => &x.main.dock,
                             },
-                            this.main_window.keyboard_focus_group(),
+                            this.main_window.root_keyboard_focus_group(),
                             &mut PaneGroupCreateContext {
                                 view_init_context: view_init_ctx,
                                 view_render_queue,
@@ -1812,7 +1813,7 @@ impl<'sys> CoreLoop<'sys> {
                     .view_feedback_subscription_delayed_ops,
             },
             &this.main_window,
-            this.main_window.keyboard_focus_group(),
+            this.main_window.root_keyboard_focus_group(),
             Rect::from_lt_size(Point::new_logical(0.0, 0.0), this.main_window.client_size()),
             view_init_ctx.view_instance_store,
             view_init_ctx.view_tree_relation_store,
@@ -1882,7 +1883,7 @@ impl<'sys> CoreLoop<'sys> {
                                     .view_feedback_subscription_delayed_ops,
                             },
                             &w,
-                            w.keyboard_focus_group(),
+                            w.root_keyboard_focus_group(),
                             Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
                             view_init_ctx.view_instance_store,
                             view_init_ctx.view_tree_relation_store,
@@ -1909,7 +1910,7 @@ impl<'sys> CoreLoop<'sys> {
                                 |root_view, view_init_ctx, view_render_queue, store| {
                                     construct_dock_from_state(
                                         &sub.dock,
-                                        w.keyboard_focus_group(),
+                                        w.root_keyboard_focus_group(),
                                         &mut PaneGroupCreateContext {
                                             view_init_context: view_init_ctx,
                                             view_render_queue,
@@ -3339,7 +3340,7 @@ impl<'sys> CoreLoop<'sys> {
                                     .view_feedback_subscription_delayed_ops,
                             },
                             &w,
-                            w.keyboard_focus_group(),
+                            w.root_keyboard_focus_group(),
                             Rect::from_lt_size(Point::new_logical(0.0, 0.0), w.client_size()),
                             view_init_ctx.view_instance_store,
                             view_init_ctx.view_tree_relation_store,
