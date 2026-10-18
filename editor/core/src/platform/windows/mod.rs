@@ -121,6 +121,7 @@ use crate::{
         },
     },
     persistence::WindowGeometryState,
+    platform::WindowHandleBase,
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage, RenderMessageSender,
         composite::{CompositeRect, CompositeTreeRef},
@@ -148,17 +149,9 @@ impl core::hash::Hash for WindowHandle {
         self.0.0.hash(state)
     }
 }
-impl WindowHandle {
+impl WindowHandleBase for WindowHandle {
     #[inline(always)]
-    fn destroy(&mut self) {
-        self.state_mut().destroying = true;
-        if let Err(e) = unsafe { DestroyWindow(self.0) } {
-            tracing::error!(reason = %e, "window.destroy");
-        }
-    }
-
-    #[inline(always)]
-    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
+    fn associate_extra_data<T>(&mut self, data: Box<T>) {
         unsafe {
             SetWindowLongPtrW(
                 self.0,
@@ -169,7 +162,7 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub unsafe fn extra_data_ref<'a, T>(&'a self) -> &'a T {
+    unsafe fn extra_data_ref<'a, T>(&'a self) -> &'a T {
         unsafe {
             &*core::ptr::with_exposed_provenance(
                 GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
@@ -179,7 +172,7 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub unsafe fn extra_data_mut<'a, T>(&'a mut self) -> &'a mut T {
+    unsafe fn extra_data_mut<'a, T>(&'a mut self) -> &'a mut T {
         unsafe {
             &mut *core::ptr::with_exposed_provenance_mut(
                 GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
@@ -189,7 +182,7 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
+    unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
         let data = unsafe {
             Box::from_raw(core::ptr::with_exposed_provenance_mut(
                 GetWindowLongPtrW(self.0, NativeWindow::APP_POINTER_LONG_PTR_OFFSET)
@@ -201,6 +194,127 @@ impl WindowHandle {
         }
 
         data
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.state().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        &mut self.state_mut().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    fn root_keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
+        self.state().keyboard_focus_state.root_group()
+    }
+
+    #[inline(always)]
+    fn close(&mut self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_CLOSE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    fn maximize(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_MAXIMIZE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    fn minimize(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_MINIMIZE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    fn restore(&self) {
+        if let Err(e) = unsafe {
+            PostMessageW(
+                Some(self.0),
+                WM_SYSCOMMAND,
+                WPARAM(SC_RESTORE as _),
+                LPARAM(0),
+            )
+        } {
+            tracing::error!(reason = %e, "postmessage");
+        }
+    }
+
+    #[inline(always)]
+    fn ui_scale_factor(&self) -> f32 {
+        unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
+    }
+
+    #[inline(always)]
+    fn client_size(&self) -> Size<LogicalUnit> {
+        self.client_size_pixels().to_logical(self.ui_scale_factor())
+    }
+
+    fn client_size_pixels(&self) -> Size<PixelsUnit> {
+        let mut rect = core::mem::MaybeUninit::uninit();
+        if let Err(e) = unsafe { GetClientRect(self.0, rect.as_mut_ptr()) } {
+            tracing::error!(reason = %e, "get_client_rect");
+            return Size::new_pixels(0, 0);
+        }
+        let rect = unsafe { rect.assume_init_ref() };
+        Size::new_pixels(rect.right as _, rect.bottom as _)
+    }
+
+    fn geometry_state_snapshot(&self, _system_link: &SystemLink) -> crate::WindowGeometryState {
+        if unsafe { IsZoomed(self.0) }.as_bool() {
+            let hm = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
+            let mut monitor_index = 0;
+            enumerate_display_monitors(|m, _| {
+                if m == hm {
+                    return EnumerateDisplayMonitorContinuous::Stop;
+                }
+
+                monitor_index += 1;
+                EnumerateDisplayMonitorContinuous::Continue
+            });
+
+            crate::WindowGeometryState::Maximized { monitor_index }
+        } else {
+            crate::WindowGeometryState::Restored {
+                rect: self.screen_rect(),
+            }
+        }
+    }
+}
+impl WindowHandle {
+    #[inline(always)]
+    fn destroy(&mut self) {
+        self.state_mut().destroying = true;
+        if let Err(e) = unsafe { DestroyWindow(self.0) } {
+            tracing::error!(reason = %e, "window.destroy");
+        }
     }
 
     #[inline(always)]
@@ -219,23 +333,6 @@ impl WindowHandle {
                 GetWindowLongPtrW(self.0, WindowEventHandler::LONG_PTR_INDEX).cast_unsigned(),
             )
         }
-    }
-
-    #[inline(always)]
-    pub fn client_size(&self) -> Size<LogicalUnit> {
-        self.pixels_client_size()
-            .to_logical(unsafe { GetDpiForWindow(self.0) as f32 / 96.0 })
-    }
-
-    #[inline(always)]
-    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
-        let mut rect = core::mem::MaybeUninit::uninit();
-        if let Err(e) = unsafe { GetClientRect(self.0, rect.as_mut_ptr()) } {
-            tracing::error!(reason = %e, "get_client_rect");
-            return Size::new_pixels(0, 0);
-        }
-        let rect = unsafe { rect.assume_init_ref() };
-        Size::new_pixels(rect.right as _, rect.bottom as _)
     }
 
     fn query_extended_frame_bounds(&self) -> RECT {
@@ -277,11 +374,6 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub fn ui_scale_factor(&self) -> f32 {
-        unsafe { GetDpiForWindow(self.0) as f32 / 96.0 }
-    }
-
-    #[inline(always)]
     pub fn latest_ui_scale_changes(&self) -> &Mutex<Option<f32>> {
         &self.state().latest_ui_scale_changes
     }
@@ -305,98 +397,6 @@ impl WindowHandle {
     pub const fn needs_corner_cutout_rendering(&self) -> bool {
         // Windowsは常に不要
         false
-    }
-
-    #[inline(always)]
-    pub fn on_click_sys_close_button(&self) {
-        if let Err(e) = unsafe {
-            PostMessageW(
-                Some(self.0),
-                WM_SYSCOMMAND,
-                WPARAM(SC_CLOSE as _),
-                LPARAM(0),
-            )
-        } {
-            tracing::error!(reason = %e, "postmessage");
-        }
-    }
-
-    #[inline(always)]
-    pub fn on_click_sys_minimize_button(&self) {
-        if let Err(e) = unsafe {
-            PostMessageW(
-                Some(self.0),
-                WM_SYSCOMMAND,
-                WPARAM(SC_MINIMIZE as _),
-                LPARAM(0),
-            )
-        } {
-            tracing::error!(reason = %e, "postmessage");
-        }
-    }
-
-    #[inline(always)]
-    pub fn on_click_sys_maximize_button(&self) {
-        if let Err(e) = unsafe {
-            PostMessageW(
-                Some(self.0),
-                WM_SYSCOMMAND,
-                WPARAM(SC_MAXIMIZE as _),
-                LPARAM(0),
-            )
-        } {
-            tracing::error!(reason = %e, "postmessage");
-        }
-    }
-
-    #[inline(always)]
-    pub fn on_click_sys_restore_button(&self) {
-        if let Err(e) = unsafe {
-            PostMessageW(
-                Some(self.0),
-                WM_SYSCOMMAND,
-                WPARAM(SC_RESTORE as _),
-                LPARAM(0),
-            )
-        } {
-            tracing::error!(reason = %e, "postmessage");
-        }
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
-        &self.state().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
-        &mut self.state_mut().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
-        self.state().keyboard_focus_state.root_group()
-    }
-
-    pub fn geometry_state_snapshot(&self, _system_link: &SystemLink) -> crate::WindowGeometryState {
-        if unsafe { IsZoomed(self.0) }.as_bool() {
-            let hm = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
-            let mut monitor_index = 0;
-            enumerate_display_monitors(|m, _| {
-                if m == hm {
-                    return EnumerateDisplayMonitorContinuous::Stop;
-                }
-
-                monitor_index += 1;
-                EnumerateDisplayMonitorContinuous::Continue
-            });
-
-            crate::WindowGeometryState::Maximized { monitor_index }
-        } else {
-            crate::WindowGeometryState::Restored {
-                rect: self.screen_rect(),
-            }
-        }
     }
 }
 impl ShellPointerActions for WindowHandle {

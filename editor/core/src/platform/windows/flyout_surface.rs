@@ -49,7 +49,10 @@ use crate::{
         KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState, ShellPointerActions,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
-    platform::windows::{ApplicationContext, ModifierKeyRecorder},
+    platform::{
+        WindowHandleBase,
+        windows::{ApplicationContext, ModifierKeyRecorder},
+    },
     rendering::{
         NewContextMenuData, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
