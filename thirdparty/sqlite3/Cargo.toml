@@ -1,0 +1,13 @@
+[package]
+name = "peridot-tp-sqlite3"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+bitflags = "2.13"
+tracing = "0.1"
+
+[target.'cfg(windows)'.build-dependencies]
+vswhere.path = "../../platform/windows/vswhere"
+win10-sdk-locator.path = "../../platform/windows/win10-sdk-locator"

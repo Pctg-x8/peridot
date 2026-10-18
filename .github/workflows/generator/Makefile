@@ -1,0 +1,2 @@
+default:
+	stack run -- ../

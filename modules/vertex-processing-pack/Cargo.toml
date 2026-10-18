@@ -1,0 +1,25 @@
+[package]
+name = "peridot-vertex-processing-pack"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2021"
+
+[features]
+default = ["with-loader-impl"]
+with-loader-impl = ["peridot"]
+
+async-rt-async-std = [
+    "peridot-serialization-utils/async-rt-async-std",
+    "dep:async-std",
+]
+
+[lints]
+workspace = true
+
+[dependencies]
+bedrock = { workspace = true }
+peridot = { path = "../../base", optional = true }
+peridot-serialization-utils = { path = "../serialization-utils" }
+async-std = { workspace = true, optional = true }
+futures-util = { workspace = true }
+peridot-native-io = { path = "../native-io" }
