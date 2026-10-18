@@ -38,7 +38,6 @@ members = [
     "editor/core/bindgen",
     "editor/core/profiler",
     "editor/core/profiler-attr",
-    "editor/prof-reader",
 ]
 
 [workspace.dependencies]
