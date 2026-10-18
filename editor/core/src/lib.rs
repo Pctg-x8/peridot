@@ -1367,6 +1367,20 @@ impl Drop for HitTestTreeExclusiveUseHandle<'_> {
     }
 }
 
+pub struct HitTestTreeExclusiveUnuseHandle<'sys> {
+    #[cfg(debug_assertions)]
+    target: *mut CoreLoop<'sys>,
+}
+#[cfg(debug_assertions)]
+impl Drop for HitTestTreeExclusiveUnuseHandle<'_> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        unsafe { &mut *self.target }
+            .exclusive_state_flags
+            .insert(CoreLoopExclusiveStateFlags::HIT_TEST_TREE);
+    }
+}
+
 #[cfg(debug_assertions)]
 bitflags! {
     #[derive(Clone, Copy)]
@@ -1545,6 +1559,25 @@ impl<'sys> CoreLoop<'sys> {
     #[cfg(not(debug_assertions))]
     #[inline(always)]
     fn exclusive_ht_use(self: Pin<&mut Self>) {}
+
+    #[cfg(debug_assertions)]
+    #[inline(always)]
+    pub fn exclusive_ht_unuse_tmp(self: Pin<&mut Self>) -> HitTestTreeExclusiveUnuseHandle<'sys> {
+        assert!(
+            self.exclusive_state_flags
+                .contains(CoreLoopExclusiveStateFlags::HIT_TEST_TREE),
+            "CoreLoop.HitTestTree is not using exclusively"
+        );
+
+        let this = unsafe { self.get_unchecked_mut() };
+        this.exclusive_state_flags
+            .remove(CoreLoopExclusiveStateFlags::HIT_TEST_TREE);
+        HitTestTreeExclusiveUnuseHandle { target: this }
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[inline(always)]
+    pub fn exclusive_ht_unuse_tmp(self: Pin<&mut Self>) {}
 
     #[profiler::instrument("CoreLoop.Initialize")]
     pub fn init(mut self: Pin<&mut Self>) {

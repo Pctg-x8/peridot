@@ -22,7 +22,7 @@ use windows::{
         Devices::HumanInterfaceDevice::KEYBOARD_OVERRUN_MAKE_CODE,
         Foundation::{
             DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
-            HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, S_OK, WPARAM,
+            HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, POINT, POINTL, RECT, S_FALSE, S_OK, WPARAM,
         },
         Graphics::{
             Direct3D::D3D_FEATURE_LEVEL_12_0,
@@ -43,13 +43,15 @@ use windows::{
         System::{
             Com::{
                 DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject,
-                IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, STGMEDIUM, TYMED_HGLOBAL,
+                IDataObject_Impl, IEnumFORMATETC, IEnumFORMATETC_Impl, IEnumSTATDATA, STGMEDIUM,
+                TYMED_HGLOBAL, TYMED_NULL,
             },
             Memory::{GlobalLock, GlobalUnlock},
             Ole::{
-                CF_HDROP, CF_TEXT, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_MOVE, DROPEFFECT_NONE,
-                DoDragDrop, IDropSource, IDropSource_Impl, IDropTarget, IDropTarget_Impl,
-                OleInitialize, OleUninitialize, RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
+                CF_HDROP, CF_PRIVATEFIRST, CF_TEXT, CLIPBOARD_FORMAT, DROPEFFECT, DROPEFFECT_COPY,
+                DROPEFFECT_MOVE, DROPEFFECT_NONE, DoDragDrop, IDropSource, IDropSource_Impl,
+                IDropTarget, IDropTarget_Impl, OleInitialize, OleUninitialize, RegisterDragDrop,
+                ReleaseStgMedium, RevokeDragDrop,
             },
             SystemServices::{
                 MK_CONTROL, MK_LBUTTON, MK_MBUTTON, MK_RBUTTON, MK_SHIFT, MK_XBUTTON1, MK_XBUTTON2,
@@ -80,19 +82,19 @@ use windows::{
             WindowsAndMessaging::{
                 CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GCW_ATOM,
                 GetClassLongPtrW, GetClientRect, GetCursorPos, GetSystemMetrics, GetWindowLongPtrW,
-                HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT,
-                HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-                IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE, IDI_APPLICATION, IsZoomed,
-                LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW, PostQuitMessage,
-                RI_KEY_BREAK, RI_KEY_E0, RI_KEY_E1, SC_CLOSE, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
-                SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME, SM_CYSIZEFRAME, SW_HIDE, SW_SHOW,
-                SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-                SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetCursorPos, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPos, ShowWindow, WA_INACTIVE, WHEEL_DELTA,
-                WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DESTROY,
-                WM_DPICHANGED, WM_INPUT, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE, WM_NCHITTEST,
-                WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
+                GetWindowWord, HCURSOR, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION,
+                HTCLIENT, HTCLOSE, HTLEFT, HTMAXBUTTON, HTMINBUTTON, HTRIGHT, HTTOP, HTTOPLEFT,
+                HTTOPRIGHT, IDC_ARROW, IDC_HAND, IDC_IBEAM, IDC_SIZENS, IDC_SIZEWE,
+                IDI_APPLICATION, IsZoomed, LoadCursorW, LoadIconW, NCCALCSIZE_PARAMS, PostMessageW,
+                PostQuitMessage, RI_KEY_BREAK, RI_KEY_E0, RI_KEY_E1, SC_CLOSE, SC_MAXIMIZE,
+                SC_MINIMIZE, SC_RESTORE, SIZE_MAXIMIZED, SIZE_RESTORED, SM_CXSIZEFRAME,
+                SM_CYSIZEFRAME, SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+                SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetCursor,
+                SetCursorPos, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                WA_INACTIVE, WHEEL_DELTA, WINDOW_LONG_PTR_INDEX, WM_ACTIVATE, WM_CHAR, WM_CLOSE,
+                WM_CREATE, WM_DESTROY, WM_DPICHANGED, WM_INPUT, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCCALCSIZE,
+                WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMOUSELEAVE, WM_NCMOUSEMOVE,
                 WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS,
                 WM_SIZE, WM_SYSCOMMAND, WNDCLASS_STYLES, WNDCLASSEXW, WS_EX_APPWINDOW,
                 WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOPMOST,
@@ -127,6 +129,7 @@ use crate::{
         composite::{CompositeRect, CompositeTreeRef},
         text::FontSet,
     },
+    ui::dock::DockingPreviewState,
     uicore::{ViewIdentifier, ViewRenderQueue, ViewRenderer},
     utils::platform::windows::{
         EnumerateDisplayMonitorContinuous, WaitableTimer, current_instance_handle,
@@ -2022,35 +2025,80 @@ impl<'sys> SystemLink<'sys> {
         _pointer: &PointerID,
         offset: Point<LogicalUnit>,
         rect: &Rect<LogicalUnit>,
+        state: DockingPreviewState,
     ) {
-        unsafe {
-            SetCapture(initiator_surface.0);
-        }
+        let mut coreloop = WindowEventHandler::get_for_window(initiator_surface.0).coreloop();
 
         self.app_context
             .drag_preview_popover
             .show(initiator_surface.0, rect);
-        self.app_context.pane_dragging.set(true);
-        /*self.app_context
-            .drag_preview_popover
-            .show(initiator_surface.0, rect);
         let mut effect = core::mem::MaybeUninit::uninit();
+        unsafe { coreloop.as_mut().get_unchecked_mut() }.docking_preview_state = Some(state);
+        let rel = coreloop.as_mut().exclusive_ht_unuse_tmp();
+        let drop_source = IDropSource::from(DockPaneDropSource {
+            app_context: self.app_context,
+            source_rect: Rect::from_lt_size(offset, rect.size()),
+            active_dpi_scale: Cell::new(initiator_surface.ui_scale_factor()),
+            dest_window: Cell::new(initiator_surface.0),
+        });
         unsafe {
             DoDragDrop(
                 &IDataObject::from(DockPaneDataObject {}),
-                &IDropSource::from(DockPaneDropSource {
-                    event_dispatcher: self.event_dispatcher,
-                    app_context: self.app_context,
-                    source_rect: Rect::from_lt_size(offset, rect.size()),
-                    active_dpi_scale: Cell::new(initiator_surface.ui_scale_factor()),
-                }),
+                &drop_source,
                 DROPEFFECT_MOVE,
                 effect.as_mut_ptr(),
             )
             .ok()
             .expect("win32.do_drag_drop");
         }
-        self.app_context.drag_preview_popover.hide();*/
+        unsafe { coreloop.as_mut().get_unchecked_mut() }
+            .running_context_flags
+            .insert(CoreLoopRunningContextFlags::DISABLE_SYNC_VIEW);
+        let dest_window = drop_source
+            .cast_object::<DockPaneDropSource>()
+            .expect("invalid reference")
+            .dest_window
+            .get();
+        if dest_window.is_invalid()
+            || unsafe { GetClassLongPtrW(dest_window, GCW_ATOM) }
+                != self.app_context.wc_set.main as usize
+        {
+            let mut p = [POINT { x: 0, y: 0 }];
+            unsafe {
+                GetCursorPos(&mut p[0]).expect("getcursorpos");
+            }
+            unsafe {
+                MapWindowPoints(None, Some(initiator_surface.0), &mut p);
+            }
+            let [p] = p;
+
+            coreloop.as_mut().confirm_redock(
+                initiator_surface,
+                point_from_win32(p).to_logical(initiator_surface.ui_scale_factor()),
+            );
+        } else {
+            let mut p = [POINT { x: 0, y: 0 }];
+            unsafe {
+                GetCursorPos(&mut p[0]).expect("getcursorpos");
+            }
+            unsafe {
+                MapWindowPoints(None, Some(dest_window), &mut p);
+            }
+            let [p] = p;
+
+            coreloop.as_mut().confirm_redock(
+                WindowHandle(dest_window),
+                point_from_win32(p).to_logical(WindowHandle(dest_window).ui_scale_factor()),
+            );
+        }
+        unsafe { coreloop.as_mut().get_unchecked_mut() }
+            .running_context_flags
+            .remove(CoreLoopRunningContextFlags::DISABLE_SYNC_VIEW);
+        coreloop.as_mut().update_view_all();
+
+        drop(rel);
+        self.app_context.drag_preview_popover.hide();
+        unsafe { coreloop.as_mut().get_unchecked_mut() }.docking_preview_state = None;
     }
 
     pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
@@ -2608,6 +2656,63 @@ impl IDropTarget_Impl for DropTarget_Impl {
     }
 }
 
+const CF_DOCK_PANE: CLIPBOARD_FORMAT = CLIPBOARD_FORMAT(CF_PRIVATEFIRST.0 + 0);
+
+#[implement(IEnumFORMATETC)]
+#[derive(Clone)]
+struct DockPaneDataObjectFormatEtcEnumerator {
+    datadir: u32,
+    ptr: Cell<usize>,
+}
+impl IEnumFORMATETC_Impl for DockPaneDataObjectFormatEtcEnumerator_Impl {
+    fn Clone(&self) -> windows_core::Result<IEnumFORMATETC> {
+        Ok(IEnumFORMATETC::from((&**self).clone()))
+    }
+
+    fn Next(
+        &self,
+        celt: u32,
+        rgelt: *mut FORMATETC,
+        pceltfetched: *mut u32,
+    ) -> windows_core::HRESULT {
+        let returning_count = 1usize.saturating_sub(self.ptr.get()).min(celt as usize);
+        if returning_count == 0 {
+            // no items
+            if let Some(x) = unsafe { pceltfetched.as_mut() } {
+                *x = 0;
+            }
+
+            return S_FALSE;
+        }
+
+        // 今のところ1種類しかないのでそれを返す
+        assert_eq!(returning_count, 1);
+        let sink = unsafe { &mut *rgelt };
+        sink.cfFormat = CF_DOCK_PANE.0 as _;
+        sink.ptd = core::ptr::null_mut();
+        sink.dwAspect = DVASPECT_CONTENT.0;
+        sink.lindex = -1;
+        sink.tymed = TYMED_NULL.0 as _;
+
+        self.ptr.update(|x| x + returning_count);
+        if let Some(x) = unsafe { pceltfetched.as_mut() } {
+            *x = returning_count as _;
+        }
+
+        S_OK
+    }
+
+    fn Reset(&self) -> windows_core::Result<()> {
+        self.ptr.set(0);
+        Ok(())
+    }
+
+    fn Skip(&self, celt: u32) -> windows_core::Result<()> {
+        self.ptr.update(|x| x + celt as usize);
+        Ok(())
+    }
+}
+
 #[implement(IDataObject)]
 struct DockPaneDataObject {}
 impl IDataObject_Impl for DockPaneDataObject_Impl {
@@ -2632,8 +2737,12 @@ impl IDataObject_Impl for DockPaneDataObject_Impl {
     }
 
     fn EnumFormatEtc(&self, dwdirection: u32) -> windows_core::Result<IEnumFORMATETC> {
-        tracing::debug!(dwdirection, "DockPaneDataObject::EnumFormatEtc");
-        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+        Ok(IEnumFORMATETC::from(
+            DockPaneDataObjectFormatEtcEnumerator {
+                datadir: dwdirection,
+                ptr: Cell::new(0),
+            },
+        ))
     }
 
     fn GetCanonicalFormatEtc(
@@ -2680,10 +2789,10 @@ impl IDataObject_Impl for DockPaneDataObject_Impl {
 
 #[implement(IDropSource)]
 struct DockPaneDropSource {
-    event_dispatcher: *mut LogicFiberEventDispatcher,
     app_context: *const ApplicationContext,
     source_rect: Rect<LogicalUnit>,
     active_dpi_scale: Cell<f32>,
+    dest_window: Cell<HWND>,
 }
 impl IDropSource_Impl for DockPaneDropSource_Impl {
     fn GiveFeedback(&self, dweffect: DROPEFFECT) -> HRESULT {
@@ -2697,8 +2806,11 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
         let cursor_pos = unsafe { cursor_pos.assume_init() };
 
         let dest_window = unsafe { WindowFromPoint(cursor_pos) };
-        if !dest_window.is_invalid() {
-            tracing::debug!("give feedback via event");
+        self.dest_window.set(dest_window);
+        if !dest_window.is_invalid()
+            && unsafe { GetClassLongPtrW(dest_window, GCW_ATOM) }
+                == unsafe { &*self.app_context }.wc_set.main as usize
+        {
             // どれかのEditorWindowに入ってる場合はそっちで計算する
             let mut ps = [cursor_pos];
             unsafe {
@@ -2706,6 +2818,7 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
             }
             let [client_pos] = ps;
 
+            tracing::debug!(?client_pos, ?dest_window, "give feedback via event");
             WindowEventHandler::get_for_window(dest_window)
                 .coreloop()
                 .move_redock_preview(
@@ -2713,9 +2826,6 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
                     point_from_win32(client_pos)
                         .to_logical(WindowHandle(dest_window).ui_scale_factor()),
                 );
-            WindowEventHandler::get_for_window(dest_window)
-                .coreloop()
-                .update_view_all();
 
             return S_OK;
         }

@@ -1304,7 +1304,7 @@ pub(self) fn begin_preview<'sys>(
              + DockQueryable
              + ?Sized
          ),
-) -> DockingPreviewState {
+) {
     let Dock::Fill {
         group_view_controller,
         ..
@@ -1340,9 +1340,8 @@ pub(self) fn begin_preview<'sys>(
         &pointer_id,
         state.offset,
         &pane_rect.ref_with_offset(dock_basepoint),
+        state,
     );
-
-    state
 }
 
 /// Previewを移動する

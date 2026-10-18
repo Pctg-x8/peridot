@@ -508,7 +508,7 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             return EventContinueControl::empty();
         }
 
-        let state = super::begin_preview(
+        super::begin_preview(
             self.view_id,
             self.dock.get(),
             self.size.clone(),
@@ -516,7 +516,6 @@ impl HitTestTreeActionHandler for PaneGroupTabEventHandler {
             args.pointer_id,
             context,
         );
-        context.store_docking_preview_state(state);
 
         EventContinueControl::STOP_PROPAGATION
     }
