@@ -8,7 +8,10 @@ use std::{
     },
     path::Path,
     ptr::NonNull,
-    sync::atomic::{AtomicPtr, AtomicUsize},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicPtr, AtomicUsize},
+    },
 };
 
 use crate::generic_unix::{UnixFile, UnixFileUnmapData};
@@ -31,11 +34,12 @@ unsafe extern "C" {
 }
 
 #[repr(C)]
-pub struct BlockBase<F> {
+#[derive(Clone)]
+pub struct BlockBase {
     isa: *mut core::ffi::c_void,
     flags: core::ffi::c_int,
     reserved: core::ffi::c_int,
-    invoke: Option<F>,
+    invoke: Option<extern "C" fn()>,
 }
 
 #[allow(non_camel_case_types)]
@@ -61,16 +65,8 @@ where
 {
     #[repr(C)]
     struct BlockLit<F> {
-        base: BlockBase<
-            extern "C" fn(
-                *mut BlockLit<F>,
-                dispatch_data_t,
-                usize,
-                *const core::ffi::c_void,
-                usize,
-            ) -> bool,
-        >,
-        descriptor: *mut BlockDesc,
+        base: BlockBase,
+        descriptor: *const BlockDesc,
         f: F,
     }
     #[repr(C)]
@@ -105,9 +101,11 @@ where
                     isa: &_NSConcreteStackBlock as *const _ as _,
                     flags: 0,
                     reserved: 0,
-                    invoke: Some(invoke_impl::<F>),
+                    invoke: Some(core::mem::transmute(
+                        invoke_impl::<F> as extern "C" fn(_, _, _, _, _) -> _,
+                    )),
                 },
-                descriptor: block_desc as *const _ as _,
+                descriptor: block_desc,
                 f: applier,
             } as *const _ as _,
         )
@@ -223,18 +221,20 @@ impl DispatchIO {
         cleanup_handler: F,
     ) -> Option<OwnedNativeObjectPtr<Self>>
     where
-        F: FnMut(core::ffi::c_int) + Sync + Send,
+        F: FnMut(core::ffi::c_int) + Sync + Send + 'static,
     {
         #[repr(C)]
         struct BlockLit<F> {
-            base: BlockBase<extern "C" fn(*mut BlockLit<F>, core::ffi::c_int)>,
-            descriptor: *mut BlockDesc,
+            base: BlockBase,
+            descriptor: *mut BlockDesc<F>,
             f: F,
         }
         #[repr(C)]
-        struct BlockDesc {
+        struct BlockDesc<F> {
             reserved: core::ffi::c_long,
             size: core::ffi::c_long,
+            copy: extern "C" fn(*mut BlockLit<F>, *mut BlockLit<F>),
+            dispose: extern "C" fn(*mut BlockLit<F>),
         }
 
         extern "C" fn invoke_impl<F>(lit: *mut BlockLit<F>, error: core::ffi::c_int)
@@ -246,9 +246,20 @@ impl DispatchIO {
             }
         }
 
-        let block_desc: &'static BlockDesc = &BlockDesc {
+        extern "C" fn copy<F>(src: *mut BlockLit<F>, dst: *mut BlockLit<F>) {
+            tracing::debug!("block copy");
+            unimplemented!("block copy");
+        }
+        extern "C" fn dispose<F>(src: *mut BlockLit<F>) {
+            tracing::debug!("block dispose");
+            unimplemented!("block dispose");
+        }
+
+        let block_desc: &'static BlockDesc<F> = &BlockDesc::<F> {
             reserved: 0,
             size: core::mem::size_of::<BlockLit<F>>() as _,
+            copy: copy::<F>,
+            dispose: dispose::<F>,
         };
 
         let p = unsafe {
@@ -261,7 +272,9 @@ impl DispatchIO {
                         isa: &_NSConcreteStackBlock as *const _ as _,
                         flags: 0,
                         reserved: 0,
-                        invoke: Some(invoke_impl::<F>),
+                        invoke: Some(core::mem::transmute(
+                            invoke_impl::<F> as extern "C" fn(_, _),
+                        )),
                     },
                     descriptor: block_desc as *const _ as _,
                     f: cleanup_handler,
@@ -273,19 +286,20 @@ impl DispatchIO {
 
     pub fn read<F>(&self, offset: libc::off_t, length: usize, queue: &DispatchQueue, io_handler: F)
     where
-        F: FnMut(bool, dispatch_data_t, core::ffi::c_int) + Sync + Send,
+        F: FnMut(bool, dispatch_data_t, core::ffi::c_int) + Sync + Send + 'static,
     {
         #[repr(C)]
         struct BlockLit<F> {
-            base:
-                BlockBase<extern "C" fn(*mut BlockLit<F>, bool, dispatch_data_t, core::ffi::c_int)>,
-            descriptor: *mut BlockDesc,
-            f: F,
+            base: BlockBase,
+            descriptor: *mut BlockDesc<F>,
+            f: Arc<Mutex<F>>,
         }
         #[repr(C)]
-        struct BlockDesc {
+        struct BlockDesc<F> {
             reserved: core::ffi::c_long,
             size: core::ffi::c_long,
+            copy: extern "C" fn(*mut BlockLit<F>, *mut BlockLit<F>),
+            dispose: extern "C" fn(*mut BlockLit<F>),
         }
 
         extern "C" fn invoke_impl<F>(
@@ -296,12 +310,28 @@ impl DispatchIO {
         ) where
             F: FnMut(bool, dispatch_data_t, core::ffi::c_int),
         {
-            unsafe { ((*lit).f)(done, data, error) }
+            unsafe { (&mut *(*lit).f.lock().expect("poisoned"))(done, data, error) }
         }
 
-        let block_desc: &'static BlockDesc = &BlockDesc {
+        extern "C" fn copy<F>(dst: *mut BlockLit<F>, src: *mut BlockLit<F>) {
+            let src = unsafe { &*src };
+            unsafe {
+                dst.write(BlockLit::<F> {
+                    base: src.base.clone(),
+                    descriptor: src.descriptor,
+                    f: src.f.clone(),
+                });
+            }
+        }
+        extern "C" fn dispose<F>(src: *mut BlockLit<F>) {
+            unimplemented!("block dispose");
+        }
+
+        let block_desc: &'static BlockDesc<F> = &BlockDesc::<F> {
             reserved: 0,
             size: core::mem::size_of::<BlockLit<F>>() as _,
+            copy: copy::<F>,
+            dispose: dispose::<F>,
         };
 
         unsafe {
@@ -313,12 +343,14 @@ impl DispatchIO {
                 &BlockLit {
                     base: BlockBase {
                         isa: &_NSConcreteStackBlock as *const _ as _,
-                        flags: 0,
+                        flags: BLOCK_HAS_COPY_DISPOSE,
                         reserved: 0,
-                        invoke: Some(invoke_impl::<F>),
+                        invoke: Some(core::mem::transmute(
+                            invoke_impl::<F> as extern "C" fn(_, _, _, _),
+                        )),
                     },
                     descriptor: block_desc as *const _ as _,
-                    f: io_handler,
+                    f: Arc::new(Mutex::new(io_handler)),
                 } as *const _ as _,
             )
         }
@@ -394,8 +426,11 @@ impl NativeFileAsyncReader {
             DISPATCH_IO_RANDOM,
             &f,
             DispatchQueue::main().expect("no main dispatch queue"),
-            |_error| {
-                let _ = unsafe { libc::close(f.as_raw_fd()) };
+            {
+                let fd = f.as_raw_fd();
+                move |_error| {
+                    let _ = unsafe { libc::close(fd) };
+                }
             },
         )
         .ok_or(std::io::Error::other("dispatch_io_create failed"))?;
