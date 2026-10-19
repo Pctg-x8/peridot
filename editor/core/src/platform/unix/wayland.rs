@@ -18,6 +18,7 @@ use crate::{
     },
     platform::WindowHandleBase,
     rendering::RenderMessage,
+    ui::dock::DockingPreviewState,
     uicore::MountTarget,
     utils::platform::unix::{MappedMemory, TemporalSharedMemory, ftruncate},
 };
@@ -413,8 +414,8 @@ impl crate::SystemLink<'_> {
         &self,
         initiator: toplevel::Handle,
         pointer: &PointerID,
-        offset: Point<LogicalUnit>,
         rect: &Rect<LogicalUnit>,
+        state: DockingPreviewState,
     ) {
         tracing::debug!("begin_pane_drag");
 
@@ -435,7 +436,7 @@ impl crate::SystemLink<'_> {
 
         global_msg.drag_preview_popover.setup_dnd_icon_surface(
             &unsafe { &*self.display_server.context }.global_interfaces,
-            offset,
+            state.offset,
             &rect.size(),
         );
         let pointer_enter_state = global_msg

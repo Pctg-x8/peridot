@@ -1338,7 +1338,6 @@ pub(self) fn begin_preview<'sys>(
     env.system_link().begin_pane_drag(
         initiator,
         &pointer_id,
-        state.offset,
         &pane_rect.ref_with_offset(dock_basepoint),
         state,
     );

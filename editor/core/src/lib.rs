@@ -4296,7 +4296,7 @@ pub const DRAG_PREVIEW_POPOVER_BG_COLOR: Color32 = Color32 {
 
 #[cfg(not(windows))]
 pub struct SystemLink<'sys> {
-    gfx: *const Graphics<'sys>,
+    gfx: &'sys Graphics,
     rt_sender: RenderMessageSender,
     font_set: FontSet,
     event_dispatcher: *mut LogicFiberEventDispatcher,

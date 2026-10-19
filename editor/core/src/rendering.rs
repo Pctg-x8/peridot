@@ -1211,9 +1211,9 @@ struct ContextMenuRenderer<'d> {
     backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics>,
     swapchain_invalidated: bool,
     #[cfg(not(windows))]
-    swapchain: VulkanSwapchain<'d, 'd>,
+    swapchain: VulkanSwapchain<'d>,
     #[cfg(not(windows))]
-    surface: VulkanSurface<'d, 'd>,
+    surface: VulkanSurface<'d>,
     #[cfg(windows)]
     swapchain: windows::Win32::Graphics::Dxgi::IDXGISwapChain3,
     #[cfg(windows)]
