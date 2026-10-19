@@ -984,7 +984,7 @@ impl<'main> RenderThread<'main> {
                 // preview may still updating on main thread...
                 if let Ok(mut st) = self.preview_state.try_lock() {
                     profiler::scope!(UPDATE_PREVIEW);
-                    preview_renderer.update(self.gfx, &mut st);
+                    crate::rendering::preview::update(self.gfx, &mut preview_renderer, &mut st);
                     preview_renderer.validate(self.gfx, &preview_rt_buffer, &mut st);
                 }
             }

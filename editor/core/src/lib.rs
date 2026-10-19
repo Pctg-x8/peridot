@@ -142,42 +142,10 @@ pub fn launch() {
         "wayland presentation not supported on graphics queue"
     );
 
-    let mut main_camera = peridot_math::Camera {
-        position: peridot_math::Vector3(1.0, 1.0, -5.0),
-        rotation: peridot_math::Quaternion::ONE,
-        projection: Some(peridot_math::ProjectionMethod::Physical {
-            focal_length: 30.0,
-            sensor_size: peridot_math::Vector2(35.0, 24.0),
-            screen_fitting: peridot_math::PhysicalScreenFitting::Shrink,
-            lens_shift: peridot_math::Vector2(0.0, 0.0),
-        }),
-        depth_range: 0.1..1000.0,
-    };
-    main_camera.look_at(
-        peridot_math::Vector3::ZERO,
-        Some(peridot_math::Vector3::up()),
-    );
-
     let renderer_sync = Mutex::new(RendererSync {
         composite_buffer: CompositeTreeSyncBuffer::new(),
     });
-    let preview_state = Mutex::new(rendering::preview::CommittedState {
-        viewport_size: Size::new_logical(640.0, 480.0),
-        main_camera,
-        main_camera_dirtified: false,
-        pushed_meshes: Vec::new(),
-        dirty_meshes: HashMap::new(),
-        removed_meshes: HashSet::new(),
-        pushed_render_data: Vec::new(),
-        dirty_render_data: HashMap::new(),
-        removed_render_data: HashSet::new(),
-        highlight_render_index: None,
-        handle_shape: None,
-        handle_pointing: None,
-        handle_to_world_transform: peridot_math::Matrix4::ONE,
-        handle_data_dirtified: false,
-    });
-
+    let preview_state = rendering::preview::initialize();
     let global_time_base = std::time::Instant::now();
 
     #[cfg(feature = "wayland")]
@@ -218,11 +186,9 @@ pub fn launch() {
         utils::platform::windows::WaitableTimer::new(false).expect("memory_sample_timer.create");
     #[cfg(windows)]
     #[cfg(feature = "enable-profiling")]
-    {
-        memory_sample_timer
-            .set_interval_relative(50)
-            .expect("memory_sample_timer.set_interval_relative");
-    }
+    memory_sample_timer
+        .set_interval_relative(50)
+        .expect("memory_sample_timer.set_interval_relative");
 
     #[cfg(windows)]
     let pointer_hovering_timer =

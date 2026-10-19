@@ -12,7 +12,7 @@ wayland = ["dep:peridot-tp-wayland", "bedrock/VK_KHR_wayland_surface"]
 freetype = ["dep:peridot-tp-freetype"]
 fontconfig = ["dep:peridot-tp-fontconfig"]
 harfbuzz = ["dep:peridot-tp-harfbuzz"]
-enable-profiling = ["profiler/active", "windows/Win32_System_ProcessStatus", "windows/Win32_System_Threading"]
+enable-profiling = ["profiler/active", "windows/Win32_System_ProcessStatus"]
 
 [dependencies]
 profiler.path = "./profiler"

@@ -3,13 +3,17 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     rc::Rc,
+    sync::Mutex,
 };
 
 use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, Device, DeviceMemoryMut, ImageChild,
     MemoryBound, RenderPass, ShaderModule, VkHandle,
 };
-use peridot_math::{Camera, Matrix4, Matrix4F32, One};
+use peridot_math::{
+    Camera, Matrix4, Matrix4F32, One, PhysicalScreenFitting, ProjectionMethod, Quaternion, Vector2,
+    Vector3, Zero,
+};
 use shared::{
     LogicalUnit, PixelsUnit, SafeF32, Size, find_lowest_bit_pos_from_u16, lowest_bit_pos_u16,
     most_top_bit_pos_u64, range_from_len_u64, rup2, rup2_u64,
@@ -32,6 +36,298 @@ use crate::{
 };
 
 pub mod handle;
+
+pub fn initialize() -> Mutex<CommittedState> {
+    let mut main_camera = Camera {
+        position: Vector3(1.0, 1.0, -5.0),
+        rotation: Quaternion::ONE,
+        projection: Some(ProjectionMethod::Physical {
+            focal_length: 30.0,
+            sensor_size: Vector2(35.0, 24.0),
+            screen_fitting: PhysicalScreenFitting::Shrink,
+            lens_shift: Vector2(0.0, 0.0),
+        }),
+        depth_range: 0.1..1000.0,
+    };
+    main_camera.look_at(Vector3::ZERO, Some(Vector3::up()));
+
+    Mutex::new(CommittedState {
+        viewport_size: Size::new_logical(640.0, 480.0),
+        main_camera,
+        main_camera_dirtified: false,
+        pushed_meshes: Vec::new(),
+        dirty_meshes: HashMap::new(),
+        removed_meshes: HashSet::new(),
+        pushed_render_data: Vec::new(),
+        dirty_render_data: HashMap::new(),
+        removed_render_data: HashSet::new(),
+        highlight_render_index: None,
+        handle_shape: None,
+        handle_pointing: None,
+        handle_to_world_transform: peridot_math::Matrix4::ONE,
+        handle_data_dirtified: false,
+    })
+}
+
+#[profiler::instrument("PreviewRenderer.Update")]
+pub fn update(device: &Graphics, renderer: &mut Renderer, committed_state: &mut CommittedState) {
+    renderer.scratch_staging.reset();
+
+    sync_meshes(device, renderer, committed_state);
+    sync_render_data(device, renderer, committed_state);
+
+    if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
+        renderer.handle_shape = committed_state.handle_shape;
+        renderer.handle_pointing = committed_state.handle_pointing;
+        let handle_data_update_offset = renderer.scratch_staging.reserve(size_of::<Matrix4F32>());
+        unsafe {
+            renderer
+                .scratch_staging
+                .mapped_ptr
+                .byte_add(handle_data_update_offset)
+                .cast::<Matrix4F32>()
+                .write(
+                    committed_state
+                        .handle_to_world_transform
+                        .clone()
+                        .transpose(),
+                );
+        }
+        renderer.handle_data_update_offset = Some(handle_data_update_offset);
+        renderer.needs_invalidate_render = true;
+    }
+
+    renderer.highlight_render_index = committed_state.highlight_render_index;
+}
+
+#[profiler::instrument("PreviewRenderer.Update.SyncMeshes")]
+fn sync_meshes(gfx: &Graphics, renderer: &mut Renderer, committed_state: &mut CommittedState) {
+    for m in committed_state.pushed_meshes.drain(..) {
+        let vbuf = renderer
+            .dynamic_buffer
+            .alloc(gfx, m.vertices.len() as _, |_, _| {});
+        let ibuf = renderer
+            .dynamic_buffer
+            .alloc(gfx, m.indices.len() as _, |_, _| {});
+
+        let vertex_update = renderer.scratch_staging.reserve(m.vertices.len());
+        let index_update = renderer.scratch_staging.reserve(m.indices.len());
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                m.vertices.as_ptr(),
+                renderer
+                    .scratch_staging
+                    .mapped_ptr
+                    .byte_add(vertex_update)
+                    .cast(),
+                m.vertices.len(),
+            );
+            core::ptr::copy_nonoverlapping(
+                m.indices.as_ptr(),
+                renderer
+                    .scratch_staging
+                    .mapped_ptr
+                    .byte_add(index_update)
+                    .cast(),
+                m.indices.len(),
+            );
+        }
+        renderer.user_data_update_pending = true;
+
+        renderer.user_meshes.push(MeshData {
+            vertex_offset: vbuf,
+            index_offset: ibuf,
+            vertex_size: m.vertices.len() as _,
+            index_size: m.indices.len() as _,
+            vertex_update_pending: Some(vertex_update),
+            index_update_pending: Some(index_update),
+            index_type: m.index_type,
+            sub_mesh_ranges: m.sub_mesh_ranges.as_ref().to_owned(),
+        });
+    }
+    for (id, m) in committed_state.dirty_meshes.drain() {
+        let existing = &mut renderer.user_meshes[id];
+        if existing.vertex_size != m.vertices.len() as _ {
+            // needs realloc
+            unsafe {
+                renderer.dynamic_buffer.free_ref(&existing.vertex_offset);
+            }
+            existing.vertex_offset =
+                renderer
+                    .dynamic_buffer
+                    .alloc(gfx, m.vertices.len() as _, |_, _| {});
+            existing.vertex_size = m.vertices.len() as _;
+        }
+        if existing.index_size != m.indices.len() as _ {
+            // needs realloc
+            unsafe {
+                renderer.dynamic_buffer.free_ref(&existing.index_offset);
+            }
+            existing.index_offset =
+                renderer
+                    .dynamic_buffer
+                    .alloc(gfx, m.indices.len() as _, |_, _| {});
+            existing.index_size = m.indices.len() as _;
+        }
+
+        let vertex_update = renderer.scratch_staging.reserve(m.vertices.len());
+        let index_update = renderer.scratch_staging.reserve(m.indices.len());
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                m.vertices.as_ptr(),
+                renderer
+                    .scratch_staging
+                    .mapped_ptr
+                    .byte_add(vertex_update)
+                    .cast(),
+                m.vertices.len(),
+            );
+            core::ptr::copy_nonoverlapping(
+                m.indices.as_ptr(),
+                renderer
+                    .scratch_staging
+                    .mapped_ptr
+                    .byte_add(index_update)
+                    .cast(),
+                m.indices.len(),
+            );
+        }
+        renderer.user_data_update_pending = true;
+
+        existing.vertex_update_pending = Some(vertex_update);
+        existing.index_update_pending = Some(index_update);
+        existing.index_type = m.index_type;
+        existing.sub_mesh_ranges = m.sub_mesh_ranges.as_ref().to_owned();
+    }
+}
+
+#[profiler::instrument("PreviewRenderer.Update.SyncRenderData")]
+fn sync_render_data(gfx: &Graphics, renderer: &mut Renderer, committed_state: &mut CommittedState) {
+    for r in committed_state.pushed_render_data.drain(..) {
+        let object_uniform_start = renderer.dynamic_ubuf.alloc(
+            gfx,
+            size_of::<Matrix4F32>() as _,
+            |new_buffer_index, buffer| {
+                renderer
+                    .dynamic_ubuf_object_descriptor_set_index_by_buffer_handle
+                    .insert(buffer.native_ptr(), new_buffer_index);
+
+                // setup descriptor set for newly created pool
+                if renderer.dynamic_ubuf_object_descriptor_sets.len() > new_buffer_index {
+                    // without extend
+                    gfx.update_descriptor_sets(
+                        &[
+                            renderer.dynamic_ubuf_object_descriptor_sets[new_buffer_index]
+                                .binding_at(0)
+                                .write(br::DescriptorContents::uniform_buffer_dynamic(
+                                    buffer,
+                                    0..size_of::<Matrix4F32>() as _,
+                                )),
+                        ],
+                        &[],
+                    );
+                    return;
+                }
+
+                // with extending
+                let mut new_pool = br::DescriptorPoolObject::new(
+                    gfx,
+                    &br::DescriptorPoolCreateInfo::new(
+                        (renderer.dynamic_ubuf_object_descriptor_sets.len() * 2) as _,
+                        &[br::DescriptorType::UniformBufferDynamic.make_size(
+                            (renderer.dynamic_ubuf_object_descriptor_sets.len() * 2) as _,
+                        )],
+                    ),
+                )
+                .expect("preview.dynamic_ubuf_object_descriptor_pool.recreate");
+                let new_sets = new_pool
+                    .alloc(&vec![
+                        unsafe {
+                            br::VkHandleRef::dangling(renderer.object_descriptor_set_layout)
+                        };
+                        renderer.dynamic_ubuf_object_descriptor_sets.len() * 2
+                    ])
+                    .expect("preview.dynamic_ubuf_objet_descriptors.realloc");
+                gfx.update_descriptor_sets(
+                    &[new_sets[new_buffer_index].binding_at(0).write(
+                        br::DescriptorContents::uniform_buffer_dynamic(
+                            buffer,
+                            0..size_of::<Matrix4F32>() as _,
+                        ),
+                    )],
+                    &renderer
+                        .dynamic_ubuf_object_descriptor_sets
+                        .iter()
+                        .zip(new_sets.iter())
+                        .map(|(src, dst)| src.binding_at(0).copy(1, dst.binding_at(0)))
+                        .collect::<Vec<_>>(),
+                );
+                let old_pool = core::mem::replace(
+                    &mut renderer.dynamic_ubuf_object_descriptor_pool,
+                    new_pool.unmanage().0,
+                );
+                renderer.dynamic_ubuf_object_descriptor_sets = new_sets;
+                drop(unsafe { br::DescriptorPoolObject::manage(old_pool, gfx) });
+            },
+        );
+
+        let object_ubuf = renderer.scratch_staging.reserve(size_of::<Matrix4F32>());
+        unsafe {
+            renderer
+                .scratch_staging
+                .mapped_ptr
+                .byte_add(object_ubuf)
+                .cast::<Matrix4F32>()
+                .write(r.object_to_world.transpose());
+        }
+        renderer.user_data_update_pending = true;
+
+        renderer.user_renders.push(RenderData::Active {
+            object_uniform_start,
+            object_uniform_update_pending: Some(object_ubuf),
+            mesh_id: r.mesh_id,
+        });
+        renderer.needs_invalidate_render = true;
+    }
+    for r in committed_state.removed_render_data.drain() {
+        let RenderData::Active {
+            object_uniform_start,
+            ..
+        } = core::mem::replace(&mut renderer.user_renders[r], RenderData::Inactive)
+        else {
+            // already inactive
+            continue;
+        };
+
+        renderer.dynamic_ubuf.free(object_uniform_start);
+        renderer.needs_invalidate_render = true;
+    }
+    for (rid, d) in committed_state.dirty_render_data.drain() {
+        let RenderData::Active {
+            object_uniform_update_pending,
+            mesh_id,
+            ..
+        } = &mut renderer.user_renders[rid]
+        else {
+            continue;
+        };
+
+        let object_ubuf = renderer.scratch_staging.reserve(size_of::<Matrix4F32>());
+        unsafe {
+            renderer
+                .scratch_staging
+                .mapped_ptr
+                .byte_add(object_ubuf)
+                .cast::<Matrix4F32>()
+                .write(d.object_to_world.transpose());
+        }
+        renderer.user_data_update_pending = true;
+
+        *object_uniform_update_pending = Some(object_ubuf);
+        *mesh_id = d.mesh_id;
+        renderer.needs_invalidate_render = true;
+    }
+}
 
 pub struct PreviewRenderTargetBuffer {
     memory: br::vk::VkDeviceMemory,
@@ -2834,244 +3130,6 @@ impl Renderer {
             needs_invalidate_render: false,
             valid: false,
         }
-    }
-
-    pub fn update(&mut self, device: &Graphics, committed_state: &mut CommittedState) {
-        self.scratch_staging.reset();
-
-        for m in committed_state.pushed_meshes.drain(..) {
-            let vbuf = self
-                .dynamic_buffer
-                .alloc(device, m.vertices.len() as _, |_, _| {});
-            let ibuf = self
-                .dynamic_buffer
-                .alloc(device, m.indices.len() as _, |_, _| {});
-
-            let vertex_update = self.scratch_staging.reserve(m.vertices.len());
-            let index_update = self.scratch_staging.reserve(m.indices.len());
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    m.vertices.as_ptr(),
-                    self.scratch_staging
-                        .mapped_ptr
-                        .byte_add(vertex_update)
-                        .cast(),
-                    m.vertices.len(),
-                );
-                core::ptr::copy_nonoverlapping(
-                    m.indices.as_ptr(),
-                    self.scratch_staging
-                        .mapped_ptr
-                        .byte_add(index_update)
-                        .cast(),
-                    m.indices.len(),
-                );
-            }
-            self.user_data_update_pending = true;
-
-            self.user_meshes.push(MeshData {
-                vertex_offset: vbuf,
-                index_offset: ibuf,
-                vertex_size: m.vertices.len() as _,
-                index_size: m.indices.len() as _,
-                vertex_update_pending: Some(vertex_update),
-                index_update_pending: Some(index_update),
-                index_type: m.index_type,
-                sub_mesh_ranges: m.sub_mesh_ranges.as_ref().to_owned(),
-            });
-        }
-        for (id, m) in committed_state.dirty_meshes.drain() {
-            let existing = &mut self.user_meshes[id];
-            if existing.vertex_size != m.vertices.len() as _ {
-                // needs realloc
-                unsafe {
-                    self.dynamic_buffer.free_ref(&existing.vertex_offset);
-                }
-                existing.vertex_offset =
-                    self.dynamic_buffer
-                        .alloc(device, m.vertices.len() as _, |_, _| {});
-                existing.vertex_size = m.vertices.len() as _;
-            }
-            if existing.index_size != m.indices.len() as _ {
-                // needs realloc
-                unsafe {
-                    self.dynamic_buffer.free_ref(&existing.index_offset);
-                }
-                existing.index_offset =
-                    self.dynamic_buffer
-                        .alloc(device, m.indices.len() as _, |_, _| {});
-                existing.index_size = m.indices.len() as _;
-            }
-
-            let vertex_update = self.scratch_staging.reserve(m.vertices.len());
-            let index_update = self.scratch_staging.reserve(m.indices.len());
-            unsafe {
-                core::ptr::copy_nonoverlapping(
-                    m.vertices.as_ptr(),
-                    self.scratch_staging
-                        .mapped_ptr
-                        .byte_add(vertex_update)
-                        .cast(),
-                    m.vertices.len(),
-                );
-                core::ptr::copy_nonoverlapping(
-                    m.indices.as_ptr(),
-                    self.scratch_staging
-                        .mapped_ptr
-                        .byte_add(index_update)
-                        .cast(),
-                    m.indices.len(),
-                );
-            }
-            self.user_data_update_pending = true;
-
-            existing.vertex_update_pending = Some(vertex_update);
-            existing.index_update_pending = Some(index_update);
-            existing.index_type = m.index_type;
-            existing.sub_mesh_ranges = m.sub_mesh_ranges.as_ref().to_owned();
-        }
-
-        for r in committed_state.pushed_render_data.drain(..) {
-            let object_uniform_start = self.dynamic_ubuf.alloc(
-                device,
-                size_of::<Matrix4F32>() as _,
-                |new_buffer_index, buffer| {
-                    self.dynamic_ubuf_object_descriptor_set_index_by_buffer_handle
-                        .insert(buffer.native_ptr(), new_buffer_index);
-
-                    // setup descriptor set for newly created pool
-                    if self.dynamic_ubuf_object_descriptor_sets.len() > new_buffer_index {
-                        // without extend
-                        device.update_descriptor_sets(
-                            &[self.dynamic_ubuf_object_descriptor_sets[new_buffer_index]
-                                .binding_at(0)
-                                .write(br::DescriptorContents::uniform_buffer_dynamic(
-                                    buffer,
-                                    0..size_of::<Matrix4F32>() as _,
-                                ))],
-                            &[],
-                        );
-                        return;
-                    }
-
-                    // with extending
-                    let mut new_pool = br::DescriptorPoolObject::new(
-                        device,
-                        &br::DescriptorPoolCreateInfo::new(
-                            (self.dynamic_ubuf_object_descriptor_sets.len() * 2) as _,
-                            &[br::DescriptorType::UniformBufferDynamic.make_size(
-                                (self.dynamic_ubuf_object_descriptor_sets.len() * 2) as _,
-                            )],
-                        ),
-                    )
-                    .expect("preview.dynamic_ubuf_object_descriptor_pool.recreate");
-                    let new_sets = new_pool
-                        .alloc(&vec![
-                            unsafe {
-                                br::VkHandleRef::dangling(self.object_descriptor_set_layout)
-                            };
-                            self.dynamic_ubuf_object_descriptor_sets.len() * 2
-                        ])
-                        .expect("preview.dynamic_ubuf_objet_descriptors.realloc");
-                    device.update_descriptor_sets(
-                        &[new_sets[new_buffer_index].binding_at(0).write(
-                            br::DescriptorContents::uniform_buffer_dynamic(
-                                buffer,
-                                0..size_of::<Matrix4F32>() as _,
-                            ),
-                        )],
-                        &self
-                            .dynamic_ubuf_object_descriptor_sets
-                            .iter()
-                            .zip(new_sets.iter())
-                            .map(|(src, dst)| src.binding_at(0).copy(1, dst.binding_at(0)))
-                            .collect::<Vec<_>>(),
-                    );
-                    let old_pool = core::mem::replace(
-                        &mut self.dynamic_ubuf_object_descriptor_pool,
-                        new_pool.unmanage().0,
-                    );
-                    self.dynamic_ubuf_object_descriptor_sets = new_sets;
-                    drop(unsafe { br::DescriptorPoolObject::manage(old_pool, device) });
-                },
-            );
-
-            let object_ubuf = self.scratch_staging.reserve(size_of::<Matrix4F32>());
-            unsafe {
-                self.scratch_staging
-                    .mapped_ptr
-                    .byte_add(object_ubuf)
-                    .cast::<Matrix4F32>()
-                    .write(r.object_to_world.transpose());
-            }
-            self.user_data_update_pending = true;
-
-            self.user_renders.push(RenderData::Active {
-                object_uniform_start,
-                object_uniform_update_pending: Some(object_ubuf),
-                mesh_id: r.mesh_id,
-            });
-            self.needs_invalidate_render = true;
-        }
-        for r in committed_state.removed_render_data.drain() {
-            let RenderData::Active {
-                object_uniform_start,
-                ..
-            } = core::mem::replace(&mut self.user_renders[r], RenderData::Inactive)
-            else {
-                // already inactive
-                continue;
-            };
-
-            self.dynamic_ubuf.free(object_uniform_start);
-            self.needs_invalidate_render = true;
-        }
-        for (rid, d) in committed_state.dirty_render_data.drain() {
-            let RenderData::Active {
-                object_uniform_update_pending,
-                mesh_id,
-                ..
-            } = &mut self.user_renders[rid]
-            else {
-                continue;
-            };
-
-            let object_ubuf = self.scratch_staging.reserve(size_of::<Matrix4F32>());
-            unsafe {
-                self.scratch_staging
-                    .mapped_ptr
-                    .byte_add(object_ubuf)
-                    .cast::<Matrix4F32>()
-                    .write(d.object_to_world.transpose());
-            }
-            self.user_data_update_pending = true;
-
-            *object_uniform_update_pending = Some(object_ubuf);
-            *mesh_id = d.mesh_id;
-            self.needs_invalidate_render = true;
-        }
-
-        if core::mem::replace(&mut committed_state.handle_data_dirtified, false) {
-            self.handle_shape = committed_state.handle_shape;
-            self.handle_pointing = committed_state.handle_pointing;
-            let handle_data_update_offset = self.scratch_staging.reserve(size_of::<Matrix4F32>());
-            unsafe {
-                self.scratch_staging
-                    .mapped_ptr
-                    .byte_add(handle_data_update_offset)
-                    .cast::<Matrix4F32>()
-                    .write(
-                        committed_state
-                            .handle_to_world_transform
-                            .clone()
-                            .transpose(),
-                    );
-            }
-            self.handle_data_update_offset = Some(handle_data_update_offset);
-            self.needs_invalidate_render = true;
-        }
-
-        self.highlight_render_index = committed_state.highlight_render_index;
     }
 
     pub fn validate(
