@@ -8,7 +8,6 @@ use linux_epoll::{Epoll, EpollEventBits};
 #[cfg(feature = "wayland")]
 use linux_eventfd::{EventFD, EventFDFlags};
 use model::{Application, ApplicationMutation};
-use peridot_math::{One, Zero};
 #[cfg(target_os = "linux")]
 use peridot_tp_dbus as dbus;
 use shared::{Color32, LogicalUnit, NonDropAnyTypeQueue, Point, Rect, Size};
@@ -19,7 +18,7 @@ use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     path::{Path, PathBuf},
     rc::Rc,
     sync::Mutex,
@@ -468,71 +467,32 @@ pub fn launch() {
             memory_sample_timer.as_handle(),
         ];
         #[cfg(windows)]
-        let mut msg = core::mem::MaybeUninit::uninit();
-        #[cfg(windows)]
         'app: loop {
-            let r = unsafe {
-                windows::Win32::UI::WindowsAndMessaging::MsgWaitForMultipleObjectsEx(
-                    Some(&handles),
-                    windows::Win32::System::Threading::INFINITE,
-                    windows::Win32::UI::WindowsAndMessaging::QS_ALLEVENTS,
-                    windows::Win32::UI::WindowsAndMessaging::MWMO_INPUTAVAILABLE,
-                )
-            };
-            if r == windows::Win32::Foundation::WAIT_FAILED {
-                panic!(
-                    "unrecoverable MsgWaitForMultipleObjectsEx error: {}",
-                    std::io::Error::last_os_error()
-                );
-            }
-
-            if let Some(hindex) = r.0.checked_sub(windows::Win32::Foundation::WAIT_OBJECT_0.0)
-                && let Some(&handle) = handles.get(hindex as usize)
-            {
-                // handle signaled
-                if handle == sync_event_bus.event_notify.as_handle() {
-                    sync_event_bus.redispatch(coreloop.as_mut());
-                    continue;
-                }
-                if handle == pointer_hovering_timer.as_handle() {
-                    coreloop.as_mut().handle_pointer_hover_timeout();
-                    continue;
-                }
-                if handle == delayed_action_timer.as_handle() {
-                    coreloop.as_mut().perform_menu_delayed_action();
-                    continue;
-                }
-                #[cfg(feature = "enable-profiling")]
-                if handle == memory_sample_timer.as_handle() {
-                    profiler::profiler().emit_memory_stats();
-                    continue;
-                }
-            }
-            if r.0 == windows::Win32::Foundation::WAIT_OBJECT_0.0 + handles.len() as u32 {
-                while unsafe {
-                    windows::Win32::UI::WindowsAndMessaging::PeekMessageW(
-                        msg.as_mut_ptr(),
-                        None,
-                        0,
-                        0,
-                        windows::Win32::UI::WindowsAndMessaging::PM_REMOVE,
-                    )
-                    .as_bool()
-                } {
-                    let msg = unsafe { msg.assume_init_ref() };
-                    if msg.message == windows::Win32::UI::WindowsAndMessaging::WM_QUIT {
-                        break 'app;
+            match platform::windows::pump_messages(&handles) {
+                Err(e) => panic!("unrecoverable MsgWaitForMultipleObjectsEx error: {e:?}"),
+                Ok(platform::windows::Message::Quit) => break 'app,
+                Ok(platform::windows::Message::Handle(hindex)) => {
+                    // handle signaled
+                    let handle = handles[hindex];
+                    if handle == sync_event_bus.event_notify.as_handle() {
+                        sync_event_bus.redispatch(coreloop.as_mut());
+                        continue;
                     }
-
-                    unsafe {
-                        let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(msg);
-                        windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(msg);
+                    if handle == pointer_hovering_timer.as_handle() {
+                        coreloop.as_mut().handle_pointer_hover_timeout();
+                        continue;
+                    }
+                    if handle == delayed_action_timer.as_handle() {
+                        coreloop.as_mut().perform_menu_delayed_action();
+                        continue;
+                    }
+                    #[cfg(feature = "enable-profiling")]
+                    if handle == memory_sample_timer.as_handle() {
+                        profiler::profiler().emit_memory_stats();
+                        continue;
                     }
                 }
-                continue;
             }
-
-            tracing::warn!(?r, "unhandled mwmo result");
         }
 
         #[cfg(target_os = "macos")]
@@ -3212,8 +3172,6 @@ impl<'sys> CoreLoop<'sys> {
         mut destination_window: WindowHandle,
         client_pos_in_dest: Point<LogicalUnit>,
     ) {
-        let _exclusive_ht_use = self.as_mut().exclusive_ht_use();
-
         let this = unsafe { self.as_mut().get_unchecked_mut() };
         if let Some(state) = this.docking_preview_state.take() {
             let dm = &mut unsafe { destination_window.extra_data_mut::<ui::PerWindowData>() }
@@ -3231,6 +3189,8 @@ impl<'sys> CoreLoop<'sys> {
                 state,
                 &mut this.syslink,
             );
+            let exclusive_ht_use = self.as_mut().exclusive_ht_use();
+            let this = unsafe { self.as_mut().get_unchecked_mut() };
             let (diverged_content, undock_result) = dm.redock(
                 source_dock,
                 &mut this.dock_store,
@@ -3254,6 +3214,7 @@ impl<'sys> CoreLoop<'sys> {
                     view_render_queue: &mut this.view_render_queue,
                 },
             );
+            drop(exclusive_ht_use);
 
             match undock_result {
                 ui::dock::UndockResult::Success => {}

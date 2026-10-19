@@ -18,7 +18,8 @@ use windows::{
             },
         },
         UI::WindowsAndMessaging::{
-            FindWindowExW, MB_ICONERROR, MB_OK, MessageBoxA, RegisterClassExW, WNDCLASSEXW,
+            FindWindowExW, GCW_ATOM, GetClassLongW, MB_ICONERROR, MB_OK, MessageBoxA,
+            RegisterClassExW, WNDCLASSEXW,
         },
     },
     core::PCSTR,
@@ -58,6 +59,11 @@ pub unsafe fn register_class(x: &WNDCLASSEXW) -> std::io::Result<u16> {
         r if r == 0 => Err(std::io::Error::last_os_error()),
         r => Ok(r),
     }
+}
+
+#[inline(always)]
+pub unsafe fn window_class_atom(w: HWND) -> u16 {
+    unsafe { GetClassLongW(w, GCW_ATOM) as _ }
 }
 
 #[inline(always)]

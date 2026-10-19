@@ -22,8 +22,8 @@ use windows::{
             Controls::WM_MOUSELEAVE,
             HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
-                ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
-                TrackMouseEvent,
+                ReleaseCapture, SetCapture, TME_HOVER, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT,
+                TRACKMOUSEEVENT_FLAGS, TrackMouseEvent,
             },
             WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos,
@@ -273,6 +273,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
         ht == HTCLOSE || ht == HTMAXBUTTON || ht == HTMINBUTTON
     }
 
+    update_mouse_event_tracking(hwnd, msg);
+
     if msg == WM_MOUSEACTIVATE {
         return LRESULT(MA_NOACTIVATE as _);
     }
@@ -477,16 +479,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     if msg == WM_MOUSEMOVE {
-        unsafe {
-            TrackMouseEvent(&mut TRACKMOUSEEVENT {
-                cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
-                dwFlags: TME_LEAVE,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            })
-            .expect("TrackMouseEvent");
-        }
-
         state_mut(hwnd).pointer_focus = true;
 
         state(hwnd).coreloop().handle_menu_pointer_move(
@@ -505,16 +497,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     if msg == WM_NCMOUSEMOVE {
-        unsafe {
-            TrackMouseEvent(&mut TRACKMOUSEEVENT {
-                cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as _,
-                dwFlags: TME_LEAVE | TME_NONCLIENT,
-                hwndTrack: hwnd,
-                dwHoverTime: 0,
-            })
-            .expect("TrackMouseEvent");
-        }
-
         state_mut(hwnd).pointer_focus = true;
 
         // NonClientイベントはスクリーン座標で来る
@@ -575,6 +557,28 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+}
+
+fn update_mouse_event_tracking(hwnd: HWND, msg: u32) {
+    let mut flags = TRACKMOUSEEVENT_FLAGS(0);
+    if msg == WM_MOUSEMOVE {
+        flags |= TME_LEAVE | TME_HOVER;
+    }
+    if msg == WM_NCMOUSEMOVE {
+        flags |= TME_LEAVE | TME_HOVER | TME_NONCLIENT;
+    }
+
+    if flags.0 != 0 {
+        unsafe {
+            TrackMouseEvent(&mut TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as _,
+                dwFlags: flags,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            })
+            .expect("TrackMouseEvent");
+        }
+    }
 }
 
 const BLUR_EFFECT_SOURCE_PARAM_NAME: &HSTRING = h!("source");
