@@ -34,8 +34,7 @@ pub const MS_STATE_EMPTY: &br::PipelineMultisampleStateCreateInfo =
     &br::PipelineMultisampleStateCreateInfo::new();
 
 /// Graphics Manager
-pub struct Graphics<'fs> {
-    fs: &'fs FileSystem,
+pub struct Graphics {
     native: br::vk::VkDevice,
     adapter: br::vk::VkPhysicalDevice,
     parent: br::InstanceObject,
@@ -45,6 +44,7 @@ pub struct Graphics<'fs> {
     pipeline_cache_path: PathBuf,
     pipeline_cache: br::vk::VkPipelineCache,
     min_uniform_buffer_offset_alignment: u64,
+    resource_base_path: PathBuf,
     fp_cmd_pipeline_barrier2: br::vk::PFN_vkCmdPipelineBarrier2KHR,
     fp_create_render_pass2: br::vk::PFN_vkCreateRenderPass2KHR,
     fp_cmd_begin_render_pass2: br::vk::PFN_vkCmdBeginRenderPass2KHR,
@@ -53,9 +53,9 @@ pub struct Graphics<'fs> {
     #[cfg(windows)]
     fp_get_memory_win32_handle_properties: br::vk::PFN_vkGetMemoryWin32HandlePropertiesKHR,
 }
-unsafe impl Sync for Graphics<'_> {}
-unsafe impl Send for Graphics<'_> {}
-impl Drop for Graphics<'_> {
+unsafe impl Sync for Graphics {}
+unsafe impl Send for Graphics {}
+impl Drop for Graphics {
     fn drop(&mut self) {
         // writeback pipeline cache for next launch
         self.writeback_pipeline_cache();
@@ -70,7 +70,7 @@ impl Drop for Graphics<'_> {
         }
     }
 }
-impl br::VkHandle for Graphics<'_> {
+impl br::VkHandle for Graphics {
     type Handle = br::vk::VkDevice;
 
     #[inline(always)]
@@ -78,16 +78,16 @@ impl br::VkHandle for Graphics<'_> {
         self.native
     }
 }
-impl br::InstanceChild for Graphics<'_> {
+impl br::InstanceChild for Graphics {
     type ConcreteInstance = br::InstanceObject;
 
     fn instance(&self) -> &Self::ConcreteInstance {
         &self.parent
     }
 }
-impl br::Device for Graphics<'_> {}
+impl br::Device for Graphics {}
 #[cfg(windows)]
-impl br::DeviceExternalMemoryWin32Extension for Graphics<'_> {
+impl br::DeviceExternalMemoryWin32Extension for Graphics {
     #[inline(always)]
     fn get_memory_win32_handle_khr_fn(&self) -> br::vk::PFN_vkGetMemoryWin32HandleKHR {
         unimplemented!("not planned to use")
@@ -100,7 +100,7 @@ impl br::DeviceExternalMemoryWin32Extension for Graphics<'_> {
         self.fp_get_memory_win32_handle_properties
     }
 }
-impl br::DeviceCreateRenderPass2Extension for Graphics<'_> {
+impl br::DeviceCreateRenderPass2Extension for Graphics {
     #[inline(always)]
     fn create_render_pass_2_khr_fn(&self) -> br::vk::PFN_vkCreateRenderPass2KHR {
         self.fp_create_render_pass2
@@ -121,8 +121,8 @@ impl br::DeviceCreateRenderPass2Extension for Graphics<'_> {
         unimplemented!("not planned to use")
     }
 }
-impl<'fs> Graphics<'fs> {
-    pub fn init(fs: &'fs FileSystem) -> Self {
+impl Graphics {
+    pub fn init(fs: &FileSystem) -> Self {
         let api_version = match br::instance_version() {
             Ok(v) => {
                 tracing::info!(version = %v, "Vulkan");
@@ -395,7 +395,6 @@ impl<'fs> Graphics<'fs> {
         }.unwrap_or_else(|| br::PipelineCacheObject::new(&vk_device, &br::PipelineCacheCreateInfo::new(&[])).expect("pipeline_cache.new_empty"));
 
         Self {
-            fs,
             fp_create_render_pass2: unsafe {
                 br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
@@ -415,6 +414,7 @@ impl<'fs> Graphics<'fs> {
             fp_get_memory_win32_handle_properties: unsafe {
                 br::load_function_unconstrainted(&br::DeviceResolverImpl(vk_device.native_ptr()))
             },
+            resource_base_path: fs.resources_base_path.clone(),
             min_uniform_buffer_offset_alignment,
             pipeline_cache: pipeline_cache.unmanage().0,
             pipeline_cache_path,
@@ -428,7 +428,7 @@ impl<'fs> Graphics<'fs> {
     }
 
     #[inline(always)]
-    pub const fn primary_adapter_ref<'s>(&'s self) -> VulkanDeviceAdapterRef<'s, 'fs> {
+    pub const fn primary_adapter_ref<'s>(&'s self) -> VulkanDeviceAdapterRef<'s> {
         VulkanDeviceAdapterRef(self.adapter, self)
     }
 
@@ -466,7 +466,7 @@ impl<'fs> Graphics<'fs> {
 
     #[tracing::instrument(skip(self), fields(path = ?path.as_ref(), resolved_path))]
     pub fn require_shader(&self, path: impl AsRef<Path>) -> br::ShaderModuleObject<&Self> {
-        let resolved_path = self.fs.resolve_resource_path(&path);
+        let resolved_path = self.resource_base_path.join(&path);
         tracing::record_all!(tracing::Span::current(), ?resolved_path);
         let bin = std::fs::read(resolved_path)
             .inspect_err(|e| tracing::error!(reason = %e, "require_shader.read"))
@@ -691,10 +691,10 @@ impl<'fs> Graphics<'fs> {
     }
 }
 
-pub struct VulkanDeviceAdapterRef<'d, 'fs>(br::vk::VkPhysicalDevice, &'d Graphics<'fs>);
-unsafe impl Sync for VulkanDeviceAdapterRef<'_, '_> {}
-unsafe impl Send for VulkanDeviceAdapterRef<'_, '_> {}
-impl br::VkHandle for VulkanDeviceAdapterRef<'_, '_> {
+pub struct VulkanDeviceAdapterRef<'d>(br::vk::VkPhysicalDevice, &'d Graphics);
+unsafe impl Sync for VulkanDeviceAdapterRef<'_> {}
+unsafe impl Send for VulkanDeviceAdapterRef<'_> {}
+impl br::VkHandle for VulkanDeviceAdapterRef<'_> {
     type Handle = br::vk::VkPhysicalDevice;
 
     #[inline(always)]
@@ -702,24 +702,24 @@ impl br::VkHandle for VulkanDeviceAdapterRef<'_, '_> {
         self.0
     }
 }
-impl<'fs> br::InstanceChild for VulkanDeviceAdapterRef<'_, 'fs> {
-    type ConcreteInstance = <Graphics<'fs> as br::InstanceChild>::ConcreteInstance;
+impl br::InstanceChild for VulkanDeviceAdapterRef<'_> {
+    type ConcreteInstance = <Graphics as br::InstanceChild>::ConcreteInstance;
 
     #[inline(always)]
     fn instance(&self) -> &Self::ConcreteInstance {
         self.1.instance()
     }
 }
-impl br::PhysicalDevice for VulkanDeviceAdapterRef<'_, '_> {}
+impl br::PhysicalDevice for VulkanDeviceAdapterRef<'_> {}
 
-pub struct VulkanSwapchain<'d, 'fs> {
-    device: &'d Graphics<'fs>,
+pub struct VulkanSwapchain<'d> {
+    device: &'d Graphics,
     handle: br::vk::VkSwapchainKHR,
     ext: br::Extent2D,
     images: Vec<br::vk::VkImage>,
     image_views: Vec<br::vk::VkImageView>,
 }
-impl Drop for VulkanSwapchain<'_, '_> {
+impl Drop for VulkanSwapchain<'_> {
     fn drop(&mut self) {
         unsafe {
             for x in self.image_views.drain(..) {
@@ -737,7 +737,7 @@ impl Drop for VulkanSwapchain<'_, '_> {
         }
     }
 }
-impl br::VkHandle for VulkanSwapchain<'_, '_> {
+impl br::VkHandle for VulkanSwapchain<'_> {
     type Handle = br::vk::VkSwapchainKHR;
 
     #[inline(always)]
@@ -745,34 +745,34 @@ impl br::VkHandle for VulkanSwapchain<'_, '_> {
         self.handle
     }
 }
-impl br::VkHandleMut for VulkanSwapchain<'_, '_> {
+impl br::VkHandleMut for VulkanSwapchain<'_> {
     #[inline(always)]
     fn native_ptr_mut(&mut self) -> Self::Handle {
         self.handle
     }
 }
-impl br::DeviceChildHandle for VulkanSwapchain<'_, '_> {
+impl br::DeviceChildHandle for VulkanSwapchain<'_> {
     #[inline(always)]
     fn device_handle(&self) -> bedrock::vk::VkDevice {
         self.device.native_ptr()
     }
 }
-impl<'fs> br::DeviceChild for VulkanSwapchain<'_, 'fs> {
-    type ConcreteDevice = Graphics<'fs>;
+impl br::DeviceChild for VulkanSwapchain<'_> {
+    type ConcreteDevice = Graphics;
 
     #[inline(always)]
     fn device(&self) -> &Self::ConcreteDevice {
         self.device
     }
 }
-impl br::Swapchain for VulkanSwapchain<'_, '_> {}
-impl br::SwapchainMut for VulkanSwapchain<'_, '_> {}
-impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
+impl br::Swapchain for VulkanSwapchain<'_> {}
+impl br::SwapchainMut for VulkanSwapchain<'_> {}
+impl<'d> VulkanSwapchain<'d> {
     const IMAGE_USAGE_FLAGS: br::ImageUsageFlags =
         br::ImageUsageFlags::COLOR_ATTACHMENT.merge(br::ImageUsageFlags::TRANSFER_SRC);
 
     pub fn new(
-        surface: &VulkanSurface<'d, 'fs>,
+        surface: &VulkanSurface<'d>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) -> Self {
         let ext = surface.compute_real_extent(query_window_extent);
@@ -828,7 +828,7 @@ impl<'d, 'fs> VulkanSwapchain<'d, 'fs> {
 
     pub fn recreate(
         &mut self,
-        surface: &VulkanSurface<'d, 'fs>,
+        surface: &VulkanSurface<'d>,
         query_window_extent: impl FnOnce() -> Size<PixelsUnit>,
     ) {
         // release pre-created resources
@@ -940,7 +940,7 @@ impl UnboundVulkanSurface {
         }
     }
 
-    pub const unsafe fn bound<'d, 'fs>(self, gfx: &'d Graphics<'fs>) -> VulkanSurface<'d, 'fs> {
+    pub const unsafe fn bound<'d>(self, gfx: &'d Graphics) -> VulkanSurface<'d> {
         VulkanSurface(gfx, self)
     }
 
@@ -1007,8 +1007,8 @@ impl UnboundVulkanSurface {
     }
 }
 
-pub struct VulkanSurface<'d, 'fs>(&'d Graphics<'fs>, UnboundVulkanSurface);
-impl core::ops::Deref for VulkanSurface<'_, '_> {
+pub struct VulkanSurface<'d>(&'d Graphics, UnboundVulkanSurface);
+impl core::ops::Deref for VulkanSurface<'_> {
     type Target = UnboundVulkanSurface;
 
     #[inline(always)]
@@ -1016,7 +1016,7 @@ impl core::ops::Deref for VulkanSurface<'_, '_> {
         &self.1
     }
 }
-impl Drop for VulkanSurface<'_, '_> {
+impl Drop for VulkanSurface<'_> {
     #[inline(always)]
     fn drop(&mut self) {
         unsafe {
@@ -1024,7 +1024,7 @@ impl Drop for VulkanSurface<'_, '_> {
         }
     }
 }
-impl br::VkHandle for VulkanSurface<'_, '_> {
+impl br::VkHandle for VulkanSurface<'_> {
     type Handle = br::vk::VkSurfaceKHR;
 
     #[inline(always)]
@@ -1032,19 +1032,19 @@ impl br::VkHandle for VulkanSurface<'_, '_> {
         self.1.handle
     }
 }
-unsafe impl Sync for VulkanSurface<'_, '_> {}
-unsafe impl Send for VulkanSurface<'_, '_> {}
-impl<'fs> br::InstanceChild for VulkanSurface<'_, 'fs> {
-    type ConcreteInstance = <Graphics<'fs> as br::InstanceChild>::ConcreteInstance;
+unsafe impl Sync for VulkanSurface<'_> {}
+unsafe impl Send for VulkanSurface<'_> {}
+impl<'fs> br::InstanceChild for VulkanSurface<'_> {
+    type ConcreteInstance = <Graphics as br::InstanceChild>::ConcreteInstance;
 
     #[inline(always)]
     fn instance(&self) -> &Self::ConcreteInstance {
         self.0.instance()
     }
 }
-impl br::Surface for VulkanSurface<'_, '_> {}
-impl<'d, 'fs> VulkanSurface<'d, 'fs> {
-    pub fn new(gfx: &'d Graphics<'fs>, handle: br::vk::VkSurfaceKHR) -> Self {
+impl br::Surface for VulkanSurface<'_> {}
+impl<'d> VulkanSurface<'d> {
+    pub fn new(gfx: &'d Graphics, handle: br::vk::VkSurfaceKHR) -> Self {
         match unsafe {
             br::vkfn_wrapper::get_physical_device_surface_support(
                 gfx.primary_adapter_ref().as_transparent_ref(),
@@ -1143,7 +1143,7 @@ impl<'d, 'fs> VulkanSurface<'d, 'fs> {
         )
     }
 
-    pub const fn unbound(self) -> (&'d Graphics<'fs>, UnboundVulkanSurface) {
+    pub const fn unbound(self) -> (&'d Graphics, UnboundVulkanSurface) {
         let gfx = unsafe { core::ptr::read(&self.0) };
         let unbound = unsafe { core::ptr::read(&self.1) };
         core::mem::forget(self);

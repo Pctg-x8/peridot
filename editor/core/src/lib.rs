@@ -240,9 +240,9 @@ pub fn launch() {
     let mut coreloop = core::pin::pin!(CoreLoop::new(
         #[cfg(windows)]
         SystemLink {
+            gfx: &gfx,
             font_set: FontSet::new(&root_font_set),
             rt_sender: rt_sender.clone(),
-            gfx: &gfx,
             event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context: &app_context,
             pointer_hovering_timer_handle: pointer_hovering_timer.as_handle(),

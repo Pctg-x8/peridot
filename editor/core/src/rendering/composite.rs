@@ -1877,11 +1877,7 @@ impl CompositeInstanceManager {
     }
 }
 
-pub struct MappedStagingMemory<'g>(
-    *mut core::ffi::c_void,
-    br::vk::VkDeviceMemory,
-    &'g Graphics<'g>,
-);
+pub struct MappedStagingMemory<'g>(*mut core::ffi::c_void, br::vk::VkDeviceMemory, &'g Graphics);
 impl Drop for MappedStagingMemory<'_> {
     fn drop(&mut self) {
         unsafe {
@@ -1901,7 +1897,7 @@ impl MappedStagingMemory<'_> {
 pub struct CompositeInstanceMappedStagingMemory<'m, 'g>(
     *mut core::ffi::c_void,
     &'m mut CompositeInstanceManager,
-    &'g Graphics<'g>,
+    &'g Graphics,
 );
 impl Drop for CompositeInstanceMappedStagingMemory<'_, '_> {
     fn drop(&mut self) {
@@ -1922,7 +1918,7 @@ impl CompositeInstanceMappedStagingMemory<'_, '_> {
 pub struct CompositeInstanceMappedStreamingMemory<'m, 'g>(
     *mut core::ffi::c_void,
     &'m mut CompositeInstanceManager,
-    &'g Graphics<'g>,
+    &'g Graphics,
 );
 impl Drop for CompositeInstanceMappedStreamingMemory<'_, '_> {
     fn drop(&mut self) {
@@ -4880,7 +4876,7 @@ impl CompositeRenderer {
 
 pub struct BoundCompositeRenderer<'d> {
     core: CompositeRenderer,
-    device: &'d Graphics<'d>,
+    device: &'d Graphics,
 }
 impl Drop for BoundCompositeRenderer<'_> {
     fn drop(&mut self) {
@@ -5117,13 +5113,13 @@ impl BackdropEffectBlurProcessor {
     }
 
     fn create_pipelines<'x>(
-        gfx: &'x Graphics<'x>,
+        gfx: &'x Graphics,
         rt_size: br::Extent2D,
         pipeline_layout: &(impl br::VkHandle<Handle = br::vk::VkPipelineLayout> + ?Sized),
         render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
     ) -> (
-        Vec<br::PipelineObject<&'x Graphics<'x>>>,
-        Vec<br::PipelineObject<&'x Graphics<'x>>>,
+        Vec<br::PipelineObject<&'x Graphics>>,
+        Vec<br::PipelineObject<&'x Graphics>>,
     ) {
         let downsample_shader = gfx.require_shader("dual_kawase_filter/downsample.spv");
         let upsample_shader = gfx.require_shader("dual_kawase_filter/upsample.spv");
@@ -5198,11 +5194,11 @@ impl BackdropEffectBlurProcessor {
     }
 
     fn create_temporal_buffers<'x>(
-        gfx: &'x Graphics<'x>,
+        gfx: &'x Graphics,
         rt_size: br::Extent2D,
         rt_format: br::Format,
-        object_sink: &mut Vec<br::ImageViewObject<br::ImageObject<&'x Graphics<'x>>>>,
-    ) -> br::DeviceMemoryObject<&'x Graphics<'x>> {
+        object_sink: &mut Vec<br::ImageViewObject<br::ImageObject<&'x Graphics>>>,
+    ) -> br::DeviceMemoryObject<&'x Graphics> {
         let mut resources_offsets = Vec::with_capacity(BLUR_SAMPLE_STEPS);
         let mut top = 0;
         let mut memory_index_mask = !0u32;
@@ -5246,13 +5242,13 @@ impl BackdropEffectBlurProcessor {
 
     /// returns: (downsample, upsample_fixed(only for temporal buffers))
     fn create_framebuffers<'r, 'x>(
-        gfx: &'x Graphics<'x>,
-        temporal_buffers: &'r [br::ImageViewObject<br::ImageObject<&'x Graphics<'x>>>],
+        gfx: &'x Graphics,
+        temporal_buffers: &'r [br::ImageViewObject<br::ImageObject<&'x Graphics>>],
         render_pass: &(impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized),
         rt_size: br::Extent2D,
     ) -> (
-        Vec<br::FramebufferObject<'r, &'x Graphics<'x>>>,
-        Vec<br::FramebufferObject<'r, &'x Graphics<'x>>>,
+        Vec<br::FramebufferObject<'r, &'x Graphics>>,
+        Vec<br::FramebufferObject<'r, &'x Graphics>>,
     ) {
         let mut downsample_pass_fbs = Vec::with_capacity(temporal_buffers.len());
         let mut upsample_pass_fixed_fbs = Vec::with_capacity(temporal_buffers.len() - 1);

@@ -564,7 +564,7 @@ impl NativeWindow {
     }
 
     #[inline(always)]
-    fn create_vk_surface<'d, 'fs>(&self, gfx: &'d Graphics<'fs>) -> VulkanSurface<'d, 'fs> {
+    fn create_vk_surface<'d>(&self, gfx: &'d Graphics) -> VulkanSurface<'d> {
         VulkanSurface::new(gfx, unsafe {
             br::Win32SurfaceCreateInfo::new(
                 core::mem::transmute(self.hinstance),
@@ -1843,12 +1843,12 @@ pub fn create_main_window<'sys>(
     drop(exclusive_ht_use);
     let h = w.make_handle();
 
-    let vk_surface = w.create_vk_surface(unsafe { &*coreloop.syslink.gfx });
+    let vk_surface = NewWindowVulkanSurface(w.create_vk_surface(coreloop.syslink.gfx).unbound().1);
     unsafe { coreloop.as_mut().get_unchecked_mut() }
         .delayed_render_messages
         .push(RenderMessage::NewWindow(NewWindowData {
             key: h,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            vk_surface,
         }));
 
     h
@@ -1903,12 +1903,12 @@ pub fn open_sub_window<'sys>(
     );
     let h = w.make_handle();
 
-    let vk_surface = w.create_vk_surface(unsafe { &*coreloop.syslink.gfx });
+    let vk_surface = NewWindowVulkanSurface(w.create_vk_surface(coreloop.syslink.gfx).unbound().1);
     unsafe { coreloop.as_mut().get_unchecked_mut() }
         .delayed_render_messages
         .push(RenderMessage::NewWindow(NewWindowData {
             key: h,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            vk_surface,
         }));
 
     setup_contents(h, coreloop);
@@ -1947,8 +1947,8 @@ pub fn close_sub_window(mut window_handle: WindowHandle) {
 }
 
 pub struct SystemLink<'sys> {
+    pub gfx: &'sys Graphics,
     pub font_set: FontSet,
-    pub gfx: *const Graphics<'sys>,
     pub rt_sender: RenderMessageSender,
     pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context: &'sys ApplicationContext,

@@ -181,7 +181,7 @@ profiler::section!(WIN32_DX_PRESENT = "RenderLoop.Win32.DirectXPresent");
 pub const PREVIEW_COMPOSITE: CustomRenderToken = CustomRenderToken(0);
 
 pub struct RenderThread<'main> {
-    pub gfx: &'main Graphics<'main>,
+    pub gfx: &'main Graphics,
     pub shutdown_signal: &'main AtomicBool,
     pub renderer_sync: &'main Mutex<RendererSync>,
     pub global_time_base: &'main std::time::Instant,
@@ -1165,7 +1165,7 @@ impl<'main> RenderThread<'main> {
 
 #[cfg(windows)]
 struct CompositionSwapchainBuffer<'d> {
-    vk_device: &'d Graphics<'d>,
+    vk_device: &'d Graphics,
     d3d12_resource: windows::Win32::Graphics::Direct3D12::ID3D12Resource,
     shared_handle: windows::Win32::Foundation::HANDLE,
     vk_device_memory: br::vk::VkDeviceMemory,
@@ -1195,20 +1195,20 @@ impl<'d> Drop for CompositionSwapchainBuffer<'d> {
 struct ContextMenuRenderer<'d> {
     w: FlyoutSurfaceHandle,
     active_scale: SafeF32,
-    vk_device: &'d Graphics<'d>,
+    vk_device: &'d Graphics,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
     last_composite_render_data: CompositeRenderingData,
-    update_cp: br::CommandPoolObject<&'d Graphics<'d>>,
-    update_cb: br::CommandBufferObject<&'d Graphics<'d>>,
-    update_completion_fence: br::FenceObject<&'d Graphics<'d>>,
-    update_completion_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
+    update_cp: br::CommandPoolObject<&'d Graphics>,
+    update_cb: br::CommandBufferObject<&'d Graphics>,
+    update_completion_fence: br::FenceObject<&'d Graphics>,
+    update_completion_semaphore: br::SemaphoreObject<&'d Graphics>,
     updating: bool,
-    render_cp: br::CommandPoolObject<&'d Graphics<'d>>,
-    render_cb: Vec<br::CommandBufferObject<&'d Graphics<'d>>>,
+    render_cp: br::CommandPoolObject<&'d Graphics>,
+    render_cb: Vec<br::CommandBufferObject<&'d Graphics>>,
     render_cb_invalid: bool,
-    present_ready_semaphores: Vec<br::SemaphoreObject<&'d Graphics<'d>>>,
-    backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
+    present_ready_semaphores: Vec<br::SemaphoreObject<&'d Graphics>>,
+    backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics>,
     swapchain_invalidated: bool,
     #[cfg(not(windows))]
     swapchain: VulkanSwapchain<'d, 'd>,
@@ -1223,7 +1223,7 @@ struct ContextMenuRenderer<'d> {
 }
 impl<'d> ContextMenuRenderer<'d> {
     fn new(
-        device: &'d Graphics<'d>,
+        device: &'d Graphics,
         shared_buffers: &CompositeSharedBuffers,
         create_data: NewContextMenuData,
         init_scale: SafeF32,
@@ -1751,29 +1751,29 @@ struct WindowRenderer<'d> {
     active_scale: SafeF32,
     #[cfg(not(feature = "wayland"))]
     latest_ui_scale_changes: *const Mutex<Option<f32>>,
-    vk_device: &'d Graphics<'d>,
+    vk_device: &'d Graphics,
     swapchain_invalidated: bool,
     composite_root: CompositeTreeRef,
     composite_renderer: BoundCompositeRenderer<'d>,
-    corner_cutout_renderer: Option<CornerCutoutRenderer<'d, 'd>>,
+    corner_cutout_renderer: Option<CornerCutoutRenderer<'d>>,
     last_composite_render_data: CompositeRenderingData,
-    update_cp: br::CommandPoolObject<&'d Graphics<'d>>,
-    update_cb: br::CommandBufferObject<&'d Graphics<'d>>,
-    update_completion_fence: br::FenceObject<&'d Graphics<'d>>,
-    update_completion_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
+    update_cp: br::CommandPoolObject<&'d Graphics>,
+    update_cb: br::CommandBufferObject<&'d Graphics>,
+    update_completion_fence: br::FenceObject<&'d Graphics>,
+    update_completion_semaphore: br::SemaphoreObject<&'d Graphics>,
     updating: bool,
-    render_cp: br::CommandPoolObject<&'d Graphics<'d>>,
-    render_cb: Vec<br::CommandBufferObject<&'d Graphics<'d>>>,
+    render_cp: br::CommandPoolObject<&'d Graphics>,
+    render_cb: Vec<br::CommandBufferObject<&'d Graphics>>,
     render_cb_invalid: bool,
     render_requires_preview_composition: bool,
-    present_ready_semaphores: Vec<br::SemaphoreObject<&'d Graphics<'d>>>,
-    backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics<'d>>,
-    swapchain: VulkanSwapchain<'d, 'd>,
-    surface: VulkanSurface<'d, 'd>,
+    present_ready_semaphores: Vec<br::SemaphoreObject<&'d Graphics>>,
+    backbuffer_ready_semaphore: br::SemaphoreObject<&'d Graphics>,
+    swapchain: VulkanSwapchain<'d>,
+    surface: VulkanSurface<'d>,
 }
 impl<'d> WindowRenderer<'d> {
     fn new(
-        device: &'d Graphics<'d>,
+        device: &'d Graphics,
         shared_buffers: &CompositeSharedBuffers,
         create_data: NewWindowData,
         init_scale: SafeF32,
@@ -2225,13 +2225,13 @@ pub struct GlyphAtlasRenderingFormats {
 }
 
 pub struct GlyphAtlasManagerCommonResources<'d> {
-    device: &'d Graphics<'d>,
-    fill_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
-    curve_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
-    vec_tri_fill_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
-    fill_tri_white_shader_module: br::ShaderModuleObject<&'d Graphics<'d>>,
-    render_pass: br::RenderPassObject<&'d Graphics<'d>>,
-    pipeline_layout: br::PipelineLayoutObject<&'d Graphics<'d>>,
+    device: &'d Graphics,
+    fill_shader_module: br::ShaderModuleObject<&'d Graphics>,
+    curve_shader_module: br::ShaderModuleObject<&'d Graphics>,
+    vec_tri_fill_shader_module: br::ShaderModuleObject<&'d Graphics>,
+    fill_tri_white_shader_module: br::ShaderModuleObject<&'d Graphics>,
+    render_pass: br::RenderPassObject<&'d Graphics>,
+    pipeline_layout: br::PipelineLayoutObject<&'d Graphics>,
 }
 impl<'d> GlyphAtlasManagerCommonResources<'d> {
     pub fn new(vk_device: &'d Graphics, formats: &GlyphAtlasRenderingFormats) -> Self {
@@ -2324,15 +2324,15 @@ struct CornerCutoutPushConstants {
     pub screen_size: [f32; 2],
 }
 
-struct CornerCutoutRenderer<'d, 'fs> {
-    _shader: br::ShaderModuleObject<&'d Graphics<'fs>>,
-    pipeline_layout: br::PipelineLayoutObject<&'d Graphics<'fs>>,
-    pipeline: br::PipelineObject<&'d Graphics<'fs>>,
-    pipeline_cont: br::PipelineObject<&'d Graphics<'fs>>,
+struct CornerCutoutRenderer<'d> {
+    _shader: br::ShaderModuleObject<&'d Graphics>,
+    pipeline_layout: br::PipelineLayoutObject<&'d Graphics>,
+    pipeline: br::PipelineObject<&'d Graphics>,
+    pipeline_cont: br::PipelineObject<&'d Graphics>,
 }
-impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
+impl<'d, 'fs> CornerCutoutRenderer<'d> {
     fn new(
-        device: &'d Graphics<'fs>,
+        device: &'d Graphics,
         rendered_pass: br::SubpassRef<impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized>,
         rendered_pass_cont: br::SubpassRef<
             impl br::VkHandle<Handle = br::vk::VkRenderPass> + ?Sized,
@@ -2419,14 +2419,14 @@ impl<'d, 'fs> CornerCutoutRenderer<'d, 'fs> {
 }
 
 pub struct MaskTextureAtlasManager<'d> {
-    device: &'d Graphics<'d>,
+    device: &'d Graphics,
     atlas: TextureAtlas,
     acquired_glyph_rects: HashMap<(usize, u16), AtlasRect>,
     rounded_fill_rects_by_radius: HashMap<SafeF32, AtlasRect>,
-    triangle_fans_pipeline: br::PipelineObject<&'d Graphics<'d>>,
-    curve_pipeline: br::PipelineObject<&'d Graphics<'d>>,
-    colorize_pipeline: br::PipelineObject<&'d Graphics<'d>>,
-    fill_tri_white_pipeline: br::PipelineObject<&'d Graphics<'d>>,
+    triangle_fans_pipeline: br::PipelineObject<&'d Graphics>,
+    curve_pipeline: br::PipelineObject<&'d Graphics>,
+    colorize_pipeline: br::PipelineObject<&'d Graphics>,
+    fill_tri_white_pipeline: br::PipelineObject<&'d Graphics>,
 }
 impl Drop for MaskTextureAtlasManager<'_> {
     fn drop(&mut self) {
@@ -3157,7 +3157,7 @@ impl<'d> MaskTextureAtlasManager<'d> {
 }
 
 pub struct ColorTextureAtlasManager<'d> {
-    device: &'d Graphics<'d>,
+    device: &'d Graphics,
     atlas: ColorTextureAtlas,
 }
 impl Drop for ColorTextureAtlasManager<'_> {
