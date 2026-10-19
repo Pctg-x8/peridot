@@ -353,7 +353,7 @@ pub fn launch() {
             poll_id_to_watch_ref: &poll_id_to_watch_ref,
         }));
         #[cfg(target_os = "linux")]
-        let mut eventbuf = [const { core::mem::MaybeUninit::uninit() }; 8];
+        let mut eventbuf = [const { core::mem::MaybeUninit::uninit() }; 32];
         #[cfg(target_os = "linux")]
         'app: loop {
             #[cfg(feature = "wayland")]
@@ -413,16 +413,8 @@ pub fn launch() {
                 }
                 #[cfg(feature = "enable-profiling")]
                 if e.value() == 5 {
-                    let mut b = [core::mem::MaybeUninit::<u8>::uninit(); 8];
-                    if unsafe {
-                        libc::read(
-                            std::os::fd::AsRawFd::as_raw_fd(&memory_sample_timer_fd),
-                            b.as_mut_ptr().cast(),
-                            8,
-                        )
-                    } < 0
-                    {
-                        tracing::error!(reason = %std::io::Error::last_os_error(), "read memory_sample_timer_fd failed");
+                    if let Err(e) = memory_sample_timer_fd.take() {
+                        tracing::error!(reason = %e, "read memory_sample_timer_fd failed");
                     }
 
                     profiler::sample_memory!();

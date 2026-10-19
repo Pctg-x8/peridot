@@ -3,7 +3,6 @@ use std::sync::{Mutex, atomic::AtomicBool};
 
 use bedrock::{self as br, InstanceChild, SurfaceCreateInfo};
 use bitflags::bitflags;
-use peridot_tp_dbus as dbus;
 use peridot_tp_wayland::{self as wl, ProxyObject};
 use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
 
@@ -19,8 +18,7 @@ use crate::{
         unix::{
             APPMENU_OBJECT_PATH,
             wayland::{
-                DisplayServerContext, GlobalInterfaces, SurfaceScaling, SurfaceState,
-                SurfaceStateTag,
+                EnvironmentTraits, GlobalInterfaces, SurfaceScaling, SurfaceState, SurfaceStateTag,
             },
         },
     },
@@ -146,7 +144,9 @@ impl WindowHandleBase for Handle {
         if committed_state.maximized {
             crate::WindowGeometryState::Maximized {
                 monitor_index: unsafe {
-                    (*system_link.display_server.context)
+                    system_link
+                        .display_server
+                        .context()
                         .global_interfaces
                         .outputs
                         .iter()
@@ -341,7 +341,7 @@ pub(super) struct EventListener<'sys> {
     pending_activated_changes: Option<bool>,
     pending_maximized_changes: Option<bool>,
     pending_decoration_edge_changes: Option<DecorationEdge>,
-    coreloop: *mut CoreLoop<'sys>,
+    pub(super) coreloop: *mut CoreLoop<'sys>,
 }
 impl wl::SurfaceEventListener for EventListener<'_> {
     #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, output))]
@@ -656,8 +656,6 @@ impl NativeWindow {
         pos: Option<Point<LogicalUnit>>,
         size: Option<Size<LogicalUnit>>,
         maximized: bool,
-        dpsv: &DisplayServerContext,
-        dbus: &dbus::Connection,
         coreloop: core::pin::Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
         // TODO: displaying surface at specific rectangle
@@ -667,12 +665,19 @@ impl NativeWindow {
         );
 
         let coreloop = unsafe { coreloop.get_unchecked_mut() };
-        let mut surface = dpsv
+        let env_traits = coreloop.syslink.display_server.environment_traits();
+        let mut surface = coreloop
+            .syslink
+            .display_server
+            .context()
             .global_interfaces
             .compositor
             .create_surface()
             .expect("wl_surface create");
-        let xdg_surface = dpsv
+        let xdg_surface = coreloop
+            .syslink
+            .display_server
+            .context()
             .global_interfaces
             .xdg_wm_base
             .get_xdg_surface(&surface)
@@ -685,17 +690,34 @@ impl NativeWindow {
             .set_window_geometry(0, 0, size.width.ceil() as _, size.height.ceil() as _)
             .expect("xdg_surface.set_window_geometry");
 
-        let appmenu = if let Some(ref am) = dpsv.global_interfaces.kde_appmenu_manager {
+        let appmenu = if let Some(ref am) = coreloop
+            .syslink
+            .display_server
+            .context()
+            .global_interfaces
+            .kde_appmenu_manager
+        {
             let a = am.create(&surface).expect("appmenu.create");
-            a.set_address(dbus.unique_name().expect("no name"), APPMENU_OBJECT_PATH)
-                .expect("appmenu.set_address");
+            a.set_address(
+                unsafe { &*coreloop.syslink.dbus }
+                    .unique_name()
+                    .expect("no name"),
+                APPMENU_OBJECT_PATH,
+            )
+            .expect("appmenu.set_address");
 
             Some(a)
         } else {
             None
         };
 
-        let deco = if let Some(ref dm) = dpsv.global_interfaces.zxdg_decoration_manager {
+        let deco = if let Some(ref dm) = coreloop
+            .syslink
+            .display_server
+            .context()
+            .global_interfaces
+            .zxdg_decoration_manager
+        {
             let d = dm
                 .get_toplevel_decoration(&xdg_toplevel)
                 .expect("decoration.get_toplevel");
@@ -708,12 +730,12 @@ impl NativeWindow {
         };
         // memo: HyprlandのViewporterはsrcの座標範囲の判定が間違っているので特殊判定して影を出さないようにする
         // (将来的になおったら外す)
-        let decoration = if !dpsv.global_interfaces.is_hyprland
+        let decoration = if !env_traits.contains(EnvironmentTraits::NEEDS_HYPRLAND_WORKAROUNDS)
             && let Some(ref deco_pixbuf) =
                 unsafe { &*coreloop.syslink.display_server.static_pixbufs }.window_decoration
         {
             Some(Decoration::new(
-                &dpsv.global_interfaces,
+                &coreloop.syslink.display_server.context().global_interfaces,
                 deco_pixbuf,
                 &surface,
                 &xdg_toplevel,
@@ -722,27 +744,35 @@ impl NativeWindow {
             None
         };
 
-        let mut window_scaling =
-            if let Some(ref fs) = dpsv.global_interfaces.fractional_scale_manager {
-                let f = fs
-                    .get_fractional_scale(&surface)
-                    .expect("fractional_scale.create");
-                let vp = dpsv
-                    .global_interfaces
-                    .viewporter
-                    .get_viewport(&surface)
-                    .expect("viewporter.get_viewport");
+        let mut window_scaling = if let Some(ref fs) = coreloop
+            .syslink
+            .display_server
+            .context()
+            .global_interfaces
+            .fractional_scale_manager
+        {
+            let f = fs
+                .get_fractional_scale(&surface)
+                .expect("fractional_scale.create");
+            let vp = coreloop
+                .syslink
+                .display_server
+                .context()
+                .global_interfaces
+                .viewporter
+                .get_viewport(&surface)
+                .expect("viewporter.get_viewport");
 
-                vp.set_destination(size.width as _, size.height as _)
-                    .expect("viewport.set_destination");
+            vp.set_destination(size.width as _, size.height as _)
+                .expect("viewport.set_destination");
 
-                SurfaceScaling::Manual {
-                    fractional_scale: f,
-                    viewport: vp,
-                }
-            } else {
-                SurfaceScaling::Automatic
-            };
+            SurfaceScaling::Manual {
+                fractional_scale: f,
+                viewport: vp,
+            }
+        } else {
+            SurfaceScaling::Automatic
+        };
         let fractional_scale_ptr = if let SurfaceScaling::Manual {
             ref mut fractional_scale,
             ..
@@ -753,7 +783,13 @@ impl NativeWindow {
             core::ptr::null_mut()
         };
 
-        if let Some(ref kp) = dpsv.global_interfaces.kde_plasma_shell {
+        if let Some(ref kp) = coreloop
+            .syslink
+            .display_server
+            .context()
+            .global_interfaces
+            .kde_plasma_shell
+        {
             let window = kp
                 .get_surface(&surface)
                 .expect("kde_plasma_shell.get_surface");
@@ -776,12 +812,10 @@ impl NativeWindow {
         let composite_root = CompositeRect::build()
             .expand_full()
             .create(&mut coreloop.composite_tree);
-        let ht_root = coreloop.ht_manager.create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            root_of_window: Some(Handle::from_mut(&mut surface)),
-            ..Default::default()
-        });
+        let ht_root = HitTestTreeData::build()
+            .expand_full()
+            .root_of_window(Handle::from_mut(&mut surface))
+            .create(&mut coreloop.ht_manager);
         let kf_root_group = coreloop.keyboard_focus_registry.acquire_group();
 
         let xdg_surface_ptr = xdg_surface.as_ptr();
@@ -862,12 +896,12 @@ impl NativeWindow {
             .push(RenderMessage::NewWindow(NewWindowData {
                 key: Handle::from_mut(&mut surface),
                 vk_surface: NewWindowVulkanSurface(
-                    VulkanSurface::new(unsafe { &*coreloop.syslink.gfx }, unsafe {
+                    VulkanSurface::new(coreloop.syslink.gfx, unsafe {
                         br::WaylandSurfaceCreateInfo::new(
-                            dpsv.dp.as_raw().cast(),
+                            coreloop.syslink.display_server.context().dp.as_raw().cast(),
                             surface.as_raw().cast(),
                         )
-                        .execute((*coreloop.syslink.gfx).instance(), None)
+                        .execute(coreloop.syslink.gfx.instance(), None)
                         .expect("vk_surface.create")
                     })
                     .unbound()

@@ -4,6 +4,7 @@ use std::{
     os::fd::{AsRawFd, RawFd},
 };
 
+use bitflags::bitflags;
 use linux_input::Key;
 use peridot_tp_wayland as wl;
 use peridot_tp_xkbcommon as xkbcommon;
@@ -138,10 +139,33 @@ impl DisplayServerContext {
     }
 }
 
+bitflags! {
+    #[derive(Debug, Clone, Copy)]
+    pub struct EnvironmentTraits : u8 {
+        const NEEDS_HYPRLAND_WORKAROUNDS = 0x01;
+    }
+}
+
 pub struct DisplayServerLink<'sys> {
     pub context: *mut DisplayServerContext,
     pub static_pixbufs: *const StaticPixbufs,
     pub global_messaging_ptr: *mut GlobalMessaging<'sys>,
+}
+impl DisplayServerLink<'_> {
+    pub const fn context(&self) -> &DisplayServerContext {
+        unsafe { &*self.context }
+    }
+
+    pub fn environment_traits(&self) -> EnvironmentTraits {
+        let ctx = unsafe { &*self.context };
+        let mut flags = EnvironmentTraits::empty();
+        if ctx.global_interfaces.is_hyprland {
+            // Hyprlandは若干バグを抱えているのでいくつか回避策が必要になる
+            flags |= EnvironmentTraits::NEEDS_HYPRLAND_WORKAROUNDS;
+        }
+
+        flags
+    }
 }
 
 pub fn create_main_window<'sys, 'cl>(
@@ -192,8 +216,6 @@ pub fn create_main_window<'sys, 'cl>(
         pos,
         size,
         initial_maximize,
-        unsafe { &*coreloop.syslink.display_server.context },
-        unsafe { &*coreloop.syslink.dbus },
         coreloop,
     )
     .into_handle()
@@ -242,8 +264,6 @@ pub fn open_sub_window<'sys, 'cl>(
         pos,
         size,
         initial_maximize,
-        unsafe { &*coreloop.syslink.display_server.context },
-        unsafe { &*coreloop.syslink.dbus },
         coreloop.as_mut(),
     );
 
@@ -399,8 +419,8 @@ impl crate::SystemLink<'_> {
     }
 
     pub fn query_window_under_pointer(&self, pointer: &PointerID) -> Option<toplevel::Handle> {
-        let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
-        let surface = global_msg
+        let surface = pointer
+            .global_messaging()
             .pointer
             .as_ref()
             .expect("no pointer?")
@@ -419,7 +439,7 @@ impl crate::SystemLink<'_> {
     ) {
         tracing::debug!("begin_pane_drag");
 
-        let global_msg = unsafe { &mut *(*pointer.0).user_data().cast::<GlobalMessaging>() };
+        let global_msg = pointer.global_messaging_mut();
         let mut data_source = unsafe { global_msg.data_device_manager.as_ref() }
             .create_data_source()
             .expect("data_device_manager.create_data_source");
@@ -446,6 +466,7 @@ impl crate::SystemLink<'_> {
             .enter_state
             .as_ref()
             .expect("not entering");
+        unsafe { &mut *global_msg.coreloop }.docking_preview_state = Some(state);
         let dd = global_msg.data_device.as_mut().expect("no data device");
         dd.data_device
             .start_drag(
@@ -482,8 +503,8 @@ impl crate::SystemLink<'_> {
             .data_device
             .as_mut()
             .expect("no data device")
-            .pane_drag_state
-            .take();
+            .pane_drag_state = None;
+        unsafe { &mut *global_msg.coreloop }.docking_preview_state = None;
     }
 }
 
@@ -599,6 +620,16 @@ impl StaticPixbufs {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct PointerID(*mut wl::Pointer);
 impl PointerID {
+    #[inline(always)]
+    fn global_messaging(&self) -> &GlobalMessaging {
+        unsafe { &*(*self.0).user_data().cast::<GlobalMessaging>() }
+    }
+
+    #[inline(always)]
+    fn global_messaging_mut(&self) -> &mut GlobalMessaging {
+        unsafe { &mut *(*self.0).user_data().cast::<GlobalMessaging>() }
+    }
+
     pub fn acquire_lock_on_surface(&self) {
         let global_msg = unsafe { &mut *(*self.0).user_data().cast::<GlobalMessaging>() };
         let Some(rpm) = global_msg.relative_pointer_manager else {

@@ -194,22 +194,33 @@ struct InstanceData<'sys> {
 
 #[repr(transparent)]
 struct EventHandler<'sys>(SurfaceState<InstanceData<'sys>>);
+impl<'sys> EventHandler<'sys> {
+    #[inline(always)]
+    const fn surface(&self) -> &wl::Surface {
+        unsafe { &*self.0.data.surface_ptr }
+    }
+
+    #[inline(always)]
+    const fn coreloop(&self) -> Pin<&mut CoreLoop<'sys>> {
+        unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }
+    }
+
+    #[inline(always)]
+    fn invalidate_swapchain(&self) {
+        self.0
+            .data
+            .swapchain_externally_invalidation_signal
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
 impl wl::SurfaceEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "wl_surface::enter", skip(self, _surface, _output))]
-    fn enter(
-        &mut self,
-        _surface: &mut peridot_tp_wayland::Surface,
-        _output: &mut peridot_tp_wayland::Output,
-    ) {
+    fn enter(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {
         super::event_trace!();
     }
 
     #[tracing::instrument(name = "wl_surface::leave", skip(self, _surface, _output))]
-    fn leave(
-        &mut self,
-        _surface: &mut peridot_tp_wayland::Surface,
-        _output: &mut peridot_tp_wayland::Output,
-    ) {
+    fn leave(&mut self, _surface: &mut wl::Surface, _output: &mut wl::Output) {
         super::event_trace!();
     }
 
@@ -218,7 +229,7 @@ impl wl::SurfaceEventListener for EventHandler<'_> {
         skip(self, _surface),
         fields(has_fractional_scale_support = self.0.data.scaling.is_manual())
     )]
-    fn preferred_buffer_scale(&mut self, _surface: &mut peridot_tp_wayland::Surface, factor: i32) {
+    fn preferred_buffer_scale(&mut self, _surface: &mut wl::Surface, factor: i32) {
         super::event_trace!();
 
         if self.0.data.scaling.is_manual() {
@@ -229,17 +240,13 @@ impl wl::SurfaceEventListener for EventHandler<'_> {
     }
 
     #[tracing::instrument(name = "wl_surface::preferred_buffer_transform", skip(self, _surface))]
-    fn preferred_buffer_transform(
-        &mut self,
-        _surface: &mut peridot_tp_wayland::Surface,
-        transform: u32,
-    ) {
+    fn preferred_buffer_transform(&mut self, _surface: &mut wl::Surface, transform: u32) {
         super::event_trace!();
     }
 }
 impl wl::XdgSurfaceEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "xdg_surface::configure", skip(self, sender))]
-    fn configure(&mut self, sender: &mut peridot_tp_wayland::XdgSurface, serial: u32) {
+    fn configure(&mut self, sender: &mut wl::XdgSurface, serial: u32) {
         super::event_trace!();
 
         let mut committed_state_ref = self.0.data.committed_state.lock().expect("poisoned");
@@ -247,13 +254,13 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
         if let Some(s) = self.0.data.pending_configure_buffer_scale.take() {
             match self.0.data.scaling {
                 SurfaceScaling::Automatic => {
-                    unsafe { &*self.0.data.surface_ptr }
+                    self.surface()
                         .set_buffer_scale(s as _)
                         .expect("wl_surface.set_buffer_scale");
                 }
                 SurfaceScaling::Manual { .. } => {
                     // fractional scaleでは1固定にして、viewporterでスケールを適用する必要がある
-                    unsafe { &*self.0.data.surface_ptr }
+                    self.surface()
                         .set_buffer_scale(1)
                         .expect("wl_surface.set_buffer_scale");
                 }
@@ -283,10 +290,7 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
             if pixels_size != committed_state_ref.size_pixels {
                 committed_state_ref.size_pixels = pixels_size;
                 committed_state_ref.size = logical_size;
-                self.0
-                    .data
-                    .swapchain_externally_invalidation_signal
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.invalidate_swapchain();
 
                 if let SurfaceScaling::Manual { ref viewport, .. } = self.0.data.scaling {
                     viewport
@@ -300,46 +304,33 @@ impl wl::XdgSurfaceEventListener for EventHandler<'_> {
         }
 
         drop(committed_state_ref);
-        unsafe { &*self.0.data.surface_ptr }
-            .commit()
-            .expect("surface.commit");
+        self.surface().commit().expect("surface.commit");
         if let Some(s) = rescaled {
-            unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.rescale_menu(s);
+            self.coreloop().rescale_menu(s);
         }
-        unsafe { Pin::new_unchecked(&mut *self.0.data.coreloop) }.update_view_all();
+        self.coreloop().update_view_all();
         sender.ack_configure(serial).expect("ack_configure");
     }
 }
 impl wl::XdgPopupEventListener for EventHandler<'_> {
     #[tracing::instrument(name = "xdg_popup::configure", skip(self, _sender))]
-    fn configure(
-        &mut self,
-        _sender: &mut peridot_tp_wayland::XdgPopup,
-        x: i32,
-        y: i32,
-        width: i32,
-        height: i32,
-    ) {
+    fn configure(&mut self, _sender: &mut wl::XdgPopup, x: i32, y: i32, width: i32, height: i32) {
         super::event_trace!();
     }
 
     #[tracing::instrument(name = "xdg_popup::popup_done", skip(self, _sender))]
-    fn popup_done(&mut self, _sender: &mut peridot_tp_wayland::XdgPopup) {
+    fn popup_done(&mut self, _sender: &mut wl::XdgPopup) {
         super::event_trace!();
     }
 
     #[tracing::instrument(name = "xdg_popup::repositioned", skip(self, _sender))]
-    fn repositioned(&mut self, _sender: &mut peridot_tp_wayland::XdgPopup, token: u32) {
+    fn repositioned(&mut self, _sender: &mut wl::XdgPopup, token: u32) {
         super::event_trace!();
     }
 }
 impl wl::WpFractionalScaleV1EventListener for EventHandler<'_> {
     #[tracing::instrument(name = "wp_fractional_scale_v1::repositioned", skip(self, _sender))]
-    fn preferred_scale(
-        &mut self,
-        _sender: &mut peridot_tp_wayland::WpFractionalScaleV1,
-        scale: u32,
-    ) {
+    fn preferred_scale(&mut self, _sender: &mut wl::WpFractionalScaleV1, scale: u32) {
         super::event_trace!();
 
         self.0.data.pending_configure_buffer_scale = Some(scale as f32 / 120.0);
@@ -372,24 +363,36 @@ pub fn new_surface<'sys>(
     ref_scale_factor: f32,
 ) -> Handle {
     let cl = unsafe { coreloop.get_unchecked_mut() };
-    let mut surface = unsafe { &*cl.syslink.display_server.context }
+    let mut surface = cl
+        .syslink
+        .display_server
+        .context()
         .global_interfaces
         .compositor
         .create_surface()
         .expect("compositor.create_surface");
-    let xdg_surface = unsafe { &*cl.syslink.display_server.context }
+    let xdg_surface = cl
+        .syslink
+        .display_server
+        .context()
         .global_interfaces
         .xdg_wm_base
         .get_xdg_surface(&surface)
         .expect("xdg_wm_base.get_xdg_surface");
-    let scaling = if let Some(ref fs) = unsafe { &*cl.syslink.display_server.context }
+    let scaling = if let Some(ref fs) = cl
+        .syslink
+        .display_server
+        .context()
         .global_interfaces
         .fractional_scale_manager
     {
         let f = fs
             .get_fractional_scale(&surface)
             .expect("fractional_scale.create");
-        let vp = unsafe { &*cl.syslink.display_server.context }
+        let vp = cl
+            .syslink
+            .display_server
+            .context()
             .global_interfaces
             .viewporter
             .get_viewport(&surface)
@@ -405,7 +408,10 @@ pub fn new_surface<'sys>(
     } else {
         SurfaceScaling::Automatic
     };
-    let blur = if let Some(ref bm) = unsafe { &*cl.syslink.display_server.context }
+    let blur = if let Some(ref bm) = cl
+        .syslink
+        .display_server
+        .context()
         .global_interfaces
         .kde_blur_manager
     {
@@ -417,7 +423,10 @@ pub fn new_surface<'sys>(
         None
     };
 
-    let p = unsafe { &*cl.syslink.display_server.context }
+    let p = cl
+        .syslink
+        .display_server
+        .context()
         .global_interfaces
         .xdg_wm_base
         .create_positioner()
@@ -437,11 +446,9 @@ pub fn new_surface<'sys>(
         .expand_full()
         .composite_fill_color_imm([0.0, 0.0, 0.0, 0.375])
         .create(&mut cl.composite_tree);
-    let ht_root = cl.ht_manager.create(HitTestTreeData {
-        width_adjustment_factor: 1.0,
-        height_adjustment_factor: 1.0,
-        ..Default::default()
-    });
+    let ht_root = HitTestTreeData::build()
+        .expand_full()
+        .create(&mut cl.ht_manager);
     let kf_root_group = cl.keyboard_focus_registry.acquire_group();
     let mut eh = Box::new(EventHandler(SurfaceState {
         tag: SurfaceStateTag::FlyoutSurface,
@@ -495,15 +502,14 @@ pub fn new_surface<'sys>(
     // give ownership
     surface.set_user_data(Box::into_raw(eh).cast());
 
-    let vk_surface = unsafe {
+    let vk_surface = VulkanSurface::new(cl.syslink.gfx, unsafe {
         br::WaylandSurfaceCreateInfo::new(
-            (*cl.syslink.display_server.context).dp.as_raw().cast(),
+            cl.syslink.display_server.context().dp.as_raw().cast(),
             surface.as_ptr().cast(),
         )
-        .execute((&*cl.syslink.gfx).instance(), None)
+        .execute(cl.syslink.gfx.instance(), None)
         .expect("vk_surface.create")
-    };
-    let vk_surface = VulkanSurface::new(unsafe { &*cl.syslink.gfx }, vk_surface);
+    });
     cl.delayed_render_messages
         .push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
             w: Handle(unsafe { NonNull::new_unchecked(surface.as_ptr()) }),
