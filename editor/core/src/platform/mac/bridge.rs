@@ -369,6 +369,7 @@ bitflags! {
     #[derive(Clone, Copy)]
     pub struct WindowCreationFlags : u32 {
         const MAIN = 0x01;
+        const INITIAL_FULL_SCREEN = 0x02;
     }
 }
 
@@ -385,6 +386,7 @@ unsafe extern "C" {
     pub fn ni_release_window(window_link: *mut WindowLink);
     pub fn ni_show_window(window_link: *mut WindowLink);
     pub fn ni_show_window_as_primary(window_link: *mut WindowLink);
+    pub fn ni_window_perform_postinit(window_link: *mut WindowLink);
     pub fn ni_get_content_scale(window_link: *mut WindowLink) -> c_float;
     pub fn ni_set_window_callbacks(
         window_link: *mut WindowLink,
@@ -392,6 +394,14 @@ unsafe extern "C" {
         caller_context: *mut c_void,
     );
     pub fn ni_get_window_callback_context(window_link: *mut WindowLink) -> *mut c_void;
+    pub fn ni_query_window_state(
+        window_link: *mut WindowLink,
+        is_maximized: *mut bool,
+        x: *mut c_double,
+        y: *mut c_double,
+        width: *mut c_double,
+        height: *mut c_double,
+    );
     pub fn ni_get_size_logical(
         window_link: *mut WindowLink,
         width: *mut c_double,

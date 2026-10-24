@@ -102,7 +102,38 @@ impl WindowHandleBase for WindowHandle {
     }
 
     fn geometry_state_snapshot(&self, syslink: &SystemLink) -> WindowGeometryState {
-        unimplemented!()
+        let mut is_maximized = core::mem::MaybeUninit::uninit();
+        let mut x = core::mem::MaybeUninit::uninit();
+        let mut y = core::mem::MaybeUninit::uninit();
+        let mut width = core::mem::MaybeUninit::uninit();
+        let mut height = core::mem::MaybeUninit::uninit();
+        unsafe {
+            bridge::ni_query_window_state(
+                self.0,
+                is_maximized.as_mut_ptr(),
+                x.as_mut_ptr(),
+                y.as_mut_ptr(),
+                width.as_mut_ptr(),
+                height.as_mut_ptr(),
+            );
+        }
+        let is_maximized = unsafe { is_maximized.assume_init() };
+        let x = unsafe { x.assume_init() };
+        let y = unsafe { y.assume_init() };
+        let width = unsafe { width.assume_init() };
+        let height = unsafe { height.assume_init() };
+
+        if is_maximized {
+            // TODO: multi monitor support?
+            WindowGeometryState::Maximized { monitor_index: 0 }
+        } else {
+            WindowGeometryState::Restored {
+                rect: Rect::from_lt_size(
+                    Point::new_logical(x as _, y as _),
+                    Size::new_logical(width as _, height as _),
+                ),
+            }
+        }
     }
 }
 impl WindowHandle {
@@ -304,18 +335,24 @@ pub fn create_main_window<'sys>(
     mode: MainWindowOpenMode,
     mut coreloop: Pin<&mut CoreLoop<'sys>>,
 ) -> WindowHandle {
-    let (size, pos);
+    let (size, pos, flags);
     match mode {
         MainWindowOpenMode::New => {
             size = Size::new_logical(960.0, 540.0);
             pos = Point::new_logical(0.0, 0.0);
+            flags = bridge::WindowCreationFlags::MAIN;
         }
-        MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-            todo!("restore maximized")
+        MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index: _ }) => {
+            // TODO: multi monitor support?
+            size = Size::new_logical(960.0, 540.0);
+            pos = Point::new_logical(0.0, 0.0);
+            flags = bridge::WindowCreationFlags::MAIN
+                | bridge::WindowCreationFlags::INITIAL_FULL_SCREEN;
         }
         MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
             size = rect.size();
             pos = rect.left_top();
+            flags = bridge::WindowCreationFlags::MAIN;
         }
     }
 
@@ -328,7 +365,7 @@ pub fn create_main_window<'sys>(
         });
     let w = NativeWindow::new(
         WindowType::Main {},
-        self::bridge::WindowCreationFlags::MAIN,
+        flags,
         Rect::from_lt_size(pos, size),
         unsafe { coreloop.as_mut().get_unchecked_mut() }
             .composite_tree
@@ -365,16 +402,18 @@ pub fn open_sub_window<'sys>(
     mut coreloop: Pin<&mut CoreLoop<'sys>>,
     setup_content: impl FnOnce(WindowHandle, Pin<&mut CoreLoop<'sys>>),
 ) -> WindowHandle {
-    let (size, pos);
+    let (size, pos, flags);
     match mode {
-        SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
-            tracing::warn!(monitor_index, "TODO: restore maximized");
+        SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index: _ }) => {
+            // TODO: multi monitor support?
             size = Size::new_logical(960.0, 540.0);
             pos = Point::new_logical(0.0, 0.0);
+            flags = bridge::WindowCreationFlags::INITIAL_FULL_SCREEN;
         }
         SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
             size = rect.size();
             pos = rect.left_top();
+            flags = bridge::WindowCreationFlags::empty();
         }
         SubWindowOpenMode::DockDiverge {
             rect,
@@ -387,6 +426,7 @@ pub fn open_sub_window<'sys>(
                 bridge::ni_convert_point_to_screen(position_ref_window.0, &mut x, &mut y);
             }
             pos = Point::new_logical(x as _, y as _);
+            flags = bridge::WindowCreationFlags::empty();
         }
     }
 
@@ -399,7 +439,7 @@ pub fn open_sub_window<'sys>(
         });
     let mut w = NativeWindow::new(
         WindowType::Sub,
-        self::bridge::WindowCreationFlags::empty(),
+        flags,
         Rect::from_lt_size(pos, size),
         unsafe { coreloop.as_mut().get_unchecked_mut() }
             .composite_tree
@@ -481,7 +521,7 @@ pub fn create_flyout_surface<'sys>(
     let h = FlyoutSurfaceHandle::new(parent, pos, size, coreloop.as_mut());
 
     let cl = unsafe { coreloop.get_unchecked_mut() };
-    h.create_render_thread_objects(unsafe { &*cl.syslink.gfx }, &mut cl.delayed_render_messages);
+    h.create_render_thread_objects(cl.syslink.gfx, &mut cl.delayed_render_messages);
     h
 }
 
@@ -494,6 +534,7 @@ impl crate::SystemLink<'_> {
     pub fn prelaunch(&self, main_window: WindowHandle) {
         unsafe {
             self::bridge::ni_show_window_as_primary(main_window.0);
+            bridge::ni_window_perform_postinit(main_window.0);
         }
     }
 

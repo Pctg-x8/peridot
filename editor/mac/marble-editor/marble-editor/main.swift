@@ -13,7 +13,7 @@ let filesystemPersistStateDir = URL.applicationSupportDirectory.path.utf8CString
 
 let menu = NSMenu()
 let appMenu = NSMenu(title: "Peridot Marble Editor")
-let quitMenuItem = appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate), keyEquivalent: "q")
+let quitMenuItem = appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.stop), keyEquivalent: "q")
 quitMenuItem.keyEquivalentModifierMask = .command
 let appMenuItem = menu.addItem(withTitle: "Peridot Marble Editor", action: nil, keyEquivalent: "")
 appMenuItem.title = "Peridot Marble Editor"
@@ -44,7 +44,11 @@ func nsAppRun(_ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>, _ new
     appRunCallbackContext = nil
 }
 
-final class AppMainDelegate : NSObject, NSApplicationDelegate {}
+final class AppMainDelegate : NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        .terminateLater
+    }
+}
 
 final class DockContentPasteboardWriter : NSObject, NSPasteboardWriting {
     static let PasteboardType = NSPasteboard.PasteboardType("io.ct2.peridot.editor.dock")

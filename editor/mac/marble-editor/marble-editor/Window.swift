@@ -5,6 +5,7 @@ final class WindowLink : NSWindow {
     private let windowDelegate: Delegate
     private var callbacks: CallbackSet? = nil
     let mainView = MainView()
+    private var postMaximize: Bool = false
     
     static func fromBorrowedPtr(_ ptr: UnsafeMutableRawPointer) -> WindowLink {
         Unmanaged<WindowLink>.fromOpaque(ptr).takeUnretainedValue()
@@ -25,9 +26,16 @@ final class WindowLink : NSWindow {
         self.titlebarAppearsTransparent = true
         self.titleVisibility = .hidden
         self.title = "Peridot Marble Editor"
+        self.postMaximize = flags.contains(.initialFullScreen)
         
         self.mainView.setup()
         self.contentView = self.mainView
+    }
+    
+    func postinit() {
+        if self.postMaximize {
+            self.toggleFullScreen(nil)
+        }
     }
     
     var metalLayer: CAMetalLayer {
@@ -109,6 +117,7 @@ final class WindowLink : NSWindow {
         let rawValue: UInt32
         
         static let main = Self(rawValue: 0x01)
+        static let initialFullScreen = Self(rawValue: 0x02)
     }
     
     final class CallbackSet {
@@ -243,7 +252,7 @@ final class WindowLink : NSWindow {
 
     final class MainDelegate : Delegate {
         func windowWillClose(_ notification: Notification) {
-            app.terminate(nil)
+            app.stop(nil)
         }
     }
 
@@ -678,6 +687,11 @@ func showWindowAsPrimary(windowLink: UnsafeMutableRawPointer) {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().showAsPrimary()
 }
 
+@_cdecl("ni_window_perform_postinit")
+func windowPerformPostInit(windowLink: UnsafeMutableRawPointer) {
+    WindowLink.fromBorrowedPtr(windowLink).postinit()
+}
+
 @_cdecl("ni_get_content_scale")
 func getContentScale(windowLink: UnsafeMutableRawPointer) -> Float {
     Float(Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().mainView.contentsScale)
@@ -695,6 +709,16 @@ func setWindowCallbacks(
 @_cdecl("ni_get_window_callback_context")
 func getWindowCallbackContext(windowLink: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer? {
     Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue().getCallbackContextPointer()
+}
+
+@_cdecl("ni_query_window_state")
+func queryWindowState(windowLink: UnsafeMutableRawPointer, isMaximized: UnsafeMutablePointer<Bool>, x: UnsafeMutablePointer<CDouble>, y: UnsafeMutablePointer<CDouble>, width: UnsafeMutablePointer<CDouble>, height: UnsafeMutablePointer<CDouble>) {
+    let w = WindowLink.fromBorrowedPtr(windowLink)
+    isMaximized.pointee = w.styleMask.contains(.fullScreen)
+    x.pointee = w.frame.minX
+    y.pointee = w.frame.minY
+    width.pointee = w.frame.width
+    height.pointee = w.frame.height
 }
 
 @_cdecl("ni_accepts_key_inputs_to_view")
