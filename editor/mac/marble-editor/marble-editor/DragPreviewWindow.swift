@@ -11,6 +11,7 @@ final class DragPreviewWindow : NSPanel {
             defer: false,
         )
         
+        self.ignoresMouseEvents = true
         self.backgroundColor = NSColor(red: 0.0625, green: 0.6875, blue: 1.0, alpha: 0.0625)
         let view = NSVisualEffectView()
         view.blendingMode = .behindWindow
@@ -31,6 +32,10 @@ final class DragPreviewWindow : NSPanel {
     func move(to: NSPoint) {
         self.setFrameTopLeftPoint(to)
     }
+    
+    func updateRect(_ rect: NSRect) {
+        self.setFrame(rect, display: false)
+    }
 }
 
 @_cdecl("ni_show_drag_preview")
@@ -42,6 +47,11 @@ func showDragPreview(x: Double, y: Double, width: Double, height: Double) {
 @_cdecl("ni_hide_drag_preview")
 func hideDragPreview() {
     DragPreviewWindow.instance.hide()
+}
+
+@_cdecl("ni_update_drag_preview_rect")
+func updateDragPreviewRect(x: Double, y: Double, width: Double, height: Double) {
+    DragPreviewWindow.instance.updateRect(NSRect(x: x, y: y - height, width: width, height: height))
 }
 
 @_cdecl("ni_move_drag_preview")

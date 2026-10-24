@@ -15,7 +15,6 @@ use crate::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
-    uikit::MenuItemSubMenuView,
 };
 
 #[repr(transparent)]
@@ -185,7 +184,10 @@ impl Handle {
         &mut self.instance_vars_mut().kf_state
     }
 
-    pub fn submenu_pop_position(&self, view: &MenuItemSubMenuView) -> Point<LogicalUnit> {
+    pub fn submenu_pop_position(
+        &self,
+        view: &crate::uikit::menu::InteractableElement,
+    ) -> Point<LogicalUnit> {
         let ivars = self.instance_vars();
         let base = ivars.spawned_position;
         let size = ivars.size;
@@ -211,7 +213,6 @@ impl Handle {
             key_modifier,
         );
         h.instance_vars().coreloop().dispatch_menu_pointer_down(
-            h,
             super::PointerID(),
             match button {
                 super::bridge::MouseButton::Left => PointerButton::Primary,
@@ -249,7 +250,6 @@ impl Handle {
         let key_modifier = translate_event_modifier_key(modifier_flags);
 
         h.instance_vars().coreloop().dispatch_menu_pointer_up(
-            h,
             super::PointerID(),
             match button {
                 super::bridge::MouseButton::Left => PointerButton::Primary,
@@ -330,8 +330,10 @@ impl<'sys> SharedState<'sys> {
         extern "C" fn cb<'sys>(ctx: *mut core::ffi::c_void, on_context_menu_surface: u8) {
             if on_context_menu_surface == 0 {
                 // コンテキストメニュー以外でクリックが入った
-                unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.close_all_menus();
-                unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.update_view_all();
+                /*unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }
+                    .close_all_flyouts();
+                unsafe { Pin::new_unchecked(&mut *ctx.cast::<CoreLoop<'sys>>()) }.update_view_all();*/
+                tracing::warn!("global click");
             }
         }
 

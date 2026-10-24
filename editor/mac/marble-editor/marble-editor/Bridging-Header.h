@@ -27,6 +27,11 @@ typedef struct {
     void (*onKeyUpWithChar)(void* callerContext, WindowLink window, uint16_t code, uint32_t modifierFlags, uint32_t ch);
     void (*onKeyFocusStateChanged)(void* callerContext, WindowLink window, uint8_t focused);
     void (*onScrollWheel)(void* callerContext, WindowLink window, uint32_t modifierFlags, double amount);
+    void (*onDragBegin)(void* callerContext, WindowLink window, double x, double y);
+    void (*onDragMove)(void* callerContext, WindowLink window, double x, double y);
+    void (*onDragEnd)(void* callerContext, WindowLink window, double x, double y);
+    void (*onDockDragEnterToKnownSurface)(void* callerContext, WindowLink window);
+    void (*onDockDragLeaveFromKnownSurface)(void* callerContext, WindowLink window);
 } WindowLinkCallbacks;
 
 typedef struct FlyoutSurface_* FlyoutSurface;

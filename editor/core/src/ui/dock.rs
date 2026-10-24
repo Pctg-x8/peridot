@@ -1283,11 +1283,13 @@ fn relayout_dock(
 
 pub struct DockingPreviewState {
     tab_size: Size<LogicalUnit>,
-    original_rect: Rect<LogicalUnit>,
+    pub original_rect: Rect<LogicalUnit>,
     pub offset: Point<LogicalUnit>,
     pub source_window: WindowHandle,
     pub source_dock: DockID,
     pub tab_index: usize,
+    #[cfg(target_os = "macos")]
+    pub entering_surface: Option<WindowHandle>,
 }
 
 /// RedockingのPreviewを開始する
@@ -1331,6 +1333,8 @@ pub(self) fn begin_preview<'sys>(
         source_window: initiator,
         source_dock: target_dock,
         tab_index,
+        #[cfg(target_os = "macos")]
+        entering_surface: Some(initiator),
     };
 
     let root_layout = env.view_layout_untyped(root_view_id).expect("query failed");
@@ -1348,7 +1352,7 @@ pub fn move_preview(
     root_manager: &WindowDockingManager,
     store: &DockStore,
     client_pos: &Point<LogicalUnit>,
-    state: &mut DockingPreviewState,
+    state: &DockingPreviewState,
 ) -> Rect<LogicalUnit> {
     compute_recommended_operation(
         root_manager.root_id,

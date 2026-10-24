@@ -166,7 +166,7 @@ impl MemoryStats {
             }
             let task_vm_info = unsafe { task_vm_info.assume_init() };
 
-            tracing::debug!(?task_vm_info, "mach task mem");
+            // tracing::debug!(?task_vm_info, "mach task mem");
             // TODO: 暫定で割り振り private residentがinternalかはちょっと自信がない（本来はそういうテストする機能をつけて挙動を確認するのが良い）
             return Self {
                 total_resident_bytes: task_vm_info.resident_size as _,

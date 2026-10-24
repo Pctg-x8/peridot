@@ -10,12 +10,12 @@ final class WindowLink : NSWindow {
         Unmanaged<WindowLink>.fromOpaque(ptr).takeUnretainedValue()
     }
     
-    init(_ flags: CreationFlags) {
+    init(_ flags: CreationFlags, _ rect: NSRect) {
         let styleMask: StyleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
         
         self.windowDelegate = flags.contains(.main) ? MainDelegate() : SubDelegate()
         super.init(
-            contentRect: NSRect(x: 0.0, y: 0.0, width: 960.0, height: 540.0),
+            contentRect: rect,
             styleMask: styleMask,
             backing: .buffered,
             defer: false
@@ -207,6 +207,26 @@ final class WindowLink : NSWindow {
         func notifyScrollWheel(_ modifierFlags: NSEvent.ModifierFlags, _ amount: CGFloat) {
             self.funcs.pointee.onScrollWheel(self.ctx, self.windowLinkPointer, UInt32(modifierFlags.rawValue), amount)
         }
+        
+        func notifyBeginDrag(_ screenPoint: NSPoint) {
+            self.funcs.pointee.onDragBegin(self.ctx, self.windowLinkPointer, Double(screenPoint.x), Double(screenPoint.y))
+        }
+        
+        func notifyMoveDrag(_ screenPoint: NSPoint) {
+            self.funcs.pointee.onDragMove(self.ctx, self.windowLinkPointer, Double(screenPoint.x), Double(screenPoint.y))
+        }
+        
+        func notifyEndDrag(_ screenPoint: NSPoint) {
+            self.funcs.pointee.onDragEnd(self.ctx, self.windowLinkPointer, Double(screenPoint.x), Double(screenPoint.y))
+        }
+        
+        func notifyDockDragEnterToKnownSurface() {
+            self.funcs.pointee.onDockDragEnterToKnownSurface(self.ctx, self.windowLinkPointer)
+        }
+        
+        func notifyDockDragLeaveFromKnownSurface() {
+            self.funcs.pointee.onDockDragLeaveFromKnownSurface(self.ctx, self.windowLinkPointer)
+        }
     }
 
     class Delegate : NSObject, NSWindowDelegate {
@@ -257,6 +277,8 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
         self.contentsScale = min(scaling.width, scaling.height)
         layer.contentsScale = self.contentsScale
         self.layer = layer
+        
+        self.registerForDraggedTypes([DockContentPasteboardWriter.PasteboardType])
     }
     
     override var acceptsFirstResponder: Bool {
@@ -591,16 +613,53 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
         return .move
     }
     
+    func draggingSession(_ session: NSDraggingSession, willBeginAt screenPoint: NSPoint) {
+        self.windowLinkCallbacks?.notifyBeginDrag(screenPoint)
+    }
+    
+    func draggingSession(_ session: NSDraggingSession, movedTo screenPoint: NSPoint) {
+        self.windowLinkCallbacks?.notifyMoveDrag(screenPoint)
+    }
+    
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
-        logger.log("dragging ended")
+        self.windowLinkCallbacks?.notifyEndDrag(screenPoint)
+        activeDraggingSession = nil
+    }
+    
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        if sender.draggingPasteboard.types?.contains(DockContentPasteboardWriter.PasteboardType) ?? false {
+            self.windowLinkCallbacks?.notifyDockDragEnterToKnownSurface()
+            return .move
+        }
+        
+        logger.debug("draggingEntered")
+        return []
+    }
+    
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        if sender?.draggingPasteboard.types?.contains(DockContentPasteboardWriter.PasteboardType) ?? false {
+            self.windowLinkCallbacks?.notifyDockDragLeaveFromKnownSurface()
+            return
+        }
+        
+        logger.debug("draggingExited")
+    }
+    
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+//        logger.debug("draggingUpdates")
+        return .move
+    }
+    
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        logger.debug("draggingEnded")
     }
 }
 
 var mouseAndMouseCursorAssociated = true
 
 @_cdecl("ni_create_window")
-func createWindow(flags: UInt32) -> UnsafeMutableRawPointer {
-    return Unmanaged.passRetained(WindowLink(WindowLink.CreationFlags(rawValue: flags))).toOpaque()
+func createWindow(flags: UInt32, x: CDouble, y: CDouble, width: CDouble, height: CDouble) -> UnsafeMutableRawPointer {
+    return Unmanaged.passRetained(WindowLink(WindowLink.CreationFlags(rawValue: flags), NSRect(x: x, y: y, width: width, height: height))).toOpaque()
 }
 
 @_cdecl("ni_release_window")
@@ -693,6 +752,16 @@ func convertPointToScreen(windowLink: UnsafeMutableRawPointer, x: UnsafeMutableP
     y.pointee = result.y
 }
 
+@_cdecl("ni_convert_point_from_screen")
+func convertPointFromScreen(windowLink: UnsafeMutableRawPointer, x: UnsafeMutablePointer<Double>, y: UnsafeMutablePointer<Double>) {
+    let w = WindowLink.fromBorrowedPtr(windowLink)
+    
+    let result = w.convertPoint(fromScreen: NSPoint(x: x.pointee, y: y.pointee))
+    
+    x.pointee = result.x
+    y.pointee = w.frame.height - result.y
+}
+
 @_cdecl("ni_lock_cursor")
 func lockCursor() {
     CGAssociateMouseAndMouseCursorPosition(0)
@@ -705,9 +774,14 @@ func unlockCursor() {
     mouseAndMouseCursorAssociated = true
 }
 
+var activeDraggingSession: NSDraggingSession? = nil
+
 @_cdecl("ni_begin_drag")
 func beginDrag(windowLink: UnsafeMutableRawPointer) {
-    let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()
+    let w = WindowLink.fromBorrowedPtr(windowLink)
     
-    w.mainView.beginDraggingSession(with: [], event: w.mainView.lastMouseDownEvent!, source: w.mainView)
+    assert(activeDraggingSession == nil, "nested dragging session?")
+    let content = NSDraggingItem(pasteboardWriter: DockContentPasteboardWriter())
+    content.setDraggingFrame(NSRect(x: 0, y: 0, width: 16, height: 16), contents: nil)
+    activeDraggingSession = w.mainView.beginDraggingSession(with: [content], event: w.mainView.lastMouseDownEvent!, source: w.mainView)
 }

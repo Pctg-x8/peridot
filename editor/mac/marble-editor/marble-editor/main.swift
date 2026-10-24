@@ -46,6 +46,26 @@ func nsAppRun(_ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>, _ new
 
 final class AppMainDelegate : NSObject, NSApplicationDelegate {}
 
+final class DockContentPasteboardWriter : NSObject, NSPasteboardWriting {
+    static let PasteboardType = NSPasteboard.PasteboardType("io.ct2.peridot.editor.dock")
+    
+    func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
+        [DockContentPasteboardWriter.PasteboardType]
+    }
+    
+    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+        .init(rawValue: 0)
+    }
+    
+    func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
+        if type == DockContentPasteboardWriter.PasteboardType {
+            NSData()
+        } else {
+            nil
+        }
+    }
+}
+
 @_cdecl("manual_capture_begin")
 func manualCaptureBegin(windowLink: UnsafeMutableRawPointer) {
     let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()

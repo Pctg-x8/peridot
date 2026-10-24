@@ -87,6 +87,28 @@ pub struct WindowLinkCallbacks {
         modifier_flags: u32,
         amount: f64,
     ),
+    pub on_drag_begin: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        x: c_double,
+        y: c_double,
+    ),
+    pub on_drag_move: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        x: c_double,
+        y: c_double,
+    ),
+    pub on_drag_end: extern "C" fn(
+        caller_context: *mut c_void,
+        window: *mut WindowLink,
+        x: c_double,
+        y: c_double,
+    ),
+    pub on_dock_drag_enter_to_known_surface:
+        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink),
+    pub on_dock_drag_leave_from_known_surface:
+        extern "C" fn(caller_context: *mut c_void, window: *mut WindowLink),
 }
 
 #[repr(C)]
@@ -353,7 +375,13 @@ bitflags! {
 unsafe extern "C" {
     pub fn nsapp_run(callbacks: *const AppRunCallbacks, callback_context: *mut c_void);
 
-    pub fn ni_create_window(flags: u32) -> *mut WindowLink;
+    pub fn ni_create_window(
+        flags: u32,
+        x: c_double,
+        y: c_double,
+        width: c_double,
+        height: c_double,
+    ) -> *mut WindowLink;
     pub fn ni_release_window(window_link: *mut WindowLink);
     pub fn ni_show_window(window_link: *mut WindowLink);
     pub fn ni_show_window_as_primary(window_link: *mut WindowLink);
@@ -371,6 +399,11 @@ unsafe extern "C" {
     );
     pub fn ni_get_metal_layer(window_link: *mut WindowLink) -> *mut c_void;
     pub fn ni_convert_point_to_screen(
+        window_link: *mut WindowLink,
+        x: *mut c_double,
+        y: *mut c_double,
+    );
+    pub fn ni_convert_point_from_screen(
         window_link: *mut WindowLink,
         x: *mut c_double,
         y: *mut c_double,
@@ -395,6 +428,7 @@ unsafe extern "C" {
     pub fn ni_show_drag_preview(x: c_double, y: c_double, width: c_double, height: c_double);
     pub fn ni_hide_drag_preview();
     pub fn ni_move_drag_preview(x: c_double, y: c_double);
+    pub fn ni_update_drag_preview_rect(x: c_double, y: c_double, width: c_double, height: c_double);
 
     pub fn ni_query_filesystem_cachedir_path() -> *const c_char;
     pub fn ni_query_filesystem_persist_statedir_path() -> *const c_char;

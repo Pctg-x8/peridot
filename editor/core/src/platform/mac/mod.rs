@@ -13,11 +13,12 @@ use crate::{
         PointerInputUnit,
         hittest::{CursorShape, HitTestTreeData, HitTestTreeRef, PointerButton},
     },
-    platform::mac::bridge::TextInputClientForwarding,
+    platform::{WindowHandleBase, mac::bridge::TextInputClientForwarding},
     rendering::{
         NewWindowData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTreeRef},
     },
+    ui::dock::DockingPreviewState,
 };
 
 pub mod bridge;
@@ -29,6 +30,81 @@ pub type WindowPersistentStateNativeGeometryUnit = LogicalUnit;
 pub struct WindowHandle(*mut self::bridge::WindowLink);
 unsafe impl Sync for WindowHandle {}
 unsafe impl Send for WindowHandle {}
+impl WindowHandleBase for WindowHandle {
+    #[inline(always)]
+    fn associate_extra_data<T>(&mut self, data: Box<T>) {
+        self.state_mut().extra_data = Box::into_raw(data) as _;
+    }
+
+    #[inline(always)]
+    unsafe fn extra_data_ref<T>(&self) -> &T {
+        unsafe { &*self.state().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
+        unsafe { &mut *self.state_mut().extra_data.cast() }
+    }
+
+    #[inline(always)]
+    unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
+        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
+        self.state_mut().extra_data = core::ptr::null_mut();
+
+        r
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
+        &self.state().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
+        &mut self.state_mut().keyboard_focus_state
+    }
+
+    #[inline(always)]
+    fn root_keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
+        self.state().kf_root_group
+    }
+
+    // TODO: impl them
+    fn close(&mut self) {
+        unimplemented!("WindowHandle::on_click_sys_close_button")
+    }
+
+    fn maximize(&self) {
+        unimplemented!("WindowHandle::on_click_sys_maximize_button")
+    }
+
+    fn minimize(&self) {
+        unimplemented!("WindowHandle::on_click_sys_minimize_button")
+    }
+
+    fn restore(&self) {
+        unimplemented!("WindowHandle::on_click_sys_restore_button")
+    }
+
+    #[inline(always)]
+    fn ui_scale_factor(&self) -> f32 {
+        *self.state().active_buffer_scale.lock().expect("poisoned")
+    }
+
+    #[inline(always)]
+    fn client_size(&self) -> Size<LogicalUnit> {
+        *self.state().active_size.lock().expect("poisoned")
+    }
+
+    #[inline(always)]
+    fn client_size_pixels(&self) -> Size<PixelsUnit> {
+        *self.state().active_rt_size.lock().expect("poisoned")
+    }
+
+    fn geometry_state_snapshot(&self, syslink: &SystemLink) -> WindowGeometryState {
+        unimplemented!()
+    }
+}
 impl WindowHandle {
     #[inline(always)]
     pub fn dispatcher(&self) -> &WindowDispatcher {
@@ -65,43 +141,6 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub fn associate_extra_data<T>(&mut self, data: Box<T>) {
-        self.state_mut().extra_data = Box::into_raw(data) as _;
-    }
-
-    #[inline(always)]
-    pub unsafe fn extra_data_ref<T>(&self) -> &T {
-        unsafe { &*self.state().extra_data.cast() }
-    }
-
-    #[inline(always)]
-    pub unsafe fn extra_data_mut<T>(&mut self) -> &mut T {
-        unsafe { &mut *self.state_mut().extra_data.cast() }
-    }
-
-    #[inline(always)]
-    pub unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
-        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
-        self.state_mut().extra_data = core::ptr::null_mut();
-
-        r
-    }
-
-    #[inline(always)]
-    pub fn client_size(&self) -> Size<LogicalUnit> {
-        *self.state().active_size.lock().expect("poisoned")
-    }
-
-    pub fn pixels_client_size(&self) -> Size<PixelsUnit> {
-        *self.state().active_rt_size.lock().expect("poisoned")
-    }
-
-    #[inline(always)]
-    pub fn ui_scale_factor(&self) -> f32 {
-        *self.state().active_buffer_scale.lock().expect("poisoned")
-    }
-
-    #[inline(always)]
     pub fn latest_ui_scale_changes(&self) -> &Mutex<Option<f32>> {
         &self.state().latest_ui_scale_changes
     }
@@ -119,21 +158,6 @@ impl WindowHandle {
     }
 
     #[inline(always)]
-    pub fn keyboard_focus_state(&self) -> &PerWindowKeyboardFocusState {
-        &self.state().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_state_mut(&mut self) -> &mut PerWindowKeyboardFocusState {
-        &mut self.state_mut().keyboard_focus_state
-    }
-
-    #[inline(always)]
-    pub fn keyboard_focus_group(&self) -> KeyboardFocusGroupRef {
-        self.state().kf_root_group
-    }
-
-    #[inline(always)]
     pub const fn needs_corner_cutout_rendering(&self) -> bool {
         // macはシステムが角のくり抜きしてくれる
         false
@@ -145,29 +169,8 @@ impl WindowHandle {
         false
     }
 
-    // TODO: impl them
-    pub fn on_click_sys_close_button(&self) {
-        unimplemented!("WindowHandle::on_click_sys_close_button")
-    }
-
-    pub fn on_click_sys_maximize_button(&self) {
-        unimplemented!("WindowHandle::on_click_sys_maximize_button")
-    }
-
-    pub fn on_click_sys_minimize_button(&self) {
-        unimplemented!("WindowHandle::on_click_sys_minimize_button")
-    }
-
-    pub fn on_click_sys_restore_button(&self) {
-        unimplemented!("WindowHandle::on_click_sys_restore_button")
-    }
-
     pub fn is_maximized(&self) -> bool {
         false
-    }
-
-    pub fn geometry_state_snapshot(&self, syslink: &SystemLink) -> WindowGeometryState {
-        unimplemented!()
     }
 
     pub fn begin_text_input<T: TextInputClientForwarding>(&self, forwarding: *mut T) {
@@ -301,6 +304,21 @@ pub fn create_main_window<'sys>(
     mode: MainWindowOpenMode,
     mut coreloop: Pin<&mut CoreLoop<'sys>>,
 ) -> WindowHandle {
+    let (size, pos);
+    match mode {
+        MainWindowOpenMode::New => {
+            size = Size::new_logical(960.0, 540.0);
+            pos = Point::new_logical(0.0, 0.0);
+        }
+        MainWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+            todo!("restore maximized")
+        }
+        MainWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+            size = rect.size();
+            pos = rect.left_top();
+        }
+    }
+
     let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
         .ht_manager
         .create(HitTestTreeData {
@@ -311,6 +329,7 @@ pub fn create_main_window<'sys>(
     let w = NativeWindow::new(
         WindowType::Main {},
         self::bridge::WindowCreationFlags::MAIN,
+        Rect::from_lt_size(pos, size),
         unsafe { coreloop.as_mut().get_unchecked_mut() }
             .composite_tree
             .create(CompositeRect {
@@ -326,9 +345,9 @@ pub fn create_main_window<'sys>(
         .get_data_mut(ht_root)
         .root_of_window = Some(main_window_handle);
 
-    let vk_surface = VulkanSurface::new(unsafe { &*coreloop.syslink.gfx }, unsafe {
+    let vk_surface = VulkanSurface::new(coreloop.syslink.gfx, unsafe {
         bedrock::MetalSurfaceCreateInfo::new(w.metal_layer())
-            .execute((&*coreloop.syslink.gfx).instance(), None)
+            .execute(coreloop.syslink.gfx.instance(), None)
             .expect("vk_surface.create")
     });
     unsafe { coreloop.as_mut().get_unchecked_mut() }
@@ -346,6 +365,31 @@ pub fn open_sub_window<'sys>(
     mut coreloop: Pin<&mut CoreLoop<'sys>>,
     setup_content: impl FnOnce(WindowHandle, Pin<&mut CoreLoop<'sys>>),
 ) -> WindowHandle {
+    let (size, pos);
+    match mode {
+        SubWindowOpenMode::Restore(WindowGeometryState::Maximized { monitor_index }) => {
+            tracing::warn!(monitor_index, "TODO: restore maximized");
+            size = Size::new_logical(960.0, 540.0);
+            pos = Point::new_logical(0.0, 0.0);
+        }
+        SubWindowOpenMode::Restore(WindowGeometryState::Restored { rect }) => {
+            size = rect.size();
+            pos = rect.left_top();
+        }
+        SubWindowOpenMode::DockDiverge {
+            rect,
+            position_ref_window,
+        } => {
+            size = rect.size();
+            let mut x = rect.left as _;
+            let mut y = rect.top as _;
+            unsafe {
+                bridge::ni_convert_point_to_screen(position_ref_window.0, &mut x, &mut y);
+            }
+            pos = Point::new_logical(x as _, y as _);
+        }
+    }
+
     let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
         .ht_manager
         .create(HitTestTreeData {
@@ -356,6 +400,7 @@ pub fn open_sub_window<'sys>(
     let mut w = NativeWindow::new(
         WindowType::Sub,
         self::bridge::WindowCreationFlags::empty(),
+        Rect::from_lt_size(pos, size),
         unsafe { coreloop.as_mut().get_unchecked_mut() }
             .composite_tree
             .create(CompositeRect {
@@ -371,23 +416,11 @@ pub fn open_sub_window<'sys>(
         .get_data_mut(ht_root)
         .root_of_window = Some(handle);
     w.show();
-    // notify resize on show(register to pointer input manager)
-    let mut width = core::mem::MaybeUninit::uninit();
-    let mut height = core::mem::MaybeUninit::uninit();
-    unsafe {
-        self::bridge::ni_get_size_logical(w.native_ptr, width.as_mut_ptr(), height.as_mut_ptr())
-    }
-    coreloop.as_mut().resize_window(
-        handle,
-        Size::new_logical(unsafe { width.assume_init() as _ }, unsafe {
-            height.assume_init() as _
-        }),
-    );
 
-    let vk_surface = VulkanSurface::new(unsafe { &*coreloop.syslink.gfx }, unsafe {
+    let vk_surface = VulkanSurface::new(coreloop.syslink.gfx, unsafe {
         bedrock::SurfaceCreateInfo::execute(
             &bedrock::MetalSurfaceCreateInfo::new(w.metal_layer()),
-            bedrock::InstanceChild::instance(&*coreloop.syslink.gfx),
+            bedrock::InstanceChild::instance(coreloop.syslink.gfx),
             None,
         )
         .expect("vk_surface.create")
@@ -498,20 +531,42 @@ impl crate::SystemLink<'_> {
         &self,
         initiator: WindowHandle,
         pointer: &PointerID,
-        offset: Point<LogicalUnit>,
         rect: &Rect<LogicalUnit>,
+        state: DockingPreviewState,
     ) {
+        let preview_rect = Rect::from_lt_size(state.offset, rect.size());
+        unsafe { &mut *initiator.dispatcher().coreloop }.docking_preview_state = Some(state);
         unsafe {
+            self::bridge::ni_show_drag_preview(
+                preview_rect.left as _,
+                preview_rect.top as _,
+                preview_rect.width as _,
+                preview_rect.height as _,
+            );
             self::bridge::ni_begin_drag(initiator.0);
         }
     }
 
-    pub fn update_pane_drag(&self, _on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
-        unimplemented!();
+    pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
+        let mut x = rect.left as _;
+        let mut y = rect.top as _;
+        unsafe {
+            bridge::ni_convert_point_to_screen(on_surface.0, &mut x, &mut y);
+        }
+        unsafe {
+            self::bridge::ni_update_drag_preview_rect(
+                x as _,
+                y as _,
+                rect.width as _,
+                rect.height as _,
+            );
+        }
     }
 
     pub fn end_pane_drag(&self) {
-        unimplemented!();
+        unsafe {
+            self::bridge::ni_hide_drag_preview();
+        }
     }
 }
 
@@ -524,11 +579,20 @@ impl NativeWindow {
     pub fn new<'sys>(
         window_type: WindowType,
         flags: self::bridge::WindowCreationFlags,
+        rect: Rect<LogicalUnit>,
         composite_root: CompositeTreeRef,
         ht_root: HitTestTreeRef,
         mut coreloop: Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
-        let native_ptr = unsafe { bridge::ni_create_window(flags.bits()) };
+        let native_ptr = unsafe {
+            bridge::ni_create_window(
+                flags.bits(),
+                rect.left as _,
+                rect.top as _,
+                rect.width as _,
+                rect.height as _,
+            )
+        };
         let init_scale = unsafe { bridge::ni_get_content_scale(native_ptr) };
         let kf_root_group = unsafe { coreloop.as_mut().get_unchecked_mut() }
             .keyboard_focus_registry
@@ -543,10 +607,8 @@ impl NativeWindow {
                     std::sync::atomic::AtomicBool::new(false),
                 ),
                 latest_ui_scale_changes: Mutex::new(None),
-                active_size: std::sync::Mutex::new(Size::new_logical(960.0, 540.0)),
-                active_rt_size: std::sync::Mutex::new(
-                    Size::new_logical(960.0, 540.0).to_pixels_ceil(init_scale),
-                ),
+                active_size: std::sync::Mutex::new(rect.size()),
+                active_rt_size: std::sync::Mutex::new(rect.size().to_pixels_ceil(init_scale)),
                 active_buffer_scale: std::sync::Mutex::new(init_scale),
                 composite_root,
                 ht_root,
@@ -568,6 +630,13 @@ impl NativeWindow {
             on_key_up_with_char: WindowDispatcher::on_key_up_with_char,
             on_key_focus_state_changed: WindowDispatcher::on_key_focus_state_changed,
             on_scroll_wheel: WindowDispatcher::on_scroll_wheel,
+            on_drag_begin: WindowDispatcher::on_drag_begin,
+            on_drag_move: WindowDispatcher::on_drag_move,
+            on_drag_end: WindowDispatcher::on_drag_end,
+            on_dock_drag_enter_to_known_surface:
+                WindowDispatcher::on_dock_drag_enter_to_known_surface,
+            on_dock_drag_leave_from_known_surface:
+                WindowDispatcher::on_dock_drag_leave_from_known_surface,
         };
         unsafe {
             bridge::ni_set_window_callbacks(native_ptr, callbacks, Box::into_raw(dispatcher) as _);
@@ -675,7 +744,6 @@ impl<'sys> WindowDispatcher<'sys> {
             key_modifier,
         );
         this.coreloop().handle_pointer_down(
-            target,
             pointer_id,
             match button {
                 bridge::MouseButton::Left => PointerButton::Primary,
@@ -734,7 +802,6 @@ impl<'sys> WindowDispatcher<'sys> {
         let key_modifier = translate_event_modifier_key(modifier_flags);
 
         this.coreloop().handle_pointer_up(
-            target,
             pointer_id,
             match button {
                 bridge::MouseButton::Left => PointerButton::Primary,
@@ -920,7 +987,7 @@ impl<'sys> WindowDispatcher<'sys> {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
 
         this.coreloop()
-            .handle_window_focus_changed(WindowHandle(window), focused != 0);
+            .notify_focus_changes(WindowHandle(window), focused != 0);
         this.coreloop().update_view_all();
     }
 
@@ -935,6 +1002,101 @@ impl<'sys> WindowDispatcher<'sys> {
         this.coreloop()
             .dispatch_scroll_wheel(amount as _, translate_event_modifier_key(modifier_flags));
         this.coreloop().update_view_all();
+    }
+
+    extern "C" fn on_drag_begin(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut bridge::WindowLink,
+        x: core::ffi::c_double,
+        y: core::ffi::c_double,
+    ) {
+        tracing::debug!(?window, x, y, "on drag begin");
+    }
+
+    extern "C" fn on_drag_move(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut bridge::WindowLink,
+        mut x: core::ffi::c_double,
+        mut y: core::ffi::c_double,
+    ) {
+        tracing::debug!(?window, x, y, "on drag move");
+
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let docking_preview_state = unsafe { &*this.coreloop }
+            .docking_preview_state
+            .as_ref()
+            .expect("not dragging");
+        if let Some(entering_surface) = docking_preview_state.entering_surface {
+            unsafe {
+                bridge::ni_convert_point_from_screen(entering_surface.0, &mut x, &mut y);
+            }
+            this.coreloop()
+                .move_redock_preview(entering_surface, Point::new_logical(x as _, y as _));
+        } else {
+            unsafe {
+                bridge::ni_update_drag_preview_rect(
+                    x,
+                    y,
+                    docking_preview_state.original_rect.width as _,
+                    docking_preview_state.original_rect.height as _,
+                );
+            }
+        }
+    }
+
+    extern "C" fn on_drag_end(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut bridge::WindowLink,
+        mut x: core::ffi::c_double,
+        mut y: core::ffi::c_double,
+    ) {
+        tracing::debug!(?window, x, y, "on drag end");
+
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let docking_preview_state = unsafe { &*this.coreloop }
+            .docking_preview_state
+            .as_ref()
+            .expect("no dragging");
+        let destination_surface = docking_preview_state
+            .entering_surface
+            .unwrap_or(docking_preview_state.source_window);
+        unsafe {
+            bridge::ni_convert_point_from_screen(destination_surface.0, &mut x, &mut y);
+        }
+        this.coreloop()
+            .confirm_redock(destination_surface, Point::new_logical(x as _, y as _));
+    }
+
+    extern "C" fn on_dock_drag_enter_to_known_surface(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut bridge::WindowLink,
+    ) {
+        tracing::debug!("dock drag enter to known surface");
+
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let docking_preview_state = unsafe { &mut *this.coreloop }
+            .docking_preview_state
+            .as_mut()
+            .expect("not docking");
+        docking_preview_state.entering_surface = Some(WindowHandle(window));
+    }
+
+    extern "C" fn on_dock_drag_leave_from_known_surface(
+        caller_context: *mut core::ffi::c_void,
+        window: *mut bridge::WindowLink,
+    ) {
+        tracing::debug!("dock drag leave from known surface");
+
+        let this = unsafe { &mut *caller_context.cast::<Self>() };
+        let docking_preview_state = unsafe { &mut *this.coreloop }
+            .docking_preview_state
+            .as_mut()
+            .expect("not docking");
+        assert_eq!(
+            docking_preview_state.entering_surface.take(),
+            Some(WindowHandle(window)),
+            "state drifting",
+        );
     }
 }
 
