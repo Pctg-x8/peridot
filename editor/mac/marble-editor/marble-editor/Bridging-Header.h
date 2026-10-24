@@ -48,6 +48,7 @@ typedef struct {
     void (*selectedRange)(void* context, int64_t* outLocation, int64_t* outLength);
     void (*setMarkedText)(
         void* context,
+        WindowLink window,
         const char* str,
         int64_t newSelectionLocation,
         int64_t newSelectionLength,
@@ -56,6 +57,7 @@ typedef struct {
     );
     void (*insertText)(
         void* context,
+        WindowLink window,
         const char* str,
         int64_t replacementLocation,
         int64_t replacementLength

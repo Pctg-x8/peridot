@@ -135,7 +135,7 @@ final class WindowLink : NSWindow {
             self.funcs.pointee.destructor(self.ctx)
         }
         
-        private var windowLinkPointer: OpaquePointer {
+        var windowLinkPointer: OpaquePointer {
             get { return OpaquePointer(Unmanaged.passUnretained(self.owner).toOpaque()) }
         }
         
@@ -407,6 +407,7 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
         if let s = string as? NSString {
             fw.ftable.pointee.setMarkedText(
                 fw.context,
+                self.windowLinkCallbacks!.windowLinkPointer,
                 s.utf8String,
                 Int64(selectedRange.location),
                 Int64(selectedRange.length),
@@ -417,6 +418,7 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
             s.string.utf8CString.withUnsafeBufferPointer { strptr in
                 fw.ftable.pointee.setMarkedText(
                     fw.context,
+                    self.windowLinkCallbacks!.windowLinkPointer,
                     strptr.baseAddress,
                     Int64(selectedRange.location),
                     Int64(selectedRange.length),
@@ -486,6 +488,7 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
         if let s = string as? NSString {
             fw.ftable.pointee.insertText(
                 fw.context,
+                self.windowLinkCallbacks!.windowLinkPointer,
                 s.utf8String,
                 Int64(replacementRange.location),
                 Int64(replacementRange.length),
@@ -494,6 +497,7 @@ final class MainView : NSView, NSTextInputClient, NSDraggingSource {
             s.string.utf8CString.withUnsafeBufferPointer { strptr in
                 fw.ftable.pointee.insertText(
                     fw.context,
+                    self.windowLinkCallbacks!.windowLinkPointer,
                     strptr.baseAddress,
                     Int64(replacementRange.location),
                     Int64(replacementRange.length),
