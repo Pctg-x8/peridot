@@ -3,6 +3,8 @@ use core::ffi::*;
 use apple_sdk_port::raw::CFStringRef;
 use bitflags::bitflags;
 
+use crate::uicore::{ViewRenderQueue, ViewRenderer};
+
 #[repr(C)]
 pub struct AppRunCallbacks {
     pub redispatch_sync_events: extern "C" fn(ctx: *mut c_void),
@@ -132,6 +134,26 @@ pub struct FlyoutSurfaceCallbacks {
     pub on_pointer_leave: extern "C" fn(sender: *mut FlyoutSurface),
 }
 
+pub struct TextInputClientSetMarkedTextContext<'a> {
+    pub view_render_queue: &'a mut ViewRenderQueue,
+}
+impl ViewRenderer for TextInputClientSetMarkedTextContext<'_> {
+    #[inline(always)]
+    fn schedule_view_render_untyped(&mut self, target: crate::uicore::ViewIdentifier) {
+        self.view_render_queue.schedule(target);
+    }
+}
+
+pub struct TextInputClientInsertTextContext<'a> {
+    pub view_render_queue: &'a mut ViewRenderQueue,
+}
+impl ViewRenderer for TextInputClientInsertTextContext<'_> {
+    #[inline(always)]
+    fn schedule_view_render_untyped(&mut self, target: crate::uicore::ViewIdentifier) {
+        self.view_render_queue.schedule(target);
+    }
+}
+
 pub trait TextInputClientForwarding {
     fn has_marked_text(&self) -> bool;
     fn marked_range(&self, out_location: *mut i64, out_length: *mut i64) -> bool;
@@ -143,12 +165,14 @@ pub trait TextInputClientForwarding {
         new_selection_length: i64,
         replacement_location: i64,
         replacement_length: i64,
+        ctx: &mut TextInputClientSetMarkedTextContext,
     );
     fn insert_text(
         &self,
         text: &core::ffi::CStr,
         replacement_location: i64,
         replacement_length: i64,
+        ctx: &mut TextInputClientInsertTextContext,
     );
     fn substring(
         &self,
@@ -180,6 +204,7 @@ pub struct TextInputClientForwardingFT {
         extern "C" fn(context: *mut c_void, out_location: *mut i64, out_length: *mut i64),
     pub set_marked_text: extern "C" fn(
         context: *mut c_void,
+        window_link: *mut WindowLink,
         str: *const c_char,
         new_selection_location: i64,
         new_selection_length: i64,
@@ -188,6 +213,7 @@ pub struct TextInputClientForwardingFT {
     ),
     pub insert_text: extern "C" fn(
         context: *mut c_void,
+        window_link: *mut WindowLink,
         str: *const c_char,
         replacement_location: i64,
         replacement_length: i64,
@@ -243,12 +269,15 @@ impl TextInputClientForwardingFT {
         }
         extern "C" fn set_marked_text<T: TextInputClientForwarding>(
             context: *mut c_void,
+            window_link: *mut WindowLink,
             text: *const c_char,
             new_selection_location: i64,
             new_selection_length: i64,
             replacement_location: i64,
             replacement_length: i64,
         ) {
+            let mut w = super::WindowHandle(window_link);
+
             T::set_marked_text(
                 unsafe { &*context.cast::<T>() },
                 unsafe { CStr::from_ptr(text) },
@@ -256,19 +285,30 @@ impl TextInputClientForwardingFT {
                 new_selection_length,
                 replacement_location,
                 replacement_length,
+                &mut TextInputClientSetMarkedTextContext {
+                    view_render_queue: &mut unsafe { &mut *w.dispatcher_mut().coreloop }
+                        .view_render_queue,
+                },
             );
         }
         extern "C" fn insert_text<T: TextInputClientForwarding>(
             context: *mut c_void,
+            window_link: *mut WindowLink,
             text: *const c_char,
             replacement_location: i64,
             replacement_length: i64,
         ) {
+            let mut w = super::WindowHandle(window_link);
+
             T::insert_text(
                 unsafe { &*context.cast::<T>() },
                 unsafe { CStr::from_ptr(text) },
                 replacement_location,
                 replacement_length,
+                &mut TextInputClientInsertTextContext {
+                    view_render_queue: &mut unsafe { &mut *w.dispatcher_mut().coreloop }
+                        .view_render_queue,
+                },
             );
         }
         extern "C" fn substring<T: TextInputClientForwarding>(

@@ -61,7 +61,7 @@ use crate::{
         ContainerView, ContainerViewInit, MenuCommandSelectionHandler, MenuItem,
         MenuItemCommonResources, NumericInputViewIO, NumericInputViewInit, RadioButtonView,
         ScrollContainer, ScrollContainerInit, SimpleButtonEventHandler, SimpleButtonViewInit,
-        StaticTextViewInit, TextInputView, TextInputViewIO, TextInputViewInit,
+        StaticTextViewInit, TextInputViewIO, TextInputViewInit,
     },
 };
 
@@ -77,13 +77,6 @@ mod ui;
 mod uicore;
 mod uikit;
 mod utils;
-
-static APP_WAKER_VTABLE: core::task::RawWakerVTable = core::task::RawWakerVTable::new(
-    |data| core::task::RawWaker::new(data, &APP_WAKER_VTABLE),
-    |_| {},
-    |_| {},
-    |_| {},
-);
 
 pub fn launch() {
     #[cfg(windows)]
@@ -111,7 +104,6 @@ pub fn launch() {
     profiler::init_profiler();
     tracing::info!("app start");
 
-    let mut event_store = VecDeque::new();
     let (rt_sender, rt_receiver) = std::sync::mpsc::channel::<RenderMessage>();
     let fs = FileSystem::new();
 
@@ -151,16 +143,6 @@ pub fn launch() {
     let terminate_event = std::sync::Arc::new(
         EventFD::new(0, EventFDFlags::empty()).expect("terminate_event.create"),
     );
-
-    let mut polling = false;
-    let empty_dispatcher = LogicFiberEventDispatcher {
-        event_store: &mut event_store,
-        polling: &mut polling,
-        #[allow(invalid_value)]
-        poll_fn_ptr: unsafe { core::mem::MaybeUninit::uninit().assume_init() },
-        future_ptr: core::ptr::null_mut(),
-    };
-    let mut app_event_dispatcher = core::pin::pin!(empty_dispatcher.clone());
 
     #[cfg(feature = "wayland")]
     let mut wl_global_msg = core::pin::pin!(platform::unix::wayland::GlobalMessaging::new(
@@ -226,7 +208,6 @@ pub fn launch() {
             rt_sender: rt_sender.clone(),
             gfx: &gfx,
             font_set: FontSet::new(&root_font_set),
-            event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             #[cfg(target_os = "linux")]
             dbus: &dbus,
             #[cfg(feature = "wayland")]
@@ -267,28 +248,6 @@ pub fn launch() {
     #[cfg(feature = "wayland")]
     wl_global_msg.as_mut().bind_coreloop(coreloop.as_mut());
 
-    let mut app = core::pin::pin!(run(
-        unsafe {
-            Pin::new_unchecked(&mut *core::ptr::from_mut(
-                coreloop.as_mut().get_unchecked_mut(),
-            ))
-        },
-        EventQueue {
-            event_store: &mut event_store
-        }
-    ));
-    // 関数を経由してFutureの具象型をトラップする
-    fn launch_app_loop<'sys, AppFuture: core::future::Future<Output = ()> + 'sys>(
-        _app: Pin<&mut AppFuture>,
-        app_event_dispatcher: &mut LogicFiberEventDispatcher,
-    ) {
-        app_event_dispatcher.poll_fn_ptr =
-            unsafe { core::mem::transmute(AppFuture::poll as *const core::ffi::c_void) };
-    }
-    app_event_dispatcher.future_ptr =
-        unsafe { core::ptr::from_mut(app.as_mut().get_unchecked_mut()).cast() };
-    launch_app_loop(app, &mut app_event_dispatcher);
-    app_event_dispatcher.poll_init();
     coreloop.as_mut().init();
     coreloop.syslink.prelaunch(coreloop.main_window);
 
@@ -520,7 +479,6 @@ pub fn launch() {
             );
         }
 
-        app_event_dispatcher.terminate();
         shutdown.store(true, std::sync::atomic::Ordering::Release);
         render_thread.join().expect("render_thread join");
     });
@@ -547,8 +505,6 @@ impl SyncEvent {
 #[derive(Clone, Debug)]
 pub enum Event {
     Quit,
-    // TODO: これあんまりいい設計じゃないので使わない形にしたい（macOSでのIME入力によるView更新のためだけに必要）
-    ScheduleViewRenderExt { id: ViewIdentifier },
 }
 impl Event {
     /// Profilerに表示するEvent名
@@ -556,99 +512,6 @@ impl Event {
     pub const fn p_name(&self) -> &'static str {
         match self {
             Self::Quit => "Quit",
-            Self::ScheduleViewRenderExt { .. } => "ScheduleViewRenderExt",
-        }
-    }
-}
-
-struct EventQueue {
-    event_store: *mut VecDeque<Event>,
-}
-impl EventQueue {
-    pub async fn next_event(&self) -> Event {
-        EventQueueNextEventAwaiter { q: self }.await
-    }
-}
-
-#[derive(Clone)]
-pub struct LogicFiberEventDispatcher {
-    event_store: *mut VecDeque<Event>,
-    polling: *mut bool,
-    poll_fn_ptr: fn(*mut core::ffi::c_void, ctx: &mut core::task::Context) -> core::task::Poll<()>,
-    future_ptr: *mut core::ffi::c_void,
-}
-impl LogicFiberEventDispatcher {
-    pub fn poll_init(&self) {
-        unsafe {
-            self.polling.write_volatile(true);
-        }
-        let _ = unsafe {
-            (self.poll_fn_ptr)(
-                self.future_ptr,
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            )
-        };
-        unsafe {
-            self.polling.write_volatile(false);
-        }
-    }
-
-    pub fn dispatch(&self, e: Event) {
-        unsafe {
-            (*self.event_store).push_back(e);
-            if !*self.polling {
-                *self.polling = true;
-                let _ = (self.poll_fn_ptr)(
-                    self.future_ptr,
-                    &mut core::task::Context::from_waker(&core::task::Waker::new(
-                        &(),
-                        &APP_WAKER_VTABLE,
-                    )),
-                );
-                *self.polling = false;
-            }
-        }
-    }
-
-    pub fn terminate(&self) {
-        unsafe {
-            (*self.event_store).push_back(Event::Quit);
-        }
-
-        while unsafe {
-            (self.poll_fn_ptr)(
-                self.future_ptr,
-                &mut core::task::Context::from_waker(&core::task::Waker::new(
-                    &(),
-                    &APP_WAKER_VTABLE,
-                )),
-            )
-        }
-        .is_pending()
-        {}
-    }
-
-    pub fn can_immediate_dispatch(&self) -> bool {
-        unsafe { !*self.polling }
-    }
-}
-
-struct EventQueueNextEventAwaiter<'e> {
-    q: &'e EventQueue,
-}
-impl<'e> core::future::Future for EventQueueNextEventAwaiter<'e> {
-    type Output = Event;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        match unsafe { (&mut *self.get_mut().q.event_store).pop_front() } {
-            None => core::task::Poll::Pending,
-            Some(x) => core::task::Poll::Ready(x),
         }
     }
 }
@@ -3856,22 +3719,6 @@ impl<'sys> CoreLoop<'sys> {
     }
 }
 
-#[tracing::instrument(target = "peridot_marble_editor::logic_fiber", skip_all)]
-async fn run<'sys>(mut inst: Pin<&mut CoreLoop<'sys>>, event_queue: EventQueue) {
-    loop {
-        let e = event_queue.next_event().await;
-        tracing::trace!(target: "event-trace", event = ?e);
-        profiler::scope!(PROCESS_EVENT, str e.p_name());
-        match e {
-            Event::Quit => break,
-            Event::ScheduleViewRenderExt { id } => inst.as_mut().schedule_view_render(id),
-        }
-
-        // after-input common update phase
-        // inst.as_mut().update_view_all();
-    }
-}
-
 pub struct MenuOpenRequest {
     pub parent: WindowHandle,
     pub items: Vec<MenuItem>,
@@ -4291,7 +4138,6 @@ pub struct SystemLink<'sys> {
     gfx: &'sys Graphics,
     rt_sender: RenderMessageSender,
     font_set: FontSet,
-    event_dispatcher: *mut LogicFiberEventDispatcher,
     #[cfg(feature = "wayland")]
     display_server: platform::unix::wayland::DisplayServerLink<'sys>,
     #[cfg(target_os = "linux")]
@@ -4313,18 +4159,8 @@ impl SystemLink<'_> {
     }
 
     #[inline(always)]
-    pub fn event_dispatcher(&self) -> &LogicFiberEventDispatcher {
-        unsafe { &*self.event_dispatcher }
-    }
-
-    #[inline(always)]
     pub const fn font_set(&self) -> &FontSet {
         &self.font_set
-    }
-
-    #[inline(always)]
-    pub fn dispatch_event(&self, event: Event) {
-        unsafe { &*self.event_dispatcher }.dispatch(event);
     }
 }
 
