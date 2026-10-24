@@ -120,7 +120,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         rotation: Quaternion::ONE,
         depth_range: 1.0..10.0,
     };
-    cam.look_at(Vector3::ZERO);
+    cam.look_at(Vector3::ZERO, None);
 
     let [vertex_buffer, cam_uniform_buffer, obj_uniform_buffer] = memory_manager
         .allocate_device_local_buffer_array(

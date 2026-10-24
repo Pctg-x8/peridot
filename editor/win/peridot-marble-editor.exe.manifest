@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0" xmlns:asmv3="urn:schemas-microsoft-com:asm.v3">
+    <asmv3:application>
+        <asmv3:windowsSettings xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings"
+            xmlns:ws2016="http://schemas.microsoft.com/SMI/2016/WindowsSettings"
+            xmlns:ws2005="http://schemas.microsoft.com/SMI/2005/WindowsSettings"
+            xmlns:ws2019="http://schemas.microsoft.com/SMI/2019/WindowsSettings">
+            <ws2019:activeCodePage>UTF-8</ws2019:activeCodePage>
+            <ws2005:dpiAware>true/pm</ws2005:dpiAware>
+            <ws2016:dpiAwareness>PerMonitorV2, PerMonitor, system</ws2016:dpiAwareness>
+            <ws2016:longPathAware>true</ws2016:longPathAware>
+            <heapType>SegmentHeap</heapType>
+        </asmv3:windowsSettings>
+    </asmv3:application>
+</assembly>
