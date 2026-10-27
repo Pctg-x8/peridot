@@ -3,5 +3,3 @@ src/userlib
 src/userlib.rs
 Cargo.toml
 /peridot-cradle
-/.runtime-assets
-

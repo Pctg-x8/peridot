@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use crate::platform::BuildOptions;
+
 /// absolute path to peridot-archiver
 pub fn archiver_path() -> PathBuf {
     if let Some(p) = std::env::var_os("PERIDOT_CLI_ARCHIVER_PATH") {
@@ -33,4 +35,11 @@ pub fn vulkan_sdk_path() -> PathBuf {
 #[inline(always)]
 fn current_exe() -> PathBuf {
     std::env::current_exe().expect("Failed to get exe path")
+}
+
+/// ビルド中に生成されるRuntime Assetの格納パス
+///
+/// 基本的にはプロジェクトごとに生成される（UnityのLibraryとかと同じ扱い）
+pub fn generated_runtime_assets_dir(options: &BuildOptions) -> PathBuf {
+    options.userlib.join(".runtime-assets")
 }
