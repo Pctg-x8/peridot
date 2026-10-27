@@ -44,9 +44,8 @@ pub fn build(
         options.entry_fn_name,
     );
     steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
-    let runtime_asset_path = generated_runtime_assets_dir(options.userlib)
-        .canonicalize()
-        .expect("canonicalize");
+    let runtime_asset_path =
+        generated_runtime_assets_dir(options.userlib.canonicalize().expect("canonicalize"));
 
     // starting build...
     ctx.cwd_cradle_dir();

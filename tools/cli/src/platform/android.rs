@@ -106,9 +106,7 @@ fn gen_build_files(ctx: &steps::BuildContext, appid: &str, userlib_path: &Path) 
     let c = c.replace("**APKAPPID**", &format!("'{}'", appid));
     let c = c.replace(
         "**ASSETS_PATH**",
-        generated_runtime_assets_dir(userlib_path)
-            .canonicalize()
-            .expect("canonicalize")
+        generated_runtime_assets_dir(userlib_path.canonicalize().expect("canonicalize"))
             .to_str()
             .expect("invalid path generated"),
     );
