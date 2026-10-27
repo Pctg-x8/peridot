@@ -60,7 +60,7 @@ fn build_cdeps() {
     println!("cargo::rustc-link-lib=static=slang-compiler");
     println!("cargo::rustc-link-lib=static=core");
     println!("cargo::rustc-link-lib=static=compiler-core");
-    println!("cargo::rustc-link-lib=c++");
+    println!("cargo::rustc-link-lib=stdc++");
     println!(
         "cargo::rustc-link-search={}",
         std::env::var_os("PERIDOT_BUILD_TP_SLANG_LIB_PATH")

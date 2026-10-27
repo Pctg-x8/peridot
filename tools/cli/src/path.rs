@@ -2,18 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::platform::BuildOptions;
-
-/// absolute path to peridot-archiver
-pub fn archiver_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("PERIDOT_CLI_ARCHIVER_PATH") {
-        PathBuf::from(p)
-    } else {
-        // Note: dev-packageのフォルダ構造に依存しているので、そっちを変えたらこっちも変える
-        current_exe().with_file_name("peridot-archiver")
-    }
-}
-
 /// absolute path to builtin assets
 pub fn builtin_assets_path() -> PathBuf {
     if let Some(p) = std::env::var_os("PERIDOT_CLI_BUILTIN_ASSETS_PATH") {

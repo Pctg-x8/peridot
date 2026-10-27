@@ -1,4 +1,5 @@
 use crate::manifest::*;
+use crate::path::generated_runtime_assets_dir;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
 use std::path::Path;
@@ -31,7 +32,7 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
         project_name,
         options.features.clone(),
     );
-    gen_build_files(&ctx, options.appid);
+    gen_build_files(&ctx, options.appid, options.userlib);
     // Note: Androidはタイトルを別ファイル（string.xml）で指定するので、ここで渡した値は使われない
     steps::gen_userlib_import_code(
         &ctx,
@@ -96,13 +97,21 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     }
 }
 
-fn gen_build_files(ctx: &steps::BuildContext, appid: &str) {
+fn gen_build_files(ctx: &steps::BuildContext, appid: &str, userlib_path: &Path) {
     ctx.print_step("Generating build files...");
 
     let android_app_base = ctx.cradle_directory.join("apkbuild/app");
     let c = std::fs::read_to_string(android_app_base.join("build-template.gradle"))
         .expect("Failed to read template gradle script");
     let c = c.replace("**APKAPPID**", &format!("'{}'", appid));
+    let c = c.replace(
+        "**ASSETS_PATH**",
+        generated_runtime_assets_dir(userlib_path)
+            .canonicalize()
+            .expect("canonicalize")
+            .to_str()
+            .expect("invalid path generated"),
+    );
     std::fs::write(android_app_base.join("build.gradle"), c)
         .expect("Failed to write gradle script");
 

@@ -9,12 +9,6 @@ pub fn build(
     project_config: &PlatformConfiguration,
     build_mode: BuildMode,
 ) {
-    let builtin_assets_path = crate::path::builtin_assets_path();
-    let asset_path_abs = options
-        .ext_asset_path
-        .as_ref()
-        .map(|x| x.canonicalize().expect("Failed to resolve ext asset path"));
-
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest =
@@ -49,6 +43,12 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
+    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
+    let runtime_asset_path = generated_runtime_assets_dir(options.userlib)
+        .canonicalize()
+        .expect("canonicalize");
+
+    // starting build...
     ctx.cwd_cradle_dir();
     if options.update_deps {
         steps::update_deps(&ctx);
@@ -56,27 +56,13 @@ pub fn build(
 
     let mut env = std::collections::HashMap::new();
     let mut ext_features = options.engine_features.clone();
-    let runtime_asset_path = generated_runtime_assets_dir(options.userlib);
-    if let Some(ref p) = asset_path_abs {
-        steps::process_assets(&ctx, options.userlib, Some(p));
-
-        env.insert(
-            "PERIDOT_EXTERNAL_ASSET_PATH",
-            runtime_asset_path
-                .to_str()
-                .expect("invalid sequence in asset path"),
-        );
-        ext_features.push("UseExternalAssetPath");
-    }
-    if options.fast_build {
-        env.insert(
-            "PERIDOT_BUILTIN_ASSET_PATH",
-            builtin_assets_path
-                .to_str()
-                .expect("invalid sequence in builtin asset path"),
-        );
-        ext_features.push("IterationBuild");
-    }
+    env.insert(
+        "PERIDOT_EXTERNAL_ASSET_PATH",
+        runtime_asset_path
+            .to_str()
+            .expect("invalid sequence in asset path"),
+    );
+    ext_features.push("UseExternalAssetPath");
     let mut cargo = steps::cargo()
         .with_ext_features(ext_features)
         .with_env(env)

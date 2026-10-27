@@ -7,7 +7,6 @@ build = "build.rs"
 
 [features]
 UseExternalAssetPath = []
-IterationBuild = []
 debug = ["peridot/debug"]
 mt = ["peridot/mt"]
 support-xcb = ["dep:xcb", "bedrock/VK_KHR_xcb_surface"]
@@ -15,15 +14,15 @@ support-xcb = ["dep:xcb", "bedrock/VK_KHR_xcb_surface"]
 [dependencies]
 peridot = { path = "../../base" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
-    "VK_KHR_wayland_surface",
+  "VK_KHR_wayland_surface",
 ] }
 xcb = { version = "1.1", optional = true }
 pulseaudio-rs = { git = "https://github.com/Pctg-x8/pars" }
 regex = "1.4"
 peridot-tp-wayland = { path = "../../thirdparty/wayland", features = [
-    "xdg-shell",
-    "xdg-decoration-unstable-v1",
-    "content-type-v1"
+  "xdg-shell",
+  "xdg-decoration-unstable-v1",
+  "content-type-v1",
 ] }
 peridot-tp-pipewire = { path = "../../thirdparty/pipewire" }
 parking_lot = "0.12.1"
