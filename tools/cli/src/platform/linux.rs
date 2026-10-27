@@ -1,4 +1,5 @@
 use crate::manifest::*;
+use crate::path::generated_runtime_assets_dir;
 use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
@@ -55,11 +56,9 @@ pub fn build(
 
     let mut env = std::collections::HashMap::new();
     let mut ext_features = options.engine_features.clone();
-    let runtime_asset_path = ctx.cradle_directory.join(".runtime-assets");
+    let runtime_asset_path = generated_runtime_assets_dir(options.userlib);
     if let Some(ref p) = asset_path_abs {
-        std::fs::create_dir_all(&runtime_asset_path)
-            .expect("std::fs::create_dir_all runtime-asset-path failed");
-        steps::process_assets(&ctx, Some(p), &runtime_asset_path);
+        steps::process_assets(&ctx, options.userlib, Some(p));
 
         env.insert(
             "PERIDOT_EXTERNAL_ASSET_PATH",

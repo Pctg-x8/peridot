@@ -42,11 +42,7 @@ pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     );
     merge_resource_directory(&ctx, options.userlib);
     mirror_ext_libraries(&ctx, options.userlib);
-    steps::process_assets(
-        &ctx,
-        options.ext_asset_path.as_deref(),
-        &ctx.cradle_directory.join("assets"),
-    );
+    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
 
     ctx.within_cradle_dir(|| {
         let gradle_build_target_path = ctx.cradle_directory.join("target/arm64-v8a-linux-android");

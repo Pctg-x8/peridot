@@ -1,4 +1,5 @@
 use crate::manifest::*;
+use crate::path::generated_runtime_assets_dir;
 use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
@@ -75,14 +76,12 @@ pub fn build(
     env.insert("PERIDOT_WINDOWS_APPID", options.appid);
 
     // prepare assets
-    let runtime_asset_path = ctx.cradle_directory.join(".runtime-assets");
-    std::fs::create_dir_all(&runtime_asset_path)
-        .expect("std::fs::create_dir_all runtime-asset-path failed");
-    steps::process_assets(&ctx, asset_path_abs.as_deref(), &runtime_asset_path);
+    steps::process_assets(&ctx, options.userlib, asset_path_abs.as_deref());
+    let runtime_assets_path = generated_runtime_assets_dir(options.userlib);
 
     env.insert(
         "PERIDOT_EXTERNAL_ASSET_PATH",
-        runtime_asset_path
+        runtime_assets_path
             .to_str()
             .expect("invalid sequence in asset path"),
     );

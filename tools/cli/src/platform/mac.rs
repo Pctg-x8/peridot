@@ -52,11 +52,7 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
-    steps::process_assets(
-        &ctx,
-        options.ext_asset_path.as_deref(),
-        &generated_runtime_assets_dir(options),
-    );
+    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
 
     ctx.within_cradle_dir(|| {
         if options.update_deps {
@@ -158,7 +154,7 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
             // rewrite runtime-assets path
             // (絶対パスである必要がある)
             fr.path = Cow::Owned(
-                generated_runtime_assets_dir(options)
+                generated_runtime_assets_dir(options.userlib)
                     .canonicalize()
                     .expect("canonicalize")
                     .to_str()

@@ -1,6 +1,6 @@
 //! Peridot Tools Path
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::platform::BuildOptions;
 
@@ -40,6 +40,6 @@ fn current_exe() -> PathBuf {
 /// ビルド中に生成されるRuntime Assetの格納パス
 ///
 /// 基本的にはプロジェクトごとに生成される（UnityのLibraryとかと同じ扱い）
-pub fn generated_runtime_assets_dir(options: &BuildOptions) -> PathBuf {
-    options.userlib.join(".runtime-assets")
+pub fn generated_runtime_assets_dir(userlib_path: impl AsRef<Path>) -> PathBuf {
+    userlib_path.as_ref().join(".runtime-assets")
 }
