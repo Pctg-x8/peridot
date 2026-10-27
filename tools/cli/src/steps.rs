@@ -175,7 +175,7 @@ pub fn cargo<'x>() -> Cargo<'x> {
 }
 
 #[cfg(not(feature = "process-assets"))]
-pub fn process_assets(_: &BuildContext, _: Option<&Path>, _: &Path) {
+pub fn process_assets(_: &BuildContext, _: &Path, _: Option<&Path>) {
     eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
 }
 #[cfg(feature = "process-assets")]
