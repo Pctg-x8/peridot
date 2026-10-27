@@ -4166,9 +4166,9 @@ impl SystemLink<'_> {
 
 #[cfg(target_os = "macos")]
 pub use platform::mac::{
-    DragData, DragPreviewPopoverHandle, PointerID, WindowHandle,
-    WindowPersistentStateNativeGeometryUnit, close_sub_window, create_flyout_surface,
-    create_main_window, flyout_surface::Handle as FlyoutSurfaceHandle, open_sub_window,
+    DragData, PointerID, WindowHandle, WindowPersistentStateNativeGeometryUnit, close_sub_window,
+    create_flyout_surface, create_main_window, flyout_surface::Handle as FlyoutSurfaceHandle,
+    open_sub_window,
 };
 #[cfg(feature = "wayland")]
 pub use platform::unix::wayland::{

@@ -276,8 +276,6 @@ impl TextInputClientForwardingFT {
             replacement_location: i64,
             replacement_length: i64,
         ) {
-            let mut w = super::WindowHandle(window_link);
-
             T::set_marked_text(
                 unsafe { &*context.cast::<T>() },
                 unsafe { CStr::from_ptr(text) },
@@ -286,8 +284,10 @@ impl TextInputClientForwardingFT {
                 replacement_location,
                 replacement_length,
                 &mut TextInputClientSetMarkedTextContext {
-                    view_render_queue: &mut unsafe { &mut *w.dispatcher_mut().coreloop }
-                        .view_render_queue,
+                    view_render_queue: &mut unsafe {
+                        &mut *super::WindowDispatcher::get_mut(window_link).coreloop
+                    }
+                    .view_render_queue,
                 },
             );
         }
@@ -298,16 +298,16 @@ impl TextInputClientForwardingFT {
             replacement_location: i64,
             replacement_length: i64,
         ) {
-            let mut w = super::WindowHandle(window_link);
-
             T::insert_text(
                 unsafe { &*context.cast::<T>() },
                 unsafe { CStr::from_ptr(text) },
                 replacement_location,
                 replacement_length,
                 &mut TextInputClientInsertTextContext {
-                    view_render_queue: &mut unsafe { &mut *w.dispatcher_mut().coreloop }
-                        .view_render_queue,
+                    view_render_queue: &mut unsafe {
+                        &mut *super::WindowDispatcher::get_mut(window_link).coreloop
+                    }
+                    .view_render_queue,
                 },
             );
         }
@@ -442,11 +442,6 @@ unsafe extern "C" {
         width: *mut c_double,
         height: *mut c_double,
     );
-    pub fn ni_get_size_logical(
-        window_link: *mut WindowLink,
-        width: *mut c_double,
-        height: *mut c_double,
-    );
     pub fn ni_get_metal_layer(window_link: *mut WindowLink) -> *mut c_void;
     pub fn ni_convert_point_to_screen(
         window_link: *mut WindowLink,
@@ -477,8 +472,13 @@ unsafe extern "C" {
 
     pub fn ni_show_drag_preview(x: c_double, y: c_double, width: c_double, height: c_double);
     pub fn ni_hide_drag_preview();
-    pub fn ni_move_drag_preview(x: c_double, y: c_double);
-    pub fn ni_update_drag_preview_rect(x: c_double, y: c_double, width: c_double, height: c_double);
+    pub fn ni_update_drag_preview_rect(
+        on_surface: *mut WindowLink,
+        x: c_double,
+        y: c_double,
+        width: c_double,
+        height: c_double,
+    );
 
     pub fn ni_query_filesystem_cachedir_path() -> *const c_char;
     pub fn ni_query_filesystem_persist_statedir_path() -> *const c_char;

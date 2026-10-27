@@ -1,6 +1,6 @@
 import Cocoa
-import os
 import NaturalLanguage
+import os
 
 let app = NSApplication.shared
 let delegate = AppMainDelegate()
@@ -13,7 +13,8 @@ let filesystemPersistStateDir = URL.applicationSupportDirectory.path.utf8CString
 
 let menu = NSMenu()
 let appMenu = NSMenu(title: "Peridot Marble Editor")
-let quitMenuItem = appMenu.addItem(withTitle: "Quit", action: #selector(NSApplication.stop), keyEquivalent: "q")
+let quitMenuItem = appMenu.addItem(
+    withTitle: "Quit", action: #selector(NSApplication.stop), keyEquivalent: "q")
 quitMenuItem.keyEquivalentModifierMask = .command
 let appMenuItem = menu.addItem(withTitle: "Peridot Marble Editor", action: nil, keyEquivalent: "")
 appMenuItem.title = "Peridot Marble Editor"
@@ -25,16 +26,20 @@ rs_launch()
 var appRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>? = nil
 var appRunCallbackContext: UnsafeMutableRawPointer? = nil
 @_cdecl("nsapp_run")
-func nsAppRun(_ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>, _ newAppRunCallbackContext: UnsafeMutableRawPointer) {
+func nsAppRun(
+    _ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>,
+    _ newAppRunCallbackContext: UnsafeMutableRawPointer
+) {
     appRunCallbacks = newAppRunCallbacks
     appRunCallbackContext = newAppRunCallbackContext
     let memorySampleTimer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-    memorySampleTimer.schedule(deadline: DispatchTime.now().advanced(by: .milliseconds(50)), repeating: .milliseconds(50))
+    memorySampleTimer.schedule(
+        deadline: DispatchTime.now().advanced(by: .milliseconds(50)), repeating: .milliseconds(50))
     memorySampleTimer.setEventHandler {
         guard let cb = appRunCallbacks else {
             return
         }
-        
+
         cb.pointee.profSampleMemory(appRunCallbackContext!)
     }
     memorySampleTimer.activate()
@@ -44,23 +49,25 @@ func nsAppRun(_ newAppRunCallbacks: UnsafeMutablePointer<AppRunCallbacks>, _ new
     appRunCallbackContext = nil
 }
 
-final class AppMainDelegate : NSObject, NSApplicationDelegate {
+final class AppMainDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         .terminateLater
     }
 }
 
-final class DockContentPasteboardWriter : NSObject, NSPasteboardWriting {
+final class DockContentPasteboardWriter: NSObject, NSPasteboardWriting {
     static let PasteboardType = NSPasteboard.PasteboardType("io.ct2.peridot.editor.dock")
-    
+
     func writableTypes(for pasteboard: NSPasteboard) -> [NSPasteboard.PasteboardType] {
         [DockContentPasteboardWriter.PasteboardType]
     }
-    
-    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard) -> NSPasteboard.WritingOptions {
+
+    func writingOptions(forType type: NSPasteboard.PasteboardType, pasteboard: NSPasteboard)
+        -> NSPasteboard.WritingOptions
+    {
         .init(rawValue: 0)
     }
-    
+
     func pasteboardPropertyList(forType type: NSPasteboard.PasteboardType) -> Any? {
         if type == DockContentPasteboardWriter.PasteboardType {
             NSData()
@@ -73,7 +80,7 @@ final class DockContentPasteboardWriter : NSObject, NSPasteboardWriting {
 @_cdecl("manual_capture_begin")
 func manualCaptureBegin(windowLink: UnsafeMutableRawPointer) {
     let w = Unmanaged<WindowLink>.fromOpaque(windowLink).takeUnretainedValue()
-    
+
     let mgr = MTLCaptureManager.shared()
     let cd = MTLCaptureDescriptor()
     cd.captureObject = w.mainView.actualLayer.device
@@ -92,7 +99,7 @@ func scheduleRedispatchSyncEvents() {
             // application has terminated
             return
         }
-        
+
         cb.pointee.redispatchSyncEvents(appRunCallbackContext!)
     }
 }
@@ -107,7 +114,7 @@ enum CursorShape {
 
 @_cdecl("ni_set_cursor_shape")
 func setCursorShape(shape: UInt8) {
-    switch (shape) {
+    switch shape {
     case CursorShape.Arrow:
         NSCursor.arrow.set()
     case CursorShape.Pointer:
@@ -136,7 +143,7 @@ func queryFilesystemPersistStateDirPath() -> UnsafePointer<CChar> {
 
 final class ThreadPriorityContext {
     let threadPriority: Double
-    
+
     init(threadPriority: Double) {
         self.threadPriority = threadPriority
     }
@@ -144,7 +151,8 @@ final class ThreadPriorityContext {
 
 @_cdecl("ni_degreade_thread_priroity_temporarily")
 func degradeThreadPriorityTemporarily() -> UnsafeMutableRawPointer {
-    let context = Unmanaged.passRetained(ThreadPriorityContext(threadPriority: Thread.current.threadPriority))
+    let context = Unmanaged.passRetained(
+        ThreadPriorityContext(threadPriority: Thread.current.threadPriority))
     Thread.current.threadPriority = 0.5
     return context.toOpaque()
 }
@@ -184,15 +192,17 @@ func queryRangeForWordAt(
     _ retStart: UnsafeMutablePointer<UInt64>,
     _ retEnd: UnsafeMutablePointer<UInt64>
 ) {
-    let text = String(bytes: UnsafeBufferPointer(start: charptr, count: Int(charlen)), encoding: .utf8)!
+    let text = String(
+        bytes: UnsafeBufferPointer(start: charptr, count: Int(charlen)), encoding: .utf8)!
     let recognizer = NLLanguageRecognizer()
     recognizer.processString(text)
-    let language = recognizer.dominantLanguage ?? recognizer.languageHypotheses(withMaximum: 1).first!.key
+    let language =
+        recognizer.dominantLanguage ?? recognizer.languageHypotheses(withMaximum: 1).first!.key
     let tokenizer = NLTokenizer(unit: .word)
     tokenizer.setLanguage(language)
     tokenizer.string = text
     let tokenRange = tokenizer.tokenRange(at: String.Index(utf16Offset: Int(at), in: text))
-    
+
     retStart.pointee = UInt64(tokenRange.lowerBound.utf16Offset(in: text))
     retEnd.pointee = UInt64(tokenRange.upperBound.utf16Offset(in: text))
 }

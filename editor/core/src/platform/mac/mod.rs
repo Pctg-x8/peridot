@@ -1,5 +1,5 @@
 use core::pin::Pin;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use bedrock::{InstanceChild, SurfaceCreateInfo};
 use shared::{LogicalUnit, PixelsUnit, Point, Rect, Size};
@@ -10,7 +10,6 @@ use crate::{
     graphics::VulkanSurface,
     input::{
         KeyInputCode, KeyboardFocusGroupRef, ModifierKey, PerWindowKeyboardFocusState,
-        PointerInputUnit,
         hittest::{CursorShape, HitTestTreeData, HitTestTreeRef, PointerButton},
     },
     platform::{WindowHandleBase, mac::bridge::TextInputClientForwarding},
@@ -48,10 +47,11 @@ impl WindowHandleBase for WindowHandle {
 
     #[inline(always)]
     unsafe fn take_extra_data<T>(&mut self) -> Box<T> {
-        let r = unsafe { Box::from_raw(self.state_mut().extra_data.cast()) };
-        self.state_mut().extra_data = core::ptr::null_mut();
-
-        r
+        unsafe {
+            Box::from_raw(
+                core::mem::replace(&mut self.state_mut().extra_data, core::ptr::null_mut()).cast(),
+            )
+        }
     }
 
     #[inline(always)]
@@ -101,7 +101,7 @@ impl WindowHandleBase for WindowHandle {
         *self.state().active_rt_size.lock().expect("poisoned")
     }
 
-    fn geometry_state_snapshot(&self, syslink: &SystemLink) -> WindowGeometryState {
+    fn geometry_state_snapshot(&self, _syslink: &SystemLink) -> WindowGeometryState {
         let mut is_maximized = core::mem::MaybeUninit::uninit();
         let mut x = core::mem::MaybeUninit::uninit();
         let mut y = core::mem::MaybeUninit::uninit();
@@ -138,37 +138,13 @@ impl WindowHandleBase for WindowHandle {
 }
 impl WindowHandle {
     #[inline(always)]
-    pub fn dispatcher(&self) -> &WindowDispatcher {
-        unsafe {
-            &(*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<WindowDispatcher>())
-        }
-    }
-
-    #[inline(always)]
-    pub fn dispatcher_mut(&mut self) -> &mut WindowDispatcher {
-        unsafe {
-            &mut (*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<WindowDispatcher>())
-        }
-    }
-
-    #[inline(always)]
     pub fn state(&self) -> &WindowState {
-        unsafe {
-            &(*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<WindowDispatcher>())
-            .state
-        }
+        &WindowDispatcher::get(self.0).state
     }
 
     #[inline(always)]
     fn state_mut(&mut self) -> &mut WindowState {
-        unsafe {
-            &mut (*crate::platform::mac::bridge::ni_get_window_callback_context(self.0)
-                .cast::<WindowDispatcher>())
-            .state
-        }
+        &mut WindowDispatcher::get_mut(self.0).state
     }
 
     #[inline(always)]
@@ -264,59 +240,6 @@ impl crate::uicore::MountTarget for WindowHandle {
     }
 }
 
-pub struct DragPreviewPopoverHandle {
-    position_base_window_link: core::cell::Cell<*mut self::bridge::WindowLink>,
-}
-impl DragPreviewPopoverHandle {
-    #[inline(always)]
-    pub fn new(_syslink: &SystemLink) -> Self {
-        Self {
-            position_base_window_link: core::cell::Cell::new(core::ptr::null_mut()),
-        }
-    }
-
-    #[inline(always)]
-    pub fn bind_position_base_window_link(&self, w: WindowHandle) {
-        self.position_base_window_link.set(w.0);
-    }
-
-    pub fn show(&self, pos: &Point<PointerInputUnit>, size: &Size<LogicalUnit>) {
-        unsafe {
-            // macの場合はスクリーン座標が必要
-            let mut x = pos.x as f64;
-            let mut y = pos.y as f64;
-            self::bridge::ni_convert_point_to_screen(
-                self.position_base_window_link.get(),
-                &mut x,
-                &mut y,
-            );
-
-            self::bridge::ni_show_drag_preview(x, y, size.width as _, size.height as _);
-        }
-    }
-
-    pub fn r#move(&self, pos: &Point<PointerInputUnit>) {
-        unsafe {
-            // macの場合はスクリーン座標が必要
-            let mut x = pos.x as f64;
-            let mut y = pos.y as f64;
-            self::bridge::ni_convert_point_to_screen(
-                self.position_base_window_link.get(),
-                &mut x,
-                &mut y,
-            );
-
-            self::bridge::ni_move_drag_preview(x, y);
-        }
-    }
-
-    pub fn hide(&self) {
-        unsafe {
-            self::bridge::ni_hide_drag_preview();
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PointerID();
 
@@ -356,45 +279,15 @@ pub fn create_main_window<'sys>(
         }
     }
 
-    let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
-        .ht_manager
-        .create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
     let w = NativeWindow::new(
         WindowType::Main {},
         flags,
         Rect::from_lt_size(pos, size),
-        unsafe { coreloop.as_mut().get_unchecked_mut() }
-            .composite_tree
-            .create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-        ht_root,
         coreloop.as_mut(),
     );
-    let main_window_handle = w.make_handle();
-    unsafe { coreloop.as_mut().get_unchecked_mut() }
-        .ht_manager
-        .get_data_mut(ht_root)
-        .root_of_window = Some(main_window_handle);
+    w.create_render_objects(coreloop);
 
-    let vk_surface = VulkanSurface::new(coreloop.syslink.gfx, unsafe {
-        bedrock::MetalSurfaceCreateInfo::new(w.metal_layer())
-            .execute(coreloop.syslink.gfx.instance(), None)
-            .expect("vk_surface.create")
-    });
-    unsafe { coreloop.as_mut().get_unchecked_mut() }
-        .delayed_render_messages
-        .push(RenderMessage::NewWindow(NewWindowData {
-            key: main_window_handle,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-        }));
-
-    main_window_handle
+    w.make_handle()
 }
 
 pub fn open_sub_window<'sys>(
@@ -430,56 +323,23 @@ pub fn open_sub_window<'sys>(
         }
     }
 
-    let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
-        .ht_manager
-        .create(HitTestTreeData {
-            width_adjustment_factor: 1.0,
-            height_adjustment_factor: 1.0,
-            ..Default::default()
-        });
     let mut w = NativeWindow::new(
         WindowType::Sub,
         flags,
         Rect::from_lt_size(pos, size),
-        unsafe { coreloop.as_mut().get_unchecked_mut() }
-            .composite_tree
-            .create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                ..Default::default()
-            }),
-        ht_root,
         coreloop.as_mut(),
     );
     let handle = w.make_handle();
-    unsafe { coreloop.as_mut().get_unchecked_mut() }
-        .ht_manager
-        .get_data_mut(ht_root)
-        .root_of_window = Some(handle);
     w.show();
-
-    let vk_surface = VulkanSurface::new(coreloop.syslink.gfx, unsafe {
-        bedrock::SurfaceCreateInfo::execute(
-            &bedrock::MetalSurfaceCreateInfo::new(w.metal_layer()),
-            bedrock::InstanceChild::instance(coreloop.syslink.gfx),
-            None,
-        )
-        .expect("vk_surface.create")
-    });
-    unsafe { coreloop.as_mut().get_unchecked_mut() }
-        .delayed_render_messages
-        .push(RenderMessage::NewWindow(NewWindowData {
-            key: handle,
-            vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
-        }));
+    w.create_render_objects(coreloop.as_mut());
 
     setup_content(handle, coreloop);
     handle
 }
 
-pub fn close_sub_window(mut window_handle: WindowHandle) {
+pub fn close_sub_window(window_handle: WindowHandle) {
     let (done_event_sender, done_event_receiver) = std::sync::mpsc::channel();
-    window_handle
-        .dispatcher()
+    WindowDispatcher::get(window_handle.0)
         .coreloop()
         .syslink
         .rt_sender
@@ -496,7 +356,7 @@ pub fn close_sub_window(mut window_handle: WindowHandle) {
         bridge::ni_restore_thread_priority(tpctx);
     }
 
-    let d = window_handle.dispatcher_mut();
+    let d = WindowDispatcher::get_mut(window_handle.0);
     unsafe { &mut *d.coreloop }
         .composite_tree
         .free_all(d.state.composite_root);
@@ -571,60 +431,59 @@ impl crate::SystemLink<'_> {
     pub fn begin_pane_drag(
         &self,
         initiator: WindowHandle,
-        pointer: &PointerID,
+        _pointer: &PointerID,
         rect: &Rect<LogicalUnit>,
         state: DockingPreviewState,
     ) {
         let preview_rect = Rect::from_lt_size(state.offset, rect.size());
-        unsafe { &mut *initiator.dispatcher().coreloop }.docking_preview_state = Some(state);
+        unsafe { &mut *WindowDispatcher::get_mut(initiator.0).coreloop }.docking_preview_state =
+            Some(state);
         unsafe {
-            self::bridge::ni_show_drag_preview(
+            bridge::ni_show_drag_preview(
                 preview_rect.left as _,
                 preview_rect.top as _,
                 preview_rect.width as _,
                 preview_rect.height as _,
             );
-            self::bridge::ni_begin_drag(initiator.0);
+            bridge::ni_begin_drag(initiator.0);
         }
     }
 
+    #[inline(always)]
     pub fn update_pane_drag(&self, on_surface: WindowHandle, rect: &Rect<LogicalUnit>) {
-        let mut x = rect.left as _;
-        let mut y = rect.top as _;
         unsafe {
-            bridge::ni_convert_point_to_screen(on_surface.0, &mut x, &mut y);
-        }
-        unsafe {
-            self::bridge::ni_update_drag_preview_rect(
-                x as _,
-                y as _,
+            bridge::ni_update_drag_preview_rect(
+                on_surface.0,
+                rect.left as _,
+                rect.top as _,
                 rect.width as _,
                 rect.height as _,
             );
         }
     }
 
+    #[inline(always)]
     pub fn end_pane_drag(&self) {
         unsafe {
-            self::bridge::ni_hide_drag_preview();
+            bridge::ni_hide_drag_preview();
         }
     }
 }
 
 pub struct NativeWindow {
-    native_ptr: *mut self::bridge::WindowLink,
+    native_ptr: *mut bridge::WindowLink,
 }
 unsafe impl Sync for NativeWindow {}
 unsafe impl Send for NativeWindow {}
 impl NativeWindow {
-    pub fn new<'sys>(
+    fn new<'sys>(
         window_type: WindowType,
-        flags: self::bridge::WindowCreationFlags,
+        flags: bridge::WindowCreationFlags,
         rect: Rect<LogicalUnit>,
-        composite_root: CompositeTreeRef,
-        ht_root: HitTestTreeRef,
         mut coreloop: Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
+        let cl = unsafe { coreloop.as_mut().get_unchecked_mut() };
+
         let native_ptr = unsafe {
             bridge::ni_create_window(
                 flags.bits(),
@@ -635,53 +494,31 @@ impl NativeWindow {
             )
         };
         let init_scale = unsafe { bridge::ni_get_content_scale(native_ptr) };
-        let kf_root_group = unsafe { coreloop.as_mut().get_unchecked_mut() }
-            .keyboard_focus_registry
-            .acquire_group();
-        let dispatcher = Box::new(WindowDispatcher {
-            coreloop: unsafe { coreloop.get_unchecked_mut() },
+        let ct_root = CompositeRect::build()
+            .expand_full()
+            .create(&mut cl.composite_tree);
+        let ht_root = HitTestTreeData::build()
+            .expand_full()
+            .root_of_window(WindowHandle(native_ptr))
+            .create(&mut cl.ht_manager);
+        let kf_root_group = cl.keyboard_focus_registry.acquire_group();
+        Box::new(WindowDispatcher {
+            coreloop: cl,
             window_type,
             state: WindowState {
-                wlink: native_ptr,
                 extra_data: core::ptr::null_mut(),
-                swapchain_externally_invalidation_signal: std::sync::Arc::new(
-                    std::sync::atomic::AtomicBool::new(false),
-                ),
+                swapchain_externally_invalidation_signal: Arc::new(AtomicBool::new(false)),
                 latest_ui_scale_changes: Mutex::new(None),
-                active_size: std::sync::Mutex::new(rect.size()),
-                active_rt_size: std::sync::Mutex::new(rect.size().to_pixels_ceil(init_scale)),
-                active_buffer_scale: std::sync::Mutex::new(init_scale),
-                composite_root,
+                active_size: Mutex::new(rect.size()),
+                active_rt_size: Mutex::new(rect.size().to_pixels_ceil(init_scale)),
+                active_buffer_scale: Mutex::new(init_scale),
+                composite_root: ct_root,
                 ht_root,
                 keyboard_focus_state: PerWindowKeyboardFocusState::new(kf_root_group),
                 kf_root_group,
             },
-        });
-        let callbacks: &'static bridge::WindowLinkCallbacks = &bridge::WindowLinkCallbacks {
-            destructor: WindowDispatcher::destructor,
-            on_window_close: WindowDispatcher::on_window_close,
-            on_resize: WindowDispatcher::on_resize,
-            on_pointer_down: WindowDispatcher::on_pointer_down,
-            on_pointer_move: WindowDispatcher::on_pointer_move,
-            on_pointer_delta_move: WindowDispatcher::on_pointer_delta_move,
-            on_pointer_up: WindowDispatcher::on_pointer_up,
-            on_key_down: WindowDispatcher::on_key_down,
-            on_key_down_with_char: WindowDispatcher::on_key_down_with_char,
-            on_key_up: WindowDispatcher::on_key_up,
-            on_key_up_with_char: WindowDispatcher::on_key_up_with_char,
-            on_key_focus_state_changed: WindowDispatcher::on_key_focus_state_changed,
-            on_scroll_wheel: WindowDispatcher::on_scroll_wheel,
-            on_drag_begin: WindowDispatcher::on_drag_begin,
-            on_drag_move: WindowDispatcher::on_drag_move,
-            on_drag_end: WindowDispatcher::on_drag_end,
-            on_dock_drag_enter_to_known_surface:
-                WindowDispatcher::on_dock_drag_enter_to_known_surface,
-            on_dock_drag_leave_from_known_surface:
-                WindowDispatcher::on_dock_drag_leave_from_known_surface,
-        };
-        unsafe {
-            bridge::ni_set_window_callbacks(native_ptr, callbacks, Box::into_raw(dispatcher) as _);
-        }
+        })
+        .set(native_ptr);
 
         Self { native_ptr }
     }
@@ -694,13 +531,25 @@ impl NativeWindow {
     #[inline(always)]
     pub fn show(&mut self) {
         unsafe {
-            self::bridge::ni_show_window(self.native_ptr);
+            bridge::ni_show_window(self.native_ptr);
         }
     }
 
-    #[inline(always)]
-    pub fn metal_layer(&self) -> *mut core::ffi::c_void {
-        unsafe { self::bridge::ni_get_metal_layer(self.native_ptr) }
+    fn create_render_objects(&self, mut coreloop: Pin<&mut CoreLoop<'_>>) {
+        let vk_surface = VulkanSurface::new(
+            coreloop.syslink.gfx,
+            unsafe {
+                bedrock::MetalSurfaceCreateInfo::new(bridge::ni_get_metal_layer(self.native_ptr))
+            }
+            .execute(coreloop.syslink.gfx.instance(), None)
+            .expect("vk_surface.create"),
+        );
+        unsafe { coreloop.as_mut().get_unchecked_mut() }
+            .delayed_render_messages
+            .push(RenderMessage::NewWindow(NewWindowData {
+                key: self.make_handle(),
+                vk_surface: NewWindowVulkanSurface(vk_surface.unbound().1),
+            }));
     }
 
     #[inline(always)]
@@ -719,6 +568,46 @@ struct WindowDispatcher<'sys> {
 unsafe impl Sync for WindowDispatcher<'_> {}
 unsafe impl Send for WindowDispatcher<'_> {}
 impl<'sys> WindowDispatcher<'sys> {
+    #[inline(always)]
+    fn set(self: Box<Self>, w: *mut bridge::WindowLink) {
+        let callbacks: &'static bridge::WindowLinkCallbacks = &const {
+            bridge::WindowLinkCallbacks {
+                destructor: Self::destructor,
+                on_window_close: Self::on_window_close,
+                on_resize: Self::on_resize,
+                on_pointer_down: Self::on_pointer_down,
+                on_pointer_move: Self::on_pointer_move,
+                on_pointer_delta_move: Self::on_pointer_delta_move,
+                on_pointer_up: Self::on_pointer_up,
+                on_key_down: Self::on_key_down,
+                on_key_down_with_char: Self::on_key_down_with_char,
+                on_key_up: Self::on_key_up,
+                on_key_up_with_char: Self::on_key_up_with_char,
+                on_key_focus_state_changed: Self::on_key_focus_state_changed,
+                on_scroll_wheel: Self::on_scroll_wheel,
+                on_drag_begin: Self::on_drag_begin,
+                on_drag_move: Self::on_drag_move,
+                on_drag_end: Self::on_drag_end,
+                on_dock_drag_enter_to_known_surface: Self::on_dock_drag_enter_to_known_surface,
+                on_dock_drag_leave_from_known_surface: Self::on_dock_drag_leave_from_known_surface,
+            }
+        };
+
+        unsafe {
+            bridge::ni_set_window_callbacks(w, callbacks, Box::into_raw(self) as _);
+        }
+    }
+
+    #[inline(always)]
+    fn get<'a>(w: *mut bridge::WindowLink) -> &'a Self {
+        unsafe { &*bridge::ni_get_window_callback_context(w).cast::<Self>() }
+    }
+
+    #[inline(always)]
+    fn get_mut<'a>(w: *mut bridge::WindowLink) -> &'a mut Self {
+        unsafe { &mut *bridge::ni_get_window_callback_context(w).cast::<Self>() }
+    }
+
     extern "C" fn destructor(this: *mut core::ffi::c_void) {
         tracing::trace!(?this, "window_dispatcher.destruct");
         drop(unsafe { Box::from_raw(this.cast::<Self>()) });
@@ -818,7 +707,7 @@ impl<'sys> WindowDispatcher<'sys> {
 
     extern "C" fn on_pointer_delta_move(
         caller_context: *mut core::ffi::c_void,
-        window: *mut bridge::WindowLink,
+        _window: *mut bridge::WindowLink,
         dx: f64,
         dy: f64,
         _modifier_flags: u32,
@@ -833,12 +722,11 @@ impl<'sys> WindowDispatcher<'sys> {
 
     extern "C" fn on_pointer_up(
         caller_context: *mut core::ffi::c_void,
-        window: *mut bridge::WindowLink,
+        _window: *mut bridge::WindowLink,
         button: self::bridge::MouseButton,
         modifier_flags: u32,
     ) {
         let this = unsafe { &mut *caller_context.cast::<Self>() };
-        let target = WindowHandle(window);
         let pointer_id = PointerID();
         let key_modifier = translate_event_modifier_key(modifier_flags);
 
@@ -1034,7 +922,7 @@ impl<'sys> WindowDispatcher<'sys> {
 
     extern "C" fn on_scroll_wheel(
         caller_context: *mut core::ffi::c_void,
-        window: *mut bridge::WindowLink,
+        _window: *mut bridge::WindowLink,
         modifier_flags: u32,
         amount: f64,
     ) {
@@ -1076,6 +964,7 @@ impl<'sys> WindowDispatcher<'sys> {
         } else {
             unsafe {
                 bridge::ni_update_drag_preview_rect(
+                    core::ptr::null_mut(),
                     x,
                     y,
                     docking_preview_state.original_rect.width as _,
@@ -1160,13 +1049,12 @@ pub(self) fn translate_event_modifier_key(mk: u32) -> ModifierKey {
 }
 
 pub struct WindowState {
-    wlink: *mut bridge::WindowLink,
     extra_data: *mut core::ffi::c_void,
-    pub swapchain_externally_invalidation_signal: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub swapchain_externally_invalidation_signal: Arc<AtomicBool>,
     pub latest_ui_scale_changes: Mutex<Option<f32>>,
-    active_size: std::sync::Mutex<Size<LogicalUnit>>,
-    active_rt_size: std::sync::Mutex<Size<PixelsUnit>>,
-    active_buffer_scale: std::sync::Mutex<f32>,
+    active_size: Mutex<Size<LogicalUnit>>,
+    active_rt_size: Mutex<Size<PixelsUnit>>,
+    active_buffer_scale: Mutex<f32>,
     composite_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     keyboard_focus_state: PerWindowKeyboardFocusState,

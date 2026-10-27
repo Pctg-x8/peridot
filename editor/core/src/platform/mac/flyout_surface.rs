@@ -7,10 +7,10 @@ use crate::{
     CoreLoop, SystemLink,
     graphics::{Graphics, VulkanSurface},
     input::{
-        KeyboardFocusGroupRef, KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
+        KeyboardFocusTokenRegistry, PerWindowKeyboardFocusState,
         hittest::{HitTestTreeData, HitTestTreeManager, HitTestTreeRef, PointerButton},
     },
-    platform::mac::translate_event_modifier_key,
+    platform::mac::{bridge, translate_event_modifier_key},
     rendering::{
         NewContextMenuData, NewWindowVulkanSurface, RenderMessage,
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
@@ -29,51 +29,42 @@ impl Handle {
         size: Size<LogicalUnit>,
         mut coreloop: Pin<&mut CoreLoop<'sys>>,
     ) -> Self {
-        let ct_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
-            .composite_tree
-            .create(CompositeRect {
-                relative_size_adjustment: [1.0, 1.0],
-                // macの場合は背景は不要（NSVisualEffectViewが背景がわりになる）
-                ..Default::default()
-            });
-        let ht_root = unsafe { coreloop.as_mut().get_unchecked_mut() }
-            .ht_manager
-            .create(HitTestTreeData {
-                width_adjustment_factor: 1.0,
-                height_adjustment_factor: 1.0,
-                ..Default::default()
-            });
-        let kf_root_group = unsafe { coreloop.as_mut().get_unchecked_mut() }
-            .keyboard_focus_registry
-            .acquire_group();
-        tracing::debug!(?ct_root, "flyout surface root");
-        let h = Self(unsafe {
-            NonNull::new_unchecked(super::bridge::ni_create_flyout_surface(
+        let cl = unsafe { coreloop.as_mut().get_unchecked_mut() };
+
+        // macの場合は背景は不要（NSVisualEffectViewが背景がわりになる）
+        let ct_root = CompositeRect::build()
+            .expand_full()
+            .create(&mut cl.composite_tree);
+        let ht_root = HitTestTreeData::build()
+            .expand_full()
+            .create(&mut cl.ht_manager);
+        let kf_root_group = cl.keyboard_focus_registry.acquire_group();
+        let kf_state = PerWindowKeyboardFocusState::new(kf_root_group);
+
+        Self(unsafe {
+            NonNull::new_unchecked(bridge::ni_create_flyout_surface(
                 parent.0,
                 surface_pos.x,
                 surface_pos.y,
                 size.width,
                 size.height,
                 Box::into_raw(Box::new(InstanceVars {
-                    coreloop: coreloop.get_unchecked_mut(),
+                    coreloop: cl,
                     ct_root,
                     ht_root,
-                    kf_state: PerWindowKeyboardFocusState::new(kf_root_group),
-                    kf_root_group,
+                    kf_state,
                     spawned_position: surface_pos,
                     size,
                 }))
                 .cast(),
-                Box::into_raw(Box::new(super::bridge::FlyoutSurfaceCallbacks {
+                Box::into_raw(Box::new(bridge::FlyoutSurfaceCallbacks {
                     on_pointer_down: Self::pointer_down,
                     on_pointer_move: Self::pointer_move,
                     on_pointer_up: Self::pointer_up,
                     on_pointer_leave: Self::pointer_leave,
                 })),
             ))
-        });
-
-        h
+        })
     }
 
     pub(super) fn create_render_thread_objects(
@@ -84,14 +75,16 @@ impl Handle {
         delayed_render_messages.push(RenderMessage::NewFlyoutSurface(NewContextMenuData {
             w: *self,
             vk_surface: NewWindowVulkanSurface(
-                VulkanSurface::new(device, unsafe {
-                    br::MetalSurfaceCreateInfo::new(
-                        super::bridge::ni_flyout_surface_get_metal_layer(self.0.as_ptr())
-                            .cast_const(),
-                    )
+                VulkanSurface::new(
+                    device,
+                    unsafe {
+                        br::MetalSurfaceCreateInfo::new(
+                            bridge::ni_flyout_surface_get_metal_layer(self.0.as_ptr()).cast_const(),
+                        )
+                    }
                     .execute(device.instance(), None)
-                    .expect("vk_surface.create")
-                })
+                    .expect("vk_surface.create"),
+                )
                 .unbound()
                 .1,
             ),
@@ -111,18 +104,18 @@ impl Handle {
             .rt_sender
             .send(RenderMessage::DestroyFlyoutSurface(self, done_event_sender))
             .expect("rt_sender.send");
-        let tpctx = unsafe { super::bridge::ni_degreade_thread_priroity_temporarily() };
+        let tpctx = unsafe { bridge::ni_degreade_thread_priroity_temporarily() };
         done_event_receiver
             .recv()
             .expect("done_event_receiver.recv");
         unsafe {
-            super::bridge::ni_restore_thread_priority(tpctx);
+            bridge::ni_restore_thread_priority(tpctx);
         }
 
         let mut instance_vars = core::mem::MaybeUninit::uninit();
         let mut callbacks = core::mem::MaybeUninit::uninit();
         unsafe {
-            super::bridge::ni_release_flyout_surface(
+            bridge::ni_release_flyout_surface(
                 self.0.as_ptr(),
                 instance_vars.as_mut_ptr(),
                 callbacks.as_mut_ptr(),
@@ -133,13 +126,13 @@ impl Handle {
         let callbacks = unsafe { Box::from_raw(callbacks.assume_init()) };
         composite_tree.free_all(instance_vars.ct_root);
         ht_manager.free_all(instance_vars.ht_root);
-        keyboard_focus_registry.release_group(instance_vars.kf_root_group);
+        keyboard_focus_registry.release_group(instance_vars.kf_state.root_group());
         drop(callbacks);
     }
 
     pub(super) fn resize(&mut self, size: Size<LogicalUnit>) {
         unsafe {
-            super::bridge::ni_flyout_surface_resize(self.0.as_ptr(), size.width, size.height);
+            bridge::ni_flyout_surface_resize(self.0.as_ptr(), size.width, size.height);
         }
         self.instance_vars_mut().size = size;
     }
@@ -147,15 +140,14 @@ impl Handle {
     #[inline(always)]
     fn instance_vars<'a, 'sys>(&'a self) -> &'a InstanceVars<'sys> {
         unsafe {
-            &*super::bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
-                .cast::<InstanceVars>()
+            &*bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr()).cast::<InstanceVars>()
         }
     }
 
     #[inline(always)]
     fn instance_vars_mut<'a, 'sys>(&'a mut self) -> &'a mut InstanceVars<'sys> {
         unsafe {
-            &mut *super::bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
+            &mut *bridge::ni_flyout_surface_instance_vars_ptr(self.0.as_ptr())
                 .cast::<InstanceVars>()
         }
     }
@@ -176,7 +168,7 @@ impl Handle {
     }
 
     pub fn render_scale(&self) -> f32 {
-        unsafe { super::bridge::ni_flyout_surface_get_content_scale(self.0.as_ptr()) }
+        unsafe { bridge::ni_flyout_surface_get_content_scale(self.0.as_ptr()) }
     }
 
     #[inline(always)]
@@ -189,17 +181,17 @@ impl Handle {
         view: &crate::uikit::menu::InteractableElement,
     ) -> Point<LogicalUnit> {
         let ivars = self.instance_vars();
-        let base = ivars.spawned_position;
-        let size = ivars.size;
 
-        Point::new_logical(base.x + size.width, base.y + view.placement_y)
+        ivars
+            .spawned_position
+            .with_offset(Point::new_logical(ivars.size.width, view.placement_y))
     }
 
     extern "C" fn pointer_down(
-        sender: *mut super::bridge::FlyoutSurface,
+        sender: *mut bridge::FlyoutSurface,
         x: f64,
         y: f64,
-        button: super::bridge::MouseButton,
+        button: bridge::MouseButton,
         modifier_flags: u32,
     ) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
@@ -215,8 +207,8 @@ impl Handle {
         h.instance_vars().coreloop().dispatch_menu_pointer_down(
             super::PointerID(),
             match button {
-                super::bridge::MouseButton::Left => PointerButton::Primary,
-                super::bridge::MouseButton::Right => PointerButton::Secondary,
+                bridge::MouseButton::Left => PointerButton::Primary,
+                bridge::MouseButton::Right => PointerButton::Secondary,
             },
             key_modifier,
         );
@@ -224,7 +216,7 @@ impl Handle {
     }
 
     extern "C" fn pointer_move(
-        sender: *mut super::bridge::FlyoutSurface,
+        sender: *mut bridge::FlyoutSurface,
         x: f64,
         y: f64,
         modifier_flags: u32,
@@ -242,8 +234,8 @@ impl Handle {
     }
 
     extern "C" fn pointer_up(
-        sender: *mut super::bridge::FlyoutSurface,
-        button: super::bridge::MouseButton,
+        sender: *mut bridge::FlyoutSurface,
+        button: bridge::MouseButton,
         modifier_flags: u32,
     ) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
@@ -252,8 +244,8 @@ impl Handle {
         h.instance_vars().coreloop().dispatch_menu_pointer_up(
             super::PointerID(),
             match button {
-                super::bridge::MouseButton::Left => PointerButton::Primary,
-                super::bridge::MouseButton::Right => PointerButton::Secondary,
+                bridge::MouseButton::Left => PointerButton::Primary,
+                bridge::MouseButton::Right => PointerButton::Secondary,
             },
             key_modifier,
         );
@@ -261,7 +253,7 @@ impl Handle {
         h.instance_vars().coreloop().update_view_all();
     }
 
-    extern "C" fn pointer_leave(sender: *mut super::bridge::FlyoutSurface) {
+    extern "C" fn pointer_leave(sender: *mut bridge::FlyoutSurface) {
         let h = Self(unsafe { NonNull::new_unchecked(sender) });
 
         h.instance_vars()
@@ -294,7 +286,6 @@ struct InstanceVars<'sys> {
     ct_root: CompositeTreeRef,
     ht_root: HitTestTreeRef,
     kf_state: PerWindowKeyboardFocusState,
-    kf_root_group: KeyboardFocusGroupRef,
     spawned_position: Point<LogicalUnit>,
     size: Size<LogicalUnit>,
 }
@@ -316,13 +307,13 @@ impl<'sys> SharedState<'sys> {
         }
 
         unsafe {
-            super::bridge::ni_context_menu_reserve_delayed_action(400, cb, self.coreloop.cast());
+            bridge::ni_context_menu_reserve_delayed_action(400, cb, self.coreloop.cast());
         }
     }
 
     pub fn unreserve_delayed_action(&self) {
         unsafe {
-            super::bridge::ni_context_menu_unreserve_delayed_action();
+            bridge::ni_context_menu_unreserve_delayed_action();
         }
     }
 
@@ -338,13 +329,13 @@ impl<'sys> SharedState<'sys> {
         }
 
         unsafe {
-            super::bridge::ni_context_menu_observe_global_click(cb, self.coreloop.cast());
+            bridge::ni_context_menu_observe_global_click(cb, self.coreloop.cast());
         }
     }
 
     pub fn unobserve_global_click(&self) {
         unsafe {
-            super::bridge::ni_context_menu_unobserve_global_click();
+            bridge::ni_context_menu_unobserve_global_click();
         }
     }
 }
