@@ -1,0 +1,10 @@
+[package]
+name = "pinned-futures-helper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+futures-io = { workspace = true }
+
+[lints]
+workspace = true

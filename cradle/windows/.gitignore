@@ -1,3 +1,4 @@
 src/userlib
 src/userlib.rs
 Cargo.toml
+.runtime-assets/
