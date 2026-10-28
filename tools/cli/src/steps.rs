@@ -181,18 +181,10 @@ pub fn process_assets(_: &BuildContext, _: &Path, _: Option<&Path>) {
 #[cfg(feature = "process-assets")]
 pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Option<&Path>) {
     // Pre-required built step
-    ctx.print_step("Processing assets...");
     let output_path = crate::path::generated_runtime_assets_dir(userlib_path);
+    let builtin_assets_path = crate::path::builtin_assets_path();
 
-    std::fs::create_dir_all(&output_path).expect("Failed to create runtime-asset-path");
-
-    let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
-        Box::new(peridot_rendering_configuration::AssetProcessor),
-        Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
-        Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
-        Box::new(peridot_sprite_atlas::AssetProcessor),
-        Box::new(peridot_asset_processor_model::Processor),
-    ];
+    std::fs::create_dir_all(&output_path).expect("Failed to create runtime-assets dir");
 
     fn process_recursive(
         ctx: &BuildContext,
@@ -241,12 +233,34 @@ pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Optio
         }
     }
 
+    let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
+        Box::new(peridot_rendering_configuration::AssetProcessor),
+        Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
+        Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
+        Box::new(peridot_sprite_atlas::AssetProcessor),
+        Box::new(peridot_asset_processor_model::Processor),
+    ];
     let mut process_context = peridot_asset_processing::AssetProcessContext {
         dest_dir: &output_path,
         assetdb: peridot::AssetDatabase::open_rw(&output_path).expect("assetdb.open"),
         asset_id_generator: peridot::AssetIDGenerator::new(),
     };
+
+    ctx.print_step("Processing builtin assets...");
+    process_recursive(
+        ctx,
+        &processors,
+        &mut process_context,
+        &peridot_asset_processing::ProcessOptions {
+            force_rebuild: false,
+            loadable_prefix: Some("builtin."),
+        },
+        &builtin_assets_path,
+        &builtin_assets_path,
+    );
+
     if let Some(asset_path) = asset_path {
+        ctx.print_step("Processing assets...");
         process_recursive(
             ctx,
             &processors,
@@ -259,18 +273,4 @@ pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Optio
             &asset_path,
         );
     }
-
-    ctx.print_step("Processing builtin assets...");
-    let builtin_assets_path = crate::path::builtin_assets_path();
-    process_recursive(
-        ctx,
-        &processors,
-        &mut process_context,
-        &peridot_asset_processing::ProcessOptions {
-            force_rebuild: false,
-            loadable_prefix: Some("builtin."),
-        },
-        &builtin_assets_path,
-        &builtin_assets_path,
-    );
 }
