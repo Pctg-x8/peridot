@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use pbxproj::{Decodable, ElementWrite};
 
 use crate::manifest::*;
-use crate::path::vulkan_sdk_path;
+use crate::path::{generated_runtime_assets_dir, vulkan_sdk_path};
 use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
@@ -52,11 +52,7 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
-    steps::process_assets(
-        &ctx,
-        options.ext_asset_path.as_deref(),
-        &ctx.cradle_directory.join(".runtime-assets"),
-    );
+    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
 
     ctx.within_cradle_dir(|| {
         if options.update_deps {
@@ -147,6 +143,27 @@ fn build_app_bundle(ctx: &steps::BuildContext, options: &super::BuildOptions, id
         pbxproj::parse_value(&mut ps).expect("Failed to parse root object"),
     )
     .expect("Failed to decode to PBXProjectFile");
+
+    // rewrite runtime-assets path
+    for t in pbxproj.objects.iter_mut() {
+        let pbxproj::PBXObject::FileReference(fr) = t.1 else {
+            continue;
+        };
+
+        if fr.name.as_deref().is_some_and(|x| x == ".runtime-assets") {
+            // rewrite runtime-assets path
+            // (絶対パスである必要がある)
+            fr.path = Cow::Owned(
+                generated_runtime_assets_dir(options.userlib)
+                    .canonicalize()
+                    .expect("canonicalize")
+                    .to_str()
+                    .expect("invalid path generated")
+                    .into(),
+            );
+            fr.source_tree = Cow::Borrowed("<absolute>");
+        }
+    }
 
     let system_vk_sdk_path_str = system_vk_sdk_path.display().to_string();
     let mut build_configuration_ids = Vec::new();
