@@ -36,9 +36,9 @@ use windows::{
             HiDpi::GetDpiForWindow,
             Input::{
                 KeyboardAndMouse::{
-                    ReleaseCapture, VK_0, VK_9, VK_A, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN,
-                    VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL,
-                    VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP, VK_Z,
+                    VK_0, VK_9, VK_A, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_LCONTROL,
+                    VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN,
+                    VK_RIGHT, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_UP, VK_Z,
                 },
                 RAWINPUTDEVICE, RAWINPUTDEVICE_FLAGS, RegisterRawInputDevices,
             },
@@ -56,11 +56,14 @@ use windows::{
     },
 };
 use windows_core::{Interface, PCWSTR, h, w};
+use windows_monitor::{
+    EnumerateDisplayMonitorContinuous, enumerate_display_monitors, primary_monitor,
+};
 use windows_numerics::{Vector2, Vector3};
+use windows_waitable_timer::WaitableTimer;
 
 use crate::{
-    CoreLoop, CoreLoopRunningContextFlags, Event, LogicFiberEventDispatcher, MainWindowOpenMode,
-    SubWindowOpenMode, WindowType,
+    CoreLoop, CoreLoopRunningContextFlags, MainWindowOpenMode, SubWindowOpenMode, WindowType,
     bindgen::Microsoft::Graphics::Canvas::Effects::{EffectOptimization, GaussianBlurEffect},
     graphics::Graphics,
     input::{KeyInputCode, ModifierKey, PointerInputUnit, hittest::CursorShape},
@@ -72,9 +75,8 @@ use crate::{
     rendering::{RenderMessage, RenderMessageSender, text::FontSet},
     ui::dock::DockingPreviewState,
     utils::platform::windows::{
-        EnumerateDisplayMonitorContinuous, WaitableTimer, current_instance_handle,
-        enumerate_display_monitors, point_from_win32, point_to_win32, primary_monitor,
-        register_class, windows_native_color,
+        current_instance_handle, point_from_win32, point_to_win32, register_class,
+        windows_native_color,
     },
 };
 
@@ -682,18 +684,12 @@ pub struct SystemLink<'sys> {
     pub gfx: &'sys Graphics,
     pub font_set: FontSet,
     pub rt_sender: RenderMessageSender,
-    pub event_dispatcher: *mut LogicFiberEventDispatcher,
     pub app_context: &'sys ApplicationContext,
     pub pointer_hovering_timer_handle: HANDLE,
     pub flyout_surface_context: flyout_surface::SharedState,
     pub native_text_input_context_create_context: NativeTextInputContextCreateContext,
 }
 impl<'sys> SystemLink<'sys> {
-    #[inline(always)]
-    pub fn dispatch_event(&self, event: Event) {
-        unsafe { &*self.event_dispatcher }.dispatch(event);
-    }
-
     #[inline(always)]
     pub fn rt_sender(&self) -> &RenderMessageSender {
         &self.rt_sender
@@ -755,7 +751,6 @@ impl<'sys> SystemLink<'sys> {
         &self,
         initiator_surface: WindowHandle,
         _pointer: &PointerID,
-        offset: Point<LogicalUnit>,
         rect: &Rect<LogicalUnit>,
         state: DockingPreviewState,
     ) {
@@ -765,14 +760,14 @@ impl<'sys> SystemLink<'sys> {
             .drag_preview_popover
             .show(initiator_surface.0, rect);
         let mut effect = core::mem::MaybeUninit::uninit();
-        unsafe { coreloop.as_mut().get_unchecked_mut() }.docking_preview_state = Some(state);
         let rel = coreloop.as_mut().exclusive_ht_unuse_tmp();
         let drop_source = IDropSource::from(DockPaneDropSource {
             app_context: self.app_context,
-            source_rect: Rect::from_lt_size(offset, rect.size()),
+            source_rect: Rect::from_lt_size(state.offset, rect.size()),
             active_dpi_scale: Cell::new(initiator_surface.ui_scale_factor()),
             dest_window: Cell::new(initiator_surface.0),
         });
+        unsafe { coreloop.as_mut().get_unchecked_mut() }.docking_preview_state = Some(state);
         unsafe {
             DoDragDrop(
                 &IDataObject::from(DockPaneDataObject {}),

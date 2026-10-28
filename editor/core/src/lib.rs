@@ -91,7 +91,9 @@ pub fn launch() {
     tracing_subscriber::fmt()
         .pretty()
         .with_ansi(false)
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        // TODO: リリース番では制限したい
+        .with_max_level(tracing::Level::TRACE)
+        // .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(utils::platform::windows::DebugOutputWriter)
         .init();
     #[cfg(all(not(target_os = "macos"), not(windows)))]
@@ -164,7 +166,7 @@ pub fn launch() {
     #[cfg(windows)]
     #[cfg(feature = "enable-profiling")]
     let memory_sample_timer =
-        utils::platform::windows::WaitableTimer::new(false).expect("memory_sample_timer.create");
+        windows_waitable_timer::WaitableTimer::new(false).expect("memory_sample_timer.create");
     #[cfg(windows)]
     #[cfg(feature = "enable-profiling")]
     memory_sample_timer
@@ -173,10 +175,10 @@ pub fn launch() {
 
     #[cfg(windows)]
     let pointer_hovering_timer =
-        utils::platform::windows::WaitableTimer::new(false).expect("pointer_hovering_timer.create");
+        windows_waitable_timer::WaitableTimer::new(false).expect("pointer_hovering_timer.create");
     #[cfg(windows)]
     let delayed_action_timer =
-        utils::platform::windows::WaitableTimer::new(false).expect("delayed_action_timer.create");
+        windows_waitable_timer::WaitableTimer::new(false).expect("delayed_action_timer.create");
     #[cfg(target_os = "linux")]
     let pointer_hovering_timer = utils::platform::linux::TimerFD::new().expect("timerfd.new");
     #[cfg(feature = "wayland")]
@@ -190,9 +192,8 @@ pub fn launch() {
             gfx: &gfx,
             font_set: FontSet::new(&root_font_set),
             rt_sender: rt_sender.clone(),
-            event_dispatcher: app_event_dispatcher.as_mut().get_mut(),
             app_context: &app_context,
-            pointer_hovering_timer_handle: pointer_hovering_timer.as_handle(),
+            pointer_hovering_timer_handle: pointer_hovering_timer.as_handle_native(),
             flyout_surface_context: platform::windows::flyout_surface::SharedState::new(
                 &app_context,
                 &dx_context,
@@ -411,11 +412,11 @@ pub fn launch() {
 
         #[cfg(windows)]
         let handles = [
-            sync_event_bus.event_notify.as_handle(),
-            pointer_hovering_timer.as_handle(),
-            delayed_action_timer.as_handle(),
+            sync_event_bus.event_notify.as_handle_native(),
+            pointer_hovering_timer.as_handle_native(),
+            delayed_action_timer.as_handle_native(),
             #[cfg(feature = "enable-profiling")]
-            memory_sample_timer.as_handle(),
+            memory_sample_timer.as_handle_native(),
         ];
         #[cfg(windows)]
         'app: loop {
@@ -425,20 +426,20 @@ pub fn launch() {
                 Ok(platform::windows::Message::Handle(hindex)) => {
                     // handle signaled
                     let handle = handles[hindex];
-                    if handle == sync_event_bus.event_notify.as_handle() {
+                    if handle == sync_event_bus.event_notify.as_handle_native() {
                         sync_event_bus.redispatch(coreloop.as_mut());
                         continue;
                     }
-                    if handle == pointer_hovering_timer.as_handle() {
+                    if handle == pointer_hovering_timer.as_handle_native() {
                         coreloop.as_mut().handle_pointer_hover_timeout();
                         continue;
                     }
-                    if handle == delayed_action_timer.as_handle() {
+                    if handle == delayed_action_timer.as_handle_native() {
                         coreloop.as_mut().perform_menu_delayed_action();
                         continue;
                     }
                     #[cfg(feature = "enable-profiling")]
-                    if handle == memory_sample_timer.as_handle() {
+                    if handle == memory_sample_timer.as_handle_native() {
                         profiler::profiler().emit_memory_stats();
                         continue;
                     }
@@ -4189,7 +4190,7 @@ pub struct SyncEventBus {
     #[cfg(target_os = "linux")]
     efd: linux_eventfd::EventFD,
     #[cfg(windows)]
-    event_notify: utils::platform::windows::Event,
+    event_notify: windows_event::Event,
 }
 #[cfg(target_os = "macos")]
 unsafe impl Sync for SyncEventBus {}
@@ -4203,7 +4204,8 @@ impl SyncEventBus {
             efd: linux_eventfd::EventFD::new(0, linux_eventfd::EventFDFlags::empty())
                 .expect("app_event_bus.efd.create"),
             #[cfg(windows)]
-            event_notify: utils::platform::windows::Event::new(true, false).expect("event.new"),
+            event_notify: windows_event::Event::new(windows_event::EventCreateFlags::MANUAL_RESET)
+                .expect("event.new"),
         }
     }
 
@@ -4420,12 +4422,19 @@ impl FileSystem {
     #[tracing::instrument]
     pub fn new() -> Self {
         // TODO: リリース版だとresourcesの場所はかわる
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(all(not(target_os = "macos"), not(windows)))]
         let resources_base_path = std::env::current_exe()
             .expect("fs.resources_base_path.current_exe")
             .parent()
             .expect("fs.resources_base_path.current_exe.parent")
             .join("../../../core/resources");
+        #[cfg(windows)]
+        // Windows(winapp CLI)ではさらにフォルダが挟まるのでもっと遡る必要がある
+        let resources_base_path = std::env::current_exe()
+            .expect("fs.resources_base_path.current_exe")
+            .parent()
+            .expect("fs.resources_base_path.current_exe.parent")
+            .join("../../../../core/resources");
         #[cfg(target_os = "macos")] // macのはこれで確定（bundleするときにここにコピーしてる）
         let resources_base_path = std::env::current_exe()
             .expect("fs.resources._base_path.current_exe")

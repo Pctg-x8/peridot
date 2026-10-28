@@ -48,6 +48,7 @@ use windows::Win32::{
     },
 };
 use windows_core::{PCWSTR, w};
+use windows_monitor::{EnumerateDisplayMonitorContinuous, enumerate_display_monitors};
 
 use crate::{
     CoreLoop, CoreLoopRunningContextFlags, PointerID, SystemLink, WindowType,
@@ -65,8 +66,7 @@ use crate::{
         composite::{CompositeRect, CompositeTreeRef},
     },
     utils::platform::windows::{
-        EnumerateDisplayMonitorContinuous, enumerate_display_monitors, point_from_win32,
-        point_to_win32, register_class, window_class_atom,
+        point_from_win32, point_to_win32, register_class, window_class_atom,
     },
 };
 

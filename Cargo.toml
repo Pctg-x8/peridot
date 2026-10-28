@@ -37,7 +37,7 @@ members = [
     "editor/core/app/model",
     "editor/core/bindgen",
     "editor/core/profiler",
-    "editor/core/profiler-attr",
+    "editor/core/profiler-attr", "platform/windows/event", "platform/windows/waitable-timer", "platform/windows/monitor",
 ]
 
 [workspace.dependencies]

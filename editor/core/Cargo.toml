@@ -86,6 +86,9 @@ features = [
 windows-core = "0.62"
 windows-numerics = "0.3"
 windows-result = "*"
+windows-event = { path = "../../platform/windows/event", features = ["tracing"] }
+windows-waitable-timer = { path = "../../platform/windows/waitable-timer", features = ["tracing"] }
+windows-monitor = { path = "../../platform/windows/monitor" }
 
 [dependencies.peridot-tp-wayland]
 path = "../../thirdparty/wayland"

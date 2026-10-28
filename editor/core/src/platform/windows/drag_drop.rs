@@ -259,7 +259,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         pdataobj: windows_core::Ref<IDataObject>,
         grfkeystate: MODIFIERKEYS_FLAGS,
         pt: &POINTL,
-        pdweffect: *mut DROPEFFECT,
+        _pdweffect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
         tracing::debug!(?pt, ?grfkeystate, "drop");
         let dataobj = pdataobj.as_ref().expect("no dataobj");
@@ -274,8 +274,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
                 DragData {
                     obj: dataobj.clone(),
                     is_file_drop: OnceCell::new(),
-                }
-                .into(),
+                },
                 WindowHandle(self.hwnd),
                 point_from_win32(client_pos).to_logical(WindowHandle(self.hwnd).ui_scale_factor()),
             );

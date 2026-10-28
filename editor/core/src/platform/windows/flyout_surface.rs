@@ -41,6 +41,7 @@ use windows::{
 };
 use windows_core::{HSTRING, Interface, PCWSTR, h, w};
 use windows_numerics::{Vector2, Vector3};
+use windows_waitable_timer::WaitableTimer;
 
 use crate::{
     CoreLoop, SystemLink, WindowHandle,
@@ -58,7 +59,7 @@ use crate::{
         composite::{CompositeRect, CompositeTree, CompositeTreeRef},
     },
     utils::platform::windows::{
-        WaitableTimer, WindowByClassIter, point_from_win32, point_to_win32, register_class,
+        WindowByClassIter, point_from_win32, point_to_win32, register_class,
     },
 };
 
@@ -630,7 +631,7 @@ impl SharedState {
             dxgi_factory: dx_context.dxgi_factory.clone(),
             d3d12_cq: dx_context.d3d12_cq.clone(),
             blur_effect_factory,
-            delayed_action_timer_handle: delayed_action_timer.as_handle(),
+            delayed_action_timer_handle: delayed_action_timer.as_handle_native(),
         }
     }
 
