@@ -1,16 +1,6 @@
 //! Peridot Tools Path
 
-use std::path::PathBuf;
-
-/// absolute path to peridot-archiver
-pub fn archiver_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("PERIDOT_CLI_ARCHIVER_PATH") {
-        PathBuf::from(p)
-    } else {
-        // Note: dev-packageのフォルダ構造に依存しているので、そっちを変えたらこっちも変える
-        current_exe().with_file_name("peridot-archiver")
-    }
-}
+use std::path::{Path, PathBuf};
 
 /// absolute path to builtin assets
 pub fn builtin_assets_path() -> PathBuf {
@@ -33,4 +23,11 @@ pub fn vulkan_sdk_path() -> PathBuf {
 #[inline(always)]
 fn current_exe() -> PathBuf {
     std::env::current_exe().expect("Failed to get exe path")
+}
+
+/// ビルド中に生成されるRuntime Assetの格納パス
+///
+/// 基本的にはプロジェクトごとに生成される（UnityのLibraryとかと同じ扱い）
+pub fn generated_runtime_assets_dir(userlib_path: impl AsRef<Path>) -> PathBuf {
+    userlib_path.as_ref().join(".runtime-assets")
 }

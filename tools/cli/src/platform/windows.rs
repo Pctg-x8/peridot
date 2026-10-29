@@ -1,4 +1,5 @@
 use crate::manifest::*;
+use crate::path::generated_runtime_assets_dir;
 use crate::project::PlatformConfiguration;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
@@ -8,29 +9,6 @@ pub fn build(
     project_config: &PlatformConfiguration,
     build_mode: BuildMode,
 ) {
-    let asset_path_abs = options
-        .ext_asset_path
-        .as_ref()
-        .map(|x| x.canonicalize().expect("Failed to resolve ext asset path"));
-    #[cfg(windows)]
-    let asset_path_abs = 'try_remove_verbatim_disk: {
-        // Windowsの場合はネットワークを表すパスが頭についちゃうらしい
-        let Some(ref p) = asset_path_abs else {
-            break 'try_remove_verbatim_disk asset_path_abs;
-        };
-        let mut components = p.components();
-        let Some(std::path::Component::Prefix(prefix)) = components.next() else {
-            break 'try_remove_verbatim_disk asset_path_abs;
-        };
-
-        match prefix.kind() {
-            std::path::Prefix::VerbatimDisk(disk_letter) => {
-                Some(std::path::Path::new(&format!("{}:", disk_letter as char)).join(components))
-            }
-            _ => asset_path_abs,
-        }
-    };
-
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
         .expect("Failed to load Userlib Cargo.toml");
     let user_manifest: CargoManifest =
@@ -52,6 +30,13 @@ pub fn build(
     super::print_start_build("Win32", project_name);
 
     let ctx = steps::BuildContext::new("windows");
+
+    // process assets
+    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
+    let runtime_assets_path =
+        generated_runtime_assets_dir(options.userlib.canonicalize().expect("canonicalize"));
+
+    // prepare code
     steps::gen_manifest(
         &ctx,
         options.userlib,
@@ -65,6 +50,8 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
+
+    // starting build...
     ctx.cwd_cradle_dir();
     if options.update_deps {
         steps::update_deps(&ctx);
@@ -74,15 +61,9 @@ pub fn build(
     let mut ext_features = options.engine_features.clone();
     env.insert("PERIDOT_WINDOWS_APPID", options.appid);
 
-    // prepare assets
-    let runtime_asset_path = ctx.cradle_directory.join(".runtime-assets");
-    std::fs::create_dir_all(&runtime_asset_path)
-        .expect("std::fs::create_dir_all runtime-asset-path failed");
-    steps::process_assets(&ctx, asset_path_abs.as_deref(), &runtime_asset_path);
-
     env.insert(
         "PERIDOT_EXTERNAL_ASSET_PATH",
-        runtime_asset_path
+        runtime_assets_path
             .to_str()
             .expect("invalid sequence in asset path"),
     );
