@@ -76,7 +76,7 @@ use crate::{
     ui::dock::DockingPreviewState,
     utils::platform::windows::{
         current_instance_handle, point_from_win32, point_to_win32, register_class,
-        windows_native_color,
+        window_class_atom, windows_native_color,
     },
 };
 
@@ -482,6 +482,11 @@ impl ApplicationContext {
     }
 }
 
+#[inline(always)]
+pub(self) fn is_app_window(w: HWND, ctx: &ApplicationContext) -> bool {
+    !w.is_invalid() && unsafe { window_class_atom(w) == ctx.wc_set.main }
+}
+
 pub struct DxContext {
     pub dxgi_factory: IDXGIFactory2,
     pub d3d12_device: ID3D12Device,
@@ -764,7 +769,7 @@ impl<'sys> SystemLink<'sys> {
         let drop_source = IDropSource::from(DockPaneDropSource {
             app_context: self.app_context,
             source_rect: Rect::from_lt_size(state.offset, rect.size()),
-            active_dpi_scale: Cell::new(initiator_surface.ui_scale_factor()),
+            source_dpi_scale: initiator_surface.ui_scale_factor(),
             dest_window: Cell::new(initiator_surface.0),
         });
         unsafe { coreloop.as_mut().get_unchecked_mut() }.docking_preview_state = Some(state);

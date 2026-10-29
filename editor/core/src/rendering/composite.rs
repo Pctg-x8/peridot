@@ -1842,10 +1842,6 @@ impl CompositeInstanceManager {
         br::VkHandleRef::from_raw_ref(&self.streaming_buffer)
     }
 
-    const fn staging_memory_raw_handle(&self) -> br::vk::VkDeviceMemory {
-        self.memory_stg
-    }
-
     const fn range_all(&self) -> core::ops::Range<usize> {
         0..core::mem::size_of::<CompositeInstanceData>() * self.count
     }
