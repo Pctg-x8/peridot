@@ -26,7 +26,7 @@ use windows::Win32::{
     UI::{
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
         Shell::DROPFILES,
-        WindowsAndMessaging::{GCW_ATOM, GetClassLongPtrW, GetCursorPos, WindowFromPoint},
+        WindowsAndMessaging::{GetCursorPos, WindowFromPoint},
     },
 };
 use windows_core::{BOOL, HRESULT, implement};
@@ -36,7 +36,7 @@ use crate::{
     platform::{
         WindowHandleBase,
         windows::{
-            ApplicationContext,
+            ApplicationContext, is_app_window,
             toplevel::{WindowEventHandler, WindowHandle},
         },
     },
@@ -430,7 +430,7 @@ impl IDataObject_Impl for DockPaneDataObject_Impl {
 pub(super) struct DockPaneDropSource {
     pub app_context: *const ApplicationContext,
     pub source_rect: Rect<LogicalUnit>,
-    pub active_dpi_scale: Cell<f32>,
+    pub source_dpi_scale: f32,
     pub dest_window: Cell<HWND>,
 }
 impl IDropSource_Impl for DockPaneDropSource_Impl {
@@ -446,10 +446,7 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
 
         let dest_window = unsafe { WindowFromPoint(cursor_pos) };
         self.dest_window.set(dest_window);
-        if !dest_window.is_invalid()
-            && unsafe { GetClassLongPtrW(dest_window, GCW_ATOM) }
-                == unsafe { &*self.app_context }.wc_set.main as usize
-        {
+        if is_app_window(dest_window, unsafe { &*self.app_context }) {
             // どれかのEditorWindowに入ってる場合はそっちで計算する
             let mut ps = [cursor_pos];
             unsafe {
@@ -473,44 +470,36 @@ impl IDropSource_Impl for DockPaneDropSource_Impl {
         let o = self
             .source_rect
             .left_top()
-            .to_pixels_round(self.active_dpi_scale.get());
+            .to_pixels_round(self.source_dpi_scale);
         let s = self
             .source_rect
             .size()
-            .to_pixels_ceil(self.active_dpi_scale.get());
+            .to_pixels_ceil(self.source_dpi_scale);
+        let screen_preview_rect_pixels = RECT {
+            left: cursor_pos.x + o.x,
+            top: cursor_pos.y + o.y,
+            right: cursor_pos.x + o.x + s.width.cast_signed(),
+            bottom: cursor_pos.y + o.y + s.height.cast_signed(),
+        };
         let mut new_dpi = core::mem::MaybeUninit::uninit();
         let mut new_dpi_y = core::mem::MaybeUninit::uninit();
         unsafe {
             GetDpiForMonitor(
-                MonitorFromRect(
-                    &RECT {
-                        left: cursor_pos.x + o.x,
-                        top: cursor_pos.y + o.y,
-                        right: cursor_pos.x + o.x + s.width.cast_signed(),
-                        bottom: cursor_pos.y + o.y + s.height.cast_signed(),
-                    },
-                    MONITOR_DEFAULTTONEAREST,
-                ),
+                MonitorFromRect(&screen_preview_rect_pixels, MONITOR_DEFAULTTONEAREST),
                 MDT_EFFECTIVE_DPI,
                 new_dpi.as_mut_ptr(),
                 new_dpi_y.as_mut_ptr(),
             )
             .expect("win32.get_dpi_for_window")
         };
-        self.active_dpi_scale
-            .set(unsafe { new_dpi.assume_init() } as f32 / 96.0f32);
+        let scale = unsafe { new_dpi.assume_init() } as f32 / 96.0;
 
         unsafe { &*self.app_context }
             .drag_preview_popover
             .set_rect_screen_coord(&Rect::from_lt_size(
-                Point::new_pixels(cursor_pos.x, cursor_pos.y).with_offset(
-                    self.source_rect
-                        .left_top()
-                        .to_pixels_round(self.active_dpi_scale.get()),
-                ),
-                self.source_rect
-                    .size()
-                    .to_pixels_ceil(self.active_dpi_scale.get()),
+                Point::new_pixels(cursor_pos.x, cursor_pos.y)
+                    .with_offset(self.source_rect.left_top().to_pixels_round(scale)),
+                self.source_rect.size().to_pixels_ceil(scale),
             ));
 
         DRAGDROP_S_USEDEFAULTCURSORS
