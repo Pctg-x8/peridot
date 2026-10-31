@@ -130,7 +130,12 @@ impl wl::XdgToplevelEventListener for State {
     }
 }
 impl wl::SeatEventListener for State {
-    fn capabilities(&mut self, _seat: &mut peridot_tp_wayland::Seat, _capabilities: u32) {}
+    fn capabilities(
+        &mut self,
+        _seat: &mut peridot_tp_wayland::Seat,
+        _capabilities: peridot_tp_wayland::SeatCapability,
+    ) {
+    }
 
     #[tracing::instrument(name = "<State as SeatEventListener>::name", skip(self, _seat))]
     fn name(&mut self, _seat: &mut peridot_tp_wayland::Seat, name: &core::ffi::CStr) {
@@ -142,7 +147,7 @@ impl wl::PointerEventListener for State {
         &mut self,
         _pointer: &mut peridot_tp_wayland::Pointer,
         _serial: u32,
-        _surface: &mut peridot_tp_wayland::Surface,
+        _surface: Option<&mut peridot_tp_wayland::Surface>,
         surface_x: peridot_tp_wayland::Fixed,
         surface_y: peridot_tp_wayland::Fixed,
     ) {
@@ -155,7 +160,7 @@ impl wl::PointerEventListener for State {
         &mut self,
         _pointer: &mut peridot_tp_wayland::Pointer,
         _serial: u32,
-        _surface: &mut peridot_tp_wayland::Surface,
+        _surface: Option<&mut peridot_tp_wayland::Surface>,
     ) {
         self.pointer_entered = false;
     }

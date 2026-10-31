@@ -157,9 +157,6 @@ jobs:
         name: Disable man-db triggers for apt-get
         run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Add External PPA
-        run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install extra packages
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -174,7 +171,9 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      - env:
+          PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
@@ -339,6 +338,73 @@ jobs:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
           failure_step: "Cradle(Windows)"
+          head_sha: "${{ github.event.pull_request.head.sha }}"
+          mode: diff
+          pr_number: "${{ github.event.number }}"
+          pr_title: "${{ github.event.pull_request.title }}"
+          report_name: PR Integrity Check
+          status: failure
+  check-editor:
+    env:
+      PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SLANG_LIB_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace) }}"
+      PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE: '1'
+      PERIDOT_BUILD_TP_SPIRV_TOOLS_SKIP_CMAKE: '1'
+    name: Editor
+    needs:
+      - check-baselayer
+      - check-examples
+      - check-modules
+      - check-tools
+      - preconditions
+    permissions:
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Checking out
+        uses: "actions/checkout@v5"
+        with:
+          submodules: recursive
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Initialize Cache
+        uses: "actions/cache@v4"
+        with:
+          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
+          restore-keys: "${{ runner.os }}-cargo-"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Setup cargo-json-gha-translator
+        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
+      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Run rustfmt
+        run: cargo fmt -- --check
+        working-directory: editor/linux
+      - env:
+          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: Run clippy
+        run: "cargo clippy  --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+        working-directory: editor/linux
+      - if: "failure()"
+        uses: "actions/checkout@v5"
+        with:
+          ref: "${{ github.event.pull_request.head.sha }}"
+      - if: "failure()"
+        name: Configure for Slack Notification
+        uses: "aws-actions/configure-aws-credentials@v4"
+        with:
+          aws-region: ap-northeast-1
+          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
+      - if: "failure()"
+        name: Notify as Failure
+        uses: "Pctg-x8/ci-notifications-post-invoker@master"
+        with:
+          base_sha: "${{ github.event.pull_request.base.sha }}"
+          begintime: "${{ needs.preconditions.outputs.begintime }}"
+          failure_step: Editor
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -612,6 +678,7 @@ jobs:
       - check-cradle-linux
       - check-cradle-macos
       - check-cradle-windows
+      - check-editor
       - check-examples
       - check-formats
       - check-modules

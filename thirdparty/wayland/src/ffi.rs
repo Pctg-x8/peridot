@@ -46,10 +46,17 @@ unsafe impl Send for Interface {}
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct Fixed(i32);
 impl Fixed {
+    /// 0.0
+    pub const ZERO: Self = Self(0);
+    /// 1.0
+    pub const ONE: Self = Self(256);
+
+    /// from floating point value(possibly losing precision)
     pub const fn from_f32_lossy(v: f32) -> Self {
         Self((v * 256.0) as _)
     }
 
+    /// convert to floating point value
     pub const fn to_f32(&self) -> f32 {
         self.0 as f32 / 256.0
     }
@@ -126,6 +133,9 @@ unsafe extern "C" {
     ) -> core::ffi::c_int;
     pub fn wl_proxy_get_version(proxy: *const Proxy) -> u32;
     pub fn wl_proxy_get_display(proxy: *mut Proxy) -> *mut Display;
+    pub fn wl_proxy_set_user_data(proxy: *mut Proxy, user_data: *mut core::ffi::c_void);
+    pub fn wl_proxy_get_user_data(proxy: *mut Proxy) -> *mut core::ffi::c_void;
+    pub fn wl_proxy_get_id(proxy: *mut Proxy) -> u32;
 
     pub fn wl_display_connect(name: *const core::ffi::c_char) -> *mut Display;
     pub fn wl_display_disconnect(name: *mut Display);

@@ -8,6 +8,7 @@ exclude = [
     "thirdparty/",
     "build-script-helper/",
     "platform/",
+    "editor",
 ]
 members = [
     "base",

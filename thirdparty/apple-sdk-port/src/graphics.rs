@@ -1,4 +1,4 @@
-use crate::{Object, raw::*};
+use crate::{Object, Owned, raw::*};
 
 #[repr(transparent)]
 pub struct Path(CGPath);
@@ -9,6 +9,16 @@ impl Object for Path {
     }
 }
 impl Path {
+    #[inline(always)]
+    pub fn new_rect(rect: CGRect, transform: Option<*const CGAffineTransform>) -> Owned<Self> {
+        unsafe {
+            Owned::from_ptr_unchecked(CGPathCreateWithRect(
+                rect,
+                transform.unwrap_or(core::ptr::null()),
+            ) as *mut Self)
+        }
+    }
+
     pub fn apply<F: FnMut(&CGPathElement)>(&self, mut func: F) {
         extern "C" fn wrapper<F: FnMut(&CGPathElement)>(
             info: *mut core::ffi::c_void,

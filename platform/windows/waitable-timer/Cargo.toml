@@ -1,0 +1,15 @@
+[package]
+name = "windows-waitable-timer"
+version = "1.0.0"
+edition = "2024"
+
+[features]
+default = ["tracing"]
+tracing = ["dep:tracing"]
+
+[dependencies]
+tracing = { version = "0.1", optional = true }
+
+[dependencies.windows]
+version = "0.62"
+features = ["Win32_Foundation", "Win32_System_Threading"]

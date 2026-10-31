@@ -1,2 +1,2 @@
 default:
-	stack run -- ../
+	cabal run generator-exe -- ../

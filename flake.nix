@@ -2,11 +2,12 @@
   description = "Peridot devenv";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-26.05-darwin";
   };
   outputs =
     { nixpkgs, ... }:
-    let target-systems = [
+    let
+      target-systems = [
         "x86_64-linux"
         "aarch64-darwin"
       ];
@@ -29,6 +30,16 @@
           ];
           text = ''pushd "$PROJECT_ROOT"/tools; cargo build; popd'';
         };
+      # haskell-pkgs: https://docs.haskellstack.org/en/stable/topics/nix_integration/#supporting-both-nix-and-non-nix-developers
+      haskell-pkgs = pkgs: pkgs.haskell.packages.ghc9123;
+      stack-wrapped = pkgs: pkgs.symlinkJoin {
+        name = "stack";
+        paths = [ pkgs.stack ];
+        buildInputs = [ pkgs.makeWrapper ];
+        postBuild = ''
+          wrapProgram $out/bin/stack --add-flags "--no-nix --system-ghc --no-install-ghc"
+        '';
+      };
       common-deps = pkgs: [
         pkgs.rustup
         # for building cdeps
@@ -38,14 +49,25 @@
         # required libs for building engine
         pkgs.vulkan-loader
         # required for workflow generator(also included in githooks)
-        pkgs.stack
+        (haskell-pkgs pkgs).ghc
+        (haskell-pkgs pkgs).fourmolu
+        (haskell-pkgs pkgs).hoogle
+        (haskell-pkgs pkgs).haskell-language-server
+        (haskell-pkgs pkgs).implicit-hie
+        pkgs.cabal-install
+        # (stack-wrapped pkgs)
+        # building browser-based tools
+        pkgs.bun
         # helper scripts
         (build-tools pkgs)
         # debugging
+        pkgs.lldb
         pkgs.vulkan-validation-layers
         # android
         (android-composition pkgs).androidsdk
         pkgs.cargo-ndk
+        # editor development deps
+        pkgs.shader-slang
       ];
       native-deps = pkgs: [ pkgs.pkg-config ];
       libclang-path = pkgs: "${pkgs.llvmPackages.libclang.lib}/lib";
@@ -70,6 +92,11 @@
                 pkgs.pkg-config
                 pkgs.clang
                 pkgs.llvmPackages.libclang
+                # editor development deps(linux specific)
+                pkgs.harfbuzz
+                pkgs.icu76
+                pkgs.libxkbcommon
+                pkgs.dbus
               ]
             else
               [ ];
@@ -79,7 +106,7 @@
           shell-set-common-env-vars = ''
             export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
             # set library search paths for thirdparty
-            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}:${pkgs.vulkan-loader.outPath}/lib
             # peridot specific env vars for development
             export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
             export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
@@ -95,6 +122,13 @@
               __peridot_fish_prompt_org
             end
           '';
+          platform-extra-setup-script =
+            if system == "aarch64-darwin" then
+              ''
+                echo "export PATH=${pkgs.rustup.outPath}/bin:\$PATH" > editor/mac/marble-editor/.build.envrc
+              ''
+            else
+              "";
           # android vars
           ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
           ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
@@ -105,7 +139,10 @@
             default = mksh {
               buildInputs = common-deps pkgs ++ platform-deps;
               nativeBuildInputs = native-deps pkgs;
-              shellHook = shell-set-common-env-vars;
+              shellHook = ''
+                ${shell-set-common-env-vars}
+                ${platform-extra-setup-script}
+              '';
 
               # このへんはないとエラーになる
               inherit LIBCLANG_PATH;
@@ -117,6 +154,7 @@
               nativeBuildInputs = native-deps pkgs;
               shellHook = ''
                 ${shell-set-common-env-vars}
+                ${platform-extra-setup-script}
 
                 exec ${pkgs.fish.outPath}/bin/fish -C "source ${fishPrehook}/bin/startup"
               '';
@@ -127,7 +165,7 @@
               inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
             };
           };
-        }
-      ) target-systems
-    ); };
+        }) target-systems
+      );
+    };
 }

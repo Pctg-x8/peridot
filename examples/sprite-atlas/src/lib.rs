@@ -15,7 +15,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         rotation: peridot::math::Quaternion::ONE,
         depth_range: 0.1..100.0,
     };
-    camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0));
+    camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0), None);
 
     let mut sprite_atlas = e
         .load::<peridot_sprite_atlas::SpriteAtlasAsset>("images.testatlas")
