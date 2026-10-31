@@ -440,7 +440,12 @@ checkEditor precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Editor" 
         <$> flattenSteps
           [ Step checkoutStep,
             Step rustCacheStep,
-            Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.stepUseShell "bash", withBuilderEnv, setLibrarySearchPathsUnix, skipCDeps, GHA.workAt "editor/linux"] $ GHA.runStep "cargo clippy"
+            Step setupCargoOutputTranslatorStep,
+            Step $ GHA.namedAs "Run rustfmt" $ GHA.workAt "editor/linux" $ GHA.runStep "cargo fmt -- --check",
+            Step
+              $ applyModifiers
+                [GHA.namedAs "Run clippy", GHA.stepUseShell "bash", withBuilderEnv, setLibrarySearchPathsUnix, skipCDeps, GHA.workAt "editor/linux"]
+              $ GHA.runStep "cargo clippy --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
           ]
 
 reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
