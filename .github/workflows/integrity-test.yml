@@ -157,9 +157,6 @@ jobs:
         name: Disable man-db triggers for apt-get
         run: "echo \"set man-db/auto-update false\" | sudo debconf-communicate\nsudo dpkg-reconfigure man-db"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Add External PPA
-        run: sudo apt-add-repository -y ppa:pipewire-debian/pipewire-upstream
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Install extra packages
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"

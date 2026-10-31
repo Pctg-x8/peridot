@@ -382,7 +382,6 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step disableAPTManualUpdateStep,
-            Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
             Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
