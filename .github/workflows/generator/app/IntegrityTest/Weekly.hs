@@ -52,12 +52,14 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
     checkCradleMacos' <- M.singleton "check-cradle-macos" <$> checkCradleMacos "true"
     checkCradleLinux' <- M.singleton "check-cradle-linux" <$> checkCradleLinux "true"
     checkCradleAndroid' <- M.singleton "check-cradle-android" <$> checkCradleAndroid "true"
+    checkEditor' <- M.singleton "check-editor" <$> checkEditor "true"
 
     pure
       [ checkFormats',
         checkBaseLayer'
           ~=> [checkTools', checkModules' ~=> checkExamples']
           ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
+          ~=> checkEditor'
       ]
 
   pure

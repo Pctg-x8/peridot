@@ -13,6 +13,7 @@ module IntegrityTest.Shared
     checkCradleMacos,
     checkCradleLinux,
     checkCradleAndroid,
+    checkEditor,
     reportSuccessJob,
     Step (..),
     flattenSteps,
@@ -430,6 +431,17 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
           skipCDeps
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+
+checkEditor :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+checkEditor precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Editor" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.stepUseShell "bash", withBuilderEnv, setLibrarySearchPathsUnix, skipCDeps, GHA.workAt "editor/linux"] $ GHA.runStep "cargo clippy"
+          ]
 
 reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
 reportSuccessJob =
