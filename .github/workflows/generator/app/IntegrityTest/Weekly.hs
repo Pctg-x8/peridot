@@ -58,8 +58,7 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
       [ checkFormats',
         checkBaseLayer'
           ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
-          ~=> checkEditor'
+          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid', checkEditor']
       ]
 
   pure

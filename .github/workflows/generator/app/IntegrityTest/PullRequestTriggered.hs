@@ -123,8 +123,7 @@ integrityTest = runIdentity $ withSlackReport slackNotifyProvider do
       [ checkFormats',
         checkBaseLayer'
           ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid']
-          ~=> checkEditor'
+          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid', checkEditor']
       ]
 
   pure

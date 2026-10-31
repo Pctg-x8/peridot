@@ -330,10 +330,6 @@ jobs:
     name: Editor
     needs:
       - check-baselayer
-      - check-cradle-android
-      - check-cradle-linux
-      - check-cradle-macos
-      - check-cradle-windows
       - check-examples
       - check-modules
       - check-tools
