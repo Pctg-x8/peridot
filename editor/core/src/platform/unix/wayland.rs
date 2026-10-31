@@ -621,12 +621,12 @@ impl StaticPixbufs {
 pub struct PointerID(*mut wl::Pointer);
 impl PointerID {
     #[inline(always)]
-    fn global_messaging(&self) -> &GlobalMessaging {
+    fn global_messaging<'a, 'sys>(&'a self) -> &'a GlobalMessaging<'sys> {
         unsafe { &*(*self.0).user_data().cast::<GlobalMessaging>() }
     }
 
     #[inline(always)]
-    fn global_messaging_mut(&self) -> &mut GlobalMessaging {
+    fn global_messaging_mut<'a, 'sys>(&'a self) -> &'a mut GlobalMessaging<'sys> {
         unsafe { &mut *(*self.0).user_data().cast::<GlobalMessaging>() }
     }
 
