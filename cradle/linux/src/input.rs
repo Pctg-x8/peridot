@@ -670,9 +670,9 @@ fn map_key_button(key: u16) -> Option<peridot::NativeButtonInput> {
         return GAMEPAD_MAP[key as usize - 0x130];
     }
 
-    if (Key::Left as u16..=Key::Task as u16).contains(&key) {
+    if (Key::MouseLeft as u16..=Key::MouseTask as u16).contains(&key) {
         return Some(peridot::NativeButtonInput::Mouse(
-            (key - Key::Left as u16) as _,
+            (key - Key::MouseLeft as u16) as _,
         ));
     }
 
