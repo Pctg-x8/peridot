@@ -189,6 +189,8 @@ pub struct RenderThread<'main> {
     pub message_receiver: std::sync::mpsc::Receiver<RenderMessage>,
     pub root_font_set: &'main RootFontSet,
     pub preview_state: &'main Mutex<preview::CommittedState>,
+    #[cfg(feature = "wayland")]
+    pub dp_dispatch_guard: &'main Mutex<()>,
     #[cfg(windows)]
     pub dx_context: &'main crate::platform::windows::DxContext,
     #[cfg(windows)]
@@ -519,12 +521,16 @@ impl<'main> RenderThread<'main> {
                 }
 
                 let mut descriptor_writes = Vec::new();
+                #[cfg(feature = "wayland")]
+                let guarded = self.dp_dispatch_guard.lock().expect("poisoned");
                 for x in windows.values_mut() {
                     x.validate_swapchain(&mut descriptor_writes);
                 }
                 for x in context_menus.values_mut() {
                     x.validate_swapchain(&mut descriptor_writes);
                 }
+                #[cfg(feature = "wayland")]
+                drop(guarded);
                 self.gfx.update_descriptor_sets(&descriptor_writes, &[]);
 
                 any_swapchain_invalidated = false;

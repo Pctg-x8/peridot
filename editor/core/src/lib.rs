@@ -254,6 +254,8 @@ pub fn launch() {
 
     let sync_event_bus = SyncEventBus::new();
     let shutdown = std::sync::atomic::AtomicBool::new(false);
+    #[cfg(feature = "wayland")]
+    let dp_dispatch_guard = Mutex::new(());
     std::thread::scope(|thread_scope| {
         let render_thread = RenderThread {
             gfx: &gfx,
@@ -264,6 +266,8 @@ pub fn launch() {
             message_receiver: rt_receiver,
             root_font_set: &root_font_set,
             preview_state: &preview_state,
+            #[cfg(feature = "wayland")]
+            dp_dispatch_guard: &dp_dispatch_guard,
             #[cfg(windows)]
             dx_context: &dx_context,
             #[cfg(windows)]
@@ -317,8 +321,12 @@ pub fn launch() {
         #[cfg(target_os = "linux")]
         'app: loop {
             #[cfg(feature = "wayland")]
-            if dp_context.prepare_read().is_err() {
-                break 'app;
+            {
+                let guarded = dp_dispatch_guard.lock().expect("poisoned");
+                if dp_context.prepare_read().is_err() {
+                    break 'app;
+                }
+                drop(guarded);
             }
             let active_events = epoll.wait(&mut eventbuf, None).expect("epoll.wait");
 
