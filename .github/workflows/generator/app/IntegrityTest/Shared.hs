@@ -323,6 +323,10 @@ withBuilderEnv = setCradleBase . setBuiltinAssetsPath
 setLibrarySearchPathsUnix :: (GHA.HasEnvironmentVariables e) => e -> e
 setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH)"
 
+-- | set specific `PERIDOT_BUILD_XXX` environment variable switch to "1"
+setPeridotBuildEnvSwitch :: (GHA.HasEnvironmentVariables e) => String -> e -> e
+setPeridotBuildEnvSwitch name = GHA.env ("PERIDOT_BUILD_" <> name) "1"
+
 checkCradleWindows :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
   where
@@ -387,7 +391,8 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
             Step checkoutStep,
             Step rustCacheStep,
-            Step cliBuildStep,
+            -- worksround for ci broken
+            Step $ setPeridotBuildEnvSwitch "TP_KTX_WA_DISABLE_SSE" $ cliBuildStep,
             Step integratedTestStep
           ]
 

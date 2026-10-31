@@ -33,6 +33,11 @@ fn build_cdeps() {
             "--fresh",
         ]);
 
+        if peridot_build_switch_enable!("TP_KTX_WA_DISABLE_SSE") {
+            // workaround: disable sse explicitly (ci broken)
+            cmd.arg("-DBASISU_SUPPORT_SSE=OFF");
+        }
+
         if std::env::var_os("TARGET").is_some_and(|e| e == "aarch64-linux-android") {
             // android on arm64-v8a specific args
             cmd.arg(format!(

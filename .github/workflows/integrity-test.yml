@@ -171,7 +171,9 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
           restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      - env:
+          PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
