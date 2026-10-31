@@ -546,6 +546,17 @@ impl<'sys> EventListener<'sys> {
                 resized = Some(logical_size);
                 should_update_decoration = true;
 
+                self.state
+                    .data
+                    .xdg_surface
+                    .set_window_geometry(
+                        0,
+                        0,
+                        logical_size.width.ceil() as _,
+                        logical_size.height.ceil() as _,
+                    )
+                    .expect("set_window_geometry");
+
                 if let SurfaceScaling::Manual { ref viewport, .. } = self.scaling {
                     viewport
                         .set_destination(
