@@ -401,8 +401,8 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
-        name: "Run clippy (baseline)"
-        run: "cargo clippy --features freetype,fontconfig --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        name: Run clippy
+        run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: 'true'
         name: Run check - Trailing Newline for Source Code Files

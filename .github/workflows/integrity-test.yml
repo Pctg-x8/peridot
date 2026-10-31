@@ -428,8 +428,8 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Run clippy (baseline)"
-        run: "cargo clippy --features freetype,fontconfig --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        name: Run clippy
+        run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run check - Trailing Newline for Source Code Files
