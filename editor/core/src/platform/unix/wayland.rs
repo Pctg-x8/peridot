@@ -1651,8 +1651,9 @@ impl wl::DataSourceEventListener for GlobalMessaging<'_> {
             return;
         };
 
+        // TODO: ドロップ地点のカーソル位置がほしい とる方法あるかな......
         unsafe { Pin::new_unchecked(&mut *self.coreloop) }
-            .confirm_redock(state.initiator, Point::new_logical(0.0, 0.0));
+            .confirm_redock(state.initiator, Point::new_logical(99999.0, 99999.0));
         self.coreloop().update_view_all();
     }
 
