@@ -8,9 +8,7 @@ exclude = [
     "thirdparty/",
     "build-script-helper/",
     "platform/",
-    "editor/win",
-    "editor/mac",
-    "editor/linux",
+    "editor",
 ]
 members = [
     "base",
@@ -32,12 +30,6 @@ members = [
     "modules/sprite-atlas",
     "modules/mesh",
     "modules/asset-processor/model",
-    "editor/core",
-    "editor/core/app/shared",
-    "editor/core/app/model",
-    "editor/core/bindgen",
-    "editor/core/profiler",
-    "editor/core/profiler-attr",
 ]
 
 [workspace.dependencies]

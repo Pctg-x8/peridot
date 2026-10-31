@@ -19,7 +19,7 @@ profiler.path = "./profiler"
 peridot-marble-editor-shared.path = "./app/shared"
 peridot-marble-editor-model.path = "./app/model"
 
-bedrock = { workspace = true, features = [
+bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = [
   "Implements",
   "DynamicLoaded",
   "VK_KHR_surface",
@@ -27,7 +27,7 @@ bedrock = { workspace = true, features = [
   "VK_EXT_debug_utils",
   "Allow1_4APIs",
 ] }
-tracing.workspace = true
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 lyon_geom = "1.0"
 peridot-math = { path = "../../modules/math" }
@@ -124,6 +124,3 @@ peridot-tp-icu = { path = "../../thirdparty/icu" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
-
-[lints]
-workspace = true

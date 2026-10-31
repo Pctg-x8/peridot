@@ -7,7 +7,7 @@ edition = "2024"
 active = ["profiler-attr/active"]
 
 [dependencies]
-tracing.workspace = true
+tracing = "0.1"
 time = { version = "0.3", features = ["formatting", "std", "macros"] }
 profiler-attr.path = "../profiler-attr"
 
