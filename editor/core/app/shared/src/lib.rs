@@ -13,9 +13,15 @@ pub use text::*;
 
 /// Safely comparable/equatable f32
 #[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SafeF32(f32);
 impl Eq for SafeF32 {}
+impl PartialOrd for SafeF32 {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        self.0.partial_cmp(&other.0)
+    }
+}
 impl Ord for SafeF32 {
     #[inline(always)]
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
