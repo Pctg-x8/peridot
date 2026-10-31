@@ -84,6 +84,7 @@ executable generator-exe
       SlackNotification
       Utils
       Paths_generator
+      Peridot
   hs-source-dirs:
       app
   default-extensions:

@@ -38,3 +38,6 @@ cradle:
 
     - path: "app/Paths_generator.hs"
       component: "generator:exe:generator-exe"
+
+    - path: "app/Peridot.hs"
+      component: "generator:exe:generator-exe"

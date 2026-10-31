@@ -383,12 +383,10 @@ jobs:
       - env:
           LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_BUILD_SKIP_CDEPS: '1'
-          PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
-          PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run clippy
-        run: "cargo clippy --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: bash
+        run: "cargo clippy  --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
         working-directory: editor/linux
       - if: "failure()"
         uses: "actions/checkout@v5"
