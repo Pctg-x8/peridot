@@ -30,6 +30,16 @@
           ];
           text = ''pushd "$PROJECT_ROOT"/tools; cargo build; popd'';
         };
+      # haskell-pkgs: https://docs.haskellstack.org/en/stable/topics/nix_integration/#supporting-both-nix-and-non-nix-developers
+      haskell-pkgs = pkgs: pkgs.haskell.packages.ghc9123;
+      stack-wrapped = pkgs: pkgs.symlinkJoin {
+        name = "stack";
+        paths = [ pkgs.stack ];
+        buildInputs = [ pkgs.makeWrapper ];
+        postBuild = ''
+          wrapProgram $out/bin/stack --add-flags "--no-nix --system-ghc --no-install-ghc"
+        '';
+      };
       common-deps = pkgs: [
         pkgs.rustup
         # for building cdeps
@@ -39,7 +49,13 @@
         # required libs for building engine
         pkgs.vulkan-loader
         # required for workflow generator(also included in githooks)
-        pkgs.stack
+        (haskell-pkgs pkgs).ghc
+        (haskell-pkgs pkgs).fourmolu
+        (haskell-pkgs pkgs).hoogle
+        (haskell-pkgs pkgs).haskell-language-server
+        (haskell-pkgs pkgs).implicit-hie
+        pkgs.cabal-install
+        # (stack-wrapped pkgs)
         # building browser-based tools
         pkgs.bun
         # helper scripts
