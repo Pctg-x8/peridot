@@ -1,4 +1,4 @@
-module Workflow.GitHub.Actions.JobGroupComposer (depends, JobGroup (..), (~=>)) where
+module Workflow.GitHub.Actions.JobGroupComposer (depends, JobMap, JobGroup (..), (~=>)) where
 
 import Data.Map (Map)
 import Data.Map qualified as M

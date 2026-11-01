@@ -1,2 +1,43 @@
 cradle:
-  stack:
+  cabal:
+    - path: "src"
+      component: "lib:generator"
+
+    - path: "app/Main.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/AutoDeliveryDev.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/CustomAction/CreateDevDeliverPRs.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/CustomAction/PostCINotifications.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/DocumentDeployment.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/IntegrityTest/PullRequestTriggered.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/IntegrityTest/Shared.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/IntegrityTest/Weekly.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/SDKBuild.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/SlackNotification.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/Utils.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/Paths_generator.hs"
+      component: "generator:exe:generator-exe"
+
+    - path: "app/Peridot.hs"
+      component: "generator:exe:generator-exe"

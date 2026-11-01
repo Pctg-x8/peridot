@@ -1,3 +1,5 @@
+#![allow(non_upper_case_globals)]
+
 pub mod mactypes;
 pub use self::mactypes::*;
 

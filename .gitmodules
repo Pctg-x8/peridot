@@ -10,6 +10,9 @@
 	path = thirdparty/spirv-tools/source-repo
     url = https://github.com/KhronosGroup/SPIRV-Tools
     ignore = dirty
+[submodule "thirdparty/budoux/source-repo"]
+	path = thirdparty/budoux/source-repo
+	url = https://github.com/google/budoux
 [submodule "thirdparty/sqlite3/source-repo"]
 	path = thirdparty/sqlite3/source-repo
 	url = https://github.com/sqlite/sqlite

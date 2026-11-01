@@ -22,6 +22,9 @@ pub struct CFDictionaryKeyCallBacks {
     pub hash: Option<CFDictionaryHashCallBack>,
 }
 
+pub type CFDictionaryApplierFunction =
+    extern "C" fn(key: *const c_void, value: *const c_void, context: *mut c_void);
+
 #[repr(C)]
 pub struct CFDictionaryValueCallBacks {
     pub version: CFIndex,
@@ -103,4 +106,10 @@ unsafe extern "C" {
     );
     pub fn CFDictionaryRemoveValue(dict: CFMutableDictionaryRef, key: *const c_void);
     pub fn CFDictionaryRemoveAllValues(dict: CFMutableDictionaryRef);
+
+    pub fn CFDictionaryApplyFunction(
+        dict: CFDictionaryRef,
+        applier: CFDictionaryApplierFunction,
+        context: *mut c_void,
+    );
 }

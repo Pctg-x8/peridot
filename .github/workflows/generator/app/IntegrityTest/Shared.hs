@@ -1,3 +1,4 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE MultilineStrings #-}
 
 module IntegrityTest.Shared
@@ -13,6 +14,8 @@ module IntegrityTest.Shared
     checkCradleMacos,
     checkCradleLinux,
     checkCradleAndroid,
+    checkCradleAll,
+    checkEditorMP,
     reportSuccessJob,
     Step (..),
     flattenSteps,
@@ -26,9 +29,12 @@ where
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.List (intercalate)
+import Data.Map qualified as M
+import Peridot qualified
 import SlackNotification (SlackReportContext (..), reportJobFailure, reportSuccessSteps)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
+import Workflow.GitHub.Actions.JobGroupComposer (JobMap)
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
@@ -88,6 +94,9 @@ rustCacheStep =
 
 cmake :: [String] -> String
 cmake args = unwords ("cmake" : args)
+
+cargoTranslated :: String -> [String] -> String
+cargoTranslated subcmd args = "cargo " <> subcmd <> " " <> unwords args <> " --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
 
 data RunnerVariant = RunnerVariantWindows | RunnerVariantMac | RunnerVariantUbuntu
 
@@ -189,22 +198,19 @@ preBuildCDeps variant =
       _ -> Nothing
 
 skipCDeps :: (GHA.HasEnvironmentVariables e) => e -> e
-skipCDeps = GHA.env "PERIDOT_BUILD_SKIP_CDEPS" "1"
+skipCDeps = Peridot.setBuildEnvSwitch "SKIP_CDEPS"
 
 cdepsEnvVars :: (GHA.HasEnvironmentVariables e) => RunnerVariant -> e -> e
 cdepsEnvVars variant =
-  GHA.env "PERIDOT_BUILD_TP_SLANG_SKIP_CMAKE" "1"
-    . GHA.env "PERIDOT_BUILD_TP_KTX_SKIP_CMAKE" "1"
-    . GHA.env "PERIDOT_BUILD_TP_SLANG_LIB_PATH" slangLibPath
-    . GHA.env "PERIDOT_BUILD_TP_SPIRV_TOOLS_SKIP_CMAKE" "1"
+  Peridot.setBuildEnvSwitch "TP_SLANG_SKIP_CMAKE"
+    . Peridot.setBuildEnvSwitch "TP_KTX_SKIP_CMAKE"
+    . Peridot.setBuildEnv "TP_SLANG_LIB_PATH" slangLibPath
+    . Peridot.setBuildEnvSwitch "TP_SPIRV_TOOLS_SKIP_CMAKE"
   where
     -- CIではDebugでビルドしてるのでそれを指定（ただしWindows以外ではなぜかRelease以下に生成される）
     slangLibPath = case variant of
       RunnerVariantWindows -> GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Debug/lib', github.workspace)"
       _ -> GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib', github.workspace)"
-
-addPPAStep :: [String] -> GHA.Step
-addPPAStep ppaList = GHA.namedAs "Add External PPA" $ GHA.runStep $ "sudo apt-add-repository -y " <> unwords ppaList
 
 aptInstallStep :: [String] -> GHA.Step
 aptInstallStep packages =
@@ -224,90 +230,82 @@ stdWindowsJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.jobRunsOn [
 stdMacJob :: (SlackReportContext m, Functor m) => String -> [GHA.Step] -> m GHA.Job
 stdMacJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.jobRunsOn ["macos-latest"] $ GHA.job steps
 
+setDummyVulkanSDKPathForUnlinking :: (GHA.HasEnvironmentVariables e) => e -> e
+setDummyVulkanSDKPathForUnlinking = GHA.env "VULKAN_SDK" ""
+
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
-  stdJob
-    "Code Formats"
-    ( GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step checkoutStep,
-            Step rustCacheStep,
-            Step setupCargoOutputTranslatorStep,
-            Step $ GHA.namedAs "Run rustfmt" $ GHA.runStep "cargo fmt -- --check",
-            Step $
-              GHA.namedAs "Run clippy" $
-                stdBashStep "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
-            Step $
-              GHA.namedAs "Run check - Trailing Newline for Source Code Files" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
-          ]
-    )
+  stdJob "Code Formats" $
+    GHA.withCondition precondition
+      <$> flattenSteps
+        [ Step checkoutStep,
+          Step rustCacheStep,
+          Step setupCargoOutputTranslatorStep,
+          Step $ GHA.namedAs "Run rustfmt" $ GHA.runStep "cargo fmt -- --check",
+          Step $
+            GHA.namedAs "Run clippy" $
+              skipCDeps $
+                stdBashStep (cargoTranslated "clippy" ["--all-features", "--all-targets"]),
+          Step $
+            GHA.namedAs "Run check - Trailing Newline for Source Code Files" $
+              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
+        ]
 
 checkBaseLayer :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkBaseLayer precondition =
-  stdJob
-    "Base Layer"
-    ( GHA.withCondition precondition
-        <$> [ checkoutStep,
-              rustCacheStep,
-              setupCargoOutputTranslatorStep,
-              GHA.namedAs "Run checks" $
-                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps,
-              GHA.namedAs "Run checks(mt)" $
-                stdBashStep "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator" & skipCDeps
-            ]
-    )
+  stdJob "Base Layer" $
+    GHA.withCondition precondition
+      <$> [ checkoutStep,
+            rustCacheStep,
+            setupCargoOutputTranslatorStep,
+            GHA.namedAs "Run checks" $ skipCDeps $ stdBashStep (cargoTranslated "check" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report"]),
+            GHA.namedAs "Run checks(mt)" $ skipCDeps $ stdBashStep (cargoTranslated "check" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"])
+          ]
 
 checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkTools precondition =
-  stdJob
-    "Tools"
-    ( GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step checkoutStep,
-            Step rustCacheStep,
-            Step setupCargoOutputTranslatorStep,
-            Step $
-              GHA.namedAs "Run checks" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                  & GHA.workAt "tools"
-                  & skipCDeps
-          ]
-    )
+  stdJob "Tools" $
+    GHA.withCondition precondition
+      <$> flattenSteps
+        [ Step checkoutStep,
+          Step rustCacheStep,
+          Step setupCargoOutputTranslatorStep,
+          Step $
+            GHA.namedAs "Run checks" $
+              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                & GHA.workAt "tools"
+                & skipCDeps
+        ]
 
 checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkModules precondition =
-  stdJob
-    "Modules"
-    ( GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step checkoutStep,
-            Step rustCacheStep,
-            Step setupCargoOutputTranslatorStep,
-            Step $
-              GHA.namedAs "Run checks" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                  & GHA.workAt "modules"
-                  & skipCDeps
-          ]
-    )
+  stdJob "Modules" $
+    GHA.withCondition precondition
+      <$> flattenSteps
+        [ Step checkoutStep,
+          Step rustCacheStep,
+          Step setupCargoOutputTranslatorStep,
+          Step $
+            GHA.namedAs "Run checks" $
+              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                & GHA.workAt "modules"
+                & skipCDeps
+        ]
 
 checkExamples :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkExamples precondition =
-  stdJob
-    "Examples"
-    ( GHA.withCondition precondition
-        <$> flattenSteps
-          [ Step checkoutStep,
-            Step rustCacheStep,
-            Step setupCargoOutputTranslatorStep,
-            Step $
-              GHA.namedAs "Run checks" $
-                GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                  & GHA.workAt "examples"
-                  & skipCDeps
-          ]
-    )
+  stdJob "Examples" $
+    GHA.withCondition precondition
+      <$> flattenSteps
+        [ Step checkoutStep,
+          Step rustCacheStep,
+          Step setupCargoOutputTranslatorStep,
+          Step $
+            GHA.namedAs "Run checks" $
+              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+                & GHA.workAt "examples"
+                & skipCDeps
+        ]
 
 cliBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build --no-default-features"
@@ -315,7 +313,7 @@ cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep 
 withBuilderEnv :: (GHA.HasEnvironmentVariables e) => e -> e
 withBuilderEnv = setCradleBase . setBuiltinAssetsPath
   where
-    setCradleBase = GHA.env "PERIDOT_CLI_CRADLE_BASE" $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
+    setCradleBase = Peridot.setCradleBasePath $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
     setBuiltinAssetsPath =
       GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
 
@@ -335,7 +333,7 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
             Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
           ]
 
-    integratedTestStep = GHA.env "VULKAN_SDK" "" . withBuilderEnv . skipCDeps . GHA.runStep
+    integratedTestStep = setDummyVulkanSDKPathForUnlinking . withBuilderEnv . skipCDeps . GHA.runStep
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
@@ -381,13 +379,13 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step disableAPTManualUpdateStep,
-            Step $ addPPAStep ["ppa:pipewire-debian/pipewire-upstream"],
             Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
             Step checkoutStep,
             Step rustCacheStep,
-            Step cliBuildStep,
+            -- worksround for ci broken
+            Step $ Peridot.setBuildEnvSwitch "TP_KTX_WA_DISABLE_SSE" $ cliBuildStep,
             Step integratedTestStep
           ]
 
@@ -430,6 +428,58 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
           skipCDeps
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+
+checkCradleAll :: (SlackReportContext m) => (Applicative m) => String -> m JobMap
+checkCradleAll precondition = do
+  win <- checkCradleWindows precondition
+  mac <- checkCradleMacos precondition
+  linux <- checkCradleLinux precondition
+  android <- checkCradleAndroid precondition
+
+  return $ M.fromList [("check-cradle-win", win), ("check-cradle-mac", mac), ("check-cradle-linux", linux), ("check-cradle-android", android)]
+
+checkEditor :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+checkEditor precondition = stdJob "Editor (Linux)" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step setupCargoOutputTranslatorStep,
+            Step $ GHA.namedAs "Run rustfmt" $ GHA.workAt "editor/linux" $ GHA.runStep "cargo fmt -- --check",
+            Step $ applyModifiers [GHA.namedAs "Run clippy", skipCDeps, GHA.workAt "editor/linux"] $ stdBashStep (cargoTranslated "clippy" [])
+          ]
+
+checkEditorWin :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+checkEditorWin precondition = stdWindowsJob "Editor (Windows)" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.workAt "editor/win", setDummyVulkanSDKPathForUnlinking, skipCDeps] $ GHA.runStep "cargo clippy"
+          ]
+
+checkEditorMac :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+checkEditorMac precondition = stdMacJob "Editor (macOS)" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.workAt "editor/mac", skipCDeps] $ GHA.runStep "cargo clippy"
+          ]
+
+checkEditorMP :: (SlackReportContext m) => (Applicative m) => String -> m JobMap
+checkEditorMP precondition = do
+  linux <- checkEditor precondition
+  win <- checkEditorWin precondition
+  mac <- checkEditorMac precondition
+
+  return $ M.fromList [("check-editor-linux", linux), ("check-editor-win", win), ("check-editor-mac", mac)]
 
 reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
 reportSuccessJob =
