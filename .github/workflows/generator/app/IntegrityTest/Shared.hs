@@ -207,7 +207,7 @@ preBuildCDeps variant =
       RunnerVariantMac -> "thirdparty/ktx/cdeps-build/aarch64-apple-darwin"
       RunnerVariantUbuntu -> "thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu"
     prepareBuildDirCmd = case variant of
-      RunnerVariantWindows -> "New-Item " <> ktxBuildDir
+      RunnerVariantWindows -> "New-Item -ItemType Directory -Force -Path " <> ktxBuildDir
       RunnerVariantMac -> "mkdir -p " <> ktxBuildDir
       RunnerVariantUbuntu -> "mkdir -p " <> ktxBuildDir
 
