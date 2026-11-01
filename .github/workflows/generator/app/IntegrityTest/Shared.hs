@@ -282,7 +282,7 @@ checkTools precondition =
           Step rustCacheStep,
           Step setupCargoOutputTranslatorStep,
           Step $ GHA.namedAs "Run clippy" $ GHA.workAt "tools" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--workspace", "--all-features", "--all-targets"]),
-          Step $ GHA.namedAs "Run tests" $ GHA.workAt "tools" $ stdBashStep "cargo test --workspace"
+          Step $ GHA.namedAs "Run tests" $ GHA.workAt "tools" $ skipCDeps $ stdBashStep "cargo test --workspace"
         ]
 
 checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job

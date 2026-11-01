@@ -708,7 +708,9 @@ jobs:
         run: "cargo clippy --workspace --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
         working-directory: tools
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run tests
         run: cargo test --workspace
         shell: "bash --noprofile --norc -eo pipefail {0}"
