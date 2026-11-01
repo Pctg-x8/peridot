@@ -306,11 +306,11 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
-      \pwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      \pwsh -c 'tools/target/debug/peridot check cradle/test-fixture -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
     integratedTestTransparentScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
-      \pwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+      \pwsh -c 'tools/target/debug/peridot check cradle/test-fixture -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
 
 checkCradleMacos :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" steps
@@ -339,7 +339,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
             GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)",
           skipCDeps
         ]
-        $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        $ GHA.runStep "./tools/target/debug/peridot check cradle/test-fixture -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleLinux :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
@@ -366,7 +366,7 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
           setLibrarySearchPathsUnix,
           skipCDeps
         ]
-        $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        $ GHA.runStep "./tools/target/debug/peridot check cradle/test-fixture -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAndroid :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Cradle(Android)" steps
@@ -396,7 +396,7 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
           setLibrarySearchPathsUnix,
           skipCDeps
         ]
-        $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        $ GHA.runStep "./tools/target/debug/peridot check cradle/test-fixture -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
 checkCradleAll :: (SlackReportContext m) => (Applicative m) => String -> m JobMap
 checkCradleAll precondition = do

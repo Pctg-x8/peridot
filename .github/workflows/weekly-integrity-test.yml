@@ -52,7 +52,7 @@ jobs:
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
         name: Run checks
-        run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check cradle/test-fixture -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -113,7 +113,7 @@ jobs:
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: 'true'
         name: Run checks
-        run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check cradle/test-fixture -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -174,7 +174,7 @@ jobs:
           VULKAN_SDK: /Users
         if: 'true'
         name: Run checks
-        run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check cradle/test-fixture -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -227,7 +227,7 @@ jobs:
           VULKAN_SDK: ''
         if: 'true'
         name: Run checks
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check cradle/test-fixture -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
@@ -235,7 +235,7 @@ jobs:
           VULKAN_SDK: ''
         if: 'true'
         name: Run checks for transparent-back
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check cradle/test-fixture -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         uses: "actions/checkout@v5"
         with:
