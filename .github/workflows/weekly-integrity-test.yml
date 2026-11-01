@@ -23,7 +23,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: 'true'
         name: Setup Rust for Android
@@ -98,7 +98,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
           PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
@@ -155,7 +155,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
           RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
@@ -214,7 +214,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: 'true'
         name: Build CLI
@@ -274,7 +274,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - if: 'true'
         name: Setup cargo-json-gha-translator
@@ -328,7 +328,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
@@ -374,7 +374,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
@@ -420,7 +420,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-formats-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-formats-"
       - if: 'true'
         name: Setup cargo-json-gha-translator
@@ -474,7 +474,7 @@ jobs:
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: 'true'
         name: Setup cargo-json-gha-translator
