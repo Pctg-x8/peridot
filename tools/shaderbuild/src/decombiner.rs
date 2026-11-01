@@ -769,7 +769,7 @@ impl<'s> CombinedShader<'s> {
         for (n, vi_vars) in self
             .vertex_input
             .iter()
-            .flat_map(|&(_, ref bb)| &bb.vars)
+            .flat_map(|(_, bb)| &bb.vars)
             .enumerate()
         {
             code += &format!(
@@ -784,7 +784,7 @@ impl<'s> CombinedShader<'s> {
             .varyings_between_shaders
             .iter()
             .filter(|&&(src, _, _)| src == br::ShaderStage::Vertex)
-            .flat_map(|&(_, _, ref v)| v)
+            .flat_map(|(_, _, v)| v)
             .enumerate()
         {
             let require_flat = ovar.type_str == "int";
@@ -827,7 +827,8 @@ impl<'s> CombinedShader<'s> {
             self.vertex_shader_code
                 .replace("RasterPosition", "gl_Position")
         );
-        return code;
+
+        code
     }
     pub fn emit_fragment_shader(&self) -> String {
         let mut code = String::from("#version 450\n\n");

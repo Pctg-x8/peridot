@@ -16,3 +16,6 @@ thiserror = "2.0.3"
 smol = "2.0.2"
 async-process = "2.3.0"
 futures-util = "0.3.31"
+
+[lints]
+workspace = true

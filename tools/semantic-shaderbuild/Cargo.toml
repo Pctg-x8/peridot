@@ -7,3 +7,6 @@ edition = "2021"
 peridot-semantic-shader = { path = "../../modules/semantic-shader", default-features = false }
 bedrock.workspace = true
 thiserror = "2.0"
+
+[lints]
+workspace = true
