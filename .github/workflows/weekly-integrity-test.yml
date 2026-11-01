@@ -508,7 +508,7 @@ jobs:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'
         name: "Run checks (examples)"
-        run: "exec $GITHUB_WOKRSPACE/.github/scripts/checkbuild-subdir.sh"
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: examples
       - if: "failure()"
         uses: "actions/checkout@v5"

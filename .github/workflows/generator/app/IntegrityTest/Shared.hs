@@ -272,7 +272,7 @@ preciseCheck precondition = stdJob "Precise Check" steps
             Step $ GHA.namedAs "Run checks (base, mt)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"]),
             Step $ GHA.namedAs "Run cahcks (modules)" $ skipCDeps $ GHA.workAt "modules" $ GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh",
             Step $ GHA.namedAs "Run checks (tools)" $ skipCDeps $ GHA.workAt "tools" $ stdBashStep (cargoTranslated "clippy" ["--workspace", "--all-features", "--all-targets"]),
-            Step $ GHA.namedAs "Run checks (examples)" $ skipCDeps $ GHA.workAt "examples" $ GHA.runStep "exec $GITHUB_WOKRSPACE/.github/scripts/checkbuild-subdir.sh"
+            Step $ GHA.namedAs "Run checks (examples)" $ skipCDeps $ GHA.workAt "examples" $ GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
           ]
 
 cliBuildStep :: GHA.Step
