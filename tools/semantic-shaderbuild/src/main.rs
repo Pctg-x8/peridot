@@ -1363,22 +1363,26 @@ impl<'s> CombinedShaderGenContext<'s> {
 
         // expand main code blocks
         sink.write_all(b"void main() {\n")?;
-        sink.write_vectored(
-            &self
-                .fragment_shader_main_ordered
-                .iter()
-                .map(|x| {
-                    std::io::IoSlice::new(
-                        x.slice
-                            .strip_prefix('{')
-                            .unwrap_or(x.slice)
-                            .strip_suffix('}')
-                            .unwrap_or(x.slice)
-                            .as_bytes(),
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )?;
+        let mut slices = self
+            .fragment_shader_main_ordered
+            .iter()
+            .map(|x| {
+                std::io::IoSlice::new(
+                    x.slice
+                        .strip_prefix('{')
+                        .unwrap_or(x.slice)
+                        .strip_suffix('}')
+                        .unwrap_or(x.slice)
+                        .as_bytes(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut slices = &mut slices[..];
+        std::io::IoSlice::advance_slices(&mut slices, 0);
+        while !slices.is_empty() {
+            let b = sink.write_vectored(slices)?;
+            std::io::IoSlice::advance_slices(&mut slices, b);
+        }
         sink.write_all(b"}\n")?;
 
         Ok(())
