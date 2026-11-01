@@ -111,56 +111,57 @@ preBuildCDeps variant =
       installStep,
       Step $ GHA.namedAs "Prepare cdeps build dir" $ GHA.runStep prepareBuildDirCmd,
       Step $
-        GHA.parallelSteps
-          [ GHA.namedAs "Pre-build c deps(slang)" $
-              GHA.runStep
-                ( maybe "" (<> "\n") commandPrelude
-                    <> cmake
-                      [ "--preset",
-                        "default",
-                        "-G",
-                        "Ninja",
-                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                        "-DSLANG_ENABLE_DXIL=FALSE",
-                        "-DSLANG_ENABLE_GFX=FALSE",
-                        "-DSLANG_ENABLE_SLANGD=FALSE",
-                        "-DSLANG_ENABLE_SLANGC=FALSE",
-                        "-DSLANG_ENABLE_SLANGI=FALSE",
-                        "-DSLANG_ENABLE_SLANGRT=FALSE",
-                        "-DSLANG_ENABLE_SLANG_GLSLANG=FALSE",
-                        "-DSLANG_ENABLE_SLANG_PROXY=FALSE",
-                        "-DSLANG_ENABLE_TESTS=FALSE",
-                        "-DSLANG_ENABLE_EXAMPLES=FALSE",
-                        "-DSLANG_ENABLE_REPLAYER=FALSE",
-                        "-DSLANG_ENABLE_RECORD_REPLAY=FALSE",
-                        "-DSLANG_ENABLE_SLANG_RHI=FALSE",
-                        "-DSLANG_LIB_TYPE=STATIC"
-                      ]
-                    <> " && cmake --build --preset releaseWithDebugInfo"
-                )
-                & GHA.workAt "thirdparty/slang/source-repo",
-            GHA.namedAs "Pre-build c deps(ktx)" $
-              GHA.runStep
-                ( maybe "" (<> "\n") commandPrelude
-                    <> cmake
-                      [ "../../source-repo",
-                        "-B",
-                        ".",
-                        "-G",
-                        "Ninja",
-                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                        "-DKTX_FEATURE_TESTS=OFF",
-                        "-DKTX_FEATURE_VK_UPLOAD=OFF",
-                        "-DKTX_FEATURE_GL_UPLOAD=OFF",
-                        "-DKTX_FEATURE_TOOLS=OFF"
-                      ]
-                    <> " && cmake --build ."
-                    <> maybe "" ("\n" <>) commandPostKtx
-                )
-                & GHA.workAt ktxBuildDir
-          ]
+        GHA.withCondition "" $
+          GHA.parallelSteps
+            [ GHA.namedAs "Pre-build c deps(slang)" $
+                GHA.runStep
+                  ( maybe "" (<> "\n") commandPrelude
+                      <> cmake
+                        [ "--preset",
+                          "default",
+                          "-G",
+                          "Ninja",
+                          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                          "-DSLANG_ENABLE_DXIL=FALSE",
+                          "-DSLANG_ENABLE_GFX=FALSE",
+                          "-DSLANG_ENABLE_SLANGD=FALSE",
+                          "-DSLANG_ENABLE_SLANGC=FALSE",
+                          "-DSLANG_ENABLE_SLANGI=FALSE",
+                          "-DSLANG_ENABLE_SLANGRT=FALSE",
+                          "-DSLANG_ENABLE_SLANG_GLSLANG=FALSE",
+                          "-DSLANG_ENABLE_SLANG_PROXY=FALSE",
+                          "-DSLANG_ENABLE_TESTS=FALSE",
+                          "-DSLANG_ENABLE_EXAMPLES=FALSE",
+                          "-DSLANG_ENABLE_REPLAYER=FALSE",
+                          "-DSLANG_ENABLE_RECORD_REPLAY=FALSE",
+                          "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+                          "-DSLANG_LIB_TYPE=STATIC"
+                        ]
+                      <> " && cmake --build --preset releaseWithDebugInfo"
+                  )
+                  & GHA.workAt "thirdparty/slang/source-repo",
+              GHA.namedAs "Pre-build c deps(ktx)" $
+                GHA.runStep
+                  ( maybe "" (<> "\n") commandPrelude
+                      <> cmake
+                        [ "../../source-repo",
+                          "-B",
+                          ".",
+                          "-G",
+                          "Ninja",
+                          "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                          "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                          "-DKTX_FEATURE_TESTS=OFF",
+                          "-DKTX_FEATURE_VK_UPLOAD=OFF",
+                          "-DKTX_FEATURE_GL_UPLOAD=OFF",
+                          "-DKTX_FEATURE_TOOLS=OFF"
+                        ]
+                      <> " && cmake --build ."
+                      <> maybe "" ("\n" <>) commandPostKtx
+                  )
+                  & GHA.workAt ktxBuildDir
+            ]
     ]
   where
     ccCachePrefix = GHA.runnerOs <> "-ccache-"
