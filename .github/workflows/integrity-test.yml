@@ -27,7 +27,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -106,7 +106,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
           PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -167,7 +167,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
           RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -230,7 +230,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
@@ -294,7 +294,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-editor-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -352,7 +352,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-editor-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -402,7 +402,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-editor-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           VULKAN_SDK: ''
@@ -452,7 +452,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-formats-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-formats-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-formats-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -510,7 +510,7 @@ jobs:
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"

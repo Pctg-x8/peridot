@@ -84,9 +84,10 @@ rustCacheStep :: String -> GHA.Step
 rustCacheStep postfix =
   GHA.namedAs "Initialize Cache" $
     CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target", "examples/**/target", "cradle/**/target", "editor/**/target"] key
-      & CacheAction.restoreKeys [keyPrefix]
+      & CacheAction.restoreKeys [commonKeyPrefix, keyPrefix]
   where
-    keyPrefix = GHA.runnerOs <> "-cargo-" <> (if postfix == "" then "" else postfix <> "-")
+    commonKeyPrefix = GHA.runnerOs <> "-cargo-"
+    keyPrefix = commonKeyPrefix <> (if postfix == "" then "" else postfix <> "-")
     key = keyPrefix <> GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
 
 cmake :: [String] -> String
