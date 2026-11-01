@@ -1,3 +1,4 @@
+{-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE MultilineStrings #-}
 
 module IntegrityTest.Shared
@@ -13,7 +14,8 @@ module IntegrityTest.Shared
     checkCradleMacos,
     checkCradleLinux,
     checkCradleAndroid,
-    checkEditor,
+    checkCradleAll,
+    checkEditorMP,
     reportSuccessJob,
     Step (..),
     flattenSteps,
@@ -27,10 +29,12 @@ where
 import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.List (intercalate)
-import Peridot
+import Data.Map qualified as M
+import Peridot qualified
 import SlackNotification (SlackReportContext (..), reportJobFailure, reportSuccessSteps)
 import Utils (applyModifiers)
 import Workflow.GitHub.Actions qualified as GHA
+import Workflow.GitHub.Actions.JobGroupComposer (JobMap)
 import Workflow.GitHub.Actions.Predefined.Cache qualified as CacheAction
 import Workflow.GitHub.Actions.Predefined.Checkout qualified as Checkout
 import Workflow.GitHub.Actions.Predefined.Rust.Toolchain qualified as RustToolchainAction
@@ -226,6 +230,9 @@ stdWindowsJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.jobRunsOn [
 stdMacJob :: (SlackReportContext m, Functor m) => String -> [GHA.Step] -> m GHA.Job
 stdMacJob name steps = reportJobFailure $ GHA.namedAs name $ GHA.jobRunsOn ["macos-latest"] $ GHA.job steps
 
+setDummyVulkanSDKPathForUnlinking :: (GHA.HasEnvironmentVariables e) => e -> e
+setDummyVulkanSDKPathForUnlinking = GHA.env "VULKAN_SDK" ""
+
 checkFormats :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkFormats precondition =
   stdJob "Code Formats" $
@@ -326,7 +333,7 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
             Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
           ]
 
-    integratedTestStep = GHA.env "VULKAN_SDK" "" . withBuilderEnv . skipCDeps . GHA.runStep
+    integratedTestStep = setDummyVulkanSDKPathForUnlinking . withBuilderEnv . skipCDeps . GHA.runStep
     integratedTestNormalScript =
       "\
       \$ErrorActionPreference = \"Continue\"\n\
@@ -422,8 +429,17 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
         ]
         $ GHA.runStep "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
 
+checkCradleAll :: (SlackReportContext m) => (Applicative m) => String -> m JobMap
+checkCradleAll precondition = do
+  win <- checkCradleWindows precondition
+  mac <- checkCradleMacos precondition
+  linux <- checkCradleLinux precondition
+  android <- checkCradleAndroid precondition
+
+  return $ M.fromList [("check-cradle-win", win), ("check-cradle-mac", mac), ("check-cradle-linux", linux), ("check-cradle-android", android)]
+
 checkEditor :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkEditor precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Editor" steps
+checkEditor precondition = stdJob "Editor (Linux)" steps
   where
     steps =
       GHA.withCondition precondition
@@ -432,11 +448,38 @@ checkEditor precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "Editor" 
             Step rustCacheStep,
             Step setupCargoOutputTranslatorStep,
             Step $ GHA.namedAs "Run rustfmt" $ GHA.workAt "editor/linux" $ GHA.runStep "cargo fmt -- --check",
-            Step
-              $ applyModifiers
-                [GHA.namedAs "Run clippy", setLibrarySearchPathsUnix, skipCDeps, GHA.workAt "editor/linux"]
-              $ stdBashStep (cargoTranslated "clippy" [])
+            Step $ applyModifiers [GHA.namedAs "Run clippy", skipCDeps, GHA.workAt "editor/linux"] $ stdBashStep (cargoTranslated "clippy" [])
           ]
+
+checkEditorWin :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+checkEditorWin precondition = stdWindowsJob "Editor (Windows)" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.workAt "editor/win", setDummyVulkanSDKPathForUnlinking, skipCDeps] $ GHA.runStep "cargo clippy"
+          ]
+
+checkEditorMac :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+checkEditorMac precondition = stdMacJob "Editor (macOS)" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.workAt "editor/mac", skipCDeps] $ GHA.runStep "cargo clippy"
+          ]
+
+checkEditorMP :: (SlackReportContext m) => (Applicative m) => String -> m JobMap
+checkEditorMP precondition = do
+  linux <- checkEditor precondition
+  win <- checkEditorWin precondition
+  mac <- checkEditorMac precondition
+
+  return $ M.fromList [("check-editor-linux", linux), ("check-editor-win", win), ("check-editor-mac", mac)]
 
 reportSuccessJob :: (SlackReportContext m) => (Functor m) => m GHA.Job
 reportSuccessJob =

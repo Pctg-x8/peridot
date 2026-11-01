@@ -113,17 +113,14 @@ integrityTest = runIdentity $ withSlackReport slackNotifyProvider do
     checkTools' <- M.singleton "check-tools" <$> checkTools preconditionOutputHasChanges
     checkModules' <- M.singleton "check-modules" <$> checkModules preconditionOutputHasChanges
     checkExamples' <- M.singleton "check-examples" <$> checkExamples preconditionOutputHasChanges
-    checkCradleWindows' <- M.singleton "check-cradle-windows" <$> checkCradleWindows preconditionOutputHasChanges
-    checkCradleMacos' <- M.singleton "check-cradle-macos" <$> checkCradleMacos preconditionOutputHasChanges
-    checkCradleLinux' <- M.singleton "check-cradle-linux" <$> checkCradleLinux preconditionOutputHasChanges
-    checkCradleAndroid' <- M.singleton "check-cradle-android" <$> checkCradleAndroid preconditionOutputHasChanges
-    checkEditor' <- M.singleton "check-editor" <$> checkEditor preconditionOutputHasChanges
+    checkCradleAll' <- checkCradleAll preconditionOutputHasChanges
+    checkEditorMP' <- checkEditorMP preconditionOutputHasChanges
 
     pure
       [ checkFormats',
         checkBaseLayer'
           ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleWindows', checkCradleMacos', checkCradleLinux', checkCradleAndroid', checkEditor']
+          ~=> [checkCradleAll', checkEditorMP']
       ]
 
   pure
