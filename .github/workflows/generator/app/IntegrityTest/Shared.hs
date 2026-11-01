@@ -80,13 +80,13 @@ disableAPTManualUpdateStep =
       sudo dpkg-reconfigure man-db
       """
 
-rustCacheStep :: GHA.Step
-rustCacheStep =
+rustCacheStep :: String -> GHA.Step
+rustCacheStep postfix =
   GHA.namedAs "Initialize Cache" $
-    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target", "examples/**/target", "cradle/**/target"] key
+    CacheAction.step ["~/.cargo/registry", "~/.cargo/git", "target", "tools/target", "examples/**/target", "cradle/**/target", "editor/**/target"] key
       & CacheAction.restoreKeys [keyPrefix]
   where
-    keyPrefix = GHA.runnerOs <> "-cargo-"
+    keyPrefix = GHA.runnerOs <> "-cargo-" <> (if postfix == "" then "" else postfix <> "-")
     key = keyPrefix <> GHA.mkExpression "hashFiles('**/*.rs', '**/Cargo.toml')"
 
 cmake :: [String] -> String
@@ -247,7 +247,7 @@ checkFormats precondition =
     GHA.withCondition precondition
       <$> flattenSteps
         [ Step checkoutStep,
-          Step rustCacheStep,
+          Step $ rustCacheStep "formats",
           Step setupCargoOutputTranslatorStep,
           Step $ GHA.namedAs "Run rustfmt" $ GHA.runStep "cargo fmt --all --check",
           Step $
@@ -266,7 +266,7 @@ preciseCheck precondition = stdJob "Precise Check" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "",
             Step setupCargoOutputTranslatorStep,
             Step $ GHA.namedAs "Run checks (base)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report"]),
             Step $ GHA.namedAs "Run checks (base, mt)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"]),
@@ -295,7 +295,7 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "",
             Step cliBuildStep,
             Step $ GHA.namedAs "Run checks" $ integratedTestStep integratedTestNormalScript,
             Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
@@ -318,7 +318,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "",
             Step $
               cliBuildStep
                 & GHA.env "RUSTFLAGS" (GHA.mkExpression "format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace)"),
@@ -351,7 +351,7 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
             Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "",
             -- worksround for ci broken
             Step $ Peridot.setBuildEnvSwitch "TP_KTX_WA_DISABLE_SSE" $ cliBuildStep,
             Step integratedTestStep
@@ -374,7 +374,7 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "",
             Step $
               GHA.namedAs "Setup Rust for Android" $
                 RustToolchainAction.step
@@ -413,7 +413,7 @@ checkEditor precondition = stdJob "Editor (Linux)" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "editor",
             Step setupCargoOutputTranslatorStep,
             Step $ GHA.namedAs "Run rustfmt" $ GHA.workAt "editor/linux" $ GHA.runStep "cargo fmt -- --check",
             Step $ applyModifiers [GHA.namedAs "Run clippy", skipCDeps, GHA.workAt "editor/linux"] $ stdBashStep (cargoTranslated "clippy" [])
@@ -426,7 +426,7 @@ checkEditorWin precondition = stdWindowsJob "Editor (Windows)" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "editor",
             Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.workAt "editor/win", setDummyVulkanSDKPathForUnlinking, skipCDeps] $ GHA.runStep "cargo clippy"
           ]
 
@@ -437,7 +437,7 @@ checkEditorMac precondition = stdMacJob "Editor (macOS)" steps
       GHA.withCondition precondition
         <$> flattenSteps
           [ Step checkoutStep,
-            Step rustCacheStep,
+            Step $ rustCacheStep "editor",
             Step $ applyModifiers [GHA.namedAs "Run clippy", GHA.workAt "editor/mac", skipCDeps] $ GHA.runStep "cargo clippy"
           ]
 
