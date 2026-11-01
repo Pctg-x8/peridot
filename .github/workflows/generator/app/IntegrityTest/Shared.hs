@@ -6,10 +6,7 @@ module IntegrityTest.Shared
     preconditionRecordBeginTimeStamp,
     preconditionBeginTimestampOutputDef,
     checkFormats,
-    checkBaseLayer,
-    checkTools,
-    checkModules,
-    checkExamples,
+    preciseCheck,
     checkCradleWindows,
     checkCradleMacos,
     checkCradleLinux,
@@ -262,57 +259,21 @@ checkFormats precondition =
               GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
         ]
 
-checkBaseLayer :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkBaseLayer precondition =
-  stdJob "Base Layer" $
-    GHA.withCondition precondition
-      <$> [ checkoutStep,
-            rustCacheStep,
-            setupCargoOutputTranslatorStep,
-            GHA.namedAs "Run checks" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report"]),
-            GHA.namedAs "Run checks(mt)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"])
+preciseCheck :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
+preciseCheck precondition = stdJob "Precise Check" steps
+  where
+    steps =
+      GHA.withCondition precondition
+        <$> flattenSteps
+          [ Step checkoutStep,
+            Step rustCacheStep,
+            Step setupCargoOutputTranslatorStep,
+            Step $ GHA.namedAs "Run checks (base)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report"]),
+            Step $ GHA.namedAs "Run checks (base, mt)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"]),
+            Step $ GHA.namedAs "Run cahcks (modules)" $ skipCDeps $ GHA.workAt "modules" $ GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh",
+            Step $ GHA.namedAs "Run checks (tools)" $ skipCDeps $ GHA.workAt "tools" $ stdBashStep (cargoTranslated "clippy" ["--workspace", "--all-features", "--all-targets"]),
+            Step $ GHA.namedAs "Run checks (examples)" $ skipCDeps $ GHA.workAt "examples" $ GHA.runStep "exec $GITHUB_WOKRSPACE/.github/scripts/checkbuild-subdir.sh"
           ]
-
-checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkTools precondition =
-  stdJob "Tools" $
-    GHA.withCondition precondition
-      <$> flattenSteps
-        [ Step checkoutStep,
-          Step rustCacheStep,
-          Step setupCargoOutputTranslatorStep,
-          Step $ GHA.namedAs "Run clippy" $ GHA.workAt "tools" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--workspace", "--all-features", "--all-targets"])
-        ]
-
-checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkModules precondition =
-  stdJob "Modules" $
-    GHA.withCondition precondition
-      <$> flattenSteps
-        [ Step checkoutStep,
-          Step rustCacheStep,
-          Step setupCargoOutputTranslatorStep,
-          Step $
-            GHA.namedAs "Run checks" $
-              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                & GHA.workAt "modules"
-                & skipCDeps
-        ]
-
-checkExamples :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
-checkExamples precondition =
-  stdJob "Examples" $
-    GHA.withCondition precondition
-      <$> flattenSteps
-        [ Step checkoutStep,
-          Step rustCacheStep,
-          Step setupCargoOutputTranslatorStep,
-          Step $
-            GHA.namedAs "Run checks" $
-              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                & GHA.workAt "examples"
-                & skipCDeps
-        ]
 
 cliBuildStep :: GHA.Step
 cliBuildStep = GHA.namedAs "Build CLI" $ GHA.workAt "./tools/cli" $ GHA.runStep "cargo build --no-default-features"

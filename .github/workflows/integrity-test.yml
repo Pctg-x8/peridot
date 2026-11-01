@@ -2,64 +2,6 @@ concurrency:
   cancel-in-progress: true
   group: "${{ github.ref }}"
 jobs:
-  check-baselayer:
-    name: Base Layer
-    needs:
-      - preconditions
-    permissions:
-      id-token: write
-    runs-on: ubuntu-latest
-    steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - env:
-          PERIDOT_BUILD_SKIP_CDEPS: '1'
-        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
-        run: "cargo clippy --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: "bash --noprofile --norc -eo pipefail {0}"
-      - env:
-          PERIDOT_BUILD_SKIP_CDEPS: '1'
-        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Run checks(mt)"
-        run: "cargo clippy --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: "bash --noprofile --norc -eo pipefail {0}"
-      - if: "failure()"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: "failure()"
-        name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v4"
-        with:
-          aws-region: ap-northeast-1
-          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
-      - if: "failure()"
-        name: Notify as Failure
-        uses: "Pctg-x8/ci-notifications-post-invoker@master"
-        with:
-          base_sha: "${{ github.event.pull_request.base.sha }}"
-          begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Base Layer
-          head_sha: "${{ github.event.pull_request.head.sha }}"
-          mode: diff
-          pr_number: "${{ github.event.number }}"
-          pr_title: "${{ github.event.pull_request.title }}"
-          report_name: PR Integrity Check
-          status: failure
   check-cradle-android:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
@@ -68,10 +10,7 @@ jobs:
       PERIDOT_BUILD_TP_SPIRV_TOOLS_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -144,10 +83,7 @@ jobs:
   check-cradle-linux:
     name: "Cradle(Linux)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -214,10 +150,7 @@ jobs:
       PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH: '1'
     name: "Cradle(macOS)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -280,10 +213,7 @@ jobs:
   check-cradle-win:
     name: "Cradle(Windows)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -347,10 +277,7 @@ jobs:
   check-editor-linux:
     name: "Editor (Linux)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -408,10 +335,7 @@ jobs:
   check-editor-mac:
     name: "Editor (macOS)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -461,10 +385,7 @@ jobs:
   check-editor-win:
     name: "Editor (Windows)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -506,60 +427,6 @@ jobs:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
           failure_step: "Editor (Windows)"
-          head_sha: "${{ github.event.pull_request.head.sha }}"
-          mode: diff
-          pr_number: "${{ github.event.number }}"
-          pr_title: "${{ github.event.pull_request.title }}"
-          report_name: PR Integrity Check
-          status: failure
-  check-examples:
-    name: Examples
-    needs:
-      - check-modules
-      - check-baselayer
-      - preconditions
-    permissions:
-      id-token: write
-    runs-on: ubuntu-latest
-    steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - env:
-          PERIDOT_BUILD_SKIP_CDEPS: '1'
-        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
-        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-        working-directory: examples
-      - if: "failure()"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: "failure()"
-        name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v4"
-        with:
-          aws-region: ap-northeast-1
-          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
-      - if: "failure()"
-        name: Notify as Failure
-        uses: "Pctg-x8/ci-notifications-post-invoker@master"
-        with:
-          base_sha: "${{ github.event.pull_request.base.sha }}"
-          begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Examples
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -624,10 +491,9 @@ jobs:
           pr_title: "${{ github.event.pull_request.title }}"
           report_name: PR Integrity Check
           status: failure
-  check-modules:
-    name: Modules
+  check-precise:
+    name: Precise Check
     needs:
-      - check-baselayer
       - preconditions
     permissions:
       id-token: write
@@ -651,63 +517,34 @@ jobs:
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
+        name: "Run checks (base)"
+        run: "cargo clippy --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Run checks (base, mt)"
+        run: "cargo clippy --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Run cahcks (modules)"
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: modules
-      - if: "failure()"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: "failure()"
-        name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v4"
-        with:
-          aws-region: ap-northeast-1
-          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
-      - if: "failure()"
-        name: Notify as Failure
-        uses: "Pctg-x8/ci-notifications-post-invoker@master"
-        with:
-          base_sha: "${{ github.event.pull_request.base.sha }}"
-          begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Modules
-          head_sha: "${{ github.event.pull_request.head.sha }}"
-          mode: diff
-          pr_number: "${{ github.event.number }}"
-          pr_title: "${{ github.event.pull_request.title }}"
-          report_name: PR Integrity Check
-          status: failure
-  check-tools:
-    name: Tools
-    needs:
-      - check-baselayer
-      - preconditions
-    permissions:
-      id-token: write
-    runs-on: ubuntu-latest
-    steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run clippy
+        name: "Run checks (tools)"
         run: "cargo clippy --workspace --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
         working-directory: tools
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Run checks (examples)"
+        run: "exec $GITHUB_WOKRSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: examples
       - if: "failure()"
         uses: "actions/checkout@v5"
         with:
@@ -724,7 +561,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Tools
+          failure_step: Precise Check
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -775,7 +612,6 @@ jobs:
   report-success:
     name: Report as Success
     needs:
-      - check-baselayer
       - check-cradle-android
       - check-cradle-linux
       - check-cradle-mac
@@ -783,10 +619,8 @@ jobs:
       - check-editor-linux
       - check-editor-mac
       - check-editor-win
-      - check-examples
       - check-formats
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
