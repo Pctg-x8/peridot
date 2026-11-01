@@ -712,7 +712,7 @@ jobs:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run tests
-        run: cargo test --workspace
+        run: cargo test --workspace --verbose
         shell: "bash --noprofile --norc -eo pipefail {0}"
         working-directory: tools
       - if: "failure()"
