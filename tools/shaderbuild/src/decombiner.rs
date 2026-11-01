@@ -66,7 +66,7 @@ impl<'s> Tokenizer<'s> {
         if self.strip_prefix("//") {
             let (_, strip_bytes) = self.0.chars().count_with_bytes_while(|c| c != '\n');
             self.0 = &self.0[strip_bytes..];
-            return true;
+            true
         } else {
             false
         }
@@ -91,7 +91,7 @@ impl<'s> Tokenizer<'s> {
         }
     }
     fn strip_ident(&mut self) -> Option<&'s str> {
-        if self.0.starts_with(|c: char| c.is_digit(10)) {
+        if self.0.starts_with(|c: char| c.is_ascii_digit()) {
             return None;
         }
         let (_, bytes) = self
@@ -174,7 +174,10 @@ impl<'s> Tokenizer<'s> {
 
     pub fn index_number(&mut self) -> ParseResult<usize> {
         self.strip_ignores();
-        let (_, num_bytes) = self.0.chars().count_with_bytes_while(|c| c.is_digit(10));
+        let (_, num_bytes) = self
+            .0
+            .chars()
+            .count_with_bytes_while(|c| c.is_ascii_digit());
         let n = usize::from_str(&self.0[..num_bytes]).map_err(drop)?;
         self.0 = &self.0[num_bytes..];
 
@@ -189,7 +192,8 @@ impl<'s> Tokenizer<'s> {
         if self.strip_prefix("VertexShader") {
             return Ok(br::ShaderStage::Vertex);
         }
-        return Err(());
+
+        Err(())
     }
     pub fn bracketed_stage(&mut self) -> ParseResult<br::ShaderStage> {
         self.strip_ignores();
@@ -200,7 +204,8 @@ impl<'s> Tokenizer<'s> {
         if !self.bracket_end() {
             return Err(());
         }
-        return Ok(st);
+
+        Ok(st)
     }
     pub fn codeblock(&mut self) -> ParseResult<&'s str> {
         self.strip_ignores();
@@ -389,7 +394,8 @@ impl<'s> BindingBlock<'s> {
                 _ => tracing::warn!("Unimplement: Unable to determine exact packed size"),
             }
         }
-        return total;
+
+        total
     }
 }
 
@@ -741,7 +747,8 @@ impl<'s> CombinedShader<'s> {
         if cs.vertex_shader_code.is_empty() {
             panic!("VertexShader is not defined");
         }
-        return cs;
+
+        cs
     }
 
     pub fn is_provided_fsh(&self) -> bool {
