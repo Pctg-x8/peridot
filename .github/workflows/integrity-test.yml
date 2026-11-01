@@ -120,15 +120,16 @@ jobs:
         name: Install ccache
         run: "sudo apt-get update && sudo apt-get install ccache"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        run: ccache --show-config
+        name: Prepare cdeps build dir
+        run: mkdir -p thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
-        working-directory: thirdparty/slang/source-repo
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Pre-build c deps(ktx)"
-        run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
-        working-directory: thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu
+        parallel:
+          - name: "Pre-build c deps(slang)"
+            run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
+            working-directory: thirdparty/slang/source-repo
+          - name: "Pre-build c deps(ktx)"
+            run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
+            working-directory: thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
@@ -202,15 +203,16 @@ jobs:
         name: Install ccache
         run: brew install ccache
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        run: ccache --show-config
+        name: Prepare cdeps build dir
+        run: mkdir -p thirdparty/ktx/cdeps-build/aarch64-apple-darwin
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
-        working-directory: thirdparty/slang/source-repo
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Pre-build c deps(ktx)"
-        run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
-        working-directory: thirdparty/ktx/cdeps-build/aarch64-apple-darwin
+        parallel:
+          - name: "Pre-build c deps(slang)"
+            run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
+            working-directory: thirdparty/slang/source-repo
+          - name: "Pre-build c deps(ktx)"
+            run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
+            working-directory: thirdparty/ktx/cdeps-build/aarch64-apple-darwin
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
@@ -286,15 +288,16 @@ jobs:
         name: Install ccache
         run: choco install ccache
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        run: ccache --show-config
+        name: Prepare cdeps build dir
+        run: New-Item thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Pre-build c deps(slang)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
-        working-directory: thirdparty/slang/source-repo
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Pre-build c deps(ktx)"
-        run: "Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease\nImport-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64\ncmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build .\necho \"EXPORTS\" | Set-Content build\\Debug\\ktx.def\ndumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def\nlib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64"
-        working-directory: thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc
+        parallel:
+          - name: "Pre-build c deps(slang)"
+            run: "& 'C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\Tools\\Launch-VsDevShell.ps1'\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
+            working-directory: thirdparty/slang/source-repo
+          - name: "Pre-build c deps(ktx)"
+            run: "& 'C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\Tools\\Launch-VsDevShell.ps1'\ncmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build .\necho \"EXPORTS\" | Set-Content build\\Debug\\ktx.def\ndumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def\nlib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64"
+            working-directory: thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"

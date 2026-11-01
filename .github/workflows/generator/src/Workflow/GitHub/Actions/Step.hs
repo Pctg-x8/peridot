@@ -1,6 +1,7 @@
 module Workflow.GitHub.Actions.Step
   ( Step (..),
     emptyStep,
+    parallelSteps,
     runStep,
     actionStep,
     StepModifier,
@@ -17,7 +18,7 @@ import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Maybe (catMaybes)
 import Workflow.GitHub.Actions.CommonTraits
-import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyMap, updateLens)
+import Workflow.GitHub.Actions.InternalHelpers (maybeNonEmptyList, maybeNonEmptyMap, updateLens)
 
 data Step = Step
   { stepId :: Maybe String,
@@ -28,7 +29,8 @@ data Step = Step
     stepShell :: Maybe String,
     stepWith :: Map String Value,
     stepEnv :: Map String String,
-    stepWorkingDirectory :: Maybe String
+    stepWorkingDirectory :: Maybe String,
+    stepParallel :: [Step]
   }
 
 emptyStep :: Step
@@ -42,8 +44,12 @@ emptyStep =
       stepShell = Nothing,
       stepWith = mempty,
       stepEnv = mempty,
-      stepWorkingDirectory = Nothing
+      stepWorkingDirectory = Nothing,
+      stepParallel = mempty
     }
+
+parallelSteps :: [Step] -> Step
+parallelSteps steps = emptyStep {stepParallel = steps}
 
 runStep :: String -> Step
 runStep command = emptyStep {stepRun = Just command}
@@ -77,7 +83,8 @@ instance ToJSON Step where
           ("shell" .=) <$> stepShell self,
           ("with" .=) <$> maybeNonEmptyMap (stepWith self),
           ("env" .=) <$> maybeNonEmptyMap (stepEnv self),
-          ("working-directory" .=) <$> stepWorkingDirectory self
+          ("working-directory" .=) <$> stepWorkingDirectory self,
+          ("parallel" .=) <$> maybeNonEmptyList (stepParallel self)
         ]
 
 instance ConditionalElement Step where

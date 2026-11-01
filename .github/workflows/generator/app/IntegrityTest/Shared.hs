@@ -109,57 +109,58 @@ preBuildCDeps variant =
           CacheAction.step [cacheDirectoryPath] (ccCachePrefix <> ccTargetHash)
             & CacheAction.restoreKeys [ccCachePrefix],
       installStep,
-      Step $ GHA.runStep "ccache --show-config",
+      Step $ GHA.namedAs "Prepare cdeps build dir" $ GHA.runStep prepareBuildDirCmd,
       Step $
-        GHA.namedAs "Pre-build c deps(slang)" $
-          GHA.runStep
-            ( maybe "" (<> "\n") commandPrelude
-                <> cmake
-                  [ "--preset",
-                    "default",
-                    "-G",
-                    "Ninja",
-                    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                    "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                    "-DSLANG_ENABLE_DXIL=FALSE",
-                    "-DSLANG_ENABLE_GFX=FALSE",
-                    "-DSLANG_ENABLE_SLANGD=FALSE",
-                    "-DSLANG_ENABLE_SLANGC=FALSE",
-                    "-DSLANG_ENABLE_SLANGI=FALSE",
-                    "-DSLANG_ENABLE_SLANGRT=FALSE",
-                    "-DSLANG_ENABLE_SLANG_GLSLANG=FALSE",
-                    "-DSLANG_ENABLE_SLANG_PROXY=FALSE",
-                    "-DSLANG_ENABLE_TESTS=FALSE",
-                    "-DSLANG_ENABLE_EXAMPLES=FALSE",
-                    "-DSLANG_ENABLE_REPLAYER=FALSE",
-                    "-DSLANG_ENABLE_RECORD_REPLAY=FALSE",
-                    "-DSLANG_ENABLE_SLANG_RHI=FALSE",
-                    "-DSLANG_LIB_TYPE=STATIC"
-                  ]
-                <> " && cmake --build --preset releaseWithDebugInfo"
-            )
-            & GHA.workAt "thirdparty/slang/source-repo",
-      Step $
-        GHA.namedAs "Pre-build c deps(ktx)" $
-          GHA.runStep
-            ( maybe "" (<> "\n") commandPrelude
-                <> cmake
-                  [ "../../source-repo",
-                    "-B",
-                    ".",
-                    "-G",
-                    "Ninja",
-                    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-                    "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                    "-DKTX_FEATURE_TESTS=OFF",
-                    "-DKTX_FEATURE_VK_UPLOAD=OFF",
-                    "-DKTX_FEATURE_GL_UPLOAD=OFF",
-                    "-DKTX_FEATURE_TOOLS=OFF"
-                  ]
-                <> " && cmake --build ."
-                <> maybe "" ("\n" <>) commandPostKtx
-            )
-            & GHA.workAt ktxBuildDir
+        GHA.parallelSteps
+          [ GHA.namedAs "Pre-build c deps(slang)" $
+              GHA.runStep
+                ( maybe "" (<> "\n") commandPrelude
+                    <> cmake
+                      [ "--preset",
+                        "default",
+                        "-G",
+                        "Ninja",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DSLANG_ENABLE_DXIL=FALSE",
+                        "-DSLANG_ENABLE_GFX=FALSE",
+                        "-DSLANG_ENABLE_SLANGD=FALSE",
+                        "-DSLANG_ENABLE_SLANGC=FALSE",
+                        "-DSLANG_ENABLE_SLANGI=FALSE",
+                        "-DSLANG_ENABLE_SLANGRT=FALSE",
+                        "-DSLANG_ENABLE_SLANG_GLSLANG=FALSE",
+                        "-DSLANG_ENABLE_SLANG_PROXY=FALSE",
+                        "-DSLANG_ENABLE_TESTS=FALSE",
+                        "-DSLANG_ENABLE_EXAMPLES=FALSE",
+                        "-DSLANG_ENABLE_REPLAYER=FALSE",
+                        "-DSLANG_ENABLE_RECORD_REPLAY=FALSE",
+                        "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+                        "-DSLANG_LIB_TYPE=STATIC"
+                      ]
+                    <> " && cmake --build --preset releaseWithDebugInfo"
+                )
+                & GHA.workAt "thirdparty/slang/source-repo",
+            GHA.namedAs "Pre-build c deps(ktx)" $
+              GHA.runStep
+                ( maybe "" (<> "\n") commandPrelude
+                    <> cmake
+                      [ "../../source-repo",
+                        "-B",
+                        ".",
+                        "-G",
+                        "Ninja",
+                        "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                        "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                        "-DKTX_FEATURE_TESTS=OFF",
+                        "-DKTX_FEATURE_VK_UPLOAD=OFF",
+                        "-DKTX_FEATURE_GL_UPLOAD=OFF",
+                        "-DKTX_FEATURE_TOOLS=OFF"
+                      ]
+                    <> " && cmake --build ."
+                    <> maybe "" ("\n" <>) commandPostKtx
+                )
+                & GHA.workAt ktxBuildDir
+          ]
     ]
   where
     ccCachePrefix = GHA.runnerOs <> "-ccache-"
@@ -188,10 +189,8 @@ preBuildCDeps variant =
     commandPrelude = case variant of
       RunnerVariantWindows ->
         Just
-          -- Pscx 4.0.0じゃないとvs2022のサポートがないのでPrereleaseを有効にする（TODO: 4.0.0正式リリースが来たら消す）
           """
-          Install-Module Pscx -Scope CurrentUser -Force -AllowClobber -AllowPrerelease
-          Import-VisualStudioVars -VisualStudioVersion 2022 -Architecture x64
+          & 'C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\Tools\\Launch-VsDevShell.ps1'
           """
       _ -> Nothing
     commandPostKtx = case variant of
@@ -208,6 +207,10 @@ preBuildCDeps variant =
       RunnerVariantWindows -> "thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc"
       RunnerVariantMac -> "thirdparty/ktx/cdeps-build/aarch64-apple-darwin"
       RunnerVariantUbuntu -> "thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu"
+    prepareBuildDirCmd = case variant of
+      RunnerVariantWindows -> "New-Item " <> ktxBuildDir
+      RunnerVariantMac -> "mkdir -p " <> ktxBuildDir
+      RunnerVariantUbuntu -> "mkdir -p " <> ktxBuildDir
 
 skipCDeps :: (GHA.HasEnvironmentVariables e) => e -> e
 skipCDeps = Peridot.setBuildEnvSwitch "SKIP_CDEPS"
