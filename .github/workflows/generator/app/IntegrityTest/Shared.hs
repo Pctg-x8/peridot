@@ -104,10 +104,11 @@ preBuildCDeps :: RunnerVariant -> Step
 preBuildCDeps variant =
   StepGroup
     [ Step $
-        GHA.namedAs "Cache ccache artifacts" $
+        GHA.namedAs "Setup cache for ccache artifacts" $
           CacheAction.step [cacheDirectoryPath] (ccCachePrefix <> ccTargetHash)
             & CacheAction.restoreKeys [ccCachePrefix],
       installStep,
+      Step $ GHA.runStep "ccache --show-config",
       Step $
         GHA.namedAs "Pre-build c deps(slang)" $
           GHA.runStep
@@ -119,16 +120,22 @@ preBuildCDeps variant =
                     "Ninja",
                     "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
                     "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-                    "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+                    "-DSLANG_ENABLE_DXIL=FALSE",
                     "-DSLANG_ENABLE_GFX=FALSE",
                     "-DSLANG_ENABLE_SLANGD=FALSE",
                     "-DSLANG_ENABLE_SLANGC=FALSE",
                     "-DSLANG_ENABLE_SLANGI=FALSE",
                     "-DSLANG_ENABLE_SLANGRT=FALSE",
+                    "-DSLANG_ENABLE_SLANG_GLSLANG=FALSE",
+                    "-DSLANG_ENABLE_SLANG_PROXY=FALSE",
                     "-DSLANG_ENABLE_TESTS=FALSE",
-                    "-DSLANG_ENABLE_EXAMPLES=FALSE"
+                    "-DSLANG_ENABLE_EXAMPLES=FALSE",
+                    "-DSLANG_ENABLE_REPLAYER=FALSE",
+                    "-DSLANG_ENABLE_RECORD_REPLAY=FALSE",
+                    "-DSLANG_ENABLE_SLANG_RHI=FALSE",
+                    "-DSLANG_LIB_TYPE=STATIC"
                   ]
-                <> " && cmake --build --preset debug"
+                <> " && cmake --build --preset releaseWithDebugInfo"
             )
             & GHA.workAt "thirdparty/slang/source-repo",
       Step $
@@ -136,9 +143,9 @@ preBuildCDeps variant =
           GHA.runStep
             ( maybe "" (<> "\n") commandPrelude
                 <> cmake
-                  [ ".",
+                  [ "../../source-repo",
                     "-B",
-                    "build",
+                    ".",
                     "-G",
                     "Ninja",
                     "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
@@ -148,10 +155,10 @@ preBuildCDeps variant =
                     "-DKTX_FEATURE_GL_UPLOAD=OFF",
                     "-DKTX_FEATURE_TOOLS=OFF"
                   ]
-                <> " && cmake --build build"
+                <> " && cmake --build ."
                 <> maybe "" ("\n" <>) commandPostKtx
             )
-            & GHA.workAt "thirdparty/ktx/source-repo"
+            & GHA.workAt ktxBuildDir
     ]
   where
     ccCachePrefix = GHA.runnerOs <> "-ccache-"
@@ -173,10 +180,10 @@ preBuildCDeps variant =
       RunnerVariantUbuntu -> "~/.cache/ccache"
       RunnerVariantWindows -> "~\\AppData\\Local\\ccache"
       RunnerVariantMac -> "~/Library/Caches/ccache"
-    installStep = case variant of
-      RunnerVariantUbuntu -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "sudo apt-get update && sudo apt-get install ccache"
-      RunnerVariantWindows -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "choco install ccache"
-      RunnerVariantMac -> Step $ GHA.namedAs "Install ccache" $ GHA.runStep "brew install ccache"
+    installStep = Step $ GHA.namedAs "Install ccache" $ case variant of
+      RunnerVariantUbuntu -> GHA.runStep "sudo apt-get update && sudo apt-get install ccache"
+      RunnerVariantWindows -> GHA.runStep "choco install ccache"
+      RunnerVariantMac -> GHA.runStep "brew install ccache"
     commandPrelude = case variant of
       RunnerVariantWindows ->
         Just
@@ -196,6 +203,10 @@ preBuildCDeps variant =
           lib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64
           """
       _ -> Nothing
+    ktxBuildDir = case variant of
+      RunnerVariantWindows -> "thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc"
+      RunnerVariantMac -> "thirdparty/ktx/cdeps-build/aarch64-apple-darwin"
+      RunnerVariantUbuntu -> "thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu"
 
 skipCDeps :: (GHA.HasEnvironmentVariables e) => e -> e
 skipCDeps = Peridot.setBuildEnvSwitch "SKIP_CDEPS"
@@ -241,11 +252,11 @@ checkFormats precondition =
         [ Step checkoutStep,
           Step rustCacheStep,
           Step setupCargoOutputTranslatorStep,
-          Step $ GHA.namedAs "Run rustfmt" $ GHA.runStep "cargo fmt -- --check",
+          Step $ GHA.namedAs "Run rustfmt" $ GHA.runStep "cargo fmt --all --check",
           Step $
             GHA.namedAs "Run clippy" $
               skipCDeps $
-                stdBashStep (cargoTranslated "clippy" ["--all-features", "--all-targets"]),
+                stdBashStep (cargoTranslated "clippy" ["--all-features", "--all-targets", "--workspace"]),
           Step $
             GHA.namedAs "Run check - Trailing Newline for Source Code Files" $
               GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/trailing_newline_checker.sh"
@@ -258,8 +269,8 @@ checkBaseLayer precondition =
       <$> [ checkoutStep,
             rustCacheStep,
             setupCargoOutputTranslatorStep,
-            GHA.namedAs "Run checks" $ skipCDeps $ stdBashStep (cargoTranslated "check" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report"]),
-            GHA.namedAs "Run checks(mt)" $ skipCDeps $ stdBashStep (cargoTranslated "check" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"])
+            GHA.namedAs "Run checks" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report"]),
+            GHA.namedAs "Run checks(mt)" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--package", "peridot", "--features=bedrock/VK_EXT_debug_report,mt"])
           ]
 
 checkTools :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
@@ -270,11 +281,8 @@ checkTools precondition =
         [ Step checkoutStep,
           Step rustCacheStep,
           Step setupCargoOutputTranslatorStep,
-          Step $
-            GHA.namedAs "Run checks" $
-              GHA.runStep "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-                & GHA.workAt "tools"
-                & skipCDeps
+          Step $ GHA.namedAs "Run clippy" $ GHA.workAt "tools" $ skipCDeps $ stdBashStep (cargoTranslated "clippy" ["--workspace", "--all-features", "--all-targets"]),
+          Step $ GHA.namedAs "Run tests" $ GHA.workAt "tools" $ stdBashStep "cargo test --workspace"
         ]
 
 checkModules :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
