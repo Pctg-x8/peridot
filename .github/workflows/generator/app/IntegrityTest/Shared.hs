@@ -144,7 +144,7 @@ preBuildCDeps variant =
           GHA.runStep
             ( maybe "" (<> "\n") commandPrelude
                 <> cmake
-                  [ "../../source-repo",
+                  ([ "../../source-repo",
                     "-B",
                     ".",
                     "-G",
@@ -155,7 +155,7 @@ preBuildCDeps variant =
                     "-DKTX_FEATURE_VK_UPLOAD=OFF",
                     "-DKTX_FEATURE_GL_UPLOAD=OFF",
                     "-DKTX_FEATURE_TOOLS=OFF"
-                  ]
+                  ] <> ktxCmakeExtraDefines)
                 <> " && cmake --build ."
                 <> maybe "" ("\n" <>) commandPostKtx
             )
@@ -211,6 +211,9 @@ preBuildCDeps variant =
       RunnerVariantWindows -> "New-Item -ItemType Directory -Force -Path " <> ktxBuildDir
       RunnerVariantMac -> "mkdir -p " <> ktxBuildDir
       RunnerVariantUbuntu -> "mkdir -p " <> ktxBuildDir
+    ktxCmakeExtraDefines = case variant of
+      RunnerVariantUbuntu -> ["-DBASISU_SUPPORT_SSE=OFF"]
+      _ -> []
 
 skipCDeps :: (GHA.HasEnvironmentVariables e) => e -> e
 skipCDeps = Peridot.setBuildEnvSwitch "SKIP_CDEPS"

@@ -128,7 +128,7 @@ jobs:
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
-        run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
+        run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF -DBASISU_SUPPORT_SSE=OFF && cmake --build ."
         working-directory: thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
