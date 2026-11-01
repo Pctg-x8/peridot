@@ -772,13 +772,12 @@ impl<'s> CombinedShader<'s> {
             .flat_map(|(_, bb)| &bb.vars)
             .enumerate()
         {
-            code += &format!(
-                "layout(location = {}) in {} {};\n",
-                n,
-                Self::translate_vtype(vi_vars.type_str),
-                vi_vars.name
-            );
+            let var_ty = Self::translate_vtype(vi_vars.type_str);
+            let var_name = vi_vars.name;
+
+            code += &format!("layout(location = {n}) in {var_ty} {var_name};\n");
         }
+
         // 出力変数
         for (n, ovar) in self
             .varyings_between_shaders
@@ -788,32 +787,30 @@ impl<'s> CombinedShader<'s> {
             .enumerate()
         {
             let require_flat = ovar.type_str == "int";
-            code += &format!(
-                "layout(location = {}) {}out {} {};\n",
-                n,
-                if require_flat { "flat " } else { "" },
-                Self::translate_vtype(ovar.type_str),
-                ovar.name
-            );
+            let flat_deco = if require_flat { "flat" } else { "" };
+            let var_ty = Self::translate_vtype(ovar.type_str);
+            let var_name = ovar.name;
+
+            code += &format!("layout(location = {n}) {flat_deco} out {var_ty} {var_name};\n");
         }
+
         // gl_Positionの宣言を追加
         if self.vertex_shader_code.contains("RasterPosition") {
             code += "out gl_PerVertex { out vec4 gl_Position; };\n";
         }
+
         // 定数(uniformとspecconstantとpushconstant)
         if let Some(cons) = self.spec_constants_per_stage.get(&br::ShaderStage::Vertex) {
             for (id, &(name, ty, init)) in cons.iter() {
-                code += &format!(
-                    "layout(constant_id = {}) const {} {} = {};\n",
-                    id, ty, name, init
-                );
+                code += &format!("layout(constant_id = {id}) const {ty} {name} = {init};\n");
             }
         }
         self.emit_resource_bindings(&mut code, br::ShaderStage::Vertex);
         if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::Vertex) {
-            code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
+            code += &format!("layout(push_constant) uniform {name} {{{cb}}};\n");
         }
         code += "\n";
+
         // header
         if let Some(cs) = self.header_codes.get(&br::ShaderStage::Vertex) {
             for c in cs {
@@ -821,6 +818,7 @@ impl<'s> CombinedShader<'s> {
             }
             code += "\n";
         }
+
         // main
         code += &format!(
             "void main() {{{}}}",
@@ -838,17 +836,15 @@ impl<'s> CombinedShader<'s> {
             .varyings_between_shaders
             .iter()
             .filter(|&&(_, dst, _)| dst == br::ShaderStage::Fragment)
-            .flat_map(|&(_, _, ref v)| v)
+            .flat_map(|(_, _, v)| v)
             .enumerate()
         {
             let require_flat = ivar.type_str == "int";
-            code += &format!(
-                "layout(location = {}) {}in {} {};\n",
-                n,
-                if require_flat { "flat " } else { "" },
-                Self::translate_vtype(ivar.type_str),
-                ivar.name
-            );
+            let flat_deco = if require_flat { "flat" } else { "" };
+            let var_ty = Self::translate_vtype(ivar.type_str);
+            let var_name = ivar.name;
+
+            code += &format!("layout(location = {n}) {flat_deco} in {var_ty} {var_name};\n");
         }
         // 出力変数(ソースコード中/Target\[\d+\]/から)
         let mut fragment_code = String::from(
@@ -858,21 +854,11 @@ impl<'s> CombinedShader<'s> {
                 .expect("No fragment shader"),
         );
         let rx = Regex::new(r"Target\[(\d+)\]").expect("compiling regex");
-        loop {
-            let replaced = if let Some(caps) = rx.captures(&fragment_code) {
-                let index = caps.get(1).expect("unreachable").as_str();
-                code += &format!(
-                    "layout(location = {index}) out vec4 sv_target_{index};\n",
-                    index = index
-                );
-                fragment_code.replace(
-                    &format!("Target[{}]", index),
-                    &format!("sv_target_{}", index),
-                )
-            } else {
-                break;
-            };
-            fragment_code = replaced;
+        while let Some(caps) = rx.captures(&fragment_code) {
+            let index = caps.get(1).expect("unreachable").as_str();
+            code += &format!("layout(location = {index}) out vec4 sv_target_{index};\n");
+            fragment_code =
+                fragment_code.replace(&format!("Target[{index}]"), &format!("sv_target_{index}"));
         }
         // 定数(uniformとspecconstant)
         if let Some(cons) = self
@@ -880,15 +866,12 @@ impl<'s> CombinedShader<'s> {
             .get(&br::ShaderStage::Fragment)
         {
             for (id, &(name, ty, init)) in cons.iter() {
-                code += &format!(
-                    "layout(constant_id = {}) const {} {} = {};\n",
-                    id, ty, name, init
-                );
+                code += &format!("layout(constant_id = {id}) const {ty} {name} = {init};\n");
             }
         }
         self.emit_resource_bindings(&mut code, br::ShaderStage::Fragment);
         if let Some(&(name, cb)) = self.push_constant_per_stage.get(&br::ShaderStage::Fragment) {
-            code += &format!("layout(push_constant) uniform {} {{{}}};\n", name, cb);
+            code += &format!("layout(push_constant) uniform {name} {{{cb}}};\n");
         }
         code += "\n";
         // header
@@ -899,8 +882,8 @@ impl<'s> CombinedShader<'s> {
             code += "\n";
         }
         // main
-        code += &format!("void main() {{{}}}", fragment_code);
-        return code;
+        code += &format!("void main() {{{fragment_code}}}");
+        code
     }
     fn emit_resource_bindings(&self, code: &mut String, stage: br::ShaderStage) {
         if let Some(ufs) = self.resources_per_stage.get(&stage) {
@@ -1073,6 +1056,6 @@ impl<'s> CombinedShader<'s> {
         }
 
         tracing::debug!("Generated Attributes: {attrs:?}");
-        return attrs;
+        attrs
     }
 }

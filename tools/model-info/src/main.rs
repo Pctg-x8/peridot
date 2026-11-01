@@ -43,7 +43,9 @@ fn process_glb_file(r: &mut (impl Read + Seek + ?Sized), out_dir: PathBuf, prefi
     println!("chunk 0: {chunk0_hdr:?}");
     let mut content = Vec::<u8>::with_capacity(chunk0_hdr.length as usize);
     r.read_exact(unsafe {
-        core::mem::transmute(&mut content.spare_capacity_mut()[..chunk0_hdr.length as usize])
+        core::mem::transmute::<&mut [core::mem::MaybeUninit<_>], &mut [_]>(
+            &mut content.spare_capacity_mut()[..chunk0_hdr.length as usize],
+        )
     })
     .expect("failed to read chunk content");
     unsafe {
