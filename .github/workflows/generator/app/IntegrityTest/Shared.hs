@@ -189,7 +189,8 @@ preBuildCDeps variant =
       RunnerVariantWindows ->
         Just
           """
-          & 'C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise\\Common7\\Tools\\Launch-VsDevShell.ps1'
+          Install-Module VsDevShell
+          Enter-VsDevShell x64
           """
       _ -> Nothing
     commandPostKtx = case variant of
