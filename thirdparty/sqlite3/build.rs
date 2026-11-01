@@ -1,7 +1,14 @@
+use build_script_helper::{peridot_build_skip_cdeps, peridot_build_watch_skip_cdeps};
+
 #[cfg(windows)]
 fn main() {
     use vswhere::VSWhere;
     use win10_sdk_locator::Windows10SdkInstallationRegistry;
+
+    peridot_build_watch_skip_cdeps();
+    if peridot_build_skip_cdeps() {
+        return;
+    }
 
     let source_repo_path = std::env::current_dir()
         .expect("current_dir")
@@ -139,6 +146,11 @@ fn main() {
 
 #[cfg(unix)]
 fn main() {
+    peridot_build_watch_skip_cdeps();
+    if peridot_build_skip_cdeps() {
+        return;
+    }
+
     let target = std::env::var("TARGET").expect("no target?");
     let clib_build_path = std::env::current_dir()
         .expect("current_dir")
