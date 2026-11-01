@@ -1,7 +1,7 @@
 fn main() {
     println!(
         "cargo::rustc-link-search={}",
-        std::path::PathBuf::from(std::env::var_os("VK_SDK_PATH").expect("no VK_SDK_PATH"))
+        std::path::PathBuf::from(std::env::var_os("VULKAN_SDK").expect("no VULKAN_SDK"))
             .join("Lib")
             .display()
     );
