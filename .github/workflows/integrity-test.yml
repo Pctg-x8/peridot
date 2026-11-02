@@ -111,7 +111,6 @@ jobs:
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
-          PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
@@ -173,7 +172,6 @@ jobs:
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
-          RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
@@ -183,7 +181,6 @@ jobs:
         run: brew install coreutils
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
-          PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VULKAN_SDK: /Users

@@ -305,7 +305,6 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
         <$> flattenSteps
           [ Step checkoutStep,
             Step $ rustCacheStep "",
-            -- preBuildCDeps RunnerVariantWindows,
             Step $ skipCDeps cliBuildStep,
             Step $ GHA.namedAs "Run checks" $ integratedTestStep integratedTestNormalScript,
             Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
@@ -329,15 +328,13 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
         <$> flattenSteps
           [ Step checkoutStep,
             Step $ rustCacheStep "",
-            -- preBuildCDeps RunnerVariantMac,
-            Step $
-              skipCDeps cliBuildStep
-                & GHA.env "RUSTFLAGS" (GHA.mkExpression "format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace)"),
+            Step $ skipCDeps cliBuildStep,
             Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
             Step integratedTestStep
           ]
 
-    platformExtraEnvs = GHA.env "PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH" "1"
+    cliRustFlags = GHA.mkExpression "format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace)"
+    platformExtraEnvs = Peridot.setBuildEnvSwitch "CLI_SKIP_DEBUG_RPATH"
 
     integratedTestStep =
       applyModifiers
@@ -345,8 +342,6 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
           GHA.stepUseShell "bash",
           GHA.env "VULKAN_SDK" "/Users",
           withBuilderEnv,
-          GHA.env "PERIDOT_CLI_ARCHIVER_PATH" $
-            GHA.mkExpression "format('{0}/tools/target/debug/peridot-archiver', github.workspace)",
           skipCDeps
         ]
         $ GHA.runStep "./tools/target/debug/peridot check cradle/test-fixture -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -363,9 +358,7 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
             Step checkoutStep,
             Step $ rustCacheStep "",
-            -- preBuildCDeps RunnerVariantUbuntu,
-            -- worksround for ci broken
-            Step $ Peridot.setBuildEnvSwitch "TP_KTX_WA_DISABLE_SSE" $ skipCDeps cliBuildStep,
+            Step $ skipCDeps cliBuildStep,
             Step integratedTestStep
           ]
 
