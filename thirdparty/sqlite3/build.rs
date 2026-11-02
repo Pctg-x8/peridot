@@ -10,6 +10,7 @@ fn main() {
         return;
     }
 
+    let target = std::env::var("TARGET").expect("no target?");
     let source_repo_path = std::env::current_dir()
         .expect("current_dir")
         .join("source-repo");
@@ -36,7 +37,6 @@ fn main() {
         .into_string()
         .expect("invalid product version string");
 
-    let target = std::env::var("TARGET").expect("target unspecified?");
     let build_tools_base_dir = vs_installation.join(r#"VC\Tools\MSVC"#);
     // Note: とりあえず特定ディレクトリ直下のフォルダ名を辞書順で並べて最大のものを最新のBuildToolsとする この出し方が正しいのかは不明
     let latest_installed_build_tool_path = build_tools_base_dir.join(
@@ -100,48 +100,119 @@ fn main() {
             vs_buildtool_path.display(),
             win10sdk_bin_path.display()
         );
-    let res = std::process::Command::new("nmake")
-        .args(["/f", "Makefile.msc", "libsqlite3.lib"])
-        .current_dir(&source_repo_path)
-        // Note: cargoかなんかがこれを設定していてMakefile.msc内の条件式がエラーになるので上書きする
-        .env(
-            "DEBUG",
-            std::env::var("DEBUG").map_or("0", |x| {
-                if x.eq_ignore_ascii_case("true") {
-                    "1"
-                } else {
-                    "0"
-                }
-            }),
-        )
-        .env("PATH", newenv_path)
-        .env(
-            "INCLUDE",
-            format!(
-                "{};{};{};{}",
-                vs_include_path.display(),
-                ucrt_include_path.display(),
-                um_include_path.display(),
-                shared_include_path.display()
-            ),
-        )
-        .env(
-            "LIB",
-            format!(
-                "{};{};{}",
-                ucrt_lib_path.display(),
-                um_lib_path.display(),
-                vs_lib_path.display()
-            ),
-        )
-        .status()
-        .expect("failed");
-    if !res.success() {
-        panic!("nmake exited with status: {}", res);
-    }
+    if target.contains("pc-windows") {
+        let res = std::process::Command::new("nmake")
+            .args(["/f", "Makefile.msc", "libsqlite3.lib"])
+            .current_dir(&source_repo_path)
+            // Note: cargoかなんかがこれを設定していてMakefile.msc内の条件式がエラーになるので上書きする
+            .env(
+                "DEBUG",
+                std::env::var("DEBUG").map_or("0", |x| {
+                    if x.eq_ignore_ascii_case("true") {
+                        "1"
+                    } else {
+                        "0"
+                    }
+                }),
+            )
+            .env("PATH", newenv_path)
+            .env(
+                "INCLUDE",
+                format!(
+                    "{};{};{};{}",
+                    vs_include_path.display(),
+                    ucrt_include_path.display(),
+                    um_include_path.display(),
+                    shared_include_path.display()
+                ),
+            )
+            .env(
+                "LIB",
+                format!(
+                    "{};{};{}",
+                    ucrt_lib_path.display(),
+                    um_lib_path.display(),
+                    vs_lib_path.display()
+                ),
+            )
+            .status()
+            .expect("failed");
+        if !res.success() {
+            panic!("nmake exited with status: {}", res);
+        }
 
-    println!("cargo::rustc-link-search={}", source_repo_path.display());
-    println!("cargo::rustc-link-lib=libsqlite3");
+        println!("cargo::rustc-link-search={}", source_repo_path.display());
+        println!("cargo::rustc-link-lib=libsqlite3");
+    } else {
+        // generate amalgam
+        let res = std::process::Command::new("nmake")
+            .args(["/f", "Makefile.msc", "sqlite3.c"])
+            .current_dir(&source_repo_path)
+            // Note: cargoかなんかがこれを設定していてMakefile.msc内の条件式がエラーになるので上書きする
+            .env(
+                "DEBUG",
+                std::env::var("DEBUG").map_or("0", |x| {
+                    if x.eq_ignore_ascii_case("true") {
+                        "1"
+                    } else {
+                        "0"
+                    }
+                }),
+            )
+            .env("PATH", newenv_path)
+            .env(
+                "INCLUDE",
+                format!(
+                    "{};{};{};{}",
+                    vs_include_path.display(),
+                    ucrt_include_path.display(),
+                    um_include_path.display(),
+                    shared_include_path.display()
+                ),
+            )
+            .env(
+                "LIB",
+                format!(
+                    "{};{};{}",
+                    ucrt_lib_path.display(),
+                    um_lib_path.display(),
+                    vs_lib_path.display()
+                ),
+            )
+            .status()
+            .expect("failed");
+        if !res.success() {
+            panic!("nmake exited with status: {res}");
+        }
+
+        // platform make
+        let clib_build_path = std::env::current_dir()
+            .expect("current_dir")
+            .join(format!("clib-build/{target}"));
+        let cc = std::env::var_os(format!("CC_{target}")).or_else(|| std::env::var_os("CC"));
+        let ar = std::env::var_os(format!("AR_{target}")).or_else(|| std::env::var_os("AR"));
+        let cflags =
+            std::env::var_os(format!("CFLAGS_{target}")).or_else(|| std::env::var_os("CFLAGS"));
+        let r = std::process::Command::new("make")
+            .current_dir(&clib_build_path)
+            .envs(
+                [
+                    cc.map(|x| ("CC", x)),
+                    cflags.map(|x| ("CFLAGS", x)),
+                    ar.map(|x| ("AR", x)),
+                ]
+                .into_iter()
+                .flatten(),
+            )
+            .status()
+            .expect("platform make");
+        if !r.success() {
+            panic!("make exited with code {r:?}");
+        }
+
+        println!("cargo::rustc-link-search={}", clib_build_path.display());
+        println!("cargo::rustc-link-lib=sqlite3");
+    }
 }
 
 #[cfg(unix)]
