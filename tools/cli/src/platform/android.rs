@@ -117,7 +117,6 @@ fn gen_build_files(ctx: &steps::BuildContext, appid: &str, userlib_path: &Path) 
 
     let c = std::fs::read_to_string(android_app_base.join("src/main/AndroidManifest-template.xml"))
         .expect("Failed to read template android manifest");
-    let c = c.replace("**APKAPPID**", appid);
     std::fs::write(android_app_base.join("src/main/AndroidManifest.xml"), c)
         .expect("Failed to write android manifest");
 }
