@@ -333,7 +333,6 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
             Step integratedTestStep
           ]
 
-    cliRustFlags = GHA.mkExpression "format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace)"
     platformExtraEnvs = Peridot.setBuildEnvSwitch "CLI_SKIP_DEBUG_RPATH"
 
     integratedTestStep =
@@ -367,7 +366,6 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
         [ GHA.namedAs "Run checks",
           GHA.stepUseShell "bash",
           withBuilderEnv,
-          setLibrarySearchPathsUnix,
           skipCDeps
         ]
         $ GHA.runStep "./tools/target/debug/peridot check cradle/test-fixture -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
@@ -397,7 +395,6 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
           GHA.stepUseShell "bash",
           withBuilderEnv,
           GHA.env "NDK_PLATFORM_TARGET" "28",
-          setLibrarySearchPathsUnix,
           skipCDeps
         ]
         $ GHA.runStep "./tools/target/debug/peridot check cradle/test-fixture -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
