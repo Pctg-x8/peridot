@@ -1,5 +1,5 @@
 -- | Peridot specific funcs
-module Peridot (setBuildEnv, setBuildEnvSwitch, setCradleBasePath) where
+module Peridot (setBuildEnv, setBuildEnvSwitch, setCradleBasePath, setBuiltinAssetsPath) where
 
 import Data.Char (toUpper)
 import Workflow.GitHub.Actions qualified as GHA
@@ -14,3 +14,6 @@ setBuildEnvSwitch name = setBuildEnv name "1"
 
 setCradleBasePath :: (GHA.HasEnvironmentVariables e) => String -> e -> e
 setCradleBasePath = GHA.env "PERIDOT_CLI_CRADLE_BASE"
+
+setBuiltinAssetsPath :: GHA.HasEnvironmentVariables e => String -> e -> e
+setBuiltinAssetsPath = GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH"

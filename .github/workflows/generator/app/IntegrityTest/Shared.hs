@@ -291,11 +291,7 @@ withBuilderEnv :: (GHA.HasEnvironmentVariables e) => e -> e
 withBuilderEnv = setCradleBase . setBuiltinAssetsPath
   where
     setCradleBase = Peridot.setCradleBasePath $ GHA.mkExpression "format('{0}/cradle', github.workspace)"
-    setBuiltinAssetsPath =
-      GHA.env "PERIDOT_CLI_BUILTIN_ASSETS_PATH" $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
-
-setLibrarySearchPathsUnix :: (GHA.HasEnvironmentVariables e) => e -> e
-setLibrarySearchPathsUnix = GHA.env "LD_LIBRARY_PATH" $ GHA.mkExpression "format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH)"
+    setBuiltinAssetsPath = Peridot.setBuiltinAssetsPath $ GHA.mkExpression "format('{0}/builtin-assets', github.workspace)"
 
 checkCradleWindows :: (SlackReportContext m) => (Functor m) => String -> m GHA.Job
 checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
@@ -303,7 +299,7 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step lightCheckoutStep,
             Step $ rustCacheStep "",
             Step $ skipCDeps cliBuildStep,
             Step $ GHA.namedAs "Run checks" $ integratedTestStep integratedTestNormalScript,
@@ -326,7 +322,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step lightCheckoutStep,
             Step $ rustCacheStep "",
             Step $ skipCDeps cliBuildStep,
             Step $ GHA.namedAs "Install requirements" $ GHA.runStep "brew install coreutils",
@@ -355,7 +351,7 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
             Step $
               GHA.namedAs "Install extra packages" $
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
-            Step checkoutStep,
+            Step lightCheckoutStep,
             Step $ rustCacheStep "",
             Step $ skipCDeps cliBuildStep,
             Step integratedTestStep
@@ -376,7 +372,7 @@ checkCradleAndroid precondition = cdepsEnvVars RunnerVariantUbuntu <$> stdJob "C
     steps =
       GHA.withCondition precondition
         <$> flattenSteps
-          [ Step checkoutStep,
+          [ Step lightCheckoutStep,
             Step $ rustCacheStep "",
             Step $
               GHA.namedAs "Setup Rust for Android" $

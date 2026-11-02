@@ -14,10 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - if: 'true'
-        name: "Checking out (with submodules)"
+        name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -90,10 +88,8 @@ jobs:
         name: Install extra packages
         run: "sudo apt-get update && sudo apt-get install -y libwayland-dev libpipewire-0.3-dev libspa-0.2-dev"
       - if: 'true'
-        name: "Checking out (with submodules)"
+        name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -146,10 +142,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - if: 'true'
-        name: "Checking out (with submodules)"
+        name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
@@ -204,10 +198,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - if: 'true'
-        name: "Checking out (with submodules)"
+        name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: 'true'
         name: Initialize Cache
         uses: "actions/cache@v4"
