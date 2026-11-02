@@ -95,7 +95,7 @@ pub fn gen_manifest(
         .write(true)
         .open(&manifest_path)
         .expect("Failed to open Userlib Cargo.toml for writing")
-        .write(
+        .write_all(
             toml::to_string_pretty(&manifest)
                 .expect("Failed to serialize Cargo.toml")
                 .as_bytes(),

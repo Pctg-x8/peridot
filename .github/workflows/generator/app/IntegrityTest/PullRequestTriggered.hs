@@ -109,18 +109,13 @@ integrityTest = runIdentity $ withSlackReport slackNotifyProvider do
 
   checkJobs <- do
     checkFormats' <- M.singleton "check-formats" <$> checkFormats preconditionOutputHasChanges
-    checkBaseLayer' <- M.singleton "check-baselayer" <$> checkBaseLayer preconditionOutputHasChanges
-    checkTools' <- M.singleton "check-tools" <$> checkTools preconditionOutputHasChanges
-    checkModules' <- M.singleton "check-modules" <$> checkModules preconditionOutputHasChanges
-    checkExamples' <- M.singleton "check-examples" <$> checkExamples preconditionOutputHasChanges
+    preciseCheck' <- M.singleton "check-precise" <$> preciseCheck preconditionOutputHasChanges
     checkCradleAll' <- checkCradleAll preconditionOutputHasChanges
     checkEditorMP' <- checkEditorMP preconditionOutputHasChanges
 
     pure
       [ checkFormats',
-        checkBaseLayer'
-          ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleAll', checkEditorMP']
+        preciseCheck' ~=> [checkCradleAll', checkEditorMP']
       ]
 
   pure

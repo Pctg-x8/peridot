@@ -44,18 +44,13 @@ weeklyIntegrityTest = runIdentity $ withSlackReport weeklySlackNotifyProvider $ 
 
   checkJobs <- do
     checkFormats' <- M.singleton "check-formats" <$> checkFormats "true"
-    checkBaseLayer' <- M.singleton "check-baselayer" <$> checkBaseLayer "true"
-    checkTools' <- M.singleton "check-tools" <$> checkTools "true"
-    checkModules' <- M.singleton "check-modules" <$> checkModules "true"
-    checkExamples' <- M.singleton "check-examples" <$> checkExamples "true"
+    preciseCheck' <- M.singleton "check-precise" <$> preciseCheck "true"
     checkCradleAll' <- checkCradleAll "true"
     checkEditorMP' <- checkEditorMP "true"
 
     pure
       [ checkFormats',
-        checkBaseLayer'
-          ~=> [checkTools', checkModules' ~=> checkExamples']
-          ~=> [checkCradleAll', checkEditorMP']
+        preciseCheck' ~=> [checkCradleAll', checkEditorMP']
       ]
 
   pure

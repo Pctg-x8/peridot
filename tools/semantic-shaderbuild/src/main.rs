@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, io::IoSlice, path::Path};
 
 use bedrock as br;
 
@@ -270,7 +270,7 @@ impl<'s> Tokenizer<'s> {
             .chars()
             .take_while(|&c| c.is_alphanumeric() || matches!(c, '_' | '$'))
             .fold((0, 0), |(c, b), ch| (c + 1, b + ch.len_utf8()));
-        if c <= 0 {
+        if c == 0 {
             // no ident characters in streak
             return Err(self.loc);
         }
@@ -290,7 +290,7 @@ impl<'s> Tokenizer<'s> {
                 .skip(2)
                 .take_while(|&c| matches!(c, '0'..='9' | 'a'..='f' | 'A'..='F' | '_'))
                 .fold((0, 0), |(c, b), ch| (c + 1, b + ch.len_utf8()));
-            if c <= 0 {
+            if c == 0 {
                 // no ipart characters in streak
                 return Err(self.loc);
             }
@@ -303,7 +303,7 @@ impl<'s> Tokenizer<'s> {
             .chars()
             .take_while(|&c| matches!(c, '0'..='9' | '_'))
             .fold((0, 0), |(c, b), ch| (c + 1, b + ch.len_utf8()));
-        if c <= 0 {
+        if c == 0 {
             // no ipart characters in streak
             return Err(self.loc);
         }
@@ -1267,12 +1267,13 @@ impl<'s> CombinedShaderGenContext<'s> {
 
         // expand main code blocks
         sink.write_all(b"void main() {\n")?;
-        sink.write_vectored(
-            &self
+        writeva(
+            sink,
+            &mut self
                 .vertex_shader_main_ordered
                 .iter()
                 .map(|x| {
-                    std::io::IoSlice::new(
+                    IoSlice::new(
                         x.slice
                             .strip_prefix('{')
                             .unwrap_or(x.slice)
@@ -1363,12 +1364,13 @@ impl<'s> CombinedShaderGenContext<'s> {
 
         // expand main code blocks
         sink.write_all(b"void main() {\n")?;
-        sink.write_vectored(
-            &self
+        writeva(
+            sink,
+            &mut self
                 .fragment_shader_main_ordered
                 .iter()
                 .map(|x| {
-                    std::io::IoSlice::new(
+                    IoSlice::new(
                         x.slice
                             .strip_prefix('{')
                             .unwrap_or(x.slice)
@@ -1383,4 +1385,17 @@ impl<'s> CombinedShaderGenContext<'s> {
 
         Ok(())
     }
+}
+
+fn writeva(
+    w: &mut (impl std::io::Write + ?Sized),
+    mut slices: &mut [IoSlice],
+) -> std::io::Result<()> {
+    IoSlice::advance_slices(&mut slices, 0); // ensure no empty slices
+    while !slices.is_empty() {
+        let b = w.write_vectored(slices)?;
+        IoSlice::advance_slices(&mut slices, b);
+    }
+
+    Ok(())
 }

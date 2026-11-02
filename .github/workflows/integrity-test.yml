@@ -2,64 +2,6 @@ concurrency:
   cancel-in-progress: true
   group: "${{ github.ref }}"
 jobs:
-  check-baselayer:
-    name: Base Layer
-    needs:
-      - preconditions
-    permissions:
-      id-token: write
-    runs-on: ubuntu-latest
-    steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - env:
-          PERIDOT_BUILD_SKIP_CDEPS: '1'
-        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
-        run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: "bash --noprofile --norc -eo pipefail {0}"
-      - env:
-          PERIDOT_BUILD_SKIP_CDEPS: '1'
-        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: "Run checks(mt)"
-        run: "cargo check --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
-        shell: "bash --noprofile --norc -eo pipefail {0}"
-      - if: "failure()"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: "failure()"
-        name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v4"
-        with:
-          aws-region: ap-northeast-1
-          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
-      - if: "failure()"
-        name: Notify as Failure
-        uses: "Pctg-x8/ci-notifications-post-invoker@master"
-        with:
-          base_sha: "${{ github.event.pull_request.base.sha }}"
-          begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Base Layer
-          head_sha: "${{ github.event.pull_request.head.sha }}"
-          mode: diff
-          pr_number: "${{ github.event.number }}"
-          pr_title: "${{ github.event.pull_request.title }}"
-          report_name: PR Integrity Check
-          status: failure
   check-cradle-android:
     env:
       PERIDOT_BUILD_TP_KTX_SKIP_CMAKE: '1'
@@ -68,10 +10,7 @@ jobs:
       PERIDOT_BUILD_TP_SPIRV_TOOLS_SKIP_CMAKE: '1'
     name: "Cradle(Android)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -80,15 +19,13 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup Rust for Android
         uses: "actions-rs/toolchain@v1"
@@ -104,19 +41,20 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: install cargo-ndk
         run: cargo install cargo-ndk
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
-          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           NDK_PLATFORM_TARGET: '28'
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run checks
-        run: "./tools/target/debug/peridot check examples/image-plane -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check cradle/test-fixture -p android 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -144,10 +82,7 @@ jobs:
   check-cradle-linux:
     name: "Cradle(Linux)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -162,29 +97,26 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
-          PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
       - env:
-          LD_LIBRARY_PATH: "${{ format('{0}/thirdparty/slang/source-repo/build/Release/lib:{0}/thirdparty/ktx/source-repo/build:{1}', github.workspace, env.LD_LIBRARY_PATH) }}"
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run checks
-        run: "./tools/target/debug/peridot check examples/image-plane -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check cradle/test-fixture -p linux 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -214,10 +146,7 @@ jobs:
       PERIDOT_BUILD_CLI_SKIP_DEBUG_RPATH: '1'
     name: "Cradle(macOS)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -226,17 +155,15 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - env:
-          RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
@@ -246,13 +173,12 @@ jobs:
         run: brew install coreutils
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
-          PERIDOT_CLI_ARCHIVER_PATH: "${{ format('{0}/tools/target/debug/peridot-archiver', github.workspace) }}"
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
           PERIDOT_CLI_CRADLE_BASE: "${{ format('{0}/cradle', github.workspace) }}"
           VULKAN_SDK: /Users
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run checks
-        run: "./tools/target/debug/peridot check examples/image-plane -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
+        run: "./tools/target/debug/peridot check cradle/test-fixture -p mac 2>&1 | tee $GITHUB_WORKSPACE/.buildlog"
         shell: bash
       - if: "failure()"
         uses: "actions/checkout@v5"
@@ -280,10 +206,7 @@ jobs:
   check-cradle-win:
     name: "Cradle(Windows)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -292,16 +215,16 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Build CLI
         run: cargo build --no-default-features
         working-directory: "./tools/cli"
@@ -312,7 +235,7 @@ jobs:
           VULKAN_SDK: ''
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run checks
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check cradle/test-fixture -p windows -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_CLI_BUILTIN_ASSETS_PATH: "${{ format('{0}/builtin-assets', github.workspace) }}"
@@ -320,7 +243,7 @@ jobs:
           VULKAN_SDK: ''
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run checks for transparent-back
-        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check examples/image-plane -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
+        run: "$ErrorActionPreference = \"Continue\"\npwsh -c 'tools/target/debug/peridot check cradle/test-fixture -p windows -F transparent -F bedrock/DynamicLoaded' *>&1 | Tee-Object $Env:GITHUB_WORKSPACE/.buildlog"
       - if: "failure()"
         uses: "actions/checkout@v5"
         with:
@@ -347,10 +270,7 @@ jobs:
   check-editor-linux:
     name: "Editor (Linux)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -359,15 +279,13 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
@@ -408,10 +326,7 @@ jobs:
   check-editor-mac:
     name: "Editor (macOS)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -420,15 +335,13 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
@@ -461,10 +374,7 @@ jobs:
   check-editor-win:
     name: "Editor (Windows)"
     needs:
-      - check-baselayer
-      - check-examples
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
@@ -473,15 +383,13 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          key: "${{ runner.os }}-cargo-editor-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-editor-"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           VULKAN_SDK: ''
@@ -512,60 +420,6 @@ jobs:
           pr_title: "${{ github.event.pull_request.title }}"
           report_name: PR Integrity Check
           status: failure
-  check-examples:
-    name: Examples
-    needs:
-      - check-modules
-      - check-baselayer
-      - preconditions
-    permissions:
-      id-token: write
-    runs-on: ubuntu-latest
-    steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
-      - env:
-          PERIDOT_BUILD_SKIP_CDEPS: '1'
-        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
-        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
-        working-directory: examples
-      - if: "failure()"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: "failure()"
-        name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v4"
-        with:
-          aws-region: ap-northeast-1
-          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
-      - if: "failure()"
-        name: Notify as Failure
-        uses: "Pctg-x8/ci-notifications-post-invoker@master"
-        with:
-          base_sha: "${{ github.event.pull_request.base.sha }}"
-          begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Examples
-          head_sha: "${{ github.event.pull_request.head.sha }}"
-          mode: diff
-          pr_number: "${{ github.event.number }}"
-          pr_title: "${{ github.event.pull_request.title }}"
-          report_name: PR Integrity Check
-          status: failure
   check-formats:
     name: Code Formats
     needs:
@@ -577,26 +431,24 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          key: "${{ runner.os }}-cargo-formats-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-formats-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run rustfmt
-        run: cargo fmt -- --check
+        run: cargo fmt --all --check
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run clippy
-        run: "cargo clippy --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        run: "cargo clippy --all-features --all-targets --workspace --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
         shell: "bash --noprofile --norc -eo pipefail {0}"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Run check - Trailing Newline for Source Code Files
@@ -624,10 +476,9 @@ jobs:
           pr_title: "${{ github.event.pull_request.title }}"
           report_name: PR Integrity Check
           status: failure
-  check-modules:
-    name: Modules
+  check-precise:
+    name: Precise Check
     needs:
-      - check-baselayer
       - preconditions
     permissions:
       id-token: write
@@ -636,77 +487,47 @@ jobs:
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Checking out
         uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Initialize Cache
         uses: "actions/cache@v4"
         with:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
+          path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
+          restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: Setup cargo-json-gha-translator
         run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
+        name: "Run checks (base)"
+        run: "cargo clippy --package peridot --features=bedrock/VK_EXT_debug_report --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Run checks (base, mt)"
+        run: "cargo clippy --package peridot --features=bedrock/VK_EXT_debug_report,mt --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Run cahcks (modules)"
         run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
         working-directory: modules
-      - if: "failure()"
-        uses: "actions/checkout@v5"
-        with:
-          ref: "${{ github.event.pull_request.head.sha }}"
-      - if: "failure()"
-        name: Configure for Slack Notification
-        uses: "aws-actions/configure-aws-credentials@v4"
-        with:
-          aws-region: ap-northeast-1
-          role-to-assume: arn:aws:iam::208140986057:role/GHALambdaInvoker
-      - if: "failure()"
-        name: Notify as Failure
-        uses: "Pctg-x8/ci-notifications-post-invoker@master"
-        with:
-          base_sha: "${{ github.event.pull_request.base.sha }}"
-          begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Modules
-          head_sha: "${{ github.event.pull_request.head.sha }}"
-          mode: diff
-          pr_number: "${{ github.event.number }}"
-          pr_title: "${{ github.event.pull_request.title }}"
-          report_name: PR Integrity Check
-          status: failure
-  check-tools:
-    name: Tools
-    needs:
-      - check-baselayer
-      - preconditions
-    permissions:
-      id-token: write
-    runs-on: ubuntu-latest
-    steps:
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Checking out
-        uses: "actions/checkout@v5"
-        with:
-          submodules: recursive
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Initialize Cache
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
-          path: "~/.cargo/registry\n~/.cargo/git\ntarget\ntools/target\nexamples/**/target\ncradle/**/target"
-          restore-keys: "${{ runner.os }}-cargo-"
-      - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Setup cargo-json-gha-translator
-        run: "mkdir -p $HOME/.local/bin\ncurl -o $HOME/.local/bin/cargo-json-gha-translator -L https://github.com/Pctg-x8/cargo-json-gha-translator/releases/download/v0.1.3/cargo-json-gha-translator\nchmod +x $HOME/.local/bin/cargo-json-gha-translator"
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
-        name: Run checks
-        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        name: "Run checks (tools)"
+        run: "cargo clippy --workspace --all-features --all-targets --message-format=json | $HOME/.local/bin/cargo-json-gha-translator"
+        shell: "bash --noprofile --norc -eo pipefail {0}"
         working-directory: tools
+      - env:
+          PERIDOT_BUILD_SKIP_CDEPS: '1'
+        if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
+        name: "Run checks (examples)"
+        run: "exec $GITHUB_WORKSPACE/.github/scripts/checkbuild-subdir.sh"
+        working-directory: examples
       - if: "failure()"
         uses: "actions/checkout@v5"
         with:
@@ -723,7 +544,7 @@ jobs:
         with:
           base_sha: "${{ github.event.pull_request.base.sha }}"
           begintime: "${{ needs.preconditions.outputs.begintime }}"
-          failure_step: Tools
+          failure_step: Precise Check
           head_sha: "${{ github.event.pull_request.head.sha }}"
           mode: diff
           pr_number: "${{ github.event.number }}"
@@ -774,7 +595,6 @@ jobs:
   report-success:
     name: Report as Success
     needs:
-      - check-baselayer
       - check-cradle-android
       - check-cradle-linux
       - check-cradle-mac
@@ -782,10 +602,8 @@ jobs:
       - check-editor-linux
       - check-editor-mac
       - check-editor-win
-      - check-examples
       - check-formats
-      - check-modules
-      - check-tools
+      - check-precise
       - preconditions
     permissions:
       id-token: write
