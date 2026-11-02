@@ -2,7 +2,7 @@ use crate::manifest::*;
 use crate::path::generated_runtime_assets_dir;
 use crate::steps;
 use crate::subcommands::build::BuildMode;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn build(options: &super::BuildOptions, build_mode: BuildMode) {
     let user_manifest_loaded = std::fs::read_to_string(options.userlib.join("Cargo.toml"))
@@ -106,9 +106,11 @@ fn gen_build_files(ctx: &steps::BuildContext, appid: &str, userlib_path: &Path) 
     let c = c.replace("**APKAPPID**", &format!("'{}'", appid));
     let c = c.replace(
         "**ASSETS_PATH**",
-        generated_runtime_assets_dir(userlib_path.canonicalize().expect("canonicalize"))
+        &generated_runtime_assets_dir(canonicalize_path_local(userlib_path).expect("canonicalize"))
             .to_str()
-            .expect("invalid path generated"),
+            .expect("invalid path generated")
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'"),
     );
     std::fs::write(android_app_base.join("build.gradle"), c)
         .expect("Failed to write gradle script");
@@ -322,4 +324,26 @@ fn run_apk(ctx: &steps::BuildContext, package_id: &str) {
         adb.start_activity(package_id, "io.ct2.peridot.PeridotActivity")
             .expect("Failed to exec start-activity command"),
     );
+}
+
+fn canonicalize_path_local(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+    let p = path.as_ref().canonicalize()?;
+
+    if cfg!(windows) {
+        // Windowsの場合はネットワークを表すパスが頭についてしまうので外す(ネットワークドライブ経由でのビルドは現時点ではサポートしない)
+        let mut components = p.components();
+        let Some(std::path::Component::Prefix(prefix)) = components.next() else {
+            // no prefix
+            return Ok(p);
+        };
+
+        match prefix.kind() {
+            std::path::Prefix::VerbatimDisk(disk_letter) => {
+                Ok(std::path::Path::new(&format!("{}:", disk_letter as char)).join(components))
+            }
+            _ => Ok(p),
+        }
+    } else {
+        Ok(p)
+    }
 }
