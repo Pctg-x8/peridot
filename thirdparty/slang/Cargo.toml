@@ -8,3 +8,7 @@ build = "build.rs"
 
 [build-dependencies]
 build-script-helper = { path = "../../build-script-helper" }
+
+[target.'cfg(windows)'.build-dependencies]
+vswhere.path = "../../platform/windows/vswhere"
+win10-sdk-locator.path = "../../platform/windows/win10-sdk-locator"
