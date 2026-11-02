@@ -598,7 +598,7 @@ struct Generator(Arc<RwLock<peridot::audio::Mixer>>);
 impl audio_backend::aaudio::DataCallback for Generator {
     fn callback(
         &mut self,
-        _stream_ptr: *mut audio_backend::aaudio::native::AAudioStream,
+        _stream_ptr: *mut aaudio::AAudioStream,
         buf: *mut libc::c_void,
         frames: usize,
     ) -> audio_backend::aaudio::CallbackResult {
@@ -643,7 +643,7 @@ impl NativeAudioEngine {
         self.generator.0.write().stop();
         self.stream.request_pause().expect("Failed to pause stream");
         let mut st = self.stream.state();
-        while st != audio_backend::aaudio::native::AAUDIO_STREAM_STATE_PAUSED {
+        while st != aaudio::StreamState::PAUSED {
             self.stream
                 .wait_for_state_change(st, &mut st, None)
                 .expect("Waiting StreamStateChange failed");
