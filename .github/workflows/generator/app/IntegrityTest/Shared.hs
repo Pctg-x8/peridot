@@ -189,8 +189,7 @@ preBuildCDeps variant =
       RunnerVariantWindows ->
         Just
           """
-          Install-Module VsDevShell
-          Enter-VsDevShell x64
+          . $Env:GITHUB_WORKSPACE\\.github\\scripts\\vs_devenv.ps1
           """
       _ -> Nothing
     commandPostKtx = case variant of
