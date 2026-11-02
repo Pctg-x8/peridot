@@ -195,12 +195,12 @@ preBuildCDeps variant =
     commandPostKtx = case variant of
       RunnerVariantWindows ->
         -- NinjaだとどうやらImport Libraryが作られないらしいので自前で作る（ktxのみ？）
-        Just
+        {-Just
           """
           echo \"EXPORTS\" | Set-Content build\\Debug\\ktx.def
           dumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def
           lib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64
-          """
+          """-} Nothing
       _ -> Nothing
     ktxBuildDir = case variant of
       RunnerVariantWindows -> "thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc"

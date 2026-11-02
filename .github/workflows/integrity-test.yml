@@ -296,7 +296,7 @@ jobs:
         working-directory: thirdparty/slang/source-repo
       - if: "${{ needs.preconditions.outputs.has_code_changes == 1 }}"
         name: "Pre-build c deps(ktx)"
-        run: ". $Env:GITHUB_WORKSPACE\\.github\\scripts\\vs_devenv.ps1\ncmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build .\necho \"EXPORTS\" | Set-Content build\\Debug\\ktx.def\ndumpbin /exports build\\Debug\\ktx.dll | Select-Object -Skip 19 | ForEach-Object { (-split $_)[3] } | ADd-Content build\\Debug\\ktx.def\nlib /def:build\\Debug\\ktx.def /out:build\\Debug\\ktx.lib /machine:x64"
+        run: ". $Env:GITHUB_WORKSPACE\\.github\\scripts\\vs_devenv.ps1\ncmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
         working-directory: thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
