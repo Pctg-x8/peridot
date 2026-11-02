@@ -102,27 +102,6 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Setup cache for ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/.cache/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: "sudo apt-get update && sudo apt-get install ccache"
-      - if: 'true'
-        name: Prepare cdeps build dir
-        run: mkdir -p thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF -DBASISU_SUPPORT_SSE=OFF && cmake --build ."
-        working-directory: thirdparty/ktx/cdeps-build/x86_64-unknown-linux-gnu
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           PERIDOT_BUILD_TP_KTX_WA_DISABLE_SSE: '1'
@@ -181,27 +160,6 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Setup cache for ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~/Library/Caches/ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: brew install ccache
-      - if: 'true'
-        name: Prepare cdeps build dir
-        run: mkdir -p thirdparty/ktx/cdeps-build/aarch64-apple-darwin
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: "cmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: "cmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
-        working-directory: thirdparty/ktx/cdeps-build/aarch64-apple-darwin
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
           RUSTFLAGS: "${{ format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace) }}"
@@ -262,27 +220,6 @@ jobs:
           key: "${{ runner.os }}-cargo-${{ hashFiles('**/*.rs', '**/Cargo.toml') }}"
           path: "~/.cargo\ntarget\ntools/target\nexamples/**/target\ncradle/**/target\neditor/**/target"
           restore-keys: "${{ runner.os }}-cargo-\n${{ runner.os }}-cargo-"
-      - if: 'true'
-        name: Setup cache for ccache artifacts
-        uses: "actions/cache@v4"
-        with:
-          key: "${{ runner.os }}-ccache-${{ hashFiles('thirdparty/slang/source-repo/**/*.c', 'thirdparty/slang/source-repo/**/*.h', 'thirdparty/slang/source-repo/**/*.cpp', 'thirdparty/slang/source-repo/**/*.hpp', 'thirdparty/slang/source-repo/**/*.inl', 'thirdparty/ktx/source-repo/**/*.c', 'thirdparty/ktx/source-repo/**/*.h', 'thirdparty/ktx/source-repo/**/*.cpp', 'thirdparty/ktx/source-repo/**/*.hpp', 'thirdparty/ktx/source-repo/**/*.inl') }}"
-          path: "~\\AppData\\Local\\ccache"
-          restore-keys: "${{ runner.os }}-ccache-"
-      - if: 'true'
-        name: Install ccache
-        run: choco install ccache
-      - if: 'true'
-        name: Prepare cdeps build dir
-        run: New-Item -ItemType Directory -Force -Path thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc
-      - if: 'true'
-        name: "Pre-build c deps(slang)"
-        run: ". $Env:GITHUB_WORKSPACE\\.github\\scripts\\vs_devenv.ps1\ncmake --preset default -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DSLANG_ENABLE_DXIL=FALSE -DSLANG_ENABLE_GFX=FALSE -DSLANG_ENABLE_SLANGD=FALSE -DSLANG_ENABLE_SLANGC=FALSE -DSLANG_ENABLE_SLANGI=FALSE -DSLANG_ENABLE_SLANGRT=FALSE -DSLANG_ENABLE_SLANG_GLSLANG=FALSE -DSLANG_ENABLE_SLANG_PROXY=FALSE -DSLANG_ENABLE_TESTS=FALSE -DSLANG_ENABLE_EXAMPLES=FALSE -DSLANG_ENABLE_REPLAYER=FALSE -DSLANG_ENABLE_RECORD_REPLAY=FALSE -DSLANG_ENABLE_SLANG_RHI=FALSE -DSLANG_LIB_TYPE=STATIC && cmake --build --preset releaseWithDebugInfo"
-        working-directory: thirdparty/slang/source-repo
-      - if: 'true'
-        name: "Pre-build c deps(ktx)"
-        run: ". $Env:GITHUB_WORKSPACE\\.github\\scripts\\vs_devenv.ps1\ncmake ../../source-repo -B . -G Ninja -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache -DKTX_FEATURE_TESTS=OFF -DKTX_FEATURE_VK_UPLOAD=OFF -DKTX_FEATURE_GL_UPLOAD=OFF -DKTX_FEATURE_TOOLS=OFF && cmake --build ."
-        working-directory: thirdparty/ktx/cdeps-build/x86_64-pc-windows-msvc
       - env:
           PERIDOT_BUILD_SKIP_CDEPS: '1'
         if: 'true'

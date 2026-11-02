@@ -305,7 +305,7 @@ checkCradleWindows precondition = stdWindowsJob "Cradle(Windows)" steps
         <$> flattenSteps
           [ Step checkoutStep,
             Step $ rustCacheStep "",
-            preBuildCDeps RunnerVariantWindows,
+            -- preBuildCDeps RunnerVariantWindows,
             Step $ skipCDeps cliBuildStep,
             Step $ GHA.namedAs "Run checks" $ integratedTestStep integratedTestNormalScript,
             Step $ GHA.namedAs "Run checks for transparent-back" $ integratedTestStep integratedTestTransparentScript
@@ -329,7 +329,7 @@ checkCradleMacos precondition = platformExtraEnvs <$> stdMacJob "Cradle(macOS)" 
         <$> flattenSteps
           [ Step checkoutStep,
             Step $ rustCacheStep "",
-            preBuildCDeps RunnerVariantMac,
+            -- preBuildCDeps RunnerVariantMac,
             Step $
               skipCDeps cliBuildStep
                 & GHA.env "RUSTFLAGS" (GHA.mkExpression "format('-Clink-arg=-Wl,-rpath,{0}/thirdparty/slang/source-repo/build/Release/lib -Clink-arg=-Wl,-rpath,{0}/thirdparty/ktx/source-repo/build', github.workspace)"),
@@ -363,7 +363,7 @@ checkCradleLinux precondition = stdJob "Cradle(Linux)" steps
                 aptInstallStep ["libwayland-dev", "libpipewire-0.3-dev", "libspa-0.2-dev"],
             Step checkoutStep,
             Step $ rustCacheStep "",
-            preBuildCDeps RunnerVariantUbuntu,
+            -- preBuildCDeps RunnerVariantUbuntu,
             -- worksround for ci broken
             Step $ Peridot.setBuildEnvSwitch "TP_KTX_WA_DISABLE_SSE" $ skipCDeps cliBuildStep,
             Step integratedTestStep
