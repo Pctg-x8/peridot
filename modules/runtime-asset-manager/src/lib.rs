@@ -20,7 +20,7 @@ impl RuntimeAssetManager {
         identifier: &str,
         engine: &mut peridot::Engine<impl peridot::NativeLinker>,
         mm: &mut peridot_memory_manager::MemoryManager,
-    ) -> Result<Option<AssetResourceHandle>, T::Error> {
+    ) -> Result<Option<TypedAssetResourceHandle<T::RuntimeResourceType>>, T::Error> {
         let Some(asset_id) = engine.resolve_runtime_asset_id::<T>(identifier) else {
             return Ok(None);
         };
@@ -33,10 +33,13 @@ impl RuntimeAssetManager {
         id: &peridot::AssetID,
         engine: &mut peridot::Engine<impl peridot::NativeLinker>,
         mm: &mut peridot_memory_manager::MemoryManager,
-    ) -> Result<Option<AssetResourceHandle>, T::Error> {
+    ) -> Result<Option<TypedAssetResourceHandle<T::RuntimeResourceType>>, T::Error> {
         if let Some(&loaded) = self.loaded_assets.get(id) {
             tracing::info!(?id, "Asset has been loaded already");
-            return Ok(Some(loaded));
+            return Ok(Some(TypedAssetResourceHandle(
+                loaded,
+                core::marker::PhantomData,
+            )));
         }
 
         tracing::info!(?id, "Loading Asset");
@@ -45,13 +48,41 @@ impl RuntimeAssetManager {
         let handle = AssetResourceHandle::from_array_index(self.asset_resources.len() - 1);
         self.loaded_assets.insert(id.clone(), handle);
 
-        Ok(Some(handle))
+        Ok(Some(TypedAssetResourceHandle(
+            handle,
+            core::marker::PhantomData,
+        )))
     }
 
     #[inline(always)]
     pub fn get(&self, handle: &AssetResourceHandle) -> Option<&AssetResource> {
         self.asset_resources.get(handle.to_array_index())
     }
+
+    #[inline(always)]
+    pub fn get_of<T: RuntimeResource>(
+        &self,
+        handle: &AssetResourceHandle,
+    ) -> Result<&T, GetResourceError> {
+        T::extract_ref(self.get(handle).ok_or(GetResourceError::InvalidHandle)?)
+            .ok_or(GetResourceError::NotAType)
+    }
+
+    #[inline(always)]
+    pub fn get_typed<T: RuntimeResource>(
+        &self,
+        handle: &TypedAssetResourceHandle<T>,
+    ) -> Result<&T, GetResourceError> {
+        self.get_of::<T>(&handle.0)
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum GetResourceError {
+    #[error("invalid handle")]
+    InvalidHandle,
+    #[error("not a type")]
+    NotAType,
 }
 
 #[repr(transparent)]
@@ -67,22 +98,66 @@ impl AssetResourceHandle {
     }
 }
 
+#[repr(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypedAssetResourceHandle<T: RuntimeResource>(
+    AssetResourceHandle,
+    core::marker::PhantomData<T>,
+);
+impl<T: RuntimeResource> TypedAssetResourceHandle<T> {
+    #[inline(always)]
+    pub const fn into_untyped(self) -> AssetResourceHandle {
+        self.0
+    }
+}
+
 pub enum AssetResource {
+    Texture2D(RuntimeTexture2D),
     Sprite(RuntimeSprite),
-    SpriteAtlas(RuntimeSpriteAtlas),
+}
+
+pub trait RuntimeResource {
+    fn extract_ref(packed: &AssetResource) -> Option<&Self>;
 }
 
 pub struct RuntimeSprite {
     pub data: peridot_sprite_atlas::SpriteAsset,
-    pub dep_atlas: AssetResourceHandle,
+    pub dep_atlas: TypedAssetResourceHandle<RuntimeTexture2D>,
+}
+impl RuntimeResource for RuntimeSprite {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::Sprite(x) => Some(x),
+            _ => None,
+        }
+    }
+}
+impl RuntimeSprite {
+    #[inline(always)]
+    pub fn uvst(&self, atlas: &RuntimeTexture2D) -> peridot_math::Vector4F32 {
+        self.data.uvst(atlas.width, atlas.height)
+    }
 }
 
-pub struct RuntimeSpriteAtlas {
-    pub data: peridot_sprite_atlas::SpriteAtlasAsset,
+pub struct RuntimeTexture2D {
     pub gfx_resource: br::ImageViewObject<peridot_memory_manager::Image>,
+    pub width: u32,
+    pub height: u32,
+}
+impl RuntimeResource for RuntimeTexture2D {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::Texture2D(x) => Some(x),
+            _ => None,
+        }
+    }
 }
 
 pub trait AssetResourceType: peridot::FromAssetBlob {
+    type RuntimeResourceType: RuntimeResource;
+
     fn load_core(
         id: &peridot::AssetID,
         dep_loader: &mut RuntimeAssetManager,
@@ -91,6 +166,8 @@ pub trait AssetResourceType: peridot::FromAssetBlob {
     ) -> Result<AssetResource, Self::Error>;
 }
 impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
+    type RuntimeResourceType = RuntimeSprite;
+
     fn load_core(
         id: &peridot::AssetID,
         dep_loader: &mut RuntimeAssetManager,
@@ -113,6 +190,8 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
     }
 }
 impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
+    type RuntimeResourceType = RuntimeTexture2D;
+
     fn load_core(
         id: &peridot::AssetID,
         _dep_loader: &mut RuntimeAssetManager,
@@ -222,9 +301,10 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
             })
             .expect("submit data copy");
 
-        Ok(AssetResource::SpriteAtlas(RuntimeSpriteAtlas {
-            data: content,
+        Ok(AssetResource::Texture2D(RuntimeTexture2D {
             gfx_resource,
+            width: content.width,
+            height: content.height,
         }))
     }
 }

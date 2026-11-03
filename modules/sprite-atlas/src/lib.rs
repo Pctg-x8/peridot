@@ -316,12 +316,12 @@ impl SpriteAsset {
     }
 
     #[inline]
-    pub fn uvst(&self, atlas: &SpriteAtlasAsset) -> peridot_math::Vector4F32 {
+    pub fn uvst(&self, atlas_width: u32, atlas_height: u32) -> peridot_math::Vector4F32 {
         peridot_math::Vector4(
-            self.width as f32 / atlas.width as f32,
-            self.height as f32 / atlas.height as f32,
-            self.left as f32 / atlas.width as f32,
-            self.top as f32 / atlas.height as f32,
+            self.width as f32 / atlas_width as f32,
+            self.height as f32 / atlas_height as f32,
+            self.left as f32 / atlas_width as f32,
+            self.top as f32 / atlas_height as f32,
         )
     }
 }

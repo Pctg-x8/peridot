@@ -7,9 +7,11 @@ edition = "2024"
 peridot = { path = "../../base" }
 peridot-memory-manager = { path = "../memory-manager" }
 peridot-sprite-atlas = { path = "../sprite-atlas", features = ["with-loader-impl"] }
+peridot-math = { path = "../math" }
 ktx = { path = "../../thirdparty/ktx" }
 bedrock.workspace = true
 tracing.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

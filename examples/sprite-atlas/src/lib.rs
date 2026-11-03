@@ -473,20 +473,15 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 .binding_at(0)
                 .write(br::DescriptorContents::CombinedImageSampler(vec![
                     br::DescriptorImageInfo::new(
-                        match runtime_asset_manager.get(&sprites[0]).expect("invalid ref") {
-                            peridot_runtime_asset_manager::AssetResource::Sprite(sprite) => {
-                                match runtime_asset_manager
-                                    .get(&sprite.dep_atlas)
-                                    .expect("invalid dep")
-                                {
-                                    peridot_runtime_asset_manager::AssetResource::SpriteAtlas(
-                                        atlas,
-                                    ) => &atlas.gfx_resource,
-                                    _ => unreachable!("invalid dep"),
-                                }
-                            }
-                            _ => unreachable!("invalid resource"),
-                        },
+                        &runtime_asset_manager
+                            .get_typed(
+                                &runtime_asset_manager
+                                    .get_typed(&sprites[0])
+                                    .expect("invalid ref")
+                                    .dep_atlas,
+                            )
+                            .expect("invalid dep")
+                            .gfx_resource,
                         br::ImageLayout::ShaderReadOnlyOpt,
                     )
                     .with_sampler(&smp),
@@ -634,23 +629,14 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             );
 
             for (n, p) in plane_states.iter_mut().enumerate() {
-                material_props[n] = match runtime_asset_manager
-                    .get(&sprites[p.sprite_index])
-                    .expect("invalid ref")
-                {
-                    peridot_runtime_asset_manager::AssetResource::Sprite(sprite) => {
-                        match runtime_asset_manager
-                            .get(&sprite.dep_atlas)
-                            .expect("invalid ref")
-                        {
-                            peridot_runtime_asset_manager::AssetResource::SpriteAtlas(atlas) => {
-                                sprite.data.uvst(&atlas.data)
-                            }
-                            _ => unreachable!("invalid dep"),
-                        }
-                    }
-                    _ => unreachable!("invalid resource"),
-                };
+                let sprite = runtime_asset_manager
+                    .get_typed(&sprites[p.sprite_index])
+                    .expect("invalid ref");
+                material_props[n] = sprite.uvst(
+                    runtime_asset_manager
+                        .get_typed(&sprite.dep_atlas)
+                        .expect("invalid dep"),
+                );
             }
         })
         .expect("update instance staging buffer");
@@ -678,17 +664,8 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                             if p.p.1 < -10.0 {
                                 p.p = peridot::math::Vector3(rng.random_range(-10.0..=10.0), p.p.1 + 20.0, rng.random_range(-10.0..=10.0));
                                 p.sprite_index = rng.random_range(0..sprites.len());
-                                material_props[n] = match runtime_asset_manager.get(&sprites[p.sprite_index]).expect("invalid ref") {
-                                    peridot_runtime_asset_manager::AssetResource::Sprite(sprite) => {
-                                        match runtime_asset_manager.get(&sprite.dep_atlas).expect("invalid ref") {
-                                            peridot_runtime_asset_manager::AssetResource::SpriteAtlas(atlas) => {
-                                                sprite.data.uvst(&atlas.data)
-                                            },
-                                            _ => unreachable!("invalid dep")
-                                        }
-                                    },
-                                    _ => unreachable!("invalid resource")
-                                };
+                                let sprite = runtime_asset_manager.get_typed(&sprites[p.sprite_index]).expect("invalid ref");
+                                material_props[n] = sprite .uvst(runtime_asset_manager.get_typed(&sprite.dep_atlas).expect("invalid dep"));
                             }
 
                             object_parameters[n].transform_matrix = peridot::math::Matrix4::trs(p.p.clone(), peridot::math::Quaternion::new(p.r.to_radians(), peridot::math::Vector3::up()), peridot::math::Vector3::ONE);
