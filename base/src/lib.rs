@@ -3,6 +3,7 @@ use futures_util::FutureExt;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 pub use peridot_native_io as native_io;
+pub use peridot_types::*;
 
 use bedrock::{self as br};
 use parking_lot::RwLock;

@@ -20,6 +20,7 @@ parking_lot = "0.12"
 rand.workspace = true
 rand_pcg.workspace = true
 
+peridot-types.path = "../base-types"
 peridot-archive = { path = "../modules/archive" }
 peridot-math = { path = "../modules/math" }
 peridot-derive = { path = "../derive", optional = true }
@@ -32,13 +33,13 @@ tracing.workspace = true
 
 [dependencies.bedrock]
 features = [
-    "VK_KHR_surface",
-    "VK_KHR_swapchain",
-    "Implements",
-    "VK_KHR_get_physical_device_properties2",
-    "VK_KHR_synchronization2",
-    "VK_KHR_bind_memory2",
-    "VK_KHR_get_memory_requirements2",
+  "VK_KHR_surface",
+  "VK_KHR_swapchain",
+  "Implements",
+  "VK_KHR_get_physical_device_properties2",
+  "VK_KHR_synchronization2",
+  "VK_KHR_bind_memory2",
+  "VK_KHR_get_memory_requirements2",
 ]
 workspace = true
 

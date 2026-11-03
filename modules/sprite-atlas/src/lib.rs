@@ -1,6 +1,7 @@
 use bedrock as br;
 use ktx::Texture;
 use peridot_serialization_utils::{PascalStr, PascalString};
+use peridot_types::AssetID;
 use std::{
     collections::HashMap,
     io::{BufRead, IoSlice, IoSliceMut, Read, Seek, Write},
@@ -214,6 +215,7 @@ impl SpriteAtlasAsset {
 
 #[derive(Debug)]
 pub struct SpriteAsset {
+    pub atlas_id: AssetID,
     pub left: u32,
     pub top: u32,
     pub width: u32,
@@ -236,6 +238,7 @@ impl SpriteAsset {
             sink,
             &mut [
                 ios(&0x1234u16),
+                IoSlice::new(self.atlas_id.as_bytes()),
                 ios(&self.left),
                 ios(&self.top),
                 ios(&self.width),
@@ -272,6 +275,15 @@ impl SpriteAsset {
         read_vectored_all(
             source,
             &mut [
+                IoSliceMut::new(
+                    unsafe {
+                        &mut *this
+                            .as_mut_ptr()
+                            .byte_add(core::mem::offset_of!(Self, atlas_id))
+                            .cast::<AssetID>()
+                    }
+                    .as_bytes_mut(),
+                ),
                 ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, left)),
                 ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, top)),
                 ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, width)),
@@ -290,6 +302,7 @@ impl SpriteAsset {
             Ok(this)
         } else {
             Ok(Self {
+                atlas_id: this.atlas_id,
                 left: this.left.swap_bytes(),
                 top: this.top.swap_bytes(),
                 width: this.width.swap_bytes(),
@@ -503,6 +516,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 ctx.register_child_asset(&sprite_assigned_group_id, peridot::ASSET_TYPE_SPRITE, 0);
             ctx.register_asset_dependency(&sprite_asset_id, &asset_id);
             SpriteAsset {
+                atlas_id: asset_id.clone(),
                 left: s.left,
                 top: s.top,
                 width: actual_width,

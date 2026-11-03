@@ -18,6 +18,7 @@ peridot-serialization-utils = { path = "../serialization-utils" }
 peridot = { path = "../../base", optional = true }
 peridot-math = { path = "../../modules/math" }
 vectored-io-helper.path = "../../base-lib/vectored-io-helper"
+peridot-types.path = "../../base-types"
 
 [lints]
 workspace = true

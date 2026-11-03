@@ -25,17 +25,26 @@ impl RuntimeAssetManager {
             return Ok(None);
         };
 
-        if let Some(&loaded) = self.loaded_assets.get(&asset_id) {
+        self.load_by_id::<T>(&asset_id, engine, mm)
+    }
+
+    fn load_by_id<T: AssetResourceType>(
+        &mut self,
+        id: &peridot::AssetID,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<Option<AssetResourceHandle>, T::Error> {
+        if let Some(&loaded) = self.loaded_assets.get(id) {
+            tracing::info!(?id, "Asset has been loaded already");
             return Ok(Some(loaded));
         }
 
-        let required_asset_ids = engine.query_required_asset_ids(&asset_id);
-        tracing::warn!(?required_asset_ids, "TODO: load dependencies");
-
-        let asset = T::load_core(asset_id.clone(), engine, mm)?;
+        tracing::info!(?id, "Loading Asset");
+        let asset = T::load_core(id, self, engine, mm)?;
         self.asset_resources.push(asset);
         let handle = AssetResourceHandle::from_array_index(self.asset_resources.len() - 1);
-        self.loaded_assets.insert(asset_id, handle);
+        self.loaded_assets.insert(id.clone(), handle);
+
         Ok(Some(handle))
     }
 
@@ -59,40 +68,61 @@ impl AssetResourceHandle {
 }
 
 pub enum AssetResource {
-    Sprite(peridot_sprite_atlas::SpriteAsset),
-    SpriteAtlas {
-        data: peridot_sprite_atlas::SpriteAtlasAsset,
-        gfx_resource: br::ImageViewObject<peridot_memory_manager::Image>,
-    },
+    Sprite(RuntimeSprite),
+    SpriteAtlas(RuntimeSpriteAtlas),
+}
+
+pub struct RuntimeSprite {
+    pub data: peridot_sprite_atlas::SpriteAsset,
+    pub dep_atlas: AssetResourceHandle,
+}
+
+pub struct RuntimeSpriteAtlas {
+    pub data: peridot_sprite_atlas::SpriteAtlasAsset,
+    pub gfx_resource: br::ImageViewObject<peridot_memory_manager::Image>,
 }
 
 pub trait AssetResourceType: peridot::FromAssetBlob {
     fn load_core(
-        id: peridot::AssetID,
+        id: &peridot::AssetID,
+        dep_loader: &mut RuntimeAssetManager,
         engine: &mut peridot::Engine<impl peridot::NativeLinker>,
         mm: &mut peridot_memory_manager::MemoryManager,
     ) -> Result<AssetResource, Self::Error>;
 }
 impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
     fn load_core(
-        id: peridot::AssetID,
+        id: &peridot::AssetID,
+        dep_loader: &mut RuntimeAssetManager,
         engine: &mut peridot::Engine<impl peridot::NativeLinker>,
-        _mm: &mut peridot_memory_manager::MemoryManager,
+        mm: &mut peridot_memory_manager::MemoryManager,
     ) -> Result<AssetResource, Self::Error> {
-        let content =
-            <Self as peridot::FromAssetBlob>::from_asset_blob(engine.open_raw_asset_by_id(id)?)?;
+        let content = <Self as peridot::FromAssetBlob>::from_asset_blob(
+            engine.open_raw_asset_by_id(id.clone())?,
+        )?;
 
-        Ok(AssetResource::Sprite(content))
+        let dep_atlas = dep_loader
+            .load_by_id::<peridot_sprite_atlas::SpriteAtlasAsset>(&content.atlas_id, engine, mm)
+            .expect("failed to load dependency")
+            .expect("no dep");
+
+        Ok(AssetResource::Sprite(RuntimeSprite {
+            data: content,
+            dep_atlas,
+        }))
     }
 }
 impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
     fn load_core(
-        id: peridot::AssetID,
+        id: &peridot::AssetID,
+        _dep_loader: &mut RuntimeAssetManager,
         engine: &mut peridot::Engine<impl peridot::NativeLinker>,
         mm: &mut peridot_memory_manager::MemoryManager,
     ) -> Result<AssetResource, Self::Error> {
-        let mut content =
-            <Self as peridot::FromAssetBlob>::from_asset_blob(engine.open_raw_asset_by_id(id)?)?;
+        let mut content = <Self as peridot::FromAssetBlob>::from_asset_blob(
+            engine.open_raw_asset_by_id(id.clone())?,
+        )?;
+        // TODO: proper handle transcoding
         assert!(content.content.needs_transcoding());
         content
             .content
@@ -102,6 +132,7 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
         let atlas_height = content.height;
         let offs = content.content.image_offset(0, 0, 0).expect("image_offset");
 
+        // TODO: batch gfx resource allocation and uploading
         let gfx_resource = mm
             .allocate_device_local_image(
                 engine.graphics(),
@@ -141,10 +172,22 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
 
         engine
             .submit_commands(|c| {
-                c.copy_buffer_to_image(
+                c.pipeline_barrier(
+                    br::PipelineStageFlags::TOP_OF_PIPE,
+                    br::PipelineStageFlags::TRANSFER,
+                    0,
+                    &[],
+                    &[],
+                    &[br::ImageMemoryBarrier::new(
+                        gfx_resource.image(),
+                        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0,
+                        br::ImageLayout::TransferDestOpt.from_undefined(),
+                    )],
+                )
+                .copy_buffer_to_image(
                     &staging_resource.inner,
                     gfx_resource.image(),
-                    br::ImageLayout::Undefined,
+                    br::ImageLayout::TransferDestOpt,
                     &[br::vk::VkBufferImageCopy {
                         bufferOffset: 0,
                         bufferRowLength: staging_resource.row_texels,
@@ -165,7 +208,7 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
                 )
                 .pipeline_barrier(
                     br::PipelineStageFlags::TRANSFER,
-                    br::PipelineStageFlags::TOP_OF_PIPE,
+                    br::PipelineStageFlags::FRAGMENT_SHADER,
                     0,
                     &[],
                     &[],
@@ -173,14 +216,15 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
                         gfx_resource.image(),
                         br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0,
                         br::ImageLayout::ShaderReadOnlyOpt.from_undefined(),
-                    )],
+                    )
+                    .access_mask_transition(0, br::AccessFlags::SHADER.read)],
                 )
             })
             .expect("submit data copy");
 
-        Ok(AssetResource::SpriteAtlas {
+        Ok(AssetResource::SpriteAtlas(RuntimeSpriteAtlas {
             data: content,
             gfx_resource,
-        })
+        }))
     }
 }
