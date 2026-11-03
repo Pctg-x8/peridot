@@ -5,6 +5,7 @@ use std::{
     collections::HashMap,
     io::{BufRead, IoSlice, IoSliceMut, Read, Seek, Write},
 };
+use vectored_io_helper::{read_vectored_all, write_vectored_all};
 
 pub mod source;
 
@@ -34,7 +35,7 @@ impl SpriteAtlasAsset {
         sink.write_all(&self.height.to_ne_bytes())?;
         sink.write_all(&(self.sprites.len() as u64).to_ne_bytes())?;
         for (id, v) in self.sprites.iter() {
-            PascalStr(&id).write(sink)?;
+            PascalStr(id).write(sink)?;
             sink.write_all(&v.left.to_ne_bytes())?;
             sink.write_all(&v.top.to_ne_bytes())?;
             sink.write_all(&v.width.to_ne_bytes())?;
@@ -231,7 +232,7 @@ impl SpriteAsset {
             })
         }
 
-        writeva(
+        write_vectored_all(
             sink,
             &mut [
                 ios(&0x1234u16),
@@ -268,7 +269,7 @@ impl SpriteAsset {
         };
 
         let mut this = core::mem::MaybeUninit::<Self>::uninit();
-        readva(
+        read_vectored_all(
             source,
             &mut [
                 ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, left)),
@@ -310,26 +311,6 @@ impl SpriteAsset {
             self.top as f32 / atlas.height as f32,
         )
     }
-}
-
-fn writeva(dst: &mut (impl Write + ?Sized), mut bufs: &mut [IoSlice]) -> std::io::Result<()> {
-    IoSlice::advance_slices(&mut bufs, 0); // ensure actually empty
-    while !bufs.is_empty() {
-        let b = dst.write_vectored(bufs)?;
-        IoSlice::advance_slices(&mut bufs, b);
-    }
-
-    Ok(())
-}
-
-fn readva(src: &mut (impl Read + ?Sized), mut bufs: &mut [IoSliceMut]) -> std::io::Result<()> {
-    IoSliceMut::advance_slices(&mut bufs, 0); // ensure actually empty
-    while !bufs.is_empty() {
-        let b = src.read_vectored(bufs)?;
-        IoSliceMut::advance_slices(&mut bufs, b);
-    }
-
-    Ok(())
 }
 
 #[cfg(feature = "with-loader-impl")]
