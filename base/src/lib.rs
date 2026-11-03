@@ -631,6 +631,38 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
     }
 
     #[inline(always)]
+    pub fn resolve_runtime_asset_id<A: LogicalAssetData>(
+        &self,
+        identifier: &str,
+    ) -> Option<AssetID> {
+        self.native_link
+            .asset_loader()
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(identifier, A::ASSET_TYPE)
+    }
+
+    #[inline(always)]
+    pub fn resolve_runtime_asset_ids<A: LogicalAssetData>(&self, identifier: &str) -> Vec<AssetID> {
+        self.native_link
+            .asset_loader()
+            .asset_db()
+            .query_loadable_asset_ids_of_type(identifier, A::ASSET_TYPE)
+    }
+
+    #[inline(always)]
+    pub fn query_required_asset_ids(&self, id: &AssetID) -> Vec<AssetID> {
+        self.native_link
+            .asset_loader()
+            .asset_db()
+            .query_required_asset_ids(id)
+    }
+
+    #[inline(always)]
+    pub fn open_raw_asset_by_id<'a>(&'a self, id: AssetID) -> std::io::Result<impl AssetBlob + 'a> {
+        self.native_link.asset_loader().get(id)
+    }
+
+    #[inline(always)]
     pub fn load<A: FromAssetBlob>(&self, path: &str) -> Result<A, A::Error> {
         A::from_asset_blob(self.open_raw_asset::<A>(path)?)
     }

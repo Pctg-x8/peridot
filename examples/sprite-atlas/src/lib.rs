@@ -46,6 +46,13 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .expect("no shader");
 
     let mut memory_manager = peridot_memory_manager::MemoryManager::new(e.graphics());
+    let mut runtime_asset_manager = peridot_runtime_asset_manager::RuntimeAssetManager::new();
+
+    let sprite = runtime_asset_manager
+        .load::<peridot_sprite_atlas::SpriteAsset>("images.testpic1", e, &mut memory_manager)
+        .expect("load failed")
+        .expect("no sprite");
+    eprintln!("testpic1: {sprite:?}",);
 
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;

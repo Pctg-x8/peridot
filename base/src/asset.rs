@@ -226,6 +226,27 @@ impl AssetDatabase {
         results
     }
 
+    pub fn query_required_asset_ids(&self, id: &AssetID) -> Vec<AssetID> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "Select required_asset_id from asset_dependency where asset_id = ?",
+                PrepareFlags::empty(),
+            )
+            .expect("prepare");
+        unsafe {
+            stmt.bind_blob(1, id.as_bytes()).expect("bind");
+        }
+
+        let mut results = Vec::new();
+        while stmt.step().expect("step") {
+            assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
+            results.push(AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() }));
+        }
+
+        results
+    }
+
     fn nonatomic_update_asset_group_info(&mut self, id: &AssetID, name: &str) {
         let mut stmt = self
             .db

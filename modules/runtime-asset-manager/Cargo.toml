@@ -1,0 +1,15 @@
+[package]
+name = "peridot-runtime-asset-manager"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot = { path = "../../base" }
+peridot-memory-manager = { path = "../memory-manager" }
+peridot-sprite-atlas = { path = "../sprite-atlas" }
+ktx = { path = "../../thirdparty/ktx" }
+bedrock.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -225,7 +225,7 @@ pub struct SpriteAsset {
 impl SpriteAsset {
     pub fn write(&self, sink: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         #[inline(always)]
-        fn ios<'a, T>(d: &'a T) -> IoSlice {
+        fn ios<'a, T>(d: &'a T) -> IoSlice<'a> {
             IoSlice::new(unsafe {
                 core::slice::from_raw_parts(core::ptr::from_ref(d).cast::<u8>(), size_of_val(d))
             })
