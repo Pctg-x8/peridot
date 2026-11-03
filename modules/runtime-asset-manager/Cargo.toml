@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 peridot = { path = "../../base" }
 peridot-memory-manager = { path = "../memory-manager" }
-peridot-sprite-atlas = { path = "../sprite-atlas" }
+peridot-sprite-atlas = { path = "../sprite-atlas", features = ["with-loader-impl"] }
 ktx = { path = "../../thirdparty/ktx" }
 bedrock.workspace = true
 tracing.workspace = true
