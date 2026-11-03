@@ -3,7 +3,7 @@ use ktx::Texture;
 use peridot_serialization_utils::{PascalStr, PascalString};
 use std::{
     collections::HashMap,
-    io::{BufRead, Seek, Write},
+    io::{BufRead, IoSlice, IoSliceMut, Read, Seek, Write},
 };
 
 pub mod source;
@@ -211,6 +211,143 @@ impl SpriteAtlasAsset {
     }
 }
 
+#[derive(Debug)]
+pub struct SpriteAsset {
+    pub left: u32,
+    pub top: u32,
+    pub width: u32,
+    pub height: u32,
+    pub border_left: u32,
+    pub border_top: u32,
+    pub border_right: u32,
+    pub border_bottom: u32,
+}
+impl SpriteAsset {
+    pub fn write(&self, sink: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        #[inline(always)]
+        fn ios<'a, T>(d: &'a T) -> IoSlice {
+            IoSlice::new(unsafe {
+                core::slice::from_raw_parts(core::ptr::from_ref(d).cast::<u8>(), size_of_val(d))
+            })
+        }
+
+        writeva(
+            sink,
+            &mut [
+                ios(&0x1234u16),
+                ios(&self.left),
+                ios(&self.top),
+                ios(&self.width),
+                ios(&self.height),
+                ios(&self.border_left),
+                ios(&self.border_top),
+                ios(&self.border_right),
+                ios(&self.border_bottom),
+            ],
+        )
+    }
+
+    pub fn read(source: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+        #[inline(always)]
+        fn ioslice<'a, T>(this: *mut SpriteAsset, offs: usize) -> IoSliceMut<'a> {
+            IoSliceMut::new(unsafe {
+                core::slice::from_raw_parts_mut(this.cast::<u8>().byte_add(offs), size_of::<T>())
+            })
+        }
+
+        let mut endian_marker = 0u16;
+        source.read_exact(unsafe {
+            core::mem::transmute::<&mut _, &mut [u8; 2]>(&mut endian_marker)
+        })?;
+        let is_native_endian = if endian_marker == 0x1234 {
+            true
+        } else if endian_marker.swap_bytes() == 0x1234 {
+            false
+        } else {
+            panic!("invalid endian marker");
+        };
+
+        let mut this = core::mem::MaybeUninit::<Self>::uninit();
+        readva(
+            source,
+            &mut [
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, left)),
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, top)),
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, width)),
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, height)),
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, border_left)),
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, border_top)),
+                ioslice::<u32>(this.as_mut_ptr(), core::mem::offset_of!(Self, border_right)),
+                ioslice::<u32>(
+                    this.as_mut_ptr(),
+                    core::mem::offset_of!(Self, border_bottom),
+                ),
+            ],
+        )?;
+        let this = unsafe { this.assume_init() };
+        if is_native_endian {
+            Ok(this)
+        } else {
+            Ok(Self {
+                left: this.left.swap_bytes(),
+                top: this.top.swap_bytes(),
+                width: this.width.swap_bytes(),
+                height: this.height.swap_bytes(),
+                border_left: this.border_left.swap_bytes(),
+                border_top: this.border_top.swap_bytes(),
+                border_right: this.border_right.swap_bytes(),
+                border_bottom: this.border_bottom.swap_bytes(),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn uvst(&self, atlas: &SpriteAtlasAsset) -> peridot_math::Vector4F32 {
+        peridot_math::Vector4(
+            self.width as f32 / atlas.width as f32,
+            self.height as f32 / atlas.height as f32,
+            self.left as f32 / atlas.width as f32,
+            self.top as f32 / atlas.height as f32,
+        )
+    }
+}
+
+fn writeva(dst: &mut (impl Write + ?Sized), mut bufs: &mut [IoSlice]) -> std::io::Result<()> {
+    IoSlice::advance_slices(&mut bufs, 0); // ensure actually empty
+    while !bufs.is_empty() {
+        let b = dst.write_vectored(bufs)?;
+        IoSlice::advance_slices(&mut bufs, b);
+    }
+
+    Ok(())
+}
+
+fn readva(src: &mut (impl Read + ?Sized), mut bufs: &mut [IoSliceMut]) -> std::io::Result<()> {
+    IoSliceMut::advance_slices(&mut bufs, 0); // ensure actually empty
+    while !bufs.is_empty() {
+        let b = src.read_vectored(bufs)?;
+        IoSliceMut::advance_slices(&mut bufs, b);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "with-loader-impl")]
+impl peridot::LogicalAssetData for SpriteAsset {
+    const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SPRITE;
+}
+#[cfg(feature = "with-loader-impl")]
+impl peridot::FromAssetBlob for SpriteAsset {
+    type Error = std::io::Error;
+
+    #[inline(always)]
+    fn from_asset_blob<'a, Blob: peridot::AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
+        Self::read(&mut peridot::native_io::RandomBlobReadSeekAdapter::new(
+            blob,
+        ))
+    }
+}
+
 #[cfg(feature = "with-loader-impl")]
 impl peridot::LogicalAssetData for SpriteAtlasAsset {
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SPRITE_ATLAS;
@@ -374,6 +511,35 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                     );
                 }
             }
+
+            let sprite_metadata =
+                peridot_asset_processing::load_metadata(path.with_extension("p-meta"));
+            let sprite_assigned_group_id =
+                peridot::AssetID::deserialize_chars(sprite_metadata["id"].chars())
+                    .expect("invalid sprite id");
+            // TODO: local_idどうするか(そもそもいる？)
+            let sprite_asset_id =
+                ctx.register_child_asset(&sprite_assigned_group_id, peridot::ASSET_TYPE_SPRITE, 0);
+            ctx.register_asset_dependency(&sprite_asset_id, &asset_id);
+            SpriteAsset {
+                left: s.left,
+                top: s.top,
+                width: actual_width,
+                height: actual_height,
+                border_left: s.border_left,
+                border_top: s.border_top,
+                border_right: s.border_right,
+                border_bottom: s.border_bottom,
+            }
+            .write(
+                &mut std::fs::File::options()
+                    .create(true)
+                    .truncate(true)
+                    .write(true)
+                    .open(ctx.prepare_runtime_asset_output(&sprite_asset_id))
+                    .expect("Failed to open output"),
+            )
+            .expect("Failed to write sprite asset data");
 
             out_sprites.insert(
                 id,

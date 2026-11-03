@@ -123,6 +123,8 @@ pub const ASSET_TYPE_RAW: AssetType = 0;
 pub const ASSET_TYPE_MESH: AssetType = 1;
 /// 2D画像
 pub const ASSET_TYPE_IMAGE2D: AssetType = 10;
+/// Sprite単体
+pub const ASSET_TYPE_SPRITE: AssetType = 18;
 /// Sprite Atlas
 pub const ASSET_TYPE_SPRITE_ATLAS: AssetType = 19;
 /// サウンド
@@ -370,6 +372,25 @@ impl AssetDatabase {
                 .expect("stmt.bind_blob");
         }
         stmt.bind_int(4, local_id as _).expect("stmt.bind_int");
+        stmt.step().expect("stmt.step");
+    }
+
+    pub fn register_asset_dependency(&mut self, asset_id: &AssetID, required_asset_id: &AssetID) {
+        let mut stmt = self
+            .db
+            .prepare(
+                "Replace into asset_dependency (asset_id, required_asset_id) values (?, ?)",
+                PrepareFlags::empty(),
+            )
+            .expect("prepare");
+        unsafe {
+            stmt.bind_blob(1, asset_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
+        unsafe {
+            stmt.bind_blob(2, required_asset_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
         stmt.step().expect("stmt.step");
     }
 }

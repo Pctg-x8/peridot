@@ -17,6 +17,11 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     };
     camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0), None);
 
+    let sprite = e
+        .load::<peridot_sprite_atlas::SpriteAsset>("images.testpic1")
+        .expect("no sprite");
+    eprintln!("testpic1: {sprite:?}");
+
     let mut sprite_atlas = e
         .load::<peridot_sprite_atlas::SpriteAtlasAsset>("images.testatlas")
         .expect("no sprite atlas");

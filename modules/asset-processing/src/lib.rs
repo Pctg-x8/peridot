@@ -81,6 +81,16 @@ impl<'a> AssetProcessContext<'a> {
             .register_child_asset(group_id, &new_asset_id, asset_type, local_id);
         new_asset_id
     }
+
+    #[inline(always)]
+    pub fn register_asset_dependency(
+        &mut self,
+        asset_id: &peridot::AssetID,
+        required_asset_id: &peridot::AssetID,
+    ) {
+        self.assetdb
+            .register_asset_dependency(asset_id, required_asset_id);
+    }
 }
 
 pub struct ProcessOptions<'a> {
@@ -105,6 +115,8 @@ pub enum ProcessError {
     MultipleAssetProcessor,
     #[error(transparent)]
     ProcessorFailure(Box<dyn std::error::Error>),
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
 }
 
 pub fn loadable_asset_identifier(
@@ -145,6 +157,109 @@ pub fn loadable_asset_identifier(
 
 pub fn is_metadata_file(path: impl AsRef<Path>) -> bool {
     path.as_ref().extension().is_some_and(|e| e == "p-meta")
+}
+
+struct RecursiveFiles {
+    stack: Vec<std::fs::ReadDir>,
+}
+impl RecursiveFiles {
+    #[inline(always)]
+    pub fn new(root_path: impl AsRef<Path>) -> std::io::Result<Self> {
+        Ok(Self {
+            stack: vec![std::fs::read_dir(root_path)?],
+        })
+    }
+}
+impl Iterator for RecursiveFiles {
+    type Item = std::io::Result<std::fs::DirEntry>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(mut active) = self.stack.pop() {
+            let Some(e) = active.next() else {
+                continue;
+            };
+
+            self.stack.push(active);
+            match e {
+                Ok(e) => {
+                    let md = match e.metadata() {
+                        Ok(x) => x,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    if md.is_dir() {
+                        let child_rd = match std::fs::read_dir(e.path()) {
+                            Ok(x) => x,
+                            Err(e) => return Some(Err(e)),
+                        };
+
+                        self.stack.push(child_rd);
+                        continue;
+                    }
+
+                    return Some(Ok(e));
+                }
+                Err(e) => return Some(Err(e)),
+            }
+        }
+
+        None
+    }
+}
+
+#[tracing::instrument(fields(path = ?path.as_ref()))]
+fn try_metadata(path: impl AsRef<Path>) -> Option<std::fs::Metadata> {
+    match path.as_ref().metadata() {
+        Ok(x) => Some(x),
+        Err(e) => {
+            tracing::warn!(reason = %e, "retrieving file metadata failed");
+            None
+        }
+    }
+}
+
+#[tracing::instrument(skip(metadata), fields(path = ?path.as_ref()))]
+fn try_modtime(
+    path: impl AsRef<Path>,
+    metadata: &std::fs::Metadata,
+) -> Option<std::time::SystemTime> {
+    match metadata.modified() {
+        Ok(x) => Some(x),
+        Err(e) => {
+            tracing::warn!(reason = %e, "retrieving file modified time failed");
+            None
+        }
+    }
+}
+
+#[tracing::instrument(fields(path = ?path.as_ref()))]
+pub fn load_metadata(path: impl AsRef<Path>) -> HashMap<metadata::Key, String> {
+    match path.as_ref().try_exists() {
+        Ok(true) => (),
+        Ok(false) => {
+            tracing::trace!("no metadata exists for this asset");
+            return HashMap::new();
+        }
+        Err(e) => {
+            tracing::warn!(reason = ?e,  "querying metadata existential failed");
+            return HashMap::new();
+        }
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::error!(reason = ?e,  "reading metadata content failed");
+            return HashMap::new();
+        }
+    };
+
+    metadata::Parser::new(&content)
+        .filter_map(|x| {
+            x.inspect_err(|e| tracing::error!(reason = ?e, "parsing metadata failed"))
+                .ok()
+        })
+        .map(|(k, v)| (k, v.to_owned()))
+        .collect()
 }
 
 #[tracing::instrument(skip(processors, ctx, base_path, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?ctx.dest_dir), err)]

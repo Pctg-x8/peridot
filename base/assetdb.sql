@@ -16,6 +16,15 @@ Create table asset(
     foreign key (`group_id`) references asset_group(`id`)
 );
 
+-- アセットの依存関係
+Create table asset_dependency(
+    `asset_id` blob(16) not null,
+    `required_asset_id` blob(16) not null,
+    primary key (`asset_id`, `required_asset_id`),
+    foreign key (`asset_id`) references asset(`id`),
+    foreign key (`required_asset_id`) references asset(`id`)
+);
+
 -- ロード可能なアセットの識別子とアセットグループのひも付きを管理する
 -- そのうちUnityのResourcesみたいな制約を加えようと思っていて（そうすると不要なアセットをエンジンの判断のみで自動でstripできる）、スクリプトからロードできるアセット（エンジンの判断でstripできない）をここに登録する
 -- 今のところは全部ロード可能なので全部登録される

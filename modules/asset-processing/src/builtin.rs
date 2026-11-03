@@ -18,6 +18,25 @@ pub enum ImageAssetProcessError {
     NulByteInOutPath(std::ffi::NulError),
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum AssetType {
+    #[default]
+    Texture,
+    Sprite,
+}
+impl AssetType {
+    pub fn from_metadata_value(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("texture") {
+            return Some(Self::Texture);
+        }
+        if value.eq_ignore_ascii_case("sprite") {
+            return Some(Self::Sprite);
+        }
+
+        None
+    }
+}
+
 pub struct ImageAssetProcessor;
 impl crate::AssetProcessor for ImageAssetProcessor {
     fn can_process(&self, source_path: &Path) -> bool {
@@ -26,6 +45,7 @@ impl crate::AssetProcessor for ImageAssetProcessor {
             .is_some_and(|x| x == "png" || x == "jpg" || x == "tiff")
     }
 
+    #[tracing::instrument(skip(self, ctx))]
     fn process(
         &self,
         source_path: &Path,
@@ -33,6 +53,15 @@ impl crate::AssetProcessor for ImageAssetProcessor {
         metadata: &HashMap<crate::metadata::Key, String>,
         ctx: &mut AssetProcessContext,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let r#type = metadata
+            .get("peridot.type")
+            .and_then(|x| AssetType::from_metadata_value(x))
+            .unwrap_or_default();
+        if r#type == AssetType::Sprite {
+            tracing::trace!("skipping `sprite` asset (packed by sprite atlas processor)");
+            return Ok(());
+        }
+
         let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_IMAGE2D, 0);
         let img = image::open(source_path).map_err(ImageAssetProcessError::OpenFailed)?;
 
