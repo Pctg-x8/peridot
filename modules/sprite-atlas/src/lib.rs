@@ -30,7 +30,7 @@ pub struct SpriteAtlasAsset {
 }
 
 impl SpriteAtlasAsset {
-    pub fn write<W: Write>(&self, sink: &mut W) -> std::io::Result<()> {
+    pub fn write<W: Write + Seek>(&self, sink: &mut W) -> std::io::Result<()> {
         sink.write_all(&0x1234u16.to_ne_bytes())?; // endian marker
         sink.write_all(&self.width.to_ne_bytes())?;
         sink.write_all(&self.height.to_ne_bytes())?;
@@ -47,6 +47,10 @@ impl SpriteAtlasAsset {
             sink.write_all(&v.border_bottom.to_ne_bytes())?;
         }
 
+        struct WriteStreamData<'a, W> {
+            ptr: &'a mut W,
+            pos_base: u64,
+        }
         extern "C" fn stream_read(
             _: *mut ktx::ffi::ktxStream,
             _: *mut core::ffi::c_void,
@@ -66,17 +70,32 @@ impl SpriteAtlasAsset {
             size: usize,
             count: usize,
         ) -> ktx::ffi::ktx_error_code_e {
-            let writer = unsafe { &mut *((*this).data.custom_ptr.address as *mut W) };
+            let writer =
+                unsafe { &mut *((*this).data.custom_ptr.address as *mut WriteStreamData<W>) };
             writer
+                .ptr
                 .write_all(unsafe { core::slice::from_raw_parts(src.cast::<u8>(), size * count) })
                 .expect("stream_write");
             0
         }
-        extern "C" fn stream_getpos(
-            _: *mut ktx::ffi::ktxStream,
-            _: *mut i64,
+        extern "C" fn stream_getpos<W: Seek>(
+            this: *mut ktx::ffi::ktxStream,
+            pos: *mut i64,
         ) -> ktx::ffi::ktx_error_code_e {
-            unimplemented!();
+            let writer =
+                unsafe { &mut *((*this).data.custom_ptr.address as *mut WriteStreamData<W>) };
+            unsafe {
+                pos.write(
+                    (writer
+                        .ptr
+                        .stream_position()
+                        .expect("writer.stream_position")
+                        - writer.pos_base)
+                        .try_into()
+                        .expect("invalid pos"),
+                );
+            }
+            0
         }
         extern "C" fn stream_setpos(
             _: *mut ktx::ffi::ktxStream,
@@ -93,18 +112,23 @@ impl SpriteAtlasAsset {
         extern "C" fn stream_destruct(_: *mut ktx::ffi::ktxStream) {
             println!("destruct");
         }
+
+        let mut writer_stream_data = WriteStreamData {
+            pos_base: sink.stream_position().expect("stream_position"),
+            ptr: sink,
+        };
         let mut stream = ktx::ffi::ktxStream {
             read: stream_read,
             skip: stream_skip,
             write: stream_write::<W>,
-            getpos: stream_getpos,
+            getpos: stream_getpos::<W>,
             setpos: stream_setpos,
             getsize: stream_getsize,
             destruct: stream_destruct,
             r#type: ktx::ffi::eStreamTypeCustom,
             data: ktx::ffi::ktxStreamData {
                 custom_ptr: ktx::ffi::ktxStreamDataCustomPtr {
-                    address: sink as *mut _ as _,
+                    address: core::ptr::from_mut(&mut writer_stream_data).cast(),
                     allocatorAddress: core::ptr::null_mut(),
                     size: 0,
                 },
