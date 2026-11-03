@@ -1,18 +1,19 @@
 -- アセットグループ
 Create table asset_group(
     `id` blob(16) not null,
-    `asset_type` int not null,
-    `local_id` int not null,
-    `runtime_asset_id` blob(16) not null unique,
-    `name` text,
-    primary key(`id`, `asset_type`, `local_id`)
-);
-
--- アセットグループの情報
-Create table asset_group_info(
-    `id` blob(16) not null,
     `name` text not null,
     primary key(`id`)
+);
+
+-- アセット
+Create table asset(
+    `id` blob(16) not null primary key,
+    `type` int not null,
+    `name` text,
+    `group_id` blob(16) not null,
+    `local_id` int not null,
+    unique (`group_id`, `local_id`)
+    foreign key (`group_id`) references asset_group(`id`)
 );
 
 -- ロード可能なアセットの識別子とアセットグループのひも付きを管理する
@@ -20,20 +21,19 @@ Create table asset_group_info(
 -- 今のところは全部ロード可能なので全部登録される
 Create table loadable_asset(
     `identifier` text not null,
-    `group_id` blob(16) unique,
+    `group_id` blob(16) not null unique,
     primary key(`identifier`),
     foreign key(`group_id`) references asset_group(`id`)
 );
-
 
 -- ユーザー生成のアセットファイルとアセットグループのひも付きを管理する
 -- last_processedでアセットが最新の状態でビルドされているかを検出する
 -- 開発中のみで使われるテーブルで、リリースビルドするときにはomitする（ユーザーマシン固有の情報が入ってるため）
 Create table dev_user_asset(
     `source_path` text,
-    `group_id` blob(16) unique,
+    `group_id` blob(16) not null unique,
     `last_processed` timestamp not null,
-    `is_new_insertion` boolean not null default true,
+    `is_new_insertion` boolean not null default true, -- upsertで新規にinsertされたときを判定するためのカラム on conflict do updateではfalseをいれるようにする
     primary key(`source_path`),
     foreign key(`group_id`) references asset_group(`id`)
 );

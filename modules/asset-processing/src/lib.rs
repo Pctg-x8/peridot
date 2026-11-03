@@ -78,7 +78,8 @@ impl<'a> AssetProcessContext<'a> {
     ) -> peridot::AssetID {
         let new_asset_id = self.asset_id_generator.generate();
         self.assetdb
-            .register_child_asset(group_id, &new_asset_id, asset_type, local_id)
+            .register_child_asset(group_id, &new_asset_id, asset_type, local_id);
+        new_asset_id
     }
 }
 

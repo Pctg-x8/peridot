@@ -182,7 +182,7 @@ impl AssetDatabase {
         identifier: &str,
         ty: AssetType,
     ) -> Option<AssetID> {
-        const Q: &str = "Select runtime_asset_id from asset_group inner join loadable_asset on group_id = asset_group.id where loadable_asset.identifier = ? and asset_group.asset_type = ? limit 1";
+        const Q: &str = "Select asset.id from asset inner join loadable_asset using(group_id) where loadable_asset.identifier = ? and asset.type = ? limit 1";
 
         // TODO: 本当は使いまわしたい（毎回コンパイルしたくない）がいまいちうまい方法が思いつかない（特にasyncで多重化してるのでスレッドローカルじゃなくて同一スレッドでの多重処理を考慮する必要がある）
         let mut stmt = self.db.prepare(Q, PrepareFlags::empty()).expect("prepare");
@@ -206,7 +206,7 @@ impl AssetDatabase {
         identifier: &str,
         ty: AssetType,
     ) -> Vec<AssetID> {
-        const Q: &str = "Select runtime_asset_id from asset_group inner join loadable_asset on group_id = asset_group.id where loadable_asset.identifier = ? and asset_group.asset_type = ?";
+        const Q: &str = "Select asset.id from asset inner join loadable_asset using(group_id) where loadable_asset.identifier = ? and asset.type = ?";
 
         // TODO: 本当は使いまわしたい（毎回コンパイルしたくない）がいまいちうまい方法が思いつかない（特にasyncで多重化してるのでスレッドローカルじゃなくて同一スレッドでの多重処理を考慮する必要がある）
         let mut stmt = self.db.prepare(Q, PrepareFlags::empty()).expect("prepare");
@@ -228,7 +228,7 @@ impl AssetDatabase {
         let mut stmt = self
             .db
             .prepare(
-                "Replace into asset_group_info (id, name) values (?, ?)",
+                "Replace into asset_group (id, name) values (?, ?)",
                 PrepareFlags::empty(),
             )
             .expect("assetdb op prepare");
@@ -291,6 +291,21 @@ impl AssetDatabase {
         group_id: &AssetID,
         to_be_processed: i64,
     ) -> (i64, bool) {
+        // 先にAsset Groupを作る
+        let asset_group_name = match source_path.file_stem() {
+            None => "",
+            Some(x) => match x.to_str() {
+                Some(x) => x,
+                None => {
+                    tracing::error!(
+                        "cannot determine asset group name(invalid str in source path)"
+                    );
+                    ""
+                }
+            },
+        };
+        self.nonatomic_update_asset_group_info(group_id, asset_group_name);
+
         let mut stmt = self.db.prepare(
             "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning last_processed, is_new_insertion",
             PrepareFlags::empty(),
@@ -309,20 +324,6 @@ impl AssetDatabase {
 
         let inserted_last_processed = unsafe { stmt.column_i64(0) };
         let new_inserted = unsafe { stmt.column_int(1) } != 0;
-
-        let asset_group_name = match source_path.file_stem() {
-            None => "",
-            Some(x) => match x.to_str() {
-                Some(x) => x,
-                None => {
-                    tracing::error!(
-                        "cannot determine asset group name(invalid str in source path)"
-                    );
-                    ""
-                }
-            },
-        };
-        self.nonatomic_update_asset_group_info(group_id, asset_group_name);
 
         (inserted_last_processed, new_inserted)
     }
@@ -351,47 +352,25 @@ impl AssetDatabase {
         new_asset_id: &AssetID,
         asset_type: AssetType,
         local_id: i32,
-    ) -> AssetID {
+    ) {
         let mut stmt = self
             .db
             .prepare(
-                "Insert or ignore into asset_group (id, asset_type, local_id, runtime_asset_id) values (?, ?, ?, ?) returning runtime_asset_id",
-                PrepareFlags::empty()
+                "Replace into asset (id, type, group_id, local_id) values (?, ?, ?, ?)",
+                PrepareFlags::empty(),
             )
             .expect("prepare_cached failed");
         unsafe {
-            stmt.bind_blob(1, group_id.as_bytes())
+            stmt.bind_blob(1, new_asset_id.as_bytes())
                 .expect("stmt.bind_blob");
         }
         stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
-        stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
         unsafe {
-            stmt.bind_blob(4, new_asset_id.as_bytes())
+            stmt.bind_blob(3, group_id.as_bytes())
                 .expect("stmt.bind_blob");
         }
-        let has_insertion = stmt.step().expect("stmt.step");
-        if has_insertion {
-            // runtime asset id in the db returned
-            assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
-            return AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
-        }
-
-        // reuse existing entry
-        let mut stmt = self
-            .db
-            .prepare("Select runtime_asset_id from asset_group where id = ? and asset_type = ? and local_id = ?", PrepareFlags::empty())
-            .expect("assetdb op prepare");
-        unsafe {
-            stmt.bind_blob(1, group_id.as_bytes())
-                .expect("stmt.bind_blob");
-        }
-        stmt.bind_int(2, asset_type as _).expect("stmt.bind_int");
-        stmt.bind_int(3, local_id as _).expect("stmt.bind_int");
-        let has_next = stmt.step().expect("stmt.step");
-        assert!(has_next);
-
-        assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
-        AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() })
+        stmt.bind_int(4, local_id as _).expect("stmt.bind_int");
+        stmt.step().expect("stmt.step");
     }
 }
 
