@@ -1,4 +1,3 @@
-use bedrock as br;
 use peridot_serialization_utils::{PascalStr, PascalString};
 use peridot_types::AssetID;
 use std::{
@@ -422,7 +421,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 glInternalformat: 0,
                 // TODO: いったん空出力の場合はRgba8を想定する そのうちカラーフォーマットは指定できるようにしたいかも
                 vkFormat: match pixel_format.unwrap_or(image::ColorType::Rgba8) {
-                    image::ColorType::Rgba8 => br::vk::VK_FORMAT_R8G8B8A8_UNORM as _,
+                    image::ColorType::Rgba8 => bedrock::vk::VK_FORMAT_R8G8B8A8_UNORM as _,
                     _ => todo!("vkFormat"),
                 },
                 pDfd: core::ptr::null_mut(),
