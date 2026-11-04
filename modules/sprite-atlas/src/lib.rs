@@ -242,21 +242,14 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn process(
         &self,
         source_path: &std::path::Path,
+        data: &peridot_asset_processing::ProcessTargetFileData,
         asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<peridot_asset_processing::AssetProcessResult, Box<dyn std::error::Error>> {
         use ktx::Texture;
 
-        let asset_id =
-            ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SPRITE_ATLAS, 0);
-        // not bound with any asset group(source file)
-        let texture_asset_id = ctx.register_child_asset(
-            &AssetID::GLOBAL_ASSET_GROUP_ID,
-            peridot::ASSET_TYPE_IMAGE2D,
-            0,
-        );
-
+        let mut needs_rebuild = data.is_dirty;
         let source = std::fs::read_to_string(source_path)?;
         let mut config = None;
         let mut sprites = HashMap::new();
@@ -279,6 +272,11 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 Ok(source::Record::Sprite(mut s)) => {
                     match sprites.entry(core::mem::replace(&mut s.id, String::new())) {
                         std::collections::hash_map::Entry::Vacant(x) => {
+                            needs_rebuild = needs_rebuild
+                                || match source_path.parent() {
+                                    None => ctx.file_is_dirty(&s.source_file_path),
+                                    Some(p) => ctx.file_is_dirty(p.join(&s.source_file_path)),
+                                };
                             x.insert(s);
                         }
                         std::collections::hash_map::Entry::Occupied(x) => {
@@ -293,6 +291,19 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         if has_content_error {
             return Err(ProcessError::InvalidContent.into());
         }
+
+        if !needs_rebuild {
+            return Ok(peridot_asset_processing::AssetProcessResult::Skipped);
+        }
+
+        let asset_id =
+            ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SPRITE_ATLAS, 0);
+        // not bound with any asset group(source file)
+        let texture_asset_id = ctx.register_child_asset(
+            &AssetID::GLOBAL_ASSET_GROUP_ID,
+            peridot::ASSET_TYPE_IMAGE2D,
+            0,
+        );
 
         let config = config.unwrap_or_else(|| {
             tracing::warn!("no configuration specified, using default value");
@@ -462,7 +473,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         )
         .inspect_err(|e| tracing::error!(reason = ?e, "Failed to write asset data"))?;
 
-        Ok(())
+        Ok(peridot_asset_processing::AssetProcessResult::Ok)
     }
 }
 

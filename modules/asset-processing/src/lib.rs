@@ -19,16 +19,28 @@ pub trait AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        data: &ProcessTargetFileData,
         asset_group_id: peridot::AssetID,
         metadata: &HashMap<metadata::Key, String>,
         ctx: &mut AssetProcessContext,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    ) -> Result<AssetProcessResult, Box<dyn std::error::Error>>;
+}
+
+pub enum AssetProcessResult {
+    Ok,
+    Skipped,
 }
 
 pub struct AssetProcessContext<'a> {
     pub dest_dir: &'a Path,
     pub assetdb: peridot::AssetDatabase,
     pub asset_id_generator: peridot::AssetIDGenerator,
+    pub dirty_file_set: ProcessedFileSet<'a>,
+}
+
+pub enum ProcessedFileSet<'a> {
+    All,
+    Selected(&'a HashMap<PathBuf, ProcessTargetFileData>),
 }
 impl<'a> AssetProcessContext<'a> {
     pub fn prepare_runtime_asset_output(&self, id: &peridot::AssetID) -> PathBuf {
@@ -42,32 +54,17 @@ impl<'a> AssetProcessContext<'a> {
         path
     }
 
-    fn try_process_new_asset_group(
-        &mut self,
-        source_path: &Path,
-        to_be_processed: i64,
-    ) -> (peridot::AssetID, i64, bool) {
-        let new_group_id = self.asset_id_generator.generate();
-        self.assetdb
-            .try_process_new_asset_group(source_path, &new_group_id, to_be_processed)
-    }
-
-    fn try_process_new_asset_group_with_existing_id(
-        &mut self,
-        source_path: &Path,
-        group_id: &peridot::AssetID,
-        to_be_processed: i64,
-    ) -> (i64, bool) {
-        self.assetdb.try_process_new_asset_group_with_existing_id(
-            source_path,
-            group_id,
-            to_be_processed,
-        )
-    }
-
-    fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &peridot::AssetID) {
-        self.assetdb
-            .register_loadable_asset(load_identifier, group_id)
+    pub fn file_is_dirty(&self, path: impl AsRef<Path>) -> bool {
+        match self.dirty_file_set {
+            ProcessedFileSet::All => true,
+            ProcessedFileSet::Selected(xs) => match path.as_ref().canonicalize() {
+                Ok(x) => xs.get(&x).is_some_and(|x| x.is_dirty),
+                Err(e) => {
+                    tracing::error!(reason = %e, "path canonicalize failed");
+                    false
+                }
+            },
+        }
     }
 
     pub fn register_child_asset(
@@ -206,29 +203,261 @@ impl Iterator for RecursiveFiles {
     }
 }
 
-#[tracing::instrument(fields(path = ?path.as_ref()))]
-fn try_metadata(path: impl AsRef<Path>) -> Option<std::fs::Metadata> {
-    match path.as_ref().metadata() {
-        Ok(x) => Some(x),
-        Err(e) => {
-            tracing::warn!(reason = %e, "retrieving file metadata failed");
-            None
-        }
-    }
+#[derive(Debug)]
+pub struct ProcessTargetFileData {
+    pub modtime: i64,
+    pub is_dirty: bool,
+    pub asset_group_id: peridot::AssetID,
 }
 
-#[tracing::instrument(skip(metadata), fields(path = ?path.as_ref()))]
-fn try_modtime(
-    path: impl AsRef<Path>,
-    metadata: &std::fs::Metadata,
-) -> Option<std::time::SystemTime> {
-    match metadata.modified() {
-        Ok(x) => Some(x),
-        Err(e) => {
-            tracing::warn!(reason = %e, "retrieving file modified time failed");
-            None
+#[tracing::instrument(skip(assetdb, group_id_generator))]
+pub fn collect_target_files(
+    builtin_assets_path: &Path,
+    assets_path: Option<&Path>,
+    assetdb: &mut peridot::AssetDatabase,
+    group_id_generator: &mut peridot::AssetIDGenerator,
+) -> HashMap<PathBuf, ProcessTargetFileData> {
+    let ts = std::time::Instant::now();
+    let modtime_fallback = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .expect("invalid nowtime")
+        .as_millis();
+    let mut batch_process = peridot::AssetDatabaseUserAssetUpdateProcess::begin(assetdb);
+    let mut target_files = HashMap::new();
+    let mut scanned_files = 0usize;
+    for e in RecursiveFiles::new(builtin_assets_path).expect("readdir builtin root") {
+        scanned_files += 1;
+
+        let e = e.expect("readdir entry");
+        let source_path = e.path().canonicalize().expect("path canonicalize");
+        if source_path
+            .file_name()
+            .is_some_and(|x| x.to_str().is_some_and(|x| x.starts_with('.')))
+        {
+            // hidden files
+            continue;
+        }
+        if is_metadata_file(&source_path) {
+            // meta files
+            continue;
+        }
+
+        let metadata_path = source_path.with_extension("p-meta");
+
+        let modtime = source_path
+            .metadata()
+            .inspect_err(|e| tracing::error!(reason = %e, "metadata"))
+            .ok()
+            .and_then(|m| {
+                m.modified()
+                    .inspect_err(|e| tracing::error!(reason = %e, "modtime"))
+                    .ok()
+            })
+            .and_then(|e| {
+                e.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .inspect_err(|e| tracing::error!(reason = %e, "modtime to unix timestamp"))
+                    .ok()
+            })
+            .map(|x| x.as_millis());
+        let meta_modtime = metadata_path
+            .metadata()
+            .inspect_err(|e| tracing::error!(reason = %e, "metadata"))
+            .ok()
+            .and_then(|m| {
+                m.modified()
+                    .inspect_err(|e| tracing::error!(reason = %e, "modtime"))
+                    .ok()
+            })
+            .and_then(|e| {
+                e.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .inspect_err(|e| tracing::error!(reason = %e, "modtime to unix timestamp"))
+                    .ok()
+            })
+            .map(|e| e.as_millis());
+        let modtime = match (modtime, meta_modtime) {
+            (None, None) => None,
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (Some(a), Some(b)) => Some(a.max(b)),
+        };
+        let modtime: i64 = modtime
+            .unwrap_or(modtime_fallback)
+            .try_into()
+            .inspect_err(|e| tracing::warn!(reason = %e, "modtime too large(truncated)"))
+            .unwrap_or(i64::MAX);
+
+        let mut metadata = load_metadata(&metadata_path);
+        let assigned_asset_id =
+            metadata
+                .get("id")
+                .and_then(|x| match peridot::AssetID::deserialize_chars(x.chars()) {
+                    Some(x) => Some(x),
+                    None => {
+                        tracing::warn!("serialized asset id is invalid");
+                        None
+                    }
+                });
+        let (asset_group_id, needs_build) = match assigned_asset_id {
+            Some(existing) => {
+                // use asset group id from metadata
+                let (db_last_processed, new_inserted) = batch_process
+                    .try_process_new_asset_group_with_existing_id(
+                        source_path.as_ref(),
+                        &existing,
+                        modtime,
+                    );
+                let needs_build = new_inserted || db_last_processed < modtime;
+                (existing, needs_build)
+            }
+            None => {
+                // issue new group and write into metadata
+                let new_group_id = group_id_generator.generate();
+                let (asset_group_id, db_last_processed, new_inserted) = batch_process
+                    .try_process_new_asset_group(source_path.as_ref(), &new_group_id, modtime);
+
+                let asset_str = asset_group_id.serialize_chars().collect::<String>();
+                metadata.insert("id".into(), asset_str);
+                writeback_metadata(&metadata_path, &metadata);
+
+                (asset_group_id, true)
+            }
+        };
+
+        if needs_build {
+            let loadable_asset_identifier =
+                loadable_asset_identifier(e.path(), builtin_assets_path)
+                    .map(|x| format!("builtin.{x}"));
+            if let Some(loadable_asset_identifier) = loadable_asset_identifier {
+                batch_process.register_loadable_asset(&loadable_asset_identifier, &asset_group_id);
+            }
+        }
+        target_files.insert(
+            source_path,
+            ProcessTargetFileData {
+                modtime,
+                is_dirty: needs_build,
+                asset_group_id,
+            },
+        );
+    }
+    if let Some(assets_path) = assets_path {
+        for e in RecursiveFiles::new(assets_path).expect("readdir assets root") {
+            scanned_files += 1;
+
+            let e = e.expect("readdir entry");
+            let source_path = e.path().canonicalize().expect("path canonicalize");
+            if source_path
+                .file_name()
+                .is_some_and(|x| x.to_str().is_some_and(|x| x.starts_with('.')))
+            {
+                // hidden files
+                continue;
+            }
+            if is_metadata_file(&source_path) {
+                // meta files
+                continue;
+            }
+
+            let metadata_path = source_path.with_extension("p-meta");
+
+            let modtime = source_path
+                .metadata()
+                .inspect_err(|e| tracing::error!(reason = %e, "metadata"))
+                .ok()
+                .and_then(|m| {
+                    m.modified()
+                        .inspect_err(|e| tracing::error!(reason = %e, "modtime"))
+                        .ok()
+                })
+                .and_then(|e| {
+                    e.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .inspect_err(|e| tracing::error!(reason = %e, "modtime to unix timestamp"))
+                        .ok()
+                })
+                .map(|x| x.as_millis());
+            let meta_modtime = metadata_path
+                .metadata()
+                .inspect_err(|e| tracing::error!(reason = %e, "metadata"))
+                .ok()
+                .and_then(|m| {
+                    m.modified()
+                        .inspect_err(|e| tracing::error!(reason = %e, "modtime"))
+                        .ok()
+                })
+                .and_then(|e| {
+                    e.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .inspect_err(|e| tracing::error!(reason = %e, "modtime to unix timestamp"))
+                        .ok()
+                })
+                .map(|e| e.as_millis());
+            let modtime = match (modtime, meta_modtime) {
+                (None, None) => None,
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                (Some(a), Some(b)) => Some(a.max(b)),
+            };
+            let modtime: i64 = modtime
+                .unwrap_or(modtime_fallback)
+                .try_into()
+                .inspect_err(|e| tracing::warn!(reason = %e, "modtime too large(truncated)"))
+                .unwrap_or(i64::MAX);
+
+            let mut metadata = load_metadata(&metadata_path);
+            let assigned_asset_id = metadata.get("id").and_then(|x| {
+                match peridot::AssetID::deserialize_chars(x.chars()) {
+                    Some(x) => Some(x),
+                    None => {
+                        tracing::warn!("serialized asset id is invalid");
+                        None
+                    }
+                }
+            });
+            let (asset_group_id, needs_build) = match assigned_asset_id {
+                Some(existing) => {
+                    // use asset group id from metadata
+                    let (db_last_processed, new_inserted) = batch_process
+                        .try_process_new_asset_group_with_existing_id(
+                            source_path.as_ref(),
+                            &existing,
+                            modtime,
+                        );
+                    let needs_build = new_inserted || db_last_processed < modtime;
+                    (existing, needs_build)
+                }
+                None => {
+                    // issue new group and write into metadata
+                    let new_group_id = group_id_generator.generate();
+                    let (asset_group_id, db_last_processed, new_inserted) = batch_process
+                        .try_process_new_asset_group(source_path.as_ref(), &new_group_id, modtime);
+
+                    let asset_str = asset_group_id.serialize_chars().collect::<String>();
+                    metadata.insert("id".into(), asset_str);
+                    writeback_metadata(&metadata_path, &metadata);
+
+                    (asset_group_id, true)
+                }
+            };
+
+            if needs_build {
+                let loadable_asset_identifier = loadable_asset_identifier(e.path(), assets_path);
+                if let Some(loadable_asset_identifier) = loadable_asset_identifier {
+                    batch_process
+                        .register_loadable_asset(&loadable_asset_identifier, &asset_group_id);
+                }
+            }
+            target_files.insert(
+                source_path,
+                ProcessTargetFileData {
+                    modtime,
+                    is_dirty: needs_build,
+                    asset_group_id,
+                },
+            );
         }
     }
+    batch_process.commit();
+
+    let elapsed = ts.elapsed();
+    tracing::info!(scanned_files, ?elapsed, "asset files scanned");
+    target_files
 }
 
 #[tracing::instrument(fields(path = ?path.as_ref()))]
@@ -262,10 +491,83 @@ pub fn load_metadata(path: impl AsRef<Path>) -> HashMap<metadata::Key, String> {
         .collect()
 }
 
-#[tracing::instrument(skip(processors, ctx, base_path, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?ctx.dest_dir), err)]
+#[tracing::instrument(skip(metadata), fields(path = ?path.as_ref()))]
+pub fn writeback_metadata(path: impl AsRef<Path>, metadata: &HashMap<metadata::Key, String>) {
+    let mut fp = std::io::BufWriter::new(match std::fs::File::create(path) {
+        Ok(x) => x,
+        Err(e) => {
+            tracing::error!(reason = %e, "Failed to open metadata file for writing");
+            return;
+        }
+    });
+    if let Err(e) =
+        metadata::serialize_metadata(&mut fp, metadata.iter().map(|(k, v)| (k, v.as_str())))
+    {
+        tracing::error!(reason = %e, "Failed to write metadata");
+    }
+}
+
+#[tracing::instrument(skip(processors, ctx ), fields(source_path = ?source_path.as_ref()))]
 pub fn process(
+    source_path: impl AsRef<Path>,
+    data: &ProcessTargetFileData,
     processors: &[Box<dyn AssetProcessor>],
     ctx: &mut AssetProcessContext,
+) -> Result<(), ProcessError> {
+    let source_path = source_path.as_ref();
+    let metadata_path = source_path.with_extension("p-meta");
+
+    let mut matching_processors_iter = processors.iter().filter(|x| x.can_process(source_path));
+    let processor = matching_processors_iter.next();
+    if matching_processors_iter.next().is_some() {
+        return Err(ProcessError::MultipleAssetProcessor);
+    }
+
+    tracing::info!("Processing...");
+    let result = match processor {
+        None => {
+            // Raw Asset Processing
+            tracing::warn!("unknown assets(processed as raw)");
+            if data.is_dirty {
+                let asset_id =
+                    ctx.register_child_asset(&data.asset_group_id, peridot::ASSET_TYPE_RAW, 0);
+
+                let dest_path = ctx.prepare_runtime_asset_output(&asset_id);
+                match std::fs::copy(source_path, dest_path) {
+                    Ok(_) => AssetProcessResult::Ok,
+                    Err(e) => return Err(ProcessError::RawAssetCopyFailed(e)),
+                }
+            } else {
+                AssetProcessResult::Skipped
+            }
+        }
+        Some(p) => p
+            .process(
+                source_path.as_ref(),
+                data,
+                data.asset_group_id.clone(),
+                &load_metadata(&metadata_path),
+                ctx,
+            )
+            .map_err(ProcessError::ProcessorFailure)?,
+    };
+
+    match result {
+        AssetProcessResult::Skipped => {
+            tracing::info!("Process skippped");
+            return Ok(());
+        }
+        AssetProcessResult::Ok => (),
+    }
+
+    Ok(())
+}
+
+/*
+#[tracing::instrument(skip(processors, external_ctx, base_path, options), fields(source_path = ?source_path.as_ref(), dest_dir = ?ctx.dest_dir), err)]
+pub fn process_old(
+    processors: &[Box<dyn AssetProcessor>],
+    external_ctx: &mut AssetProcessExternalContext,
     base_path: impl AsRef<Path>,
     source_path: impl AsRef<Path>,
     options: &ProcessOptions,
@@ -368,7 +670,7 @@ pub fn process(
     let (asset_group_id, needs_build) = match assigned_asset_id {
         Some(existing) => {
             // use asset group id from metadata
-            let (db_last_processed, new_inserted) = ctx
+            let (db_last_processed, new_inserted) = external_ctx
                 .try_process_new_asset_group_with_existing_id(
                     source_path.as_ref(),
                     &existing,
@@ -380,7 +682,7 @@ pub fn process(
         None => {
             // issue new group and write into metadata
             let (asset_group_id, db_last_processed, new_inserted) =
-                ctx.try_process_new_asset_group(source_path.as_ref(), to_be_processed);
+                external_ctx.try_process_new_asset_group(source_path.as_ref(), to_be_processed);
 
             let asset_str = asset_group_id.serialize_chars().collect::<String>();
             metadata.insert("id".into(), asset_str);
@@ -412,7 +714,7 @@ pub fn process(
 
     tracing::info!("Processing...");
     if let Some(load_identifier) = loadable_asset_identifier(source_path, base_path) {
-        ctx.register_loadable_asset(
+        external_ctx.register_loadable_asset(
             &format!("{}{load_identifier}", options.loadable_prefix.unwrap_or("")),
             &asset_group_id,
         );
@@ -421,9 +723,10 @@ pub fn process(
         None => {
             // Raw Asset Processing
             tracing::warn!("unknown assets(processed as raw)");
-            let asset_id = ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_RAW, 0);
+            let asset_id =
+                external_ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_RAW, 0);
 
-            let dest_path = ctx.prepare_runtime_asset_output(&asset_id);
+            let dest_path = external_ctx.prepare_runtime_asset_output(&asset_id);
             std::fs::copy(source_path, dest_path)
                 .map_err(ProcessError::RawAssetCopyFailed)
                 .map(drop)
@@ -432,4 +735,4 @@ pub fn process(
             .process(source_path.as_ref(), asset_group_id, &metadata, ctx)
             .map_err(ProcessError::ProcessorFailure),
     }
-}
+}*/

@@ -328,6 +328,249 @@ impl AssetDatabase {
     }
 }
 
+pub struct AssetDatabaseUserAssetUpdateProcess<'a> {
+    #[allow(dead_code)]
+    db: &'a mut AssetDatabase,
+    committed: bool,
+    stmt: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::Statement>,
+    stmt_overwrite_id: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::Statement>,
+    stmt_asset_group_update: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::Statement>,
+    stmt_upsert_loadable_asset: peridot_tp_sqlite3::Owned<peridot_tp_sqlite3::Statement>,
+}
+impl Drop for AssetDatabaseUserAssetUpdateProcess<'_> {
+    fn drop(&mut self) {
+        if !self.committed {
+            if let Err(e) = self.db.db.exec(c"Rollback transaction").into_result() {
+                tracing::error!(reason = ?e, "Failed to rollback transaction");
+            }
+        }
+    }
+}
+impl<'a> AssetDatabaseUserAssetUpdateProcess<'a> {
+    const Q_UPSERT_USER_ASSET_INFO: &'static str = r#"Insert into dev_user_asset (source_path, group_id, last_processed)
+values (?, ?, ?)
+on conflict do update set
+  last_processed = max(last_processed, excluded.last_processed),
+  is_new_insertion = false
+returning
+  group_id, last_processed, is_new_insertion
+"#;
+    const Q_UPSERT_USER_ASSET_INFO_OVERWRITE_ID: &'static str = r#"Insert into dev_user_asset (source_path, group_id, last_processed)
+values (?, ?, ?)
+on conflict do update set
+  group_id = excluded.group_id,
+  last_processed = max(last_processed, excluded.last_processed),
+  is_new_insertion = false
+returning
+  last_processed, is_new_insertion"#;
+    const Q_REPLACE_ASSET_GROUP: &'static str =
+        r#"Replace into asset_group (id, name) values (?, ?)"#;
+    const Q_UPSERT_LOADABLE_ASSET: &'static str =
+        r#"Replace into loadable_asset (identifier, group_id) values (?, ?)"#;
+
+    pub fn begin(db: &'a mut AssetDatabase) -> Self {
+        let stmt = db
+            .db
+            .prepare(Self::Q_UPSERT_USER_ASSET_INFO, PrepareFlags::empty())
+            .expect("prepare");
+        let stmt_overwrite_id = db
+            .db
+            .prepare(
+                Self::Q_UPSERT_USER_ASSET_INFO_OVERWRITE_ID,
+                PrepareFlags::empty(),
+            )
+            .expect("prepare using existing_id");
+        let stmt_asset_group_update = db
+            .db
+            .prepare(Self::Q_REPLACE_ASSET_GROUP, PrepareFlags::empty())
+            .expect("prepare asset group update");
+        let stmt_upsert_loadable_asset = db
+            .db
+            .prepare(Self::Q_UPSERT_LOADABLE_ASSET, PrepareFlags::empty())
+            .expect("prepare upsert loadable asset");
+
+        db.db
+            .exec(c"Begin exclusive transaction")
+            .into_result()
+            .expect("begin transaction");
+        Self {
+            db,
+            committed: false,
+            stmt,
+            stmt_overwrite_id,
+            stmt_asset_group_update,
+            stmt_upsert_loadable_asset,
+        }
+    }
+
+    pub fn commit(mut self) {
+        self.db
+            .db
+            .exec(c"Commit transaction")
+            .into_result()
+            .expect("commit transaction");
+        self.committed = true;
+        drop(self);
+    }
+
+    fn nonatomic_update_asset_group_info(&mut self, id: &AssetID, name: &str) {
+        unsafe {
+            self.stmt_asset_group_update
+                .bind_blob(1, id.as_bytes())
+                .expect("bind asset id");
+        }
+        unsafe {
+            self.stmt_asset_group_update
+                .bind_text(2, name)
+                .expect("bind name");
+        }
+        self.stmt_asset_group_update.step().expect("step");
+        self.stmt_asset_group_update.reset().expect("reset");
+    }
+
+    pub fn try_process_new_asset_group(
+        &mut self,
+        source_path: &Path,
+        new_group_id: &AssetID,
+        to_be_processed: i64,
+    ) -> (AssetID, i64, bool) {
+        unsafe {
+            self.stmt
+                .bind_text(1, source_path.to_str().expect("invalid str"))
+                .expect("stmt.bind_text");
+        }
+        unsafe {
+            self.stmt
+                .bind_blob(2, new_group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
+        self.stmt
+            .bind_i64(3, to_be_processed)
+            .expect("stmt.bind_int");
+        let has_insertion = self.stmt.step().expect("stmt.step");
+        assert!(has_insertion);
+
+        assert_eq!(unsafe { self.stmt.column_bytes(0) }, 16);
+        let inserted_group_id = AssetID::from_bytes(unsafe { *self.stmt.column_blob(0).cast() });
+        let inserted_last_processed = unsafe { self.stmt.column_i64(1) };
+        let new_inserted = unsafe { self.stmt.column_int(2) } != 0;
+        self.stmt.reset().expect("reset");
+
+        let asset_group_name = match source_path.file_stem() {
+            None => "",
+            Some(x) => match x.to_str() {
+                Some(x) => x,
+                None => {
+                    tracing::error!(
+                        "cannot determine asset group name(invalid str in source path)"
+                    );
+                    ""
+                }
+            },
+        };
+        self.nonatomic_update_asset_group_info(&inserted_group_id, asset_group_name);
+
+        (inserted_group_id, inserted_last_processed, new_inserted)
+    }
+
+    pub fn try_process_new_asset_group_with_existing_id(
+        &mut self,
+        source_path: &Path,
+        group_id: &AssetID,
+        to_be_processed: i64,
+    ) -> (i64, bool) {
+        // 先にAsset Groupを作る
+        let asset_group_name = match source_path.file_stem() {
+            None => "",
+            Some(x) => match x.to_str() {
+                Some(x) => x,
+                None => {
+                    tracing::error!(
+                        "cannot determine asset group name(invalid str in source path)"
+                    );
+                    ""
+                }
+            },
+        };
+        self.nonatomic_update_asset_group_info(group_id, asset_group_name);
+
+        unsafe {
+            self.stmt_overwrite_id
+                .bind_text(1, source_path.to_str().expect("invalid str"))
+                .expect("stmt.bind_text");
+        }
+        unsafe {
+            self.stmt_overwrite_id
+                .bind_blob(2, group_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
+        self.stmt_overwrite_id
+            .bind_i64(3, to_be_processed)
+            .expect("stmt.bind_int");
+        let has_insertion = self.stmt_overwrite_id.step().expect("stmt.step");
+        assert!(has_insertion);
+
+        let inserted_last_processed = unsafe { self.stmt_overwrite_id.column_i64(0) };
+        let new_inserted = unsafe { self.stmt_overwrite_id.column_int(1) } != 0;
+        self.stmt_overwrite_id.reset().expect("reset");
+
+        (inserted_last_processed, new_inserted)
+    }
+
+    pub fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &AssetID) {
+        unsafe {
+            self.stmt_upsert_loadable_asset
+                .bind_text(1, load_identifier)
+                .expect("bind_text");
+        }
+        unsafe {
+            self.stmt_upsert_loadable_asset
+                .bind_blob(2, group_id.as_bytes())
+                .expect("bind_blob");
+        }
+        self.stmt_upsert_loadable_asset.step().expect("step");
+        self.stmt_upsert_loadable_asset.reset().expect("reset");
+    }
+}
+
+pub struct AssetDatabaseUserAssetProcessedTimeChecker<'a> {
+    #[allow(dead_code)]
+    db: &'a mut AssetDatabase,
+    stmt: peridot_tp_sqlite3::Owned<Statement>,
+}
+impl<'a> AssetDatabaseUserAssetProcessedTimeChecker<'a> {
+    pub fn new(db: &'a mut AssetDatabase) -> Self {
+        let stmt = db
+            .db
+            .prepare(
+                "Select last_processed from dev_user_asset where source_path = ?",
+                PrepareFlags::empty(),
+            )
+            .expect("prepare");
+
+        Self { db, stmt }
+    }
+
+    pub fn query(&mut self, source_path: &str) -> Option<u64> {
+        unsafe {
+            self.stmt.bind_text(1, source_path).expect("bind");
+        }
+        let has_result = self.stmt.step().expect("step");
+        let r = if has_result {
+            Some(
+                unsafe { self.stmt.column_i64(0) }
+                    .try_into()
+                    .expect("negative timestamp stored"),
+            )
+        } else {
+            None
+        };
+
+        self.stmt.reset().expect("reset");
+        r
+    }
+}
+
 pub trait InputStream: Read {
     fn skip(&mut self, amount: u64) -> IOResult<u64>;
 }
@@ -401,7 +644,7 @@ pub trait FromAssetBlobAsync: LogicalAssetData {
 
 // Shader Blob //
 use bedrock as br;
-use peridot_tp_sqlite3::PrepareFlags;
+use peridot_tp_sqlite3::{PrepareFlags, Statement};
 use peridot_types::AssetID;
 use rand::{Rng, SeedableRng};
 

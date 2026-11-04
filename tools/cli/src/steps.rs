@@ -186,53 +186,6 @@ pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Optio
 
     std::fs::create_dir_all(&output_path).expect("Failed to create runtime-assets dir");
 
-    fn process_recursive(
-        ctx: &BuildContext,
-        processors: &[Box<dyn peridot_asset_processing::AssetProcessor>],
-        process_ctx: &mut peridot_asset_processing::AssetProcessContext,
-        process_opts: &peridot_asset_processing::ProcessOptions,
-        target_dir: &Path,
-        base_dir: &Path,
-    ) {
-        for e in std::fs::read_dir(target_dir).expect("std::fs::read_dir failed") {
-            let e = e.expect("std::fs::read_dir failed entry");
-            let source_path = e.path();
-            if source_path.is_dir() {
-                process_recursive(
-                    ctx,
-                    processors,
-                    process_ctx,
-                    process_opts,
-                    &source_path,
-                    base_dir,
-                );
-                continue;
-            }
-
-            if source_path
-                .file_stem()
-                .is_none_or(|x| x.to_str().is_some_and(|x| x.starts_with('.')))
-            {
-                // dot-started files: ignore
-                continue;
-            }
-
-            if peridot_asset_processing::is_metadata_file(&source_path) {
-                // metadata file
-                continue;
-            }
-
-            peridot_asset_processing::process(
-                processors,
-                process_ctx,
-                base_dir,
-                source_path,
-                &process_opts,
-            )
-            .expect("Failed to process asset");
-        }
-    }
-
     let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
         Box::new(peridot_rendering_configuration::AssetProcessor),
         Box::new(peridot_asset_processing::builtin::ImageAssetProcessor),
@@ -240,37 +193,24 @@ pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Optio
         Box::new(peridot_sprite_atlas::AssetProcessor),
         Box::new(peridot_asset_processor_model::Processor),
     ];
+    let mut assetdb = peridot::AssetDatabase::open_rw(&output_path).expect("assetdb.open");
+    let mut asset_id_generator = peridot::AssetIDGenerator::new();
+
+    ctx.print_step("Processing assets...");
+    let dirty_files = peridot_asset_processing::collect_target_files(
+        &builtin_assets_path,
+        asset_path,
+        &mut assetdb,
+        &mut asset_id_generator,
+    );
     let mut process_context = peridot_asset_processing::AssetProcessContext {
         dest_dir: &output_path,
-        assetdb: peridot::AssetDatabase::open_rw(&output_path).expect("assetdb.open"),
-        asset_id_generator: peridot::AssetIDGenerator::new(),
+        assetdb,
+        asset_id_generator,
+        dirty_file_set: peridot_asset_processing::ProcessedFileSet::Selected(&dirty_files),
     };
-
-    ctx.print_step("Processing builtin assets...");
-    process_recursive(
-        ctx,
-        &processors,
-        &mut process_context,
-        &peridot_asset_processing::ProcessOptions {
-            force_rebuild: false,
-            loadable_prefix: Some("builtin."),
-        },
-        &builtin_assets_path,
-        &builtin_assets_path,
-    );
-
-    if let Some(asset_path) = asset_path {
-        ctx.print_step("Processing assets...");
-        process_recursive(
-            ctx,
-            &processors,
-            &mut process_context,
-            &peridot_asset_processing::ProcessOptions {
-                force_rebuild: false,
-                loadable_prefix: None,
-            },
-            &asset_path,
-            &asset_path,
-        );
+    for (n, f) in dirty_files.iter() {
+        peridot_asset_processing::process(n, f, &processors, &mut process_context)
+            .expect("Failed to process asset");
     }
 }
