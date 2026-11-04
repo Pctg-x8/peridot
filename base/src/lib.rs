@@ -3,6 +3,7 @@ use futures_util::FutureExt;
 pub use peridot_archive as archive;
 pub use peridot_math as math;
 pub use peridot_native_io as native_io;
+pub use peridot_types::*;
 
 use bedrock::{self as br};
 use parking_lot::RwLock;
@@ -628,6 +629,38 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
             ids,
             _marker: core::marker::PhantomData,
         }
+    }
+
+    #[inline(always)]
+    pub fn resolve_runtime_asset_id<A: LogicalAssetData>(
+        &self,
+        identifier: &str,
+    ) -> Option<AssetID> {
+        self.native_link
+            .asset_loader()
+            .asset_db()
+            .query_first_loadable_asset_id_of_type(identifier, A::ASSET_TYPE)
+    }
+
+    #[inline(always)]
+    pub fn resolve_runtime_asset_ids<A: LogicalAssetData>(&self, identifier: &str) -> Vec<AssetID> {
+        self.native_link
+            .asset_loader()
+            .asset_db()
+            .query_loadable_asset_ids_of_type(identifier, A::ASSET_TYPE)
+    }
+
+    #[inline(always)]
+    pub fn query_required_asset_ids(&self, id: &AssetID) -> Vec<AssetID> {
+        self.native_link
+            .asset_loader()
+            .asset_db()
+            .query_required_asset_ids(id)
+    }
+
+    #[inline(always)]
+    pub fn open_raw_asset_by_id<'a>(&'a self, id: AssetID) -> std::io::Result<impl AssetBlob + 'a> {
+        self.native_link.asset_loader().get(id)
     }
 
     #[inline(always)]

@@ -1,8 +1,7 @@
 use bedrock::{
-    self as br, CommandBufferMut, DescriptorPoolMut, Device, ImageChild, RenderPass, ShaderModule,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, RenderPass, ShaderModule,
     TypedVulkanStructure, VkHandle,
 };
-use ktx::Texture;
 use peridot::math::One;
 use rand::Rng;
 
@@ -17,23 +16,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     };
     camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0), None);
 
-    let mut sprite_atlas = e
-        .load::<peridot_sprite_atlas::SpriteAtlasAsset>("images.testatlas")
-        .expect("no sprite atlas");
-    assert!(sprite_atlas.content.needs_transcoding());
-    sprite_atlas
-        .content
-        .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
-        .expect("transcode_basis");
-    let atlas_width = sprite_atlas.width;
-    let atlas_height = sprite_atlas.height;
-    let offs = sprite_atlas
-        .content
-        .image_offset(0, 0, 0)
-        .expect("image_offset");
-
-    let mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
-
     let shader = e
         .load::<peridot_rendering_configuration::CompiledRenderingConfigurationVk>(
             "shaders.unlit_image_atlas",
@@ -41,6 +23,27 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
         .expect("no shader");
 
     let mut memory_manager = peridot_memory_manager::MemoryManager::new(e.graphics());
+    let mut runtime_asset_manager = peridot_runtime_asset_manager::RuntimeAssetManager::new();
+
+    let mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
+    let sprites = [
+        runtime_asset_manager
+            .load::<peridot_sprite_atlas::SpriteAsset>("images.testpic1", e, &mut memory_manager)
+            .expect("load failed")
+            .expect("no sprite"),
+        runtime_asset_manager
+            .load::<peridot_sprite_atlas::SpriteAsset>("images.testpic2", e, &mut memory_manager)
+            .expect("load failed")
+            .expect("no sprite"),
+        runtime_asset_manager
+            .load::<peridot_sprite_atlas::SpriteAsset>("images.testpic3", e, &mut memory_manager)
+            .expect("load failed")
+            .expect("no sprite"),
+        runtime_asset_manager
+            .load::<peridot_sprite_atlas::SpriteAsset>("images.testpic4", e, &mut memory_manager)
+            .expect("load failed")
+            .expect("no sprite"),
+    ];
 
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
@@ -135,8 +138,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             .expect("dsl_mat new");
             descriptor_sizes = descriptor_set_bindings
                 .iter()
-                .enumerate()
-                .map(|(n, t)| match t {
+                .map(|t| match t {
                     peridot_rendering_configuration::DescriptorTypeVk::CombinedImageSampler => {
                         br::DescriptorType::CombinedImageSampler.make_size(1)
                     }
@@ -276,25 +278,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             br::BufferUsage::TRANSFER_DEST,
         )
         .expect("alloc device buffer(dynamic instances)");
-    let sprite_atlas_image = memory_manager
-        .allocate_device_local_image(
-            e.graphics(),
-            br::ImageCreateInfo::new(
-                br::Extent2D {
-                    width: atlas_width,
-                    height: atlas_height,
-                },
-                br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
-            )
-            .set_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST),
-        )
-        .expect("alloc sprite atlas image");
-    let sprite_atlas_image_view = br::ImageViewBuilder::new(
-        sprite_atlas_image,
-        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-    )
-    .create()
-    .expect("sprite atlas image view create");
 
     pub struct BufferInitContent {
         camera_parameters: peridot_rendering_configuration::UniformCameraParameters,
@@ -319,23 +302,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             };
         })
         .expect("write upload content");
-    let mut image_upload_buffer = memory_manager
-        .allocate_upload_linear_image_buffer(
-            e.graphics(),
-            atlas_width,
-            atlas_height,
-            peridot::PixelFormat::BC7,
-            br::BufferUsage::TRANSFER_SRC,
-        )
-        .expect("image upload buffer alloc");
-    image_upload_buffer
-        .copy_content_from_slice(unsafe {
-            core::slice::from_raw_parts(
-                sprite_atlas.content.data().add(offs),
-                sprite_atlas.content.data_size(),
-            )
-        })
-        .expect("write image upload buffer");
     let (
         mut instance_staging_buffer,
         [
@@ -372,7 +338,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             srcAccessMask: 0,
             dstAccessMask: br::AccessFlags::TRANSFER.write
         }], &[], &[
-            br::ImageMemoryBarrier::new(sprite_atlas_image_view.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0, br::ImageLayout::TransferDestOpt.from_undefined())
         ])
         .copy_buffer(&upload_buffer, &fixed_device_buffer, &[
             br::BufferCopy(br::vk::VkBufferCopy {
@@ -384,16 +349,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 (mesh_vertices_size + core::mem::offset_of!(BufferInitContent, camera_parameters)) as _,
                 camera_parameters_offset
             ),
-        ])
-        .copy_buffer_to_image(&image_upload_buffer.inner, sprite_atlas_image_view.image(), br::ImageLayout::TransferDestOpt, &[
-            br::vk::VkBufferImageCopy {
-                bufferOffset: 0,
-                bufferRowLength: image_upload_buffer.row_texels,
-                bufferImageHeight: atlas_height,
-                imageOffset: br::Offset3D { x: 0, y: 0, z: 0 },
-                imageExtent: br::Extent3D { width: atlas_width, height: atlas_height, depth: 1 },
-                imageSubresource: br::ImageSubresourceLayers::new(br::AspectMask::COLOR, 0, 0..1).0
-            }
         ])
         .copy_buffer(&instance_staging_buffer, &instance_buffer, &[
             br::BufferCopy(br::vk::VkBufferCopy {
@@ -417,8 +372,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                     srcAccessMask: br::AccessFlags::TRANSFER.write,
                     dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ | br::AccessFlags::UNIFORM_READ | br::AccessFlags::SHADER.read
                 }
-            ], &[], &[
-                br::ImageMemoryBarrier::new(sprite_atlas_image_view.image(), br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1).0, br::ImageLayout::TransferDestOpt.to(br::ImageLayout::ShaderReadOnlyOpt))]
+            ], &[], &[]
         )
     }).expect("setup command error");
 
@@ -519,7 +473,15 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                 .binding_at(0)
                 .write(br::DescriptorContents::CombinedImageSampler(vec![
                     br::DescriptorImageInfo::new(
-                        &sprite_atlas_image_view,
+                        &runtime_asset_manager
+                            .get_typed(
+                                &runtime_asset_manager
+                                    .get_typed(&sprites[0])
+                                    .expect("invalid ref")
+                                    .dep_atlas,
+                            )
+                            .expect("invalid dep")
+                            .gfx_resource,
                         br::ImageLayout::ShaderReadOnlyOpt,
                     )
                     .with_sampler(&smp),
@@ -537,7 +499,6 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     );
 
     const OBJECTS: usize = 100;
-    let sprite_atlas_ids = sprite_atlas.sprites.keys().collect::<Vec<_>>();
 
     let mut update_cb =
         peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Graphics, 1)
@@ -641,13 +602,13 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
     struct PlaneState {
         r: f32,
         p: peridot::math::Vector3F32,
-        sprite_atlas_id: String,
+        sprite_index: usize,
     }
     let mut plane_states = [const {
         PlaneState {
             r: 0.0,
             p: peridot::math::Vector3(0.0, 5.0, 0.0),
-            sprite_atlas_id: String::new(),
+            sprite_index: 0,
         }
     }; OBJECTS];
     let mut rng = rand::rng();
@@ -658,7 +619,7 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             rng.random_range(-10.0..=10.0),
             rng.random_range(-10.0..=10.0),
         );
-        p.sprite_atlas_id = sprite_atlas_ids[rng.random_range(0..sprite_atlas_ids.len())].clone();
+        p.sprite_index = rng.random_range(0..sprites.len());
     }
     instance_staging_buffer
         .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
@@ -668,11 +629,19 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
             );
 
             for (n, p) in plane_states.iter_mut().enumerate() {
-                material_props[n] = sprite_atlas.sprites[&p.sprite_atlas_id].uvst.clone();
+                let sprite = runtime_asset_manager
+                    .get_typed(&sprites[p.sprite_index])
+                    .expect("invalid ref");
+                material_props[n] = sprite.uvst(
+                    runtime_asset_manager
+                        .get_typed(&sprite.dep_atlas)
+                        .expect("invalid dep"),
+                );
             }
         })
         .expect("update instance staging buffer");
 
+    e.start_frame_drain();
     loop {
         match e.next_event().await {
             peridot::Event::Shutdown => break,
@@ -694,8 +663,9 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                             p.p.1 -= 1.0 * fd.delta_time.as_secs_f32();
                             if p.p.1 < -10.0 {
                                 p.p = peridot::math::Vector3(rng.random_range(-10.0..=10.0), p.p.1 + 20.0, rng.random_range(-10.0..=10.0));
-                                p.sprite_atlas_id = sprite_atlas_ids[rng.random_range(0..sprite_atlas_ids.len())].clone();
-                                material_props[n] = sprite_atlas.sprites[&p.sprite_atlas_id].uvst.clone();
+                                p.sprite_index = rng.random_range(0..sprites.len());
+                                let sprite = runtime_asset_manager.get_typed(&sprites[p.sprite_index]).expect("invalid ref");
+                                material_props[n] = sprite .uvst(runtime_asset_manager.get_typed(&sprite.dep_atlas).expect("invalid dep"));
                             }
 
                             object_parameters[n].transform_matrix = peridot::math::Matrix4::trs(p.p.clone(), peridot::math::Quaternion::new(p.r.to_radians(), peridot::math::Vector3::up()), peridot::math::Vector3::ONE);

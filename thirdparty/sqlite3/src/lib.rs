@@ -463,6 +463,16 @@ impl Statement {
     pub unsafe fn column_blob(&mut self, index: i32) -> *const core::ffi::c_void {
         unsafe { raw::sqlite3_column_blob(self.0.get_mut(), index) }
     }
+
+    #[inline(always)]
+    pub fn reset(&mut self) -> Result<(), Error> {
+        let r = unsafe { raw::sqlite3_reset(self.0.get_mut()) };
+        if r == raw::SQLITE_OK {
+            Ok(())
+        } else {
+            Err(Error(r))
+        }
+    }
 }
 
 #[inline(always)]

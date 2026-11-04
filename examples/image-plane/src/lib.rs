@@ -1,24 +1,22 @@
 use bedrock::{
     self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, ShaderModule, VkHandle,
 };
-use br::resources::Image;
 use br::Device;
-use ktx::Texture;
-use log::*;
 use parking_lot::RwLock;
 use peridot::audio::PreloadedPlayableWav;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
 use peridot::{CBSubmissionType, CommandBundle, SubpassDependencyTemplates};
+use peridot_image::StdTexture2DAsset;
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_rendering_configuration as prc;
+use peridot_runtime_asset_manager::RuntimeAssetManager;
 use std::ffi::CString;
 use std::sync::Arc;
 
 use peridot_command_object::{
-    BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
-    ColorAttachmentBlending, CopyBufferToImage, DescriptorSets, EndRenderPass, GraphicsCommand,
-    GraphicsCommandCombiner, ImageResourceRange, PipelineBarrier, RangedBuffer, RangedImage,
+    BeginRenderPass, BindGraphicsPipeline, BufferUsage, ColorAttachmentBlending, DescriptorSets,
+    EndRenderPass, GraphicsCommand, GraphicsCommandCombiner, PipelineBarrier, RangedBuffer,
     StandardMesh,
 };
 
@@ -49,57 +47,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let screen_size = e.back_buffer_size();
     let screen_aspect = screen_size.0 as f32 / screen_size.1 as f32;
 
-    // #[cfg(not(target_os = "android"))]
-    // #[cfg(not(target_os = "macos"))]
-    // let mut resource_container = peridot_archive::ArchiveAsync::new(
-    //     peridot::native_io::PlatformNativeFileReaderAsync::open(
-    //         "../../examples/image-plane/assets/resources.par",
-    //     )
-    //     .expect("open resources.par"),
-    //     true,
-    // )
-    // .await
-    // .expect("load resources.par");
-    // #[cfg(not(target_os = "android"))]
-    // #[cfg(target_os = "macos")]
-    // let mut resource_container = peridot_archive::ArchiveAsync::new(
-    //     peridot::native_io::PlatformNativeFileReaderAsync::open(
-    //         std::env::current_exe()
-    //             .expect("current_exe")
-    //             .parent()
-    //             .expect("no parent")
-    //             .join("../Resources/assets.par"),
-    //     )
-    //     .expect("open resources.par"),
-    //     true,
-    // )
-    // .await
-    // .expect("load resources.par");
-
-    let (mut image_data, bgm): (peridot_image::StdTexture2DAsset, PreloadedPlayableWav) =
-        futures_util::try_join!(e.load_async("images.example"), e.load_async("bgm"))
-            .expect("asset loading");
-
-    if image_data.0.needs_transcoding() {
-        // TODO: Transcode先フォーマットはあとでPhysicalDeviceのクエリからみて決める必要がある(PCではASTCサポートが基本ない)
-        image_data
-            .0
-            .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
-            .expect("failed to transcode to bc7");
-        // image_data
-        //     .0
-        //     .transcode_basis(ktx::ffi::KTX_TTF_ETC2_RGBA, ktx::TranscodeFlags::empty())
-        //     .expect("failed to transcode");
-    }
-    let image_width = image_data.0.base_width();
-    let image_height = image_data.0.base_height();
-    let offs = image_data
-        .0
-        .image_offset(0, 0, 0)
-        .expect("image_offset failed");
-    debug!("image: {image_width}x{image_height}");
-    debug!("image data size: {} offs {offs}", image_data.0.data_size());
-    // debug!("ImageFormat: {:?}", image_data.0.vk_format());
+    let (bgm,): (PreloadedPlayableWav,) =
+        futures_util::try_join!(e.load_async("bgm")).expect("asset loading");
 
     // TODO: streamingなassetが複数ある時に相性が悪い どうしたものか
     let bgm = Arc::new(RwLock::new(bgm));
@@ -107,6 +56,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     e.audio_mixer().write().set_master_volume(0.5);
 
     let mut memory_manager = MemoryManager::new(e.graphics());
+    let mut runtime_asset_manager = RuntimeAssetManager::new();
+
+    let image = runtime_asset_manager
+        .load::<StdTexture2DAsset>("images.example", e, &mut memory_manager)
+        .expect("asset loading")
+        .expect("missing image asset");
 
     let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
     let mut cam = Camera {
@@ -194,50 +149,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         })
         .expect("Failed to set initial data of object uniform buffer");
 
-    let image = memory_manager
-        .allocate_device_local_image(
-            e.graphics(),
-            br::ImageCreateInfo::new(
-                br::Extent2D {
-                    width: image_width,
-                    height: image_height,
-                },
-                br::vk::VK_FORMAT_BC7_UNORM_BLOCK,
-                // br::vk::VK_FORMAT_ETC2_R8G8B8A8_UNORM_BLOCK,
-            )
-            .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
-            .init_layout(br::ImageLayout::Preinitialized),
-        )
-        .expect("Failed to allocate main image");
-    let mut image_data_stg_buffer = memory_manager
-        .allocate_upload_linear_image_buffer(
-            e.graphics(),
-            image_width,
-            image_height,
-            peridot::PixelFormat::BC7,
-            // peridot::PixelFormat::ETC2_RGBA32,
-            br::BufferUsage::TRANSFER_SRC,
-        )
-        .expect("Failed to allocate linear image buffer");
-    image_data_stg_buffer
-        .copy_content_from_slice(unsafe {
-            core::slice::from_raw_parts(image_data.0.data().add(offs), image_data.0.data_size())
-        })
-        .expect("Failed to set image data");
-
     let pre_configure_awaiter = e
         .submit_commands_async(|r| {
-            let texture = RangedImage::single_color_plane(&image);
-            let image_data_stg_buffer_ranged = RangedBuffer::from(&image_data_stg_buffer.inner);
-
             let [mut_uniform_in_barrier, mut_uniform_out_barrier] = obj_uniform_mut_buffer
                 .make_ref()
                 .usage_barrier3_switching(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC);
-            let [tex_init_barrier, tex_ready_barrier] = texture.barrier3(
-                br::ImageLayout::Preinitialized,
-                br::ImageLayout::TransferDestOpt,
-                br::ImageLayout::ShaderReadOnlyOpt,
-            );
 
             let in_barriers = PipelineBarrier::new()
                 .with_barriers([
@@ -254,10 +170,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     vertex_buffer
                         .make_ref()
                         .usage_barrier(BufferUsage::UNUSED, BufferUsage::TRANSFER_DST),
-                    image_data_stg_buffer_ranged
-                        .usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
                 ])
-                .with_barrier(tex_init_barrier)
                 .by_region();
             let out_barriers = PipelineBarrier::new()
                 .with_barriers([
@@ -272,18 +185,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         .make_ref()
                         .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_UNIFORM),
                 ])
-                .with_barrier(tex_ready_barrier)
                 .by_region();
             let init_vertex = vertex_buffer.byref_mirror_from(&vertex_buffer_stg);
             let init_cam_uniform = cam_uniform_buffer.byref_mirror_from(&cam_uniform_buffer_stg);
             let init_obj_uniform = obj_uniform_buffer.byref_mirror_from(&obj_uniform_mut_buffer);
-            let init_tex = CopyBufferToImage::new(&image_data_stg_buffer.inner, &image).with_range(
-                BufferImageDataDesc::new(0, image_data_stg_buffer.row_texels),
-                ImageResourceRange::for_single_color_from_rect2d(
-                    image.size().wh().into_rect(br::vk::VkOffset2D::ZERO),
-                ),
-            );
-            let copies = (init_vertex, init_cam_uniform, init_obj_uniform, init_tex);
+            let copies = (init_vertex, init_cam_uniform, init_obj_uniform);
 
             copies.between(in_barriers, out_barriers).execute(r)
         })
@@ -577,12 +483,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .await
         .expect("Failed to pre-configure resources");
 
-    let image_view = br::ImageViewBuilder::new(
-        image,
-        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
-    )
-    .create()
-    .expect("Failed to create main image view");
     let [descriptor_cam, descriptor_obj, descriptor_mat] = descriptor_pool
         .alloc_array(&[
             dsl_ub1.as_transparent_ref(),
@@ -605,7 +505,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         // TODO: Material Parameter
         descriptor_writes.extend(descriptor_mat.binding_at(0).write_continuous_bindings([
             br::DescriptorContents::CombinedImageSampler(vec![br::DescriptorImageInfo::new(
-                &image_view,
+                &runtime_asset_manager.get_typed(&image).expect("invalid ref").gfx_resource,
                 br::ImageLayout::ShaderReadOnlyOpt,
             )]),
         ]));

@@ -1,11 +1,13 @@
 use core::pin::Pin;
 use image::codecs::hdr::{HdrDecoder, HdrMetadata};
 use image::{ImageDecoder, ImageError, ImageResult};
+use ktx::Texture;
 use peridot::{
     AssetBlob, DecodedPixelData, FromAssetBlob, FromAssetBlobAsync, LDRImageAsset,
     LogicalAssetData, PixelFormat,
 };
-use std::io::BufReader;
+use std::convert::TryInto;
+use std::io::{BufReader, Seek, Write};
 
 fn load_image<D>(decoder: D) -> ImageResult<DecodedPixelData>
 where
@@ -165,6 +167,108 @@ impl LDRImageAsset for TIFF {
 impl LDRImageAsset for WebP {
     fn into_pixel_data_info(self) -> DecodedPixelData {
         self.0
+    }
+}
+
+pub struct StdTexture2DAssetGenerated<'a>(pub ktx::Owned<ktx::Texture2>, pub &'a [u8]);
+impl<'a> StdTexture2DAssetGenerated<'a> {
+    pub fn write<W: Write + Seek>(&self, w: &mut W) -> std::io::Result<()> {
+        struct WriteStreamData<'a, W> {
+            ptr: &'a mut W,
+            pos_base: u64,
+        }
+        extern "C" fn stream_read(
+            _: *mut ktx::ffi::ktxStream,
+            _: *mut core::ffi::c_void,
+            _: usize,
+        ) -> ktx::ffi::ktx_error_code_e {
+            unimplemented!();
+        }
+        extern "C" fn stream_skip(
+            _: *mut ktx::ffi::ktxStream,
+            _: usize,
+        ) -> ktx::ffi::ktx_error_code_e {
+            unimplemented!();
+        }
+        extern "C" fn stream_write<W: Write>(
+            this: *mut ktx::ffi::ktxStream,
+            src: *const core::ffi::c_void,
+            size: usize,
+            count: usize,
+        ) -> ktx::ffi::ktx_error_code_e {
+            let writer =
+                unsafe { &mut *((*this).data.custom_ptr.address as *mut WriteStreamData<W>) };
+            writer
+                .ptr
+                .write_all(unsafe { core::slice::from_raw_parts(src.cast::<u8>(), size * count) })
+                .expect("stream_write");
+            0
+        }
+        extern "C" fn stream_getpos<W: Seek>(
+            this: *mut ktx::ffi::ktxStream,
+            pos: *mut i64,
+        ) -> ktx::ffi::ktx_error_code_e {
+            let writer =
+                unsafe { &mut *((*this).data.custom_ptr.address as *mut WriteStreamData<W>) };
+            unsafe {
+                pos.write(
+                    (writer
+                        .ptr
+                        .stream_position()
+                        .expect("writer.stream_position")
+                        - writer.pos_base)
+                        .try_into()
+                        .expect("invalid pos"),
+                );
+            }
+            0
+        }
+        extern "C" fn stream_setpos(
+            _: *mut ktx::ffi::ktxStream,
+            _: i64,
+        ) -> ktx::ffi::ktx_error_code_e {
+            unimplemented!();
+        }
+        extern "C" fn stream_getsize(
+            _: *mut ktx::ffi::ktxStream,
+            _: *mut usize,
+        ) -> ktx::ffi::ktx_error_code_e {
+            unimplemented!();
+        }
+        extern "C" fn stream_destruct(_: *mut ktx::ffi::ktxStream) {
+            println!("destruct");
+        }
+
+        let mut writer_stream_data = WriteStreamData {
+            pos_base: w.stream_position().expect("stream_position"),
+            ptr: w,
+        };
+        let mut stream = ktx::ffi::ktxStream {
+            read: stream_read,
+            skip: stream_skip,
+            write: stream_write::<W>,
+            getpos: stream_getpos::<W>,
+            setpos: stream_setpos,
+            getsize: stream_getsize,
+            destruct: stream_destruct,
+            r#type: ktx::ffi::eStreamTypeCustom,
+            data: ktx::ffi::ktxStreamData {
+                custom_ptr: ktx::ffi::ktxStreamDataCustomPtr {
+                    address: core::ptr::from_mut(&mut writer_stream_data).cast(),
+                    allocatorAddress: core::ptr::null_mut(),
+                    size: 0,
+                },
+            },
+            readpos: 0,
+            closeOnDestruct: false,
+        };
+        unsafe {
+            self.0
+                .write_to_stream_raw(&mut stream)
+                .expect("content.write_to_stream_raw");
+        }
+
+        Ok(())
     }
 }
 

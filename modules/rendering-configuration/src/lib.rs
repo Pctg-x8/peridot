@@ -68,10 +68,15 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn process(
         &self,
         source_path: &Path,
+        data: &peridot_asset_processing::ProcessTargetFileData,
         asset_group_id: peridot::AssetID,
         _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<peridot_asset_processing::AssetProcessResult, Box<dyn std::error::Error>> {
+        if !data.is_dirty {
+            return Ok(peridot_asset_processing::AssetProcessResult::Skipped);
+        }
+
         let content =
             std::fs::read_to_string(source_path).map_err(AssetProcessError::ReadingFailed)?;
         let asset =
@@ -92,7 +97,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         )
         .map_err(AssetProcessError::WritingAssetFailure)?;
 
-        Ok(())
+        Ok(peridot_asset_processing::AssetProcessResult::Ok)
     }
 }
 
