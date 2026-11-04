@@ -299,19 +299,18 @@ pub fn collect_target_files(
         let (asset_group_id, needs_build) = match assigned_asset_id {
             Some(existing) => {
                 // use asset group id from metadata
-                let (db_last_processed, new_inserted) = batch_process
+                let (new_inserted, last_processed_renewed) = batch_process
                     .try_process_new_asset_group_with_existing_id(
                         source_path.as_ref(),
                         &existing,
                         modtime,
                     );
-                let needs_build = new_inserted || db_last_processed < modtime;
-                (existing, needs_build)
+                (existing, new_inserted || last_processed_renewed)
             }
             None => {
                 // issue new group and write into metadata
                 let new_group_id = group_id_generator.generate();
-                let (asset_group_id, db_last_processed, new_inserted) = batch_process
+                let (asset_group_id, new_inserted, last_processed_renewed) = batch_process
                     .try_process_new_asset_group(source_path.as_ref(), &new_group_id, modtime);
 
                 let asset_str = asset_group_id.serialize_chars().collect::<String>();
@@ -413,19 +412,19 @@ pub fn collect_target_files(
             let (asset_group_id, needs_build) = match assigned_asset_id {
                 Some(existing) => {
                     // use asset group id from metadata
-                    let (db_last_processed, new_inserted) = batch_process
+                    let (new_inserted, last_processed_renewed) = batch_process
                         .try_process_new_asset_group_with_existing_id(
                             source_path.as_ref(),
                             &existing,
                             modtime,
                         );
-                    let needs_build = new_inserted || db_last_processed < modtime;
+                    let needs_build = new_inserted || last_processed_renewed;
                     (existing, needs_build)
                 }
                 None => {
                     // issue new group and write into metadata
                     let new_group_id = group_id_generator.generate();
-                    let (asset_group_id, db_last_processed, new_inserted) = batch_process
+                    let (asset_group_id, new_inserted, last_processed_renewed) = batch_process
                         .try_process_new_asset_group(source_path.as_ref(), &new_group_id, modtime);
 
                     let asset_str = asset_group_id.serialize_chars().collect::<String>();

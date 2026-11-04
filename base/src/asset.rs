@@ -159,110 +159,6 @@ impl AssetDatabase {
         results
     }
 
-    fn nonatomic_update_asset_group_info(&mut self, id: &AssetID, name: &str) {
-        let mut stmt = self
-            .db
-            .prepare(
-                "Replace into asset_group (id, name) values (?, ?)",
-                PrepareFlags::empty(),
-            )
-            .expect("assetdb op prepare");
-        unsafe {
-            stmt.bind_blob(1, id.as_bytes()).expect("stmt.bind_blob");
-        }
-        unsafe {
-            stmt.bind_text(2, name).expect("stmt.bind_text");
-        }
-        stmt.step().expect("stmt.step");
-    }
-
-    pub fn try_process_new_asset_group(
-        &mut self,
-        source_path: &Path,
-        new_group_id: &AssetID,
-        to_be_processed: i64,
-    ) -> (AssetID, i64, bool) {
-        let mut stmt = self.db.prepare(
-            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning group_id, last_processed, is_new_insertion",
-            PrepareFlags::empty(),
-        ).expect("assetdb op prepare");
-        unsafe {
-            stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-                .expect("stmt.bind_text");
-        }
-        unsafe {
-            stmt.bind_blob(2, new_group_id.as_bytes())
-                .expect("stmt.bind_blob");
-        }
-        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
-        let has_insertion = stmt.step().expect("stmt.step");
-        assert!(has_insertion);
-
-        assert_eq!(unsafe { stmt.column_bytes(0) }, 16);
-        let inserted_group_id = AssetID::from_bytes(unsafe { *stmt.column_blob(0).cast() });
-        let inserted_last_processed = unsafe { stmt.column_i64(1) };
-        let new_inserted = unsafe { stmt.column_int(2) } != 0;
-
-        let asset_group_name = match source_path.file_stem() {
-            None => "",
-            Some(x) => match x.to_str() {
-                Some(x) => x,
-                None => {
-                    tracing::error!(
-                        "cannot determine asset group name(invalid str in source path)"
-                    );
-                    ""
-                }
-            },
-        };
-        self.nonatomic_update_asset_group_info(&inserted_group_id, asset_group_name);
-
-        (inserted_group_id, inserted_last_processed, new_inserted)
-    }
-
-    pub fn try_process_new_asset_group_with_existing_id(
-        &mut self,
-        source_path: &Path,
-        group_id: &AssetID,
-        to_be_processed: i64,
-    ) -> (i64, bool) {
-        // 先にAsset Groupを作る
-        let asset_group_name = match source_path.file_stem() {
-            None => "",
-            Some(x) => match x.to_str() {
-                Some(x) => x,
-                None => {
-                    tracing::error!(
-                        "cannot determine asset group name(invalid str in source path)"
-                    );
-                    ""
-                }
-            },
-        };
-        self.nonatomic_update_asset_group_info(group_id, asset_group_name);
-
-        let mut stmt = self.db.prepare(
-            "Insert into dev_user_asset (source_path, group_id, last_processed) values (?, ?, ?) on conflict do update set group_id = excluded.group_id, last_processed = max(last_processed, excluded.last_processed), is_new_insertion = false returning last_processed, is_new_insertion",
-            PrepareFlags::empty(),
-        ).expect("assetdb op prepare");
-        unsafe {
-            stmt.bind_text(1, source_path.to_str().expect("invalid str"))
-                .expect("stmt.bind_text");
-        }
-        unsafe {
-            stmt.bind_blob(2, group_id.as_bytes())
-                .expect("stmt.bind_blob");
-        }
-        stmt.bind_i64(3, to_be_processed).expect("stmt.bind_int");
-        let has_insertion = stmt.step().expect("stmt.step");
-        assert!(has_insertion);
-
-        let inserted_last_processed = unsafe { stmt.column_i64(0) };
-        let new_inserted = unsafe { stmt.column_int(1) } != 0;
-
-        (inserted_last_processed, new_inserted)
-    }
-
     pub fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &AssetID) {
         let mut stmt = self
             .db
@@ -351,18 +247,20 @@ impl<'a> AssetDatabaseUserAssetUpdateProcess<'a> {
 values (?, ?, ?)
 on conflict do update set
   last_processed = max(last_processed, excluded.last_processed),
-  is_new_insertion = false
+  is_new_insertion = false,
+  is_last_processed_renewed = last_processed < excluded.last_processed
 returning
-  group_id, last_processed, is_new_insertion
+  group_id, is_new_insertion, is_last_processed_renewed
 "#;
     const Q_UPSERT_USER_ASSET_INFO_OVERWRITE_ID: &'static str = r#"Insert into dev_user_asset (source_path, group_id, last_processed)
 values (?, ?, ?)
 on conflict do update set
   group_id = excluded.group_id,
   last_processed = max(last_processed, excluded.last_processed),
-  is_new_insertion = false
+  is_new_insertion = false,
+  is_last_processed_renewed = last_processed < excluded.last_processed
 returning
-  last_processed, is_new_insertion"#;
+  is_new_insertion, is_last_processed_renewed"#;
     const Q_REPLACE_ASSET_GROUP: &'static str =
         r#"Replace into asset_group (id, name) values (?, ?)"#;
     const Q_UPSERT_LOADABLE_ASSET: &'static str =
@@ -433,7 +331,7 @@ returning
         source_path: &Path,
         new_group_id: &AssetID,
         to_be_processed: i64,
-    ) -> (AssetID, i64, bool) {
+    ) -> (AssetID, bool, bool) {
         unsafe {
             self.stmt
                 .bind_text(1, source_path.to_str().expect("invalid str"))
@@ -452,8 +350,8 @@ returning
 
         assert_eq!(unsafe { self.stmt.column_bytes(0) }, 16);
         let inserted_group_id = AssetID::from_bytes(unsafe { *self.stmt.column_blob(0).cast() });
-        let inserted_last_processed = unsafe { self.stmt.column_i64(1) };
-        let new_inserted = unsafe { self.stmt.column_int(2) } != 0;
+        let new_inserted = unsafe { self.stmt.column_int(1) } != 0;
+        let last_processed_renewed = unsafe { self.stmt.column_int(2) } != 0;
         self.stmt.reset().expect("reset");
 
         let asset_group_name = match source_path.file_stem() {
@@ -470,7 +368,7 @@ returning
         };
         self.nonatomic_update_asset_group_info(&inserted_group_id, asset_group_name);
 
-        (inserted_group_id, inserted_last_processed, new_inserted)
+        (inserted_group_id, new_inserted, last_processed_renewed)
     }
 
     pub fn try_process_new_asset_group_with_existing_id(
@@ -478,7 +376,7 @@ returning
         source_path: &Path,
         group_id: &AssetID,
         to_be_processed: i64,
-    ) -> (i64, bool) {
+    ) -> (bool, bool) {
         // 先にAsset Groupを作る
         let asset_group_name = match source_path.file_stem() {
             None => "",
@@ -510,11 +408,11 @@ returning
         let has_insertion = self.stmt_overwrite_id.step().expect("stmt.step");
         assert!(has_insertion);
 
-        let inserted_last_processed = unsafe { self.stmt_overwrite_id.column_i64(0) };
-        let new_inserted = unsafe { self.stmt_overwrite_id.column_int(1) } != 0;
+        let new_inserted = unsafe { self.stmt_overwrite_id.column_int(0) } != 0;
+        let last_processed_renewed = unsafe { self.stmt_overwrite_id.column_int(1) } != 0;
         self.stmt_overwrite_id.reset().expect("reset");
 
-        (inserted_last_processed, new_inserted)
+        (new_inserted, last_processed_renewed)
     }
 
     pub fn register_loadable_asset(&mut self, load_identifier: &str, group_id: &AssetID) {

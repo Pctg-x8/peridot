@@ -43,6 +43,7 @@ Create table dev_user_asset(
     `group_id` blob(16) not null unique,
     `last_processed` timestamp not null,
     `is_new_insertion` boolean not null default true, -- upsertで新規にinsertされたときを判定するためのカラム on conflict do updateではfalseをいれるようにする
+    `is_last_processed_renewed` boolean not null default false, -- upsert時のlast_processedの更新を記録するカラム ここに条件式を書いてreturningで返す
     primary key(`source_path`),
     foreign key(`group_id`) references asset_group(`id`)
 );
