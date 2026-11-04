@@ -8,6 +8,7 @@ peridot = { path = "../../base" }
 peridot-memory-manager = { path = "../memory-manager" }
 peridot-sprite-atlas = { path = "../sprite-atlas", features = ["with-loader-impl"] }
 peridot-math = { path = "../math" }
+peridot-image = { path = "../image" }
 ktx = { path = "../../thirdparty/ktx" }
 bedrock.workspace = true
 tracing.workspace = true

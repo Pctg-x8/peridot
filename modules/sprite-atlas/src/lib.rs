@@ -1,5 +1,4 @@
 use bedrock as br;
-use ktx::Texture;
 use peridot_serialization_utils::{PascalStr, PascalString};
 use peridot_types::AssetID;
 use std::{
@@ -10,136 +9,19 @@ use vectored_io_helper::{read_vectored_all, write_vectored_all};
 
 pub mod source;
 
-pub struct Sprite {
-    pub left: u32,
-    pub top: u32,
-    pub width: u32,
-    pub height: u32,
-    pub uvst: peridot_math::Vector4F32,
-    pub border_left: u32,
-    pub border_top: u32,
-    pub border_right: u32,
-    pub border_bottom: u32,
-}
-
 pub struct SpriteAtlasAsset {
-    pub width: u32,
-    pub height: u32,
-    pub sprites: HashMap<String, Sprite>,
-    pub content: ktx::Owned<ktx::Texture2>,
+    pub texture_asset_id: AssetID,
+    pub sprite_ids: HashMap<String, AssetID>,
 }
 
 impl SpriteAtlasAsset {
-    pub fn write<W: Write + Seek>(&self, sink: &mut W) -> std::io::Result<()> {
+    pub fn write(&self, sink: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         sink.write_all(&0x1234u16.to_ne_bytes())?; // endian marker
-        sink.write_all(&self.width.to_ne_bytes())?;
-        sink.write_all(&self.height.to_ne_bytes())?;
-        sink.write_all(&(self.sprites.len() as u64).to_ne_bytes())?;
-        for (id, v) in self.sprites.iter() {
-            PascalStr(id).write(sink)?;
-            sink.write_all(&v.left.to_ne_bytes())?;
-            sink.write_all(&v.top.to_ne_bytes())?;
-            sink.write_all(&v.width.to_ne_bytes())?;
-            sink.write_all(&v.height.to_ne_bytes())?;
-            sink.write_all(&v.border_left.to_ne_bytes())?;
-            sink.write_all(&v.border_top.to_ne_bytes())?;
-            sink.write_all(&v.border_right.to_ne_bytes())?;
-            sink.write_all(&v.border_bottom.to_ne_bytes())?;
-        }
-
-        struct WriteStreamData<'a, W> {
-            ptr: &'a mut W,
-            pos_base: u64,
-        }
-        extern "C" fn stream_read(
-            _: *mut ktx::ffi::ktxStream,
-            _: *mut core::ffi::c_void,
-            _: usize,
-        ) -> ktx::ffi::ktx_error_code_e {
-            unimplemented!();
-        }
-        extern "C" fn stream_skip(
-            _: *mut ktx::ffi::ktxStream,
-            _: usize,
-        ) -> ktx::ffi::ktx_error_code_e {
-            unimplemented!();
-        }
-        extern "C" fn stream_write<W: Write>(
-            this: *mut ktx::ffi::ktxStream,
-            src: *const core::ffi::c_void,
-            size: usize,
-            count: usize,
-        ) -> ktx::ffi::ktx_error_code_e {
-            let writer =
-                unsafe { &mut *((*this).data.custom_ptr.address as *mut WriteStreamData<W>) };
-            writer
-                .ptr
-                .write_all(unsafe { core::slice::from_raw_parts(src.cast::<u8>(), size * count) })
-                .expect("stream_write");
-            0
-        }
-        extern "C" fn stream_getpos<W: Seek>(
-            this: *mut ktx::ffi::ktxStream,
-            pos: *mut i64,
-        ) -> ktx::ffi::ktx_error_code_e {
-            let writer =
-                unsafe { &mut *((*this).data.custom_ptr.address as *mut WriteStreamData<W>) };
-            unsafe {
-                pos.write(
-                    (writer
-                        .ptr
-                        .stream_position()
-                        .expect("writer.stream_position")
-                        - writer.pos_base)
-                        .try_into()
-                        .expect("invalid pos"),
-                );
-            }
-            0
-        }
-        extern "C" fn stream_setpos(
-            _: *mut ktx::ffi::ktxStream,
-            _: i64,
-        ) -> ktx::ffi::ktx_error_code_e {
-            unimplemented!();
-        }
-        extern "C" fn stream_getsize(
-            _: *mut ktx::ffi::ktxStream,
-            _: *mut usize,
-        ) -> ktx::ffi::ktx_error_code_e {
-            unimplemented!();
-        }
-        extern "C" fn stream_destruct(_: *mut ktx::ffi::ktxStream) {
-            println!("destruct");
-        }
-
-        let mut writer_stream_data = WriteStreamData {
-            pos_base: sink.stream_position().expect("stream_position"),
-            ptr: sink,
-        };
-        let mut stream = ktx::ffi::ktxStream {
-            read: stream_read,
-            skip: stream_skip,
-            write: stream_write::<W>,
-            getpos: stream_getpos::<W>,
-            setpos: stream_setpos,
-            getsize: stream_getsize,
-            destruct: stream_destruct,
-            r#type: ktx::ffi::eStreamTypeCustom,
-            data: ktx::ffi::ktxStreamData {
-                custom_ptr: ktx::ffi::ktxStreamDataCustomPtr {
-                    address: core::ptr::from_mut(&mut writer_stream_data).cast(),
-                    allocatorAddress: core::ptr::null_mut(),
-                    size: 0,
-                },
-            },
-            readpos: 0,
-            closeOnDestruct: false,
-        };
-        unsafe {
-            self.content
-                .write_to_stream_raw(&mut stream)
-                .expect("content.write_to_stream_raw");
+        sink.write_all(self.texture_asset_id.as_bytes())?;
+        sink.write_all(&(self.sprite_ids.len() as u64).to_ne_bytes())?;
+        for (name, id) in self.sprite_ids.iter() {
+            PascalStr(name).write(sink)?;
+            sink.write_all(id.as_bytes())?;
         }
 
         Ok(())
@@ -147,99 +29,55 @@ impl SpriteAtlasAsset {
 
     pub fn read<R: BufRead + Seek>(source: &mut R) -> std::io::Result<Self> {
         let mut endian_marker = 0u16;
-        source
-            .read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 2]>(&mut endian_marker) })?;
-        let mut width_native = 0u32;
-        source.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut width_native) })?;
-        let mut height_native = 0u32;
-        source
-            .read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut height_native) })?;
-        let mut sprites_native = 0u64;
-        source
-            .read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 8]>(&mut sprites_native) })?;
-
-        let (width, height, sprites_count);
-        if endian_marker == 0x1234 {
-            // generated on same endian machine
-            width = width_native;
-            height = height_native;
-            sprites_count = sprites_native;
+        source.read_exact(unsafe {
+            core::mem::transmute::<&mut _, &mut [u8; 2]>(&mut endian_marker)
+        })?;
+        let is_native_endian = if endian_marker == 0x1234 {
+            true
         } else if endian_marker.swap_bytes() == 0x1234 {
-            // generated on different endian machine
-            width = width_native.swap_bytes();
-            height = height_native.swap_bytes();
-            sprites_count = sprites_native.swap_bytes();
+            false
         } else {
             panic!("endian_marker mismatch: 0x{endian_marker:04x}")
-        }
+        };
 
-        let atlas_width = width;
-        let atlas_height = height;
-        let mut sprites = HashMap::with_capacity(sprites_count as _);
+        let mut texture_asset_id = core::mem::MaybeUninit::<AssetID>::uninit();
+        let mut sprites_native = 0u64;
+        read_vectored_all(
+            source,
+            &mut [
+                IoSliceMut::new(unsafe { &mut *texture_asset_id.as_mut_ptr() }.as_bytes_mut()),
+                IoSliceMut::new(unsafe {
+                    core::mem::transmute::<&mut _, &mut [_; 8]>(&mut sprites_native)
+                }),
+            ],
+        )?;
+        let texture_asset_id = unsafe { texture_asset_id.assume_init() };
+
+        let sprites_count = if is_native_endian {
+            sprites_native
+        } else {
+            sprites_native.swap_bytes()
+        };
+
+        let mut sprite_ids = HashMap::with_capacity(sprites_count as _);
         for _ in 0..sprites_count {
-            let id = PascalString::read(source)?;
-            let mut left = 0u32;
-            source.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut left) })?;
-            let mut top = 0u32;
-            source.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut top) })?;
-            let mut width = 0u32;
-            source.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut width) })?;
-            let mut height = 0u32;
-            source.read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut height) })?;
-            let mut border_left = 0u32;
-            source
-                .read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut border_left) })?;
-            let mut border_top = 0u32;
-            source
-                .read_exact(unsafe { core::mem::transmute::<_, &mut [u8; 4]>(&mut border_top) })?;
-            let mut border_right = 0u32;
-            source.read_exact(unsafe {
-                core::mem::transmute::<_, &mut [u8; 4]>(&mut border_right)
-            })?;
-            let mut border_bottom = 0u32;
-            source.read_exact(unsafe {
-                core::mem::transmute::<_, &mut [u8; 4]>(&mut border_bottom)
-            })?;
+            let name = PascalString::read(source)?;
+            let mut id = core::mem::MaybeUninit::<AssetID>::uninit();
+            source.read_exact(unsafe { &mut *id.as_mut_ptr() }.as_bytes_mut())?;
 
-            sprites.insert(
-                id.0,
-                Sprite {
-                    left,
-                    top,
-                    width,
-                    height,
-                    uvst: peridot_math::Vector4(
-                        width as f32 / atlas_width as f32,
-                        height as f32 / atlas_height as f32,
-                        left as f32 / atlas_width as f32,
-                        top as f32 / atlas_height as f32,
-                    ),
-                    border_left,
-                    border_top,
-                    border_right,
-                    border_bottom,
-                },
-            );
+            sprite_ids.insert(name.0, unsafe { id.assume_init() });
         }
-
-        let mut content_bytes = Vec::new();
-        source.read_to_end(&mut content_bytes)?;
-        let content =
-            ktx::Texture2::from_memory(&content_bytes, ktx::TextureCreateFlags::LOAD_IMAGE_DATA)
-                .expect("content.from_stream_raw");
 
         Ok(Self {
-            width,
-            height,
-            sprites,
-            content,
+            texture_asset_id,
+            sprite_ids,
         })
     }
 }
 
 #[derive(Debug)]
 pub struct SpriteAsset {
-    pub atlas_id: AssetID,
+    pub atlas_texture_id: AssetID,
     pub left: u32,
     pub top: u32,
     pub width: u32,
@@ -262,7 +100,7 @@ impl SpriteAsset {
             sink,
             &mut [
                 ios(&0x1234u16),
-                IoSlice::new(self.atlas_id.as_bytes()),
+                IoSlice::new(self.atlas_texture_id.as_bytes()),
                 ios(&self.left),
                 ios(&self.top),
                 ios(&self.width),
@@ -303,7 +141,7 @@ impl SpriteAsset {
                     unsafe {
                         &mut *this
                             .as_mut_ptr()
-                            .byte_add(core::mem::offset_of!(Self, atlas_id))
+                            .byte_add(core::mem::offset_of!(Self, atlas_texture_id))
                             .cast::<AssetID>()
                     }
                     .as_bytes_mut(),
@@ -326,7 +164,7 @@ impl SpriteAsset {
             Ok(this)
         } else {
             Ok(Self {
-                atlas_id: this.atlas_id,
+                atlas_texture_id: this.atlas_texture_id,
                 left: this.left.swap_bytes(),
                 top: this.top.swap_bytes(),
                 width: this.width.swap_bytes(),
@@ -412,6 +250,12 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
 
         let asset_id =
             ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SPRITE_ATLAS, 0);
+        // not bound with any asset group(source file)
+        let texture_asset_id = ctx.register_child_asset(
+            &AssetID::GLOBAL_ASSET_GROUP_ID,
+            peridot::ASSET_TYPE_IMAGE2D,
+            0,
+        );
 
         let source = std::fs::read_to_string(source_path)?;
         let mut config = None;
@@ -538,9 +382,8 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             // TODO: local_idどうするか(そもそもいる？)
             let sprite_asset_id =
                 ctx.register_child_asset(&sprite_assigned_group_id, peridot::ASSET_TYPE_SPRITE, 0);
-            ctx.register_asset_dependency(&sprite_asset_id, &asset_id);
             SpriteAsset {
-                atlas_id: asset_id.clone(),
+                atlas_texture_id: texture_asset_id.clone(),
                 left: s.left,
                 top: s.top,
                 width: actual_width,
@@ -560,25 +403,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             )
             .expect("Failed to write sprite asset data");
 
-            out_sprites.insert(
-                id,
-                Sprite {
-                    left: s.left,
-                    top: s.top,
-                    width: actual_width,
-                    height: actual_height,
-                    uvst: peridot_math::Vector4(
-                        actual_width as f32 / config.width as f32,
-                        actual_height as f32 / config.height as f32,
-                        s.left as f32 / config.width as f32,
-                        s.top as f32 / config.height as f32,
-                    ),
-                    border_left: s.border_left,
-                    border_top: s.border_top,
-                    border_right: s.border_right,
-                    border_bottom: s.border_bottom,
-                },
-            );
+            out_sprites.insert(id, sprite_asset_id);
         }
 
         let mut ktx = ktx::Texture2::new(
@@ -610,12 +435,22 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             .inspect_err(|e| tracing::error!(reason = ?e, "Failed to compress ktx2 texture"))?;
         ktx.deflate_zstd(11)
             .inspect_err(|e| tracing::error!(reason = ?e, "Failed to deflate ktx2 texture"))?;
+        peridot_image::StdTexture2DAssetGenerated(ktx, &pixels)
+            .write(
+                &mut std::fs::File::options()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(ctx.prepare_runtime_asset_output(&texture_asset_id))
+                    .inspect_err(
+                        |e| tracing::error!(reason = %e, "Failed to open texture output"),
+                    )?,
+            )
+            .inspect_err(|e| tracing::error!(reason = ?e, "Failed to write texture asset data"))?;
 
         SpriteAtlasAsset {
-            width: config.width,
-            height: config.height,
-            sprites: out_sprites,
-            content: ktx,
+            texture_asset_id,
+            sprite_ids: out_sprites,
         }
         .write(
             &mut std::fs::File::options()

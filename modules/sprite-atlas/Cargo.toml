@@ -17,6 +17,7 @@ bedrock.workspace = true
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot = { path = "../../base", optional = true }
 peridot-math = { path = "../../modules/math" }
+peridot-image = { path = "../image" }
 vectored-io-helper.path = "../../base-lib/vectored-io-helper"
 peridot-types.path = "../../base-types"
 

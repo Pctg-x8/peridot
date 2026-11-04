@@ -25,6 +25,8 @@ impl core::fmt::Debug for AssetID {
     }
 }
 impl AssetID {
+    pub const GLOBAL_ASSET_GROUP_ID: Self = Self([0; _]);
+
     pub const fn from_bytes(b: [u8; 16]) -> Self {
         Self(b)
     }

@@ -114,6 +114,7 @@ impl<T: RuntimeResource> TypedAssetResourceHandle<T> {
 pub enum AssetResource {
     Texture2D(RuntimeTexture2D),
     Sprite(RuntimeSprite),
+    SpriteAtlas(RuntimeSpriteAtlas),
 }
 
 pub trait RuntimeResource {
@@ -137,6 +138,20 @@ impl RuntimeSprite {
     #[inline(always)]
     pub fn uvst(&self, atlas: &RuntimeTexture2D) -> peridot_math::Vector4F32 {
         self.data.uvst(atlas.width, atlas.height)
+    }
+}
+
+pub struct RuntimeSpriteAtlas {
+    pub texture: TypedAssetResourceHandle<RuntimeTexture2D>,
+    pub sprites: HashMap<String, TypedAssetResourceHandle<RuntimeSprite>>,
+}
+impl RuntimeResource for RuntimeSpriteAtlas {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::SpriteAtlas(x) => Some(x),
+            _ => None,
+        }
     }
 }
 
@@ -165,31 +180,7 @@ pub trait AssetResourceType: peridot::FromAssetBlob {
         mm: &mut peridot_memory_manager::MemoryManager,
     ) -> Result<AssetResource, Self::Error>;
 }
-impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
-    type RuntimeResourceType = RuntimeSprite;
-
-    fn load_core(
-        id: &peridot::AssetID,
-        dep_loader: &mut RuntimeAssetManager,
-        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
-        mm: &mut peridot_memory_manager::MemoryManager,
-    ) -> Result<AssetResource, Self::Error> {
-        let content = <Self as peridot::FromAssetBlob>::from_asset_blob(
-            engine.open_raw_asset_by_id(id.clone())?,
-        )?;
-
-        let dep_atlas = dep_loader
-            .load_by_id::<peridot_sprite_atlas::SpriteAtlasAsset>(&content.atlas_id, engine, mm)
-            .expect("failed to load dependency")
-            .expect("no dep");
-
-        Ok(AssetResource::Sprite(RuntimeSprite {
-            data: content,
-            dep_atlas,
-        }))
-    }
-}
-impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
+impl AssetResourceType for peridot_image::StdTexture2DAsset {
     type RuntimeResourceType = RuntimeTexture2D;
 
     fn load_core(
@@ -201,25 +192,23 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
         let mut content = <Self as peridot::FromAssetBlob>::from_asset_blob(
             engine.open_raw_asset_by_id(id.clone())?,
         )?;
+
         // TODO: proper handle transcoding
-        assert!(content.content.needs_transcoding());
+        assert!(content.0.needs_transcoding());
         content
-            .content
+            .0
             .transcode_basis(ktx::ffi::KTX_TTF_BC7_RGBA, ktx::TranscodeFlags::empty())
             .expect("transcode_basis");
-        let atlas_width = content.width;
-        let atlas_height = content.height;
-        let offs = content.content.image_offset(0, 0, 0).expect("image_offset");
+        let width = content.0.base_width();
+        let height = content.0.base_height();
+        let offs = content.0.image_offset(0, 0, 0).expect("image_offset");
 
         // TODO: batch gfx resource allocation and uploading
         let gfx_resource = mm
             .allocate_device_local_image(
                 engine.graphics(),
                 br::ImageCreateInfo::new(
-                    br::Extent2D {
-                        width: atlas_width,
-                        height: atlas_height,
-                    },
+                    br::Extent2D { width, height },
                     br::vk::VK_FORMAT_BC7_SRGB_BLOCK,
                 )
                 .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST),
@@ -234,18 +223,15 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
         let mut staging_resource = mm
             .allocate_upload_linear_image_buffer(
                 engine.graphics(),
-                atlas_width,
-                atlas_height,
+                width,
+                height,
                 peridot::PixelFormat::BC7_SRGB,
                 br::BufferUsage::TRANSFER_SRC,
             )
             .expect("staging_resource.allocate");
         staging_resource
             .copy_content_from_slice(unsafe {
-                core::slice::from_raw_parts(
-                    content.content.data().add(offs),
-                    content.content.data_size(),
-                )
+                core::slice::from_raw_parts(content.0.data().add(offs), content.0.data_size())
             })
             .expect("write image upload buffer");
 
@@ -270,7 +256,7 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
                     &[br::vk::VkBufferImageCopy {
                         bufferOffset: 0,
                         bufferRowLength: staging_resource.row_texels,
-                        bufferImageHeight: atlas_height,
+                        bufferImageHeight: height,
                         imageSubresource: br::ImageSubresourceLayers::new(
                             br::AspectMask::COLOR,
                             0,
@@ -279,8 +265,8 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
                         .0,
                         imageOffset: br::Offset3D { x: 0, y: 0, z: 0 },
                         imageExtent: br::Extent3D {
-                            width: atlas_width,
-                            height: atlas_height,
+                            width,
+                            height,
                             depth: 1,
                         },
                     }],
@@ -303,8 +289,69 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
 
         Ok(AssetResource::Texture2D(RuntimeTexture2D {
             gfx_resource,
-            width: content.width,
-            height: content.height,
+            width,
+            height,
+        }))
+    }
+}
+impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
+    type RuntimeResourceType = RuntimeSprite;
+
+    fn load_core(
+        id: &peridot::AssetID,
+        dep_loader: &mut RuntimeAssetManager,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<AssetResource, Self::Error> {
+        let content = <Self as peridot::FromAssetBlob>::from_asset_blob(
+            engine.open_raw_asset_by_id(id.clone())?,
+        )?;
+
+        let dep_atlas = dep_loader
+            .load_by_id::<peridot_image::StdTexture2DAsset>(&content.atlas_texture_id, engine, mm)
+            .expect("failed to load dependency")
+            .expect("no dep");
+
+        Ok(AssetResource::Sprite(RuntimeSprite {
+            data: content,
+            dep_atlas,
+        }))
+    }
+}
+impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
+    type RuntimeResourceType = RuntimeSpriteAtlas;
+
+    fn load_core(
+        id: &peridot::AssetID,
+        dep_loader: &mut RuntimeAssetManager,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<AssetResource, Self::Error> {
+        let content = <Self as peridot::FromAssetBlob>::from_asset_blob(
+            engine.open_raw_asset_by_id(id.clone())?,
+        )?;
+
+        let texture = dep_loader
+            .load_by_id::<peridot_image::StdTexture2DAsset>(&content.texture_asset_id, engine, mm)
+            .expect("Failed to load dependency")
+            .expect("no dependent asset?");
+        let sprites = content
+            .sprite_ids
+            .into_iter()
+            .map(|(name, id)| {
+                (
+                    name,
+                    dep_loader
+                        .load_by_id::<peridot_sprite_atlas::SpriteAsset>(&id, engine, mm)
+                        .expect("Failed to load dependency")
+                        .expect("no dependent asset?"),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        Ok(AssetResource::SpriteAtlas(RuntimeSpriteAtlas {
+            texture,
+            sprites,
         }))
     }
 }
