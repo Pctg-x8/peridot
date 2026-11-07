@@ -498,7 +498,7 @@ impl Attribute {
 }
 
 /// 頂点アトリビュートの付随データ
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AttributeData {
     /// バッファストリーム内の1要素あたりでのオフセット
     pub offset: u16,

@@ -9,5 +9,6 @@ peridot-mesh = { path = "../../modules/mesh", features = ["with-rendering-config
 peridot-memory-manager = { path = "../../modules/memory-manager" }
 peridot-rendering-configuration = { path = "../../modules/rendering-configuration", features = ["with-loader-impl"] }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", features = ["Implements", "Presentation"] }
+peridot-runtime-asset-manager = { path = "../../modules/runtime-asset-manager" }
 tracing = "0.1"
 futures-util = "0.3"

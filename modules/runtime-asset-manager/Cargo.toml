@@ -10,6 +10,7 @@ peridot-sprite-atlas = { path = "../sprite-atlas", features = ["with-loader-impl
 peridot-math = { path = "../math" }
 peridot-image = { path = "../image" }
 ktx = { path = "../../thirdparty/ktx" }
+peridot-mesh = { path = "../mesh", features = ["with-loader-impl"] }
 bedrock.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
