@@ -1,6 +1,6 @@
 use std::{collections::HashMap, num::NonZeroUsize};
 
-use bedrock::{self as br, ImageChild};
+use bedrock::{self as br, ImageChild, TypedVulkanStructure};
 use ktx::Texture;
 
 pub struct RuntimeAssetManager {
@@ -15,7 +15,7 @@ impl RuntimeAssetManager {
         }
     }
 
-    pub fn load<T: AssetResourceType>(
+    pub fn load<T: AssetResourceType + peridot::LogicalAssetData>(
         &mut self,
         identifier: &str,
         engine: &mut peridot::Engine<impl peridot::NativeLinker>,
@@ -113,6 +113,7 @@ impl<T: RuntimeResource> TypedAssetResourceHandle<T> {
 
 pub enum AssetResource {
     Texture2D(RuntimeTexture2D),
+    Mesh(RuntimeMesh),
     Sprite(RuntimeSprite),
     SpriteAtlas(RuntimeSpriteAtlas),
 }
@@ -170,7 +171,8 @@ impl RuntimeResource for RuntimeTexture2D {
     }
 }
 
-pub trait AssetResourceType: peridot::FromAssetBlob {
+pub trait AssetResourceType {
+    type Error;
     type RuntimeResourceType: RuntimeResource;
 
     fn load_core(
@@ -181,6 +183,7 @@ pub trait AssetResourceType: peridot::FromAssetBlob {
     ) -> Result<AssetResource, Self::Error>;
 }
 impl AssetResourceType for peridot_image::StdTexture2DAsset {
+    type Error = <Self as peridot::FromAssetBlob>::Error;
     type RuntimeResourceType = RuntimeTexture2D;
 
     fn load_core(
@@ -295,6 +298,7 @@ impl AssetResourceType for peridot_image::StdTexture2DAsset {
     }
 }
 impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
+    type Error = <Self as peridot::FromAssetBlob>::Error;
     type RuntimeResourceType = RuntimeSprite;
 
     fn load_core(
@@ -319,6 +323,7 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAsset {
     }
 }
 impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
+    type Error = <Self as peridot::FromAssetBlob>::Error;
     type RuntimeResourceType = RuntimeSpriteAtlas;
 
     fn load_core(
@@ -353,5 +358,175 @@ impl AssetResourceType for peridot_sprite_atlas::SpriteAtlasAsset {
             texture,
             sprites,
         }))
+    }
+}
+
+pub struct RuntimeMeshVertexStream {
+    pub buffer_offset: u64,
+    pub buffer_stride: u32,
+    pub attributes: Vec<(peridot_mesh::Attribute, peridot_mesh::AttributeData)>,
+}
+pub struct RuntimeMeshIndexStream {
+    pub buffer_offset: u64,
+    pub r#type: peridot_mesh::IndexType,
+    pub count: u32,
+}
+pub struct RuntimeMesh {
+    pub gfx_resource: peridot_memory_manager::Buffer,
+    pub topology: peridot_mesh::PrimitiveTopology,
+    pub vertex_count: u32,
+    pub vertex_streams: Vec<RuntimeMeshVertexStream>,
+    pub index: Option<RuntimeMeshIndexStream>,
+}
+impl RuntimeResource for RuntimeMesh {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::Mesh(x) => Some(x),
+            _ => None,
+        }
+    }
+}
+
+impl AssetResourceType for peridot_mesh::AssetCore {
+    type Error = std::io::Error;
+    type RuntimeResourceType = RuntimeMesh;
+
+    fn load_core(
+        id: &peridot::AssetID,
+        _dep_loader: &mut RuntimeAssetManager,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<AssetResource, Self::Error> {
+        let content = peridot_mesh::Asset::open(engine.open_raw_asset_by_id(id.clone())?)?;
+
+        let mut buffer_top = 0u64;
+        let mut vk_buffer_usage = br::BufferUsage::TRANSFER_DEST;
+        let mut vertex_streams = Vec::with_capacity(content.vertex_streams.len());
+        let mut vertex_byte_length_per_stream = Vec::with_capacity(content.vertex_streams.len());
+        for (stream, attrs) in content.vertex_streams.iter() {
+            let buffer_offset = peridot_math::round_up_pow2n_u64(
+                buffer_top,
+                stream.buffer.device_alignment_requirement as _,
+            );
+            let mut buffer_stride = 0;
+            for (_a, ad) in attrs.iter() {
+                buffer_stride = buffer_stride.max(ad.offset as u32 + ad.element_type.size() as u32);
+            }
+
+            vertex_streams.push(RuntimeMeshVertexStream {
+                buffer_offset,
+                buffer_stride,
+                attributes: attrs.clone(),
+            });
+            vertex_byte_length_per_stream.push(stream.buffer.byte_length);
+
+            buffer_top = buffer_offset + stream.buffer.byte_length as u64;
+            vk_buffer_usage |= br::BufferUsage::VERTEX_BUFFER;
+        }
+        let (index_offset_in_buffer, index_byte_length);
+        let index_stream = match content.index_stream {
+            peridot_mesh::IndexStream::None => {
+                index_offset_in_buffer = 0;
+                index_byte_length = 0;
+                None
+            }
+            peridot_mesh::IndexStream::Stream {
+                index_type,
+                ref buffer,
+            } => {
+                let buffer_offset = peridot_math::round_up_pow2n_u64(
+                    buffer_top,
+                    buffer.device_alignment_requirement as _,
+                );
+
+                buffer_top = buffer_offset + buffer.byte_length as u64;
+                vk_buffer_usage |= br::BufferUsage::INDEX_BUFFER;
+
+                index_offset_in_buffer = buffer_offset;
+                index_byte_length = buffer.byte_length;
+                Some(RuntimeMeshIndexStream {
+                    buffer_offset,
+                    r#type: index_type,
+                    count: content.index_count(),
+                })
+            }
+        };
+
+        // TODO: batch resource creation/uploading
+        let buffer = mm
+            .allocate_device_local_buffer(
+                engine.graphics(),
+                br::BufferCreateInfo::new(buffer_top, vk_buffer_usage),
+            )
+            .expect("buffer.create");
+        let mut upload_buffer = mm
+            .allocate_upload_buffer(
+                engine.graphics(),
+                br::BufferCreateInfo::new(buffer_top, br::BufferUsage::TRANSFER_SRC),
+            )
+            .expect("upload_buffer.create");
+        upload_buffer
+            .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| {
+                for (n, v) in vertex_streams.iter().enumerate() {
+                    content
+                        .read_vertex_buffer_into(n, unsafe {
+                            core::slice::from_raw_parts_mut(
+                                p.ptr().byte_add(v.buffer_offset as _).cast().as_ptr(),
+                                content.vertex_streams[n].0.buffer.byte_length as _,
+                            )
+                        })
+                        .expect("vertex_buffer.read");
+                }
+
+                if index_stream.is_some() {
+                    content
+                        .read_index_buffer_into(unsafe {
+                            core::slice::from_raw_parts_mut(
+                                p.ptr()
+                                    .byte_add(index_offset_in_buffer as _)
+                                    .cast()
+                                    .as_ptr(),
+                                index_byte_length as _,
+                            )
+                        })
+                        .expect("index_buffer.read");
+                }
+            })
+            .expect("upload_buffer.write");
+
+        let runtime_mesh = RuntimeMesh {
+            gfx_resource: buffer,
+            topology: content.header.primitive_topology,
+            vertex_count: vertex_byte_length_per_stream[0] / vertex_streams[0].buffer_stride,
+            vertex_streams,
+            index: index_stream,
+        };
+        drop(content);
+
+        engine
+            .submit_commands(|rec| {
+                rec.copy_buffer(
+                    &upload_buffer,
+                    &runtime_mesh.gfx_resource,
+                    &[br::BufferCopy::mirror(0, buffer_top)],
+                )
+                .pipeline_barrier(
+                    br::PipelineStageFlags::TRANSFER,
+                    br::PipelineStageFlags::VERTEX_INPUT,
+                    0,
+                    &[br::vk::VkMemoryBarrier {
+                        sType: br::vk::VkMemoryBarrier::TYPE,
+                        pNext: core::ptr::null(),
+                        srcAccessMask: br::AccessFlags::TRANSFER.write,
+                        dstAccessMask: br::AccessFlags::VERTEX_ATTRIBUTE_READ,
+                    }],
+                    &[],
+                    &[],
+                )
+            })
+            .expect("upload.cmd");
+
+        Ok(AssetResource::Mesh(runtime_mesh))
     }
 }

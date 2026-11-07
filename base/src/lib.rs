@@ -659,7 +659,10 @@ impl<'q, PL: NativeLinker> Engine<'q, PL> {
     }
 
     #[inline(always)]
-    pub fn open_raw_asset_by_id<'a>(&'a self, id: AssetID) -> std::io::Result<impl AssetBlob + 'a> {
+    pub fn open_raw_asset_by_id<'a>(
+        &'a self,
+        id: AssetID,
+    ) -> std::io::Result<<PL::AssetLoader as PlatformAssetLoader>::AssetBlob<'a>> {
         self.native_link.asset_loader().get(id)
     }
 
