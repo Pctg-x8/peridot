@@ -1,0 +1,10 @@
+[package]
+name = "peridot-types"
+description = "non-functionality, core type defines of the Peridot Engine"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+[lints]
+workspace = true

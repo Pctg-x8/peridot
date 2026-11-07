@@ -1,0 +1,8 @@
+[package]
+name = "win10-sdk-locator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+windows-registry.path = "../registry"
+windows = { version = "0.62" }

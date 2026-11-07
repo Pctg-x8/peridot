@@ -1,0 +1,11 @@
+[package]
+name = "spirv-tools"
+description = "KhronosGroup/SPIRV-Tools binding for rust"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+
+[build-dependencies]
+build-script-helper.path = "../../build-script-helper"

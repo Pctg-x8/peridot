@@ -1,0 +1,21 @@
+[package]
+name = "peridot-mesh"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+with-loader-impl = ["dep:peridot"]
+with-peridot = ["dep:peridot", "with-loader-impl"]
+with-rendering-configuration = ["dep:peridot-rendering-configuration"]
+
+[dependencies]
+bedrock.workspace = true
+futures-io.workspace = true
+pinned-futures-helper.path = "../../base-lib/pinned-futures-helper"
+
+peridot = { path = "../../base", optional = true }
+peridot-rendering-configuration = { path = "../rendering-configuration", optional = true }
+
+[lints]
+workspace = true

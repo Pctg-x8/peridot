@@ -1,0 +1,56 @@
+[package]
+name = "peridot-vg"
+version = "0.1.0"
+authors = ["S.Percentage <Syn.Tri.Naga@gmail.com>"]
+edition = "2018"
+
+[features]
+default = []
+use-freetype = ["dep:peridot-tp-freetype"]
+use-fontconfig = ["dep:peridot-tp-fontconfig"]
+ci-nolib = []
+
+[lints]
+workspace = true
+
+[dependencies]
+bedrock = { workspace = true }
+peridot = { path = "../../base" }
+pathfinder_partitioner = { git = "https://github.com/Pctg-x8/pathfinder" }
+lyon_path = "0.12"
+lyon_geom = "0.12"
+euclid = "0.19"
+log = "*"
+libc = "0.2"
+cfg-if = "1.0.0"
+peridot-command-object = { path = "../command-object" }
+parking_lot = "0.12"
+tracing.workspace = true
+thiserror.workspace = true
+
+[target.'cfg(target_os="macos")'.dependencies]
+apple-sdk-port = { path = "../../thirdparty/apple-sdk-port" }
+objc-ext = { git = "https://github.com/Pctg-x8/objc-ext" }
+
+[target.'cfg(target_os="android")'.dependencies]
+android = { git = "https://github.com/Pctg-x8/android-defs-rs" }
+
+[target.'cfg(windows)'.dependencies.windows]
+version = "0.48"
+features = [
+    "implement",
+    "Win32_Foundation",
+    "Win32_Graphics_DirectWrite",
+    "Win32_Graphics_Direct2D_Common",
+]
+
+[target.'cfg(windows)'.dependencies]
+widestring = "1.0"
+
+[dependencies.peridot-tp-freetype]
+path = "../../thirdparty/freetype"
+optional = true
+
+[dependencies.peridot-tp-fontconfig]
+path = "../../thirdparty/fontconfig"
+optional = true
