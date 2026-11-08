@@ -1,0 +1,12 @@
+[package]
+name = "peridot-shader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot = { path = "../../base" }
+slang = { path = "../../thirdparty/slang" }
+tracing.workspace = true
+
+[lints]
+workspace = true

@@ -563,6 +563,9 @@ unsafe extern "C" {
     pub fn spReflectionTypeLayout_getContainerVarLayout(
         r#type: *mut SlangReflectionTypeLayout,
     ) -> *mut SlangReflectionVariableLayout;
+    pub fn spReflectionTypeLayout_GetContentVarLayout(
+        r#type: *mut SlangReflectionTypeLayout,
+    ) -> *mut SlangReflectionVariableLayout;
     pub fn spReflectionTypeLayout_GetParameterCategory(
         r#type: *mut SlangReflectionTypeLayout,
     ) -> SlangParameterCategory;

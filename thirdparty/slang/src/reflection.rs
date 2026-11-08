@@ -313,7 +313,7 @@ iter_something!(
     c_uint
 );
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum ParameterCategory {
     None = ffi::SLANG_PARAMETER_CATEGORY_NONE,
@@ -476,6 +476,15 @@ impl TypeLayout {
 
     pub fn container_var_layout(&self) -> Option<&mut VariableLayout> {
         let p = unsafe { ffi::spReflectionTypeLayout_getContainerVarLayout(self.0.get()) };
+        if p.is_null() {
+            None
+        } else {
+            Some(unsafe { VariableLayout::from_mut_ptr(p) })
+        }
+    }
+
+    pub fn content_var_layout(&self) -> Option<&mut VariableLayout> {
+        let p = unsafe { ffi::spReflectionTypeLayout_GetContentVarLayout(self.0.get()) };
         if p.is_null() {
             None
         } else {
@@ -1107,8 +1116,11 @@ impl Variable {
     }
 
     #[inline]
-    pub fn name(&self) -> &CStr {
-        unsafe { CStr::from_ptr(ffi::spReflectionVariable_GetName(self.0.get())) }
+    pub fn name(&self) -> Option<&CStr> {
+        match unsafe { ffi::spReflectionVariable_GetName(self.0.get()) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { CStr::from_ptr(p) }),
+        }
     }
 
     #[inline]
@@ -1224,7 +1236,7 @@ impl VariableLayout {
     }
 
     #[inline(always)]
-    pub fn name(&self) -> &CStr {
+    pub fn name(&self) -> Option<&CStr> {
         self.variable().name()
     }
 
