@@ -1175,7 +1175,7 @@ fn visit_global_input<'a>(
     }
     println!(
         "{}- variable placed: {variable_placement:?}",
-        "  ".repeat(indent + 1),
+        "  ".repeat(indent),
     );
 
     match input_var_type {
