@@ -336,7 +336,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
         for (a, ad) in vst.attributes.iter() {
             if let Some(&loc) = shading_variant
                 .vertex_semantic_to_location
-                .get(&a.into_semantic())
+                .get(&a.to_semantic())
             {
                 v_attributes.push(br::VertexInputAttributeDescription(
                     br::vk::VkVertexInputAttributeDescription {
