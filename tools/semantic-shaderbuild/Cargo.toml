@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+peridot-types.path = "../../base-types"
 peridot-semantic-shader = { path = "../../modules/semantic-shader", default-features = false }
 bedrock.workspace = true
 thiserror = "2.0"

@@ -4,8 +4,6 @@ struct MaterialProperties {
   [peridot::property_name("Main Texture")]
   Sampler2D tex;
   float4 colorTint;
-  float4 colorTint2;
-  Sampler2D subTexture;
 }
 [peridot::material_property]
 ParameterBlock<MaterialProperties> materialProperties;
@@ -33,7 +31,5 @@ VertexOutput vertMain([peridot::vertex] float4 pos: POSITION0,
 
 [shader("fragment")]
 float4 fragMain(FragmentInput input: Varyings) : SV_Target {
-  return materialProperties.tex.Sample(input.uv) *
-             materialProperties.colorTint * materialProperties.colorTint2 +
-         materialProperties.subTexture.Sample(input.uv);
+  return materialProperties.tex.Sample(input.uv) * materialProperties.colorTint;
 }

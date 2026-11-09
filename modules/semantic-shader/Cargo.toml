@@ -15,6 +15,7 @@ workspace = true
 bedrock.workspace = true
 peridot-serialization-utils.path = "../serialization-utils"
 thiserror = "2.0"
+peridot-types.path = "../../base-types"
 peridot = { path = "../../base", optional = true }
 futures-io = { workspace = true }
 pinned-futures-helper.path = "../../base-lib/pinned-futures-helper"

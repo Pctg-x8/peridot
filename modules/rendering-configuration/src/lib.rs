@@ -5,7 +5,7 @@ use std::{
     io::{BufRead, Seek, SeekFrom, Write},
 };
 
-pub use peridot_semantic_shader::VertexInputSemantic;
+use peridot_types::VertexInputSemantic;
 
 #[cfg(feature = "compilation")]
 pub mod compilation;

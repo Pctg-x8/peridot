@@ -118,8 +118,36 @@ pub const SLANG_SCALAR_TYPE_UINTPT: SlangScalarType = 15;
 pub type SlangDeclKind = c_uint;
 
 pub type SlangResourceShape = c_uint;
+pub const SLANG_RESOURCE_BASE_SHAPE_MASK: SlangResourceShape = 0x0f;
+pub const SLANG_RESOURCE_NONE: SlangResourceShape = 0x00;
+
+pub const SLANG_TEXTURE_1D: SlangResourceShape = 0x01;
+pub const SLANG_TEXTURE_2D: SlangResourceShape = 0x02;
+pub const SLANG_TEXTURE_3D: SlangResourceShape = 0x03;
+pub const SLANG_TEXTURE_CUBE: SlangResourceShape = 0x04;
+pub const SLANG_TEXTURE_BUFFER: SlangResourceShape = 0x05;
+pub const SLANG_STRUCTURED_BUFFER: SlangResourceShape = 0x06;
+pub const SLANG_BYTE_ADDRESS_BUFFER: SlangResourceShape = 0x07;
+pub const SLANG_RESOURCE_UNKNOWN: SlangResourceShape = 0x08;
+pub const SLANG_ACCELERATION_STRUCTURE: SlangResourceShape = 0x09;
+pub const SLANG_TEXTURE_SUBPASS_INPUT: SlangResourceShape = 0x0a;
+
+pub const SLANG_RESOURCE_EXT_SHAPE_MASK: SlangResourceShape = 0x1f0;
+pub const SLANG_TEXTURE_FEEDBACK_FLAT: SlangResourceShape = 0x10;
+pub const SLANG_TEXTURE_SHADOW_FLAG: SlangResourceShape = 0x20;
+pub const SLANG_TEXTURE_ARRAY_FLAG: SlangResourceShape = 0x40;
+pub const SLANG_TEXTURE_MULTISAMPLE_FLAG: SlangResourceShape = 0x80;
+pub const SLANG_TEXTURE_COMBINED_FLAG: SlangResourceShape = 0x100;
 
 pub type SlangResourceAccess = c_uint;
+pub const SLANG_RESOURCE_ACCESS_NONE: SlangResourceAccess = 0;
+pub const SLANG_RESOURCE_ACCESS_READ: SlangResourceAccess = 1;
+pub const SLANG_RESOURCE_ACCESS_READ_WRITE: SlangResourceAccess = 2;
+pub const SLANG_RESOURCE_ACCESS_RASTER_ORDERED: SlangResourceAccess = 3;
+pub const SLANG_RESOURCE_ACCESS_APPEND: SlangResourceAccess = 4;
+pub const SLANG_RESOURCE_ACCESS_CONSUME: SlangResourceAccess = 5;
+pub const SLANG_RESOURCE_ACCESS_WRITE: SlangResourceAccess = 6;
+pub const SLANG_RESOURCE_ACCESS_FEEDBACK: SlangResourceAccess = 7;
 
 pub type SlangParameterCategory = c_uint;
 pub const SLANG_PARAMETER_CATEGORY_NONE: SlangParameterCategory = 0;

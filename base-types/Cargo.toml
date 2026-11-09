@@ -5,6 +5,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+pinned-futures-helper.path = "../base-lib/pinned-futures-helper"
+futures-io.workspace = true
 
 [lints]
 workspace = true

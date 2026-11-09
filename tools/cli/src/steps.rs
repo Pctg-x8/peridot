@@ -192,6 +192,7 @@ pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Optio
         Box::new(peridot_asset_processing::builtin::SoundAssetProcessor),
         Box::new(peridot_sprite_atlas::AssetProcessor),
         Box::new(peridot_asset_processor_model::Processor),
+        Box::new(peridot_shader::AssetProcessor),
     ];
     let mut assetdb = peridot::AssetDatabase::open_rw(&output_path).expect("assetdb.open");
     let mut asset_id_generator = peridot::AssetIDGenerator::new();

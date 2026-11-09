@@ -4,7 +4,7 @@ mod codegen;
 mod syntax;
 mod tokenizer;
 
-use peridot_semantic_shader::VertexInputSemantic;
+use peridot::VertexInputSemantic;
 use slang::{IBlob, IComponentType, IGlobalSession, IModule, ISession, IUnknown};
 
 use crate::{
@@ -277,7 +277,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                             fn rec(
                                 v: &slang::reflection::VariableLayout,
                                 vertex_semantic_to_location: &mut HashMap<
-                                    peridot_semantic_shader::VertexInputSemantic,
+                                    peridot::VertexInputSemantic,
                                     u32,
                                 >,
                                 has_failure: &mut bool,
