@@ -7,13 +7,8 @@ fn main() {
         PathBuf::from(std::env::args_os().nth(1).expect("no input files")),
         &Environment {
             peridot_stdlib_search_path: CString::new(
-                PathBuf::from(
-                    std::env::var_os("PERIDOT_CLI_BUILTIN_ASSETS_PATH")
-                        .expect("no builtin assets path set"),
-                )
-                .join("slangModules")
-                .to_str()
-                .expect("invalid path generated"),
+                std::env::var("PERIDOT_SHADER_STDLIB_PATH")
+                    .expect("invalid PERIDOT_SHADER_STDLIB_PATH"),
             )
             .expect("nul in path"),
         },

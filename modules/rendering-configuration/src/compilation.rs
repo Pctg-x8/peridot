@@ -262,13 +262,13 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
 
                         println!("vertex inputs");
                         for x in ep.iter_parameter() {
-                            let is_vertex_input = x
-                                .variable()
-                                .iter_user_attribute()
-                                .any(|a| a.name() == c"Peridot_VertexInput")
-                                || x.r#type()
-                                    .iter_user_attribute()
-                                    .any(|a| a.name() == c"Peridot_VertexInput");
+                            let is_vertex_input = x.variable().is_some_and(|v| {
+                                v.iter_user_attribute()
+                                    .any(|a| a.name() == c"Peridot_VertexInput")
+                            }) || x.r#type().is_some_and(|t| {
+                                t.iter_user_attribute()
+                                    .any(|a| a.name() == c"Peridot_VertexInput")
+                            });
                             if !is_vertex_input {
                                 continue;
                             }

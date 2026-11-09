@@ -1231,18 +1231,21 @@ impl VariableLayout {
     }
 
     #[inline]
-    pub fn variable(&self) -> &mut Variable {
-        unsafe { Variable::from_mut_ptr(ffi::spReflectionVariableLayout_GetVariable(self.0.get())) }
+    pub fn variable(&self) -> Option<&mut Variable> {
+        match unsafe { ffi::spReflectionVariableLayout_GetVariable(self.0.get()) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { Variable::from_mut_ptr(p) }),
+        }
     }
 
     #[inline(always)]
     pub fn name(&self) -> Option<&CStr> {
-        self.variable().name()
+        self.variable()?.name()
     }
 
     #[inline(always)]
     pub fn find_modifier(&self, id: crate::ModifierID) -> Option<&mut Modifier> {
-        self.variable().find_modifier(id)
+        self.variable()?.find_modifier(id)
     }
 
     #[inline]
@@ -1278,8 +1281,8 @@ impl VariableLayout {
     }
 
     #[inline(always)]
-    pub fn r#type(&self) -> &mut Type {
-        self.variable().r#type()
+    pub fn r#type(&self) -> Option<&mut Type> {
+        Some(self.variable()?.r#type())
     }
 
     #[inline]

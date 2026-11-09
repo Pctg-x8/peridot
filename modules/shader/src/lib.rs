@@ -125,8 +125,8 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
             let vl = e.var_layout();
             let tl = vl.type_layout();
             assert_eq!(tl.kind(), slang::reflection::TypeKind::Struct);
-            for n in 0..tl.field_count() {
-                visit_vsh_input(tl.field(n).expect("no field"), 0, &mut vertex_inputs);
+            for f in tl.iter_field() {
+                visit_vsh_input(f, &session, 0, &mut vertex_inputs);
             }
         }
         if e.stage() == slang::ffi::SLANG_STAGE_FRAGMENT {
@@ -157,18 +157,16 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         if tl.kind() == slang::reflection::TypeKind::ConstantBuffer {
             let cvl = tl.container_var_layout().expect("no container var");
             println!(
-                "cvl {} {} {:?} {} {}",
+                "cvl {} {:?} {} {}",
                 cvl.binding_index(),
-                cvl.binding_space(),
                 cvl.category(),
                 cvl.offset(cvl.category()),
                 cvl.space(cvl.category())
             );
             let evl = tl.element_var_layout().expect("no element var");
             println!(
-                "evl {} {} {:?} {} {}",
+                "evl {} {:?} {} {}",
                 evl.binding_index(),
-                evl.binding_space(),
                 evl.category(),
                 evl.offset(evl.category()),
                 evl.space(evl.category())
@@ -193,9 +191,9 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
             }
         } else {
             assert_eq!(tl.kind(), slang::reflection::TypeKind::Struct);
-            for n in 0..tl.field_count() {
+            for f in tl.iter_field() {
                 visit_global_input(
-                    tl.field(n).expect("no field"),
+                    f,
                     0,
                     &session,
                     VisitContext {
@@ -765,10 +763,13 @@ impl AssetVk {
             r,
             &mut [mkioslicem(&mut endian_mark), mkioslicem(&mut content_flags)],
         )?;
-        let is_native_endian = match unsafe { endian_mark.assume_init() } {
-            x if x == 0x1234 => true,
-            x if x.swap_bytes() == 0x1234 => false,
-            e => panic!("invalid endian mark: 0x{e:04x}"),
+        let endian_mark = unsafe { endian_mark.assume_init() };
+        let is_native_endian = if endian_mark == 0x1234 {
+            true
+        } else if endian_mark.swap_bytes() == 0x1234 {
+            false
+        } else {
+            panic!("invalid endian mark: 0x{endian_mark:04x}")
         };
         let content_flags = unsafe { content_flags.assume_init() };
 
@@ -893,9 +894,11 @@ bitflags! {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 enum VertexSemanticExtractionError<'s> {
+    #[error("invalid semantic name bytes({0:?}): {1}")]
     InvalidNameBytes(&'s core::ffi::CStr, core::str::Utf8Error),
+    #[error("unsupported semantic name: {0}")]
     Unsupported(&'s str),
 }
 
@@ -950,8 +953,31 @@ pub struct VertexInput {
     location: usize,
 }
 
+fn dump_vl_space_offset_forall_category(vl: &slang::reflection::VariableLayout, prefix: &str) {
+    for cat in vl.iter_category() {
+        println!(
+            "{prefix}- {cat:?} space={} offset={}",
+            vl.space(cat),
+            vl.offset(cat)
+        );
+    }
+}
+
+fn dump_user_attrs(vl: &slang::reflection::VariableLayout, prefix: &str) {
+    if let Some(v) = vl.variable() {
+        for a in v.iter_user_attribute() {
+            println!("{prefix}var user attr: {:?}", a.name());
+        }
+
+        for a in v.r#type().iter_user_attribute() {
+            println!("{prefix}type user attr: {:?}", a.name());
+        }
+    }
+}
+
 fn visit_vsh_input(
     v: &slang::reflection::VariableLayout,
+    global_session: &impl slang::IGlobalSession,
     indent: usize,
     collected: &mut Vec<VertexInput>,
 ) {
@@ -962,52 +988,31 @@ fn visit_vsh_input(
         v.name(),
         ty.name()
     );
-    for n in 0..v.category_count() {
-        let cat = v.category_by_index(n);
-
-        println!(
-            "{}- {cat:?}: set={} offset={}",
-            "  ".repeat(indent),
-            v.space(cat),
-            v.offset(cat)
-        );
-    }
+    dump_vl_space_offset_forall_category(v, &"  ".repeat(indent));
+    dump_user_attrs(v, &"  ".repeat(indent + 1));
 
     if ty.kind() == slang::reflection::TypeKind::Struct {
         // recurse members
-        for n in 0..ty.field_count() {
-            visit_vsh_input(ty.field(n).expect("no field"), indent + 1, collected);
+        for f in ty.iter_field() {
+            visit_vsh_input(f, global_session, indent + 1, collected);
         }
         return;
     }
 
-    for n in 0..v.variable().user_attribute_count() {
-        let Some(a) = v.variable().user_attribute(n) else {
-            continue;
-        };
+    if v.variable()
+        .and_then(|v| v.find_user_attribute_by_name(global_session, c"peridot_vertex"))
+        .is_some()
+    {
+        assert!(
+            v.iter_category()
+                .any(|x| x == slang::reflection::ParameterCategory::VaryingInput)
+        );
 
-        println!("{}user attr: {:?}", "  ".repeat(indent + 1), a.name());
-
-        if a.name() == c"peridot_vertex" {
-            assert!(
-                (0..v.category_count()).any(|n| v.category_by_index(n)
-                    == slang::reflection::ParameterCategory::VaryingInput)
-            );
-
-            collected.push(VertexInput {
-                semantic_name: v.semantic_name().expect("no semantic decorated").to_owned(),
-                semantic_index: v.semantic_index(),
-                location: v.offset(slang::reflection::ParameterCategory::VaryingInput),
-            });
-
-            println!(
-                "{}vertex input: {:?} {} = {}",
-                "  ".repeat(indent + 2),
-                v.semantic_name(),
-                v.semantic_index(),
-                v.offset(slang::reflection::ParameterCategory::VaryingInput)
-            );
-        }
+        collected.push(VertexInput {
+            semantic_name: v.semantic_name().expect("no semantic decorated").to_owned(),
+            semantic_index: v.semantic_index(),
+            location: v.offset(slang::reflection::ParameterCategory::VaryingInput),
+        });
     }
 }
 
@@ -1071,7 +1076,9 @@ fn visit_global_input<'a>(
 ) {
     let is_material_property = ctx.is_material_property
         || v.variable()
-            .find_user_attribute_by_name(global_session, c"peridot_material_property")
+            .and_then(|v| {
+                v.find_user_attribute_by_name(global_session, c"peridot_material_property")
+            })
             .is_some();
     let constant_buffer_content_full_type_name = 'try_constant_buffer_content_full_type_name: {
         match v.type_layout().kind() {
@@ -1118,13 +1125,14 @@ fn visit_global_input<'a>(
     };
     let property_name_override = v
         .variable()
-        .find_user_attribute_by_name(global_session, c"peridot_property_name")
+        .and_then(|v| v.find_user_attribute_by_name(global_session, c"peridot_property_name"))
         .map(|x| {
             assert_eq!(x.argument_count(), 1);
             x.argument_value_string(0)
                 .expect("missing argument")
                 .to_owned()
         });
+
     let ty = v.type_layout();
     let variable_path = ctx
         .parent_path
@@ -1138,20 +1146,13 @@ fn visit_global_input<'a>(
         v.name(),
         ty.name(),
     );
-    assert_eq!(v.category_count(), 1, "mixed category variable");
-    let cat = v.category_by_index(0);
-
+    dump_vl_space_offset_forall_category(v, &"  ".repeat(indent));
+    dump_user_attrs(v, &"  ".repeat(indent + 1));
     visit_ty(ty, indent + 1);
 
+    assert_eq!(v.category_count(), 1, "mixed category variable");
+    let cat = v.category_by_index(0);
     assert_eq!(v.space(cat), 0);
-    println!(
-        "{}- {cat:?}: set={} offset={} size={}",
-        "  ".repeat(indent),
-        v.space(cat),
-        v.offset(cat),
-        ty.size(cat),
-    );
-
     let mut variable_placement = ctx
         .per_category_accum_value
         .get(&cat)
@@ -1172,11 +1173,11 @@ fn visit_global_input<'a>(
         }
         _ => (),
     }
-
     println!(
         "{}- variable placed: {variable_placement:?}",
         "  ".repeat(indent + 1),
     );
+
     match input_var_type {
         InputVarType::MaterialProperty => {
             collected.input_vars.push(InputVariable {
@@ -1210,19 +1211,19 @@ fn visit_global_input<'a>(
             tracing::warn!(path = ?variable_path, "ignoring variable...");
         }
     }
-    let mut ctx = VisitContext {
+
+    let mut child_ctx = VisitContext {
         parent_path: variable_path,
         incoming_variable_placement: variable_placement,
         is_material_property,
         per_category_accum_value: HashMap::new(),
     };
-    ctx.per_category_accum_value
-        .insert(cat, ctx.incoming_variable_placement.clone());
+    child_ctx
+        .per_category_accum_value
+        .insert(cat, child_ctx.incoming_variable_placement.clone());
 
     if let Some(cvl) = ty.container_var_layout() {
-        for n in 0..cvl.category_count() {
-            let cat = cvl.category_by_index(n);
-
+        for cat in cvl.iter_category() {
             assert_eq!(cvl.space(cat), 0);
             println!(
                 "{}- cvl({:?}) {cat:?}: offset={}",
@@ -1233,21 +1234,24 @@ fn visit_global_input<'a>(
 
             match cat {
                 slang::reflection::ParameterCategory::DescriptorTableSlot => {
-                    ctx.per_category_accum_value
+                    child_ctx
+                        .per_category_accum_value
                         .entry(cat)
-                        .or_insert(ctx.incoming_variable_placement.clone())
+                        .or_insert(child_ctx.incoming_variable_placement.clone())
                         .descriptor_binding_base += cvl.offset(cat);
                 }
                 slang::reflection::ParameterCategory::SubElementRegisterSpace => {
-                    ctx.per_category_accum_value
+                    child_ctx
+                        .per_category_accum_value
                         .entry(cat)
-                        .or_insert(ctx.incoming_variable_placement.clone())
+                        .or_insert(child_ctx.incoming_variable_placement.clone())
                         .descriptor_set_base += cvl.offset(cat);
                 }
                 slang::reflection::ParameterCategory::Uniform => {
-                    ctx.per_category_accum_value
+                    child_ctx
+                        .per_category_accum_value
                         .entry(cat)
-                        .or_insert(ctx.incoming_variable_placement.clone())
+                        .or_insert(child_ctx.incoming_variable_placement.clone())
                         .offset_base += cvl.offset(cat);
                 }
                 _ => (),
@@ -1256,9 +1260,7 @@ fn visit_global_input<'a>(
     }
 
     if let Some(cnvl) = ty.content_var_layout() {
-        for n in 0..cnvl.category_count() {
-            let cat = cnvl.category_by_index(n);
-
+        for cat in cnvl.iter_category() {
             assert_eq!(cnvl.space(cat), 0);
             println!(
                 "{}- cnvl({:?}) {cat:?}: offset={}",
@@ -1269,21 +1271,24 @@ fn visit_global_input<'a>(
 
             match cat {
                 slang::reflection::ParameterCategory::DescriptorTableSlot => {
-                    ctx.per_category_accum_value
+                    child_ctx
+                        .per_category_accum_value
                         .entry(cat)
-                        .or_insert(ctx.incoming_variable_placement.clone())
+                        .or_insert(child_ctx.incoming_variable_placement.clone())
                         .descriptor_binding_base += cnvl.offset(cat);
                 }
                 slang::reflection::ParameterCategory::SubElementRegisterSpace => {
-                    ctx.per_category_accum_value
+                    child_ctx
+                        .per_category_accum_value
                         .entry(cat)
-                        .or_insert(ctx.incoming_variable_placement.clone())
+                        .or_insert(child_ctx.incoming_variable_placement.clone())
                         .descriptor_set_base += cnvl.offset(cat);
                 }
                 slang::reflection::ParameterCategory::Uniform => {
-                    ctx.per_category_accum_value
+                    child_ctx
+                        .per_category_accum_value
                         .entry(cat)
-                        .or_insert(ctx.incoming_variable_placement.clone())
+                        .or_insert(child_ctx.incoming_variable_placement.clone())
                         .offset_base += cnvl.offset(cat);
                 }
                 _ => (),
@@ -1291,67 +1296,27 @@ fn visit_global_input<'a>(
         }
     }
 
-    if let Some(evl) = ty.element_var_layout() {
-        for n in 0..evl.category_count() {
-            let cat = evl.category_by_index(n);
+    // Note: getElementTypeはgetContentTypeのサブセットっぽい(cpp見る感じでは)のでElementVarのほうは見なくてもよさそう
 
-            println!(
-                "{}- evl({:?}) {cat:?}: set={} offset={}",
-                "  ".repeat(indent),
-                evl.type_layout().kind(),
-                evl.space(cat),
-                evl.offset(cat)
-            );
-        }
-    }
-
-    if ty.kind() == slang::reflection::TypeKind::Struct {
-        // recurse members
-        for n in 0..ty.field_count() {
-            visit_global_input(
-                ty.field(n).expect("no field"),
-                indent + 1,
-                global_session,
-                ctx.clone(),
-                collected,
-            );
-        }
-        return;
-    }
-
-    if ty.kind() == slang::reflection::TypeKind::ParameterBlock
-        || ty.kind() == slang::reflection::TypeKind::ConstantBuffer
-    {
-        let content_vl = ty.content_var_layout().expect("no element var");
-        if content_vl.type_layout().kind() == slang::reflection::TypeKind::Struct {
-            for n in 0..content_vl.type_layout().field_count() {
-                visit_global_input(
-                    content_vl.type_layout().field(n).expect("no field"),
-                    indent + 1,
-                    global_session,
-                    ctx.clone(),
-                    collected,
-                );
+    match ty.kind() {
+        slang::reflection::TypeKind::Struct => {
+            // recurse members
+            for f in ty.iter_field() {
+                visit_global_input(f, indent + 1, global_session, child_ctx.clone(), collected);
             }
         }
-
-        return;
-    }
-
-    for n in 0..v.variable().user_attribute_count() {
-        let Some(a) = v.variable().user_attribute(n) else {
-            continue;
-        };
-
-        println!("{}user attr: {:?}", "  ".repeat(indent + 1), a.name());
-
-        if a.name() == c"peridot_material_property" {
-            println!(
-                "{}material property input: {}",
-                "  ".repeat(indent + 2),
-                a.argument_count(),
-            );
+        slang::reflection::TypeKind::ParameterBlock
+        | slang::reflection::TypeKind::ConstantBuffer => {
+            let content_vl = ty.content_var_layout().expect("no element var");
+            if content_vl.type_layout().kind() == slang::reflection::TypeKind::Struct {
+                for f in content_vl.type_layout().iter_field() {
+                    visit_global_input(f, indent + 1, global_session, child_ctx.clone(), collected);
+                }
+            } else {
+                todo!("direct value constant buffer");
+            }
         }
+        _ => {}
     }
 }
 
