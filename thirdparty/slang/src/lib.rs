@@ -25,6 +25,7 @@ pub use ffi::{
     SlangSourceLanguage as SourceLanguage, SlangStage as Stage, SlangTargetFlags as TargetFlags,
 };
 pub mod reflection;
+pub mod support;
 
 pub type Result<T> = core::result::Result<T, SlangResult>;
 #[inline(always)]

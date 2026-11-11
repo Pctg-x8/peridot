@@ -1,9 +1,14 @@
 import peridot;
 
+struct ConstantBlock {
+    float4 colorTint2;
+}
+
 struct MaterialProperties {
   [peridot::property_name("Main Texture")]
   Sampler2D tex;
   float4 colorTint;
+  ConstantBuffer<ConstantBlock> cb;
 }
 [peridot::material_property]
 ParameterBlock<MaterialProperties> materialProperties;

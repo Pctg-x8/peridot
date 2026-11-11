@@ -5,7 +5,7 @@ use core::{
     ptr::NonNull,
 };
 
-use crate::{ffi, *};
+use crate::{ffi, support::CStrBlob, *};
 
 pub use crate::ffi::{
     SlangReflectionGenericArg as GenericArg, SlangReflectionGenericArgType as GenericArgType,
@@ -239,11 +239,13 @@ impl Type {
         unsafe { CStr::from_ptr(ffi::spReflectionType_GetName(self.0.get())) }
     }
 
-    pub fn full_name(&self) -> crate::Result<crate::IBlobPtr> {
+    pub fn full_name(&self) -> crate::Result<CStrBlob<crate::IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         crate::rw(unsafe { ffi::spReflectionType_GetFullName(self.0.get(), o.as_mut_ptr()) })?;
+        let blob = IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) });
+        assert!(!blob.get_buffer_pointer().is_null(), "null blob returned");
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(CStrBlob(blob))
     }
 
     #[inline(always)]
@@ -379,8 +381,11 @@ impl TypeLayout {
     }
 
     #[inline]
-    pub fn r#type(&self) -> &mut Type {
-        unsafe { Type::from_mut_ptr(ffi::spReflectionTypeLayout_GetType(self.0.get())) }
+    pub fn r#type(&self) -> Option<&mut Type> {
+        match unsafe { ffi::spReflectionTypeLayout_GetType(self.0.get()) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { Type::from_mut_ptr(p) }),
+        }
     }
 
     #[inline]
@@ -444,11 +449,6 @@ impl TypeLayout {
         } else {
             Some(unsafe { VariableLayout::from_mut_ptr(p) })
         }
-    }
-
-    #[inline(always)]
-    pub fn element_count(&self, reflection: Option<&Shader>) -> usize {
-        self.r#type().element_count(reflection)
     }
 
     #[inline]
@@ -523,41 +523,6 @@ impl TypeLayout {
             current: 0,
             count: self.category_count(),
         }
-    }
-
-    #[inline(always)]
-    pub fn row_count(&self) -> c_uint {
-        self.r#type().row_count()
-    }
-
-    #[inline(always)]
-    pub fn column_count(&self) -> c_uint {
-        self.r#type().column_count()
-    }
-
-    #[inline(always)]
-    pub fn scalar_type(&self) -> ScalarType {
-        self.r#type().scalar_type()
-    }
-
-    #[inline(always)]
-    pub fn resource_result_type(&self) -> Option<&mut Type> {
-        self.r#type().resource_result_type()
-    }
-
-    #[inline(always)]
-    pub fn resource_shape(&self) -> crate::ResourceShape {
-        self.r#type().resource_shape()
-    }
-
-    #[inline(always)]
-    pub fn resource_access(&self) -> crate::ResourceAccess {
-        self.r#type().resource_access()
-    }
-
-    #[inline(always)]
-    pub fn name(&self) -> &CStr {
-        self.r#type().name()
     }
 
     #[inline]

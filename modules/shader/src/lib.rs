@@ -146,6 +146,12 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         .expect("no object parameters type?");
     println!("object parameters ty: {object_parameters_ty:p}");
 
+    if let Some(gv) = rl.global_params_var_layout() {
+        println!("---");
+        recursive_dump_global_input(gv, 0);
+        println!("---");
+    }
+
     let mut collected = GlobalInputCollected {
         input_vars: Vec::new(),
         object_parameters_var: None,
@@ -220,7 +226,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         println!(
             "  {:?}: {:?}({:?}) at Descriptor(set={}, binding={})+{} size={} is_material_property={} propertyName={:?}",
             v.path,
-            v.r#type.name(),
+            v.r#type.r#type().expect("no type?").name(),
             v.category,
             v.placement.descriptor_set_base,
             v.placement.descriptor_binding_base,
@@ -244,8 +250,9 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
     let mut input_variable_layout = HashMap::new();
     for v in collected.input_vars {
         if v.is_material_property {
-            let r#type = AssetInputVariableType::from_slang_type(v.r#type.r#type())
-                .expect("unsupported input variable type");
+            let r#type =
+                AssetInputVariableType::from_slang_type(v.r#type.r#type().expect("no type?"))
+                    .expect("unsupported input variable type");
             material_properties.push(AssetMaterialPropertyVk {
                 name: v
                     .path
@@ -285,9 +292,12 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                         slang::reflection::TypeKind::Vector => unimplemented!("single vector slot"),
                         slang::reflection::TypeKind::Matrix => unimplemented!("single matrix slot"),
                         slang::reflection::TypeKind::Resource => {
-                            let shape = sl_type.resource_shape();
-                            let result_type =
-                                sl_type.resource_result_type().expect("no result type");
+                            let shape = sl_type.r#type().expect("no type?").resource_shape();
+                            let result_type = sl_type
+                                .r#type()
+                                .expect("no type?")
+                                .resource_result_type()
+                                .expect("no result type");
                             match (
                                 shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
                                 shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
@@ -956,9 +966,10 @@ pub struct VertexInput {
 fn dump_vl_space_offset_forall_category(vl: &slang::reflection::VariableLayout, prefix: &str) {
     for cat in vl.iter_category() {
         println!(
-            "{prefix}- {cat:?} space={} offset={}",
+            "{prefix}cat {cat:?} space={} offset={} size={}",
             vl.space(cat),
-            vl.offset(cat)
+            vl.offset(cat),
+            vl.type_layout().size(cat),
         );
     }
 }
@@ -982,16 +993,14 @@ fn visit_vsh_input(
     collected: &mut Vec<VertexInput>,
 ) {
     let ty = v.type_layout();
-    println!(
-        "{}vsh param: {:?}: {:?}",
-        "  ".repeat(indent),
-        v.name(),
-        ty.name()
-    );
+    println!("{}vsh param: {:?}", "  ".repeat(indent), v.name());
     dump_vl_space_offset_forall_category(v, &"  ".repeat(indent));
     dump_user_attrs(v, &"  ".repeat(indent + 1));
+    visit_ty(ty, indent + 1);
 
-    if ty.kind() == slang::reflection::TypeKind::Struct {
+    if let Some(t) = ty.r#type()
+        && t.kind() == slang::reflection::TypeKind::Struct
+    {
         // recurse members
         for f in ty.iter_field() {
             visit_vsh_input(f, global_session, indent + 1, collected);
@@ -1013,6 +1022,33 @@ fn visit_vsh_input(
             semantic_index: v.semantic_index(),
             location: v.offset(slang::reflection::ParameterCategory::VaryingInput),
         });
+    }
+}
+
+fn recursive_dump_global_input(vl: &slang::reflection::VariableLayout, indent: usize) {
+    let ty = vl.type_layout();
+    println!("{}g param: {:?}", "  ".repeat(indent), vl.name());
+    dump_ty_layout(ty, indent + 1);
+    dump_vl_space_offset_forall_category(vl, &"  ".repeat(indent + 1));
+    dump_user_attrs(vl, &"  ".repeat(indent + 1));
+
+    if let Some(c) = ty.container_var_layout() {
+        println!("{}Container:", "  ".repeat(indent + 1));
+        recursive_dump_global_input(c, indent + 2);
+    }
+
+    if let Some(c) = ty.content_var_layout() {
+        println!("{}Content:", "  ".repeat(indent + 1));
+        recursive_dump_global_input(c, indent + 2);
+    }
+
+    if let Some(e) = ty.element_var_layout() {
+        println!("{}Element:", "  ".repeat(indent + 1));
+        recursive_dump_global_input(e, indent + 2);
+    }
+
+    for f in ty.iter_field() {
+        recursive_dump_global_input(f, indent + 1);
     }
 }
 
@@ -1087,7 +1123,12 @@ fn visit_global_input<'a>(
                     tracing::error!("contant buffer have no content var?");
                     break 'try_constant_buffer_content_full_type_name None;
                 };
-                let full_name = match content_var.type_layout().r#type().full_name() {
+                let full_name = match content_var
+                    .type_layout()
+                    .r#type()
+                    .expect("no type?")
+                    .full_name()
+                {
                     Ok(x) => x,
                     Err(e) => {
                         tracing::error!(reason = ?e, "failed to query full name of content type");
@@ -1102,10 +1143,10 @@ fn visit_global_input<'a>(
     };
     let is_engine_object_parameters = constant_buffer_content_full_type_name
         .as_ref()
-        .is_some_and(|x| unsafe { core::ffi::CStr::from_ptr(x.get_buffer_pointer().cast()) } == c"peridot.ObjectParameters");
+        .is_some_and(|x| x.as_cstr() == c"peridot.ObjectParameters");
     let is_engine_camera_parameters = constant_buffer_content_full_type_name
         .as_ref()
-        .is_some_and(|x| unsafe { core::ffi::CStr::from_ptr(x.get_buffer_pointer().cast()) } == c"peridot.CameraParameters");
+        .is_some_and(|x| x.as_cstr() == c"peridot.CameraParameters");
     let input_var_type = match (
         is_material_property,
         is_engine_object_parameters,
@@ -1144,7 +1185,7 @@ fn visit_global_input<'a>(
         "{}g param: {:?}: {:?}({ty:p})",
         "  ".repeat(indent),
         v.name(),
-        ty.name(),
+        ty.r#type().map(|t| t.name()),
     );
     dump_vl_space_offset_forall_category(v, &"  ".repeat(indent));
     dump_user_attrs(v, &"  ".repeat(indent + 1));
@@ -1320,54 +1361,188 @@ fn visit_global_input<'a>(
     }
 }
 
-fn visit_ty(ty: &slang::reflection::TypeLayout, indent: usize) {
-    let f = ty.r#type().full_name();
-    println!(
-        "{}{:?}: {:?}({ty:p}) - {:?}",
-        "  ".repeat(indent),
-        ty.name(),
-        ty.kind(),
-        match f {
-            Ok(b) => unsafe { core::ffi::CStr::from_ptr(b.get_buffer_pointer().cast()) },
-            Err(_) => c"<err>",
+fn dump_ty_layout(tl: &slang::reflection::TypeLayout, indent: usize) {
+    let prespace = "  ".repeat(indent);
+    let kind = tl.kind();
+
+    match tl.r#type() {
+        None => println!("{prespace}<Unknown Type>: {kind:?}"),
+        Some(ty) => println!("{prespace}{:?}({:?}): {kind:?}", ty.name(), ty.full_name()),
+    }
+}
+
+fn recursive_dump_ty_layout(tl: &slang::reflection::TypeLayout, indent: usize) {
+    let prespace = "  ".repeat(indent);
+    let kind = tl.kind();
+
+    match tl.r#type() {
+        None => {
+            println!("{prespace}<Unknown Type>: {kind:?}");
         }
-    );
-    match ty.kind() {
+        Some(ty) => {
+            println!("{prespace}{:?}({:?}): {kind:?}", ty.name(), ty.full_name());
+        }
+    }
+
+    match kind {
+        slang::reflection::TypeKind::Vector | slang::reflection::TypeKind::Array => {
+            println!(
+                "{prespace}- element count: {}",
+                tl.r#type().expect("no type?").element_count(None)
+            );
+        }
+        slang::reflection::TypeKind::Matrix => {
+            let ty = tl.r#type().expect("no type?");
+            println!(
+                "{prespace}- element count: {}x{}",
+                ty.row_count(),
+                ty.column_count()
+            );
+        }
+        _ => {}
+    }
+
+    if let Some(x) = tl.container_var_layout() {
+        println!("{prespace}  Container:");
+        recursive_dump_ty_layout(x.type_layout(), indent + 2);
+    }
+
+    if let Some(x) = tl.content_var_layout() {
+        println!("{prespace}  Content:");
+        recursive_dump_ty_layout(x.type_layout(), indent + 2);
+    }
+
+    if let Some(x) = tl.element_var_layout() {
+        println!("{prespace}  Element:");
+        recursive_dump_ty_layout(x.type_layout(), indent + 2);
+    }
+
+    for f in tl.iter_field() {
+        recursive_dump_ty_layout(f.type_layout(), indent + 1);
+    }
+
+    if kind == slang::reflection::TypeKind::Resource {
+        let ty = tl.r#type().expect("no type?");
+        let shape = ty.resource_shape();
+        println!(
+            "{prespace}- resource: shape_base={} shape_ext=0x{:x} access={} result_ty={:?}",
+            shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
+            shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
+            ty.resource_access(),
+            ty.resource_result_type().expect("no result type").name()
+        );
+
+        println!("{prespace}  ResultType:");
+        recursive_dump_ty(
+            ty.resource_result_type().expect("no result type"),
+            indent + 2,
+        );
+    }
+}
+fn recursive_dump_ty(ty: &slang::reflection::Type, indent: usize) {
+    let prespace = "  ".repeat(indent);
+    let kind = ty.kind();
+
+    println!("{prespace}{:?}({:?}): {kind:?}", ty.name(), ty.full_name());
+
+    match kind {
+        slang::reflection::TypeKind::Vector | slang::reflection::TypeKind::Array => {
+            println!("{prespace}- element count: {}", ty.element_count(None));
+        }
+        slang::reflection::TypeKind::Matrix => {
+            println!(
+                "{prespace}- element count: {}x{}",
+                ty.row_count(),
+                ty.column_count()
+            );
+        }
+        _ => {}
+    }
+
+    if let Some(x) = ty.element_type() {
+        println!("{prespace}  Element:");
+        recursive_dump_ty(x, indent + 2);
+    }
+
+    for f in ty.iter_field() {
+        recursive_dump_ty(f.r#type(), indent + 1);
+    }
+
+    if kind == slang::reflection::TypeKind::Resource {
+        let shape = ty.resource_shape();
+        println!(
+            "{prespace}- resource: shape_base={} shape_ext=0x{:x} access={}",
+            shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
+            shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
+            ty.resource_access(),
+        );
+
+        println!("{prespace}  ResultType:");
+        recursive_dump_ty(
+            ty.resource_result_type().expect("no result type"),
+            indent + 2,
+        );
+    }
+}
+
+fn visit_ty(tl: &slang::reflection::TypeLayout, indent: usize) {
+    match tl.r#type() {
+        None => {
+            println!("{}<Unknown Type>({:?})", "  ".repeat(indent), tl.kind());
+        }
+        Some(ty) => {
+            let f = ty.full_name();
+            println!(
+                "{}{:?}({f:?}): {:?}",
+                "  ".repeat(indent),
+                ty.name(),
+                tl.kind()
+            );
+        }
+    }
+
+    match tl.kind() {
         slang::reflection::TypeKind::ParameterBlock
         | slang::reflection::TypeKind::ConstantBuffer => {
-            let content_vl = ty.content_var_layout().expect("no element var");
-            visit_ty(content_vl.r#type_layout(), indent + 1);
+            visit_ty(
+                tl.content_var_layout()
+                    .expect("no content var?")
+                    .r#type_layout(),
+                indent + 1,
+            );
         }
         slang::reflection::TypeKind::Struct => {
-            for n in 0..ty.field_count() {
-                visit_ty(ty.field(n).expect("no field").type_layout(), indent + 1);
-            }
+            // for f in tl.iter_field() {
+            //     visit_ty(f.type_layout(), indent + 1);
+            // }
         }
         slang::reflection::TypeKind::Vector => {
+            let ty = tl.r#type().expect("no type?");
             println!(
-                "{}- vector: {} x {}",
+                "{}- vector: {}",
                 "  ".repeat(indent + 1),
                 ty.element_count(None),
-                ty.element_stride(slang::reflection::ParameterCategory::Uniform)
             );
             visit_ty(
-                ty.element_type_layout().expect("no vector element type"),
+                tl.element_type_layout().expect("no vector element type"),
                 indent + 1,
             );
         }
         slang::reflection::TypeKind::Matrix => {
+            let ty = tl.r#type().expect("no type?");
             println!(
                 "{}- matrix: {} x {}",
                 "  ".repeat(indent + 1),
-                ty.element_count(None),
-                ty.element_stride(slang::reflection::ParameterCategory::Uniform)
+                ty.row_count(),
+                ty.column_count(),
             );
             visit_ty(
-                ty.element_type_layout().expect("no matrix element type"),
+                tl.element_type_layout().expect("no matrix element type"),
                 indent + 1,
             );
         }
         slang::reflection::TypeKind::Resource => {
+            let ty = tl.r#type().expect("no type?");
             let shape = ty.resource_shape();
             println!(
                 "{}- resource: shape_base={} shape_ext=0x{:x} access={} result_ty={:?}",
@@ -1388,7 +1563,14 @@ fn visit_ty(ty: &slang::reflection::TypeLayout, indent: usize) {
 }
 
 fn visit_ty_simple(ty: &slang::reflection::Type, indent: usize) {
-    println!("{}{:?}: {:?}", "  ".repeat(indent), ty.name(), ty.kind());
+    let f = ty.full_name();
+    println!(
+        "{}{:?}({f:?}): {:?}",
+        "  ".repeat(indent),
+        ty.name(),
+        ty.kind()
+    );
+
     match ty.kind() {
         slang::reflection::TypeKind::ParameterBlock
         | slang::reflection::TypeKind::ConstantBuffer
@@ -1397,25 +1579,20 @@ fn visit_ty_simple(ty: &slang::reflection::Type, indent: usize) {
         }
         slang::reflection::TypeKind::Vector => {
             println!(
-                "{}- vector: {} ",
+                "{}- vector: {}",
                 "  ".repeat(indent + 1),
                 ty.element_count(None),
             );
-            visit_ty_simple(
-                ty.element_type().expect("no vector element type"),
-                indent + 1,
-            );
+            visit_ty_simple(ty.element_type().expect("no element type"), indent + 1);
         }
         slang::reflection::TypeKind::Matrix => {
             println!(
-                "{}- matrix: {} ",
+                "{}- matrix: {} x {}",
                 "  ".repeat(indent + 1),
-                ty.element_count(None),
+                ty.row_count(),
+                ty.column_count(),
             );
-            visit_ty_simple(
-                ty.element_type().expect("no matrix element type"),
-                indent + 1,
-            );
+            visit_ty_simple(ty.element_type().expect("no element type"), indent + 1);
         }
         slang::reflection::TypeKind::Resource => {
             let shape = ty.resource_shape();
