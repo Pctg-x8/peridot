@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     ffi::CString,
     io::{BufRead, IoSlice, IoSliceMut, Write},
+    num::NonZeroUsize,
     path::Path,
 };
 
@@ -149,6 +150,8 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
     if let Some(gv) = rl.global_params_var_layout() {
         println!("---");
         recursive_dump_global_input(gv, 0);
+        println!("---ty---");
+        recursive_dump_ty_layout(gv.type_layout(), 0);
         println!("---");
     }
 
@@ -157,6 +160,8 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         object_parameters_var: None,
         camera_parameters_var: None,
     };
+    let mut var_name_pool = VarNamePool::new();
+    let mut accumulated_offset_history_arena = AccumulatedOffsetHistoryArena::new();
     if let Some(gv) = rl.global_params_var_layout() {
         let tl = gv.type_layout();
         println!("global var: {:?}", tl.kind());
@@ -186,10 +191,11 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                     evl.type_layout().field(n).expect("no field"),
                     0,
                     &session,
-                    VisitContext {
-                        per_category_accum_value: HashMap::new(),
-                        incoming_variable_placement: AccumulatedCounter::ZERO,
-                        parent_path: Vec::new(),
+                    &mut VisitContext {
+                        accumulated_offset_history_arena: &mut accumulated_offset_history_arena,
+                        accumulated_offset_history_parent: None,
+                        var_name_pool: &mut var_name_pool,
+                        parent_name_ref: None,
                         is_material_property: false,
                     },
                     &mut collected,
@@ -202,10 +208,11 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                     f,
                     0,
                     &session,
-                    VisitContext {
-                        per_category_accum_value: HashMap::new(),
-                        incoming_variable_placement: AccumulatedCounter::ZERO,
-                        parent_path: Vec::new(),
+                    &mut VisitContext {
+                        accumulated_offset_history_arena: &mut accumulated_offset_history_arena,
+                        accumulated_offset_history_parent: None,
+                        var_name_pool: &mut var_name_pool,
+                        parent_name_ref: None,
                         is_material_property: false,
                     },
                     &mut collected,
@@ -225,12 +232,12 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
     for v in collected.input_vars.iter() {
         println!(
             "  {:?}: {:?}({:?}) at Descriptor(set={}, binding={})+{} size={} is_material_property={} propertyName={:?}",
-            v.path,
+            var_name_pool.query_chained(v.path),
             v.r#type.r#type().expect("no type?").name(),
             v.category,
-            v.placement.descriptor_set_base,
-            v.placement.descriptor_binding_base,
-            v.placement.offset_base,
+            v.placement.descriptor_set,
+            v.placement.descriptor_binding,
+            v.placement.byte_offset,
             v.size,
             v.is_material_property,
             v.property_name_override
@@ -240,10 +247,17 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
     // retain only leaf params
     let mut non_root_paths = HashSet::new();
     for v in collected.input_vars.iter() {
-        non_root_paths.insert(v.path[..v.path.len() - 1].to_vec());
+        let f = var_name_pool.query_chained(v.path);
+        let mut nr = &f[..f.len() - 1];
+        while !nr.is_empty() {
+            non_root_paths.insert(nr.to_vec());
+            nr = &nr[..nr.len() - 1];
+        }
     }
     for p in non_root_paths.into_iter() {
-        collected.input_vars.retain(|x| x.path != p);
+        collected
+            .input_vars
+            .retain(|x| var_name_pool.query_chained(x.path) != p);
     }
 
     let mut material_properties = Vec::new();
@@ -254,10 +268,10 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                 AssetInputVariableType::from_slang_type(v.r#type.r#type().expect("no type?"))
                     .expect("unsupported input variable type");
             material_properties.push(AssetMaterialPropertyVk {
-                name: v
-                    .path
+                name: var_name_pool
+                    .query_chained(v.path)
                     .iter()
-                    .filter_map(|x| x.as_ref())
+                    .flatten()
                     .map(|x| x.to_str().expect("invalid path str"))
                     .collect::<Vec<_>>()
                     .join("."),
@@ -267,15 +281,15 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                         .to_owned()
                 }),
                 r#type,
-                descriptor_binding: v.placement.descriptor_binding_base as _,
-                descriptor_set: v.placement.descriptor_set_base as _,
-                offset: v.placement.offset_base as _,
+                descriptor_binding: v.placement.descriptor_binding as _,
+                descriptor_set: v.placement.descriptor_set as _,
+                offset: v.placement.byte_offset as _,
                 size: v.size as _,
             });
 
             let input_variable_layout_key = (
-                v.placement.descriptor_set_base as u32,
-                v.placement.descriptor_binding_base as u32,
+                v.placement.descriptor_set as u32,
+                v.placement.descriptor_binding as u32,
             );
             match v.category {
                 slang::reflection::ParameterCategory::DescriptorTableSlot => {
@@ -406,22 +420,22 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         input_variable_layout,
         object_parameters_placement: collected.object_parameters_var.map(|x| {
             assert_eq!(
-                x.placement.offset_base, 0,
+                x.placement.byte_offset, 0,
                 "engine parameters placed on nonzero offset"
             );
             (
-                x.placement.descriptor_set_base as u32,
-                x.placement.descriptor_binding_base as u32,
+                x.placement.descriptor_set as u32,
+                x.placement.descriptor_binding as u32,
             )
         }),
         camera_parameters_placement: collected.camera_parameters_var.map(|x| {
             assert_eq!(
-                x.placement.offset_base, 0,
+                x.placement.byte_offset, 0,
                 "engine parameters placed on nonzero offset"
             );
             (
-                x.placement.descriptor_set_base as u32,
-                x.placement.descriptor_binding_base as u32,
+                x.placement.descriptor_set as u32,
+                x.placement.descriptor_binding as u32,
             )
         }),
     }
@@ -996,7 +1010,7 @@ fn visit_vsh_input(
     println!("{}vsh param: {:?}", "  ".repeat(indent), v.name());
     dump_vl_space_offset_forall_category(v, &"  ".repeat(indent));
     dump_user_attrs(v, &"  ".repeat(indent + 1));
-    visit_ty(ty, indent + 1);
+    dump_ty_layout(ty, indent + 1);
 
     if let Some(t) = ty.r#type()
         && t.kind() == slang::reflection::TypeKind::Struct
@@ -1052,42 +1066,143 @@ fn recursive_dump_global_input(vl: &slang::reflection::VariableLayout, indent: u
     }
 }
 
-// Note: 相対値が記録されているので、これに累積してく
-#[derive(Clone, Debug)]
-struct AccumulatedCounter {
-    descriptor_binding_base: usize,
-    descriptor_set_base: usize,
-    offset_base: usize,
+pub struct VarName {
+    name: Option<CString>,
+    parent: Option<VarNameRef>,
 }
-impl AccumulatedCounter {
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+pub struct VarNameRef(NonZeroUsize);
+impl VarNameRef {
+    #[inline(always)]
+    const fn from_array_index(v: usize) -> Self {
+        Self(unsafe { NonZeroUsize::new_unchecked(v + 1) })
+    }
+
+    #[inline(always)]
+    const fn into_array_index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
+pub struct VarNamePool(Vec<VarName>);
+impl VarNamePool {
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    #[inline(always)]
+    pub fn add(&mut self, name: VarName) -> VarNameRef {
+        self.0.push(name);
+        VarNameRef::from_array_index(self.0.len() - 1)
+    }
+
+    #[inline(always)]
+    pub fn get(&self, r: VarNameRef) -> &VarName {
+        &self.0[r.into_array_index()]
+    }
+
+    pub fn query_chained(&self, leaf: VarNameRef) -> Vec<Option<&core::ffi::CStr>> {
+        let mut sink = Vec::new();
+        let mut ptr = Some(leaf);
+        while let Some(p) = ptr {
+            let x = &self.0[p.into_array_index()];
+            sink.push(x.name.as_deref());
+            ptr = x.parent;
+        }
+        sink.reverse();
+
+        sink
+    }
+}
+
+#[derive(Debug)]
+struct VarPlacement {
+    descriptor_binding: usize,
+    descriptor_set: usize,
+    byte_offset: usize,
+}
+impl VarPlacement {
     const ZERO: Self = Self {
-        descriptor_binding_base: 0,
-        descriptor_set_base: 0,
-        offset_base: 0,
+        descriptor_binding: 0,
+        descriptor_set: 0,
+        byte_offset: 0,
     };
 }
 
-#[derive(Clone, Debug)]
-struct VisitContext {
-    per_category_accum_value: HashMap<slang::reflection::ParameterCategory, AccumulatedCounter>,
-    incoming_variable_placement: AccumulatedCounter,
-    parent_path: Vec<Option<CString>>,
+#[derive(Debug)]
+struct ParameterCategoryValues {
+    space: usize,
+    offset: usize,
+    size: usize,
+}
+
+#[derive(Debug)]
+pub struct AccumulatedOffsetHistoryEntry {
+    values: HashMap<slang::reflection::ParameterCategory, ParameterCategoryValues>,
+    container_sub_element_register_space_size: usize,
+    is_container: bool,
+    parent: Option<AccumulatedOffsetHistoryHandle>,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[repr(transparent)]
+pub struct AccumulatedOffsetHistoryHandle(NonZeroUsize);
+impl AccumulatedOffsetHistoryHandle {
+    #[inline(always)]
+    const fn from_array_index(v: usize) -> Self {
+        Self(unsafe { NonZeroUsize::new_unchecked(v + 1) })
+    }
+
+    #[inline(always)]
+    const fn into_array_index(self) -> usize {
+        self.0.get() - 1
+    }
+}
+
+pub struct AccumulatedOffsetHistoryArena {
+    entries: Vec<AccumulatedOffsetHistoryEntry>,
+}
+impl AccumulatedOffsetHistoryArena {
+    pub fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn create(&mut self, e: AccumulatedOffsetHistoryEntry) -> AccumulatedOffsetHistoryHandle {
+        self.entries.push(e);
+        AccumulatedOffsetHistoryHandle::from_array_index(self.entries.len() - 1)
+    }
+
+    pub fn get(&self, handle: AccumulatedOffsetHistoryHandle) -> &AccumulatedOffsetHistoryEntry {
+        &self.entries[handle.into_array_index()]
+    }
+}
+
+struct VisitContext<'env> {
+    accumulated_offset_history_arena: &'env mut AccumulatedOffsetHistoryArena,
+    accumulated_offset_history_parent: Option<AccumulatedOffsetHistoryHandle>,
+    var_name_pool: &'env mut VarNamePool,
+    parent_name_ref: Option<VarNameRef>,
     is_material_property: bool,
 }
 
 pub struct InputVariable<'a> {
-    path: Vec<Option<CString>>,
+    path: VarNameRef,
     var: &'a slang::reflection::VariableLayout,
     r#type: &'a slang::reflection::TypeLayout,
     category: slang::reflection::ParameterCategory,
-    placement: AccumulatedCounter,
+    placement: VarPlacement,
     size: usize,
     is_material_property: bool,
     property_name_override: Option<CString>,
 }
 
 pub struct EngineInputVariable {
-    placement: AccumulatedCounter,
+    placement: VarPlacement,
 }
 
 pub struct GlobalInputCollected<'a> {
@@ -1103,11 +1218,98 @@ enum InputVarType {
     EngineCameraParameters,
 }
 
+// accumulation algorithm deformed from official docs: https://docs.shader-slang.org/en/latest/external/slang/docs/user-guide/09-reflection.html#handling-single-element-containers
+fn accumulate_var_placement(
+    leaf: AccumulatedOffsetHistoryHandle,
+    arena: &AccumulatedOffsetHistoryArena,
+    is_uniform: bool,
+) -> VarPlacement {
+    if is_uniform {
+        let mut accumulate_uniform_offset = true;
+        let mut accumulate_descriptor_binding_offset = true;
+        let mut accumulated = VarPlacement::ZERO;
+        let mut ptr = Some(leaf);
+        while let Some(p) = ptr {
+            let h = arena.get(p);
+
+            if accumulate_uniform_offset {
+                accumulated.byte_offset += h
+                    .values
+                    .get(&slang::reflection::ParameterCategory::Uniform)
+                    .map_or(0, |x| x.offset);
+
+                if h.is_container {
+                    // container boundary
+                    accumulate_uniform_offset = false;
+
+                    // accumulate descriptor locations from here
+                    accumulated.descriptor_binding = 0;
+                    accumulated.descriptor_set = 0;
+                }
+            }
+            if accumulate_descriptor_binding_offset {
+                accumulated.descriptor_binding += h
+                    .values
+                    .get(&slang::reflection::ParameterCategory::DescriptorTableSlot)
+                    .map_or(0, |x| x.offset);
+                accumulated.descriptor_set += h
+                    .values
+                    .get(&slang::reflection::ParameterCategory::DescriptorTableSlot)
+                    .map_or(0, |x| x.space);
+
+                if h.container_sub_element_register_space_size > 0 {
+                    // sub space boundary
+                    accumulate_descriptor_binding_offset = false;
+                }
+            }
+            accumulated.descriptor_set += h
+                .values
+                .get(&slang::reflection::ParameterCategory::SubElementRegisterSpace)
+                .map_or(0, |x| x.offset);
+
+            ptr = h.parent;
+        }
+
+        accumulated
+    } else {
+        let mut accumulate_descriptor_binding_offset = true;
+        let mut accumulated = VarPlacement::ZERO;
+        let mut ptr = Some(leaf);
+        while let Some(p) = ptr {
+            let h = arena.get(p);
+
+            if accumulate_descriptor_binding_offset {
+                accumulated.descriptor_binding += h
+                    .values
+                    .get(&slang::reflection::ParameterCategory::DescriptorTableSlot)
+                    .map_or(0, |x| x.offset);
+                accumulated.descriptor_set += h
+                    .values
+                    .get(&slang::reflection::ParameterCategory::DescriptorTableSlot)
+                    .map_or(0, |x| x.space);
+            }
+            accumulated.descriptor_set += h
+                .values
+                .get(&slang::reflection::ParameterCategory::SubElementRegisterSpace)
+                .map_or(0, |x| x.offset);
+
+            if h.container_sub_element_register_space_size > 0 {
+                // sub space boundary
+                accumulate_descriptor_binding_offset = false;
+            }
+
+            ptr = h.parent;
+        }
+
+        accumulated
+    }
+}
+
 fn visit_global_input<'a>(
     v: &'a slang::reflection::VariableLayout,
     indent: usize,
     global_session: &impl slang::IGlobalSession,
-    ctx: VisitContext,
+    ctx: &mut VisitContext,
     collected: &mut GlobalInputCollected<'a>,
 ) {
     let is_material_property = ctx.is_material_property
@@ -1123,20 +1325,18 @@ fn visit_global_input<'a>(
                     tracing::error!("contant buffer have no content var?");
                     break 'try_constant_buffer_content_full_type_name None;
                 };
-                let full_name = match content_var
+                match content_var
                     .type_layout()
                     .r#type()
                     .expect("no type?")
                     .full_name()
                 {
-                    Ok(x) => x,
+                    Ok(x) => Some(x),
                     Err(e) => {
                         tracing::error!(reason = ?e, "failed to query full name of content type");
                         break 'try_constant_buffer_content_full_type_name None;
                     }
-                };
-
-                Some(full_name)
+                }
             }
             _ => None,
         }
@@ -1175,69 +1375,90 @@ fn visit_global_input<'a>(
         });
 
     let ty = v.type_layout();
-    let variable_path = ctx
-        .parent_path
-        .iter()
-        .cloned()
-        .chain(core::iter::once(v.name().map(|x| x.to_owned())))
-        .collect::<Vec<_>>();
-    println!(
-        "{}g param: {:?}: {:?}({ty:p})",
-        "  ".repeat(indent),
-        v.name(),
-        ty.r#type().map(|t| t.name()),
-    );
-    dump_vl_space_offset_forall_category(v, &"  ".repeat(indent));
+    println!("{}g param: {:?}", "  ".repeat(indent), v.name());
+    dump_ty_layout(ty, indent + 1);
+    dump_vl_space_offset_forall_category(v, &"  ".repeat(indent + 1));
     dump_user_attrs(v, &"  ".repeat(indent + 1));
-    visit_ty(ty, indent + 1);
 
-    assert_eq!(v.category_count(), 1, "mixed category variable");
-    let cat = v.category_by_index(0);
-    assert_eq!(v.space(cat), 0);
-    let mut variable_placement = ctx
-        .per_category_accum_value
-        .get(&cat)
-        .unwrap_or(&ctx.incoming_variable_placement)
-        .clone();
-    match cat {
-        slang::reflection::ParameterCategory::DescriptorTableSlot => {
-            assert_eq!(v.space(cat), 0);
-            variable_placement.descriptor_binding_base += v.offset(cat);
-        }
-        slang::reflection::ParameterCategory::SubElementRegisterSpace => {
-            assert_eq!(v.space(cat), 0);
-            variable_placement.descriptor_set_base += v.offset(cat);
-        }
-        slang::reflection::ParameterCategory::Uniform => {
-            assert_eq!(v.space(cat), 0);
-            variable_placement.offset_base += v.offset(cat);
-        }
-        _ => (),
-    }
+    let var_name_ref = ctx.var_name_pool.add(VarName {
+        name: v.name().map(ToOwned::to_owned),
+        parent: ctx.parent_name_ref,
+    });
+    let accumulated_offset_history_self =
+        ctx.accumulated_offset_history_arena
+            .create(AccumulatedOffsetHistoryEntry {
+                values: v
+                    .iter_category()
+                    .map(|cat| {
+                        (
+                            cat,
+                            ParameterCategoryValues {
+                                space: v.space(cat),
+                                offset: v.offset(cat),
+                                size: v.type_layout().size(cat),
+                            },
+                        )
+                    })
+                    .collect::<HashMap<_, _>>(),
+                is_container: matches!(
+                    ty.kind(),
+                    slang::reflection::TypeKind::ConstantBuffer
+                        | slang::reflection::TypeKind::ParameterBlock
+                        | slang::reflection::TypeKind::TextureBuffer
+                        | slang::reflection::TypeKind::ShaderStorageBuffer
+                ),
+                container_sub_element_register_space_size: ty.container_var_layout().map_or(
+                    0,
+                    |x| {
+                        x.type_layout()
+                            .size(slang::reflection::ParameterCategory::SubElementRegisterSpace)
+                    },
+                ),
+                parent: ctx.accumulated_offset_history_parent,
+            });
     println!(
-        "{}- variable placed: {variable_placement:?}",
-        "  ".repeat(indent),
+        "{}parameter category value history:",
+        "  ".repeat(indent + 1)
+    );
+    let mut ptr = Some(accumulated_offset_history_self);
+    while let Some(p) = ptr {
+        let h = ctx.accumulated_offset_history_arena.get(p);
+        println!("{}{h:?}", "  ".repeat(indent + 2));
+        ptr = h.parent;
+    }
+
+    let variable_placement = accumulate_var_placement(
+        accumulated_offset_history_self,
+        ctx.accumulated_offset_history_arena,
+        v.category() == slang::reflection::ParameterCategory::Uniform,
+    );
+    println!(
+        "{}variable placed: {variable_placement:?}",
+        "  ".repeat(indent + 1),
     );
 
     match input_var_type {
         InputVarType::MaterialProperty => {
-            collected.input_vars.push(InputVariable {
-                path: variable_path.clone(),
-                var: v,
-                r#type: ty,
-                category: cat,
-                placement: variable_placement.clone(),
-                size: ty.size(cat),
-                is_material_property,
-                property_name_override,
-            });
+            if v.category_count() == 1 {
+                let cat = v.category_by_index(0);
+                collected.input_vars.push(InputVariable {
+                    path: var_name_ref,
+                    var: v,
+                    r#type: ty,
+                    category: cat,
+                    placement: variable_placement,
+                    size: ty.size(cat),
+                    is_material_property,
+                    property_name_override,
+                });
+            }
         }
         InputVarType::EngineObjectParameters => {
             if collected.object_parameters_var.is_some() {
                 tracing::warn!("multiple object parameters variables found");
             }
             collected.object_parameters_var = Some(EngineInputVariable {
-                placement: variable_placement.clone(),
+                placement: variable_placement,
             });
         }
         InputVarType::EngineCameraParameters => {
@@ -1245,97 +1466,49 @@ fn visit_global_input<'a>(
                 tracing::warn!("multiple camera parameters variables found");
             }
             collected.camera_parameters_var = Some(EngineInputVariable {
-                placement: variable_placement.clone(),
+                placement: variable_placement,
             });
         }
         InputVarType::Unknown => {
+            let mut variable_path = Vec::new();
+            let mut ptr = Some(var_name_ref);
+            while let Some(p) = ptr {
+                let x = ctx.var_name_pool.get(p);
+                variable_path.push(x.name.as_deref());
+                ptr = x.parent;
+            }
+            variable_path.reverse();
+
             tracing::warn!(path = ?variable_path, "ignoring variable...");
         }
     }
 
     let mut child_ctx = VisitContext {
-        parent_path: variable_path,
-        incoming_variable_placement: variable_placement,
+        var_name_pool: ctx.var_name_pool,
+        parent_name_ref: Some(var_name_ref),
         is_material_property,
-        per_category_accum_value: HashMap::new(),
+        accumulated_offset_history_arena: ctx.accumulated_offset_history_arena,
+        accumulated_offset_history_parent: Some(accumulated_offset_history_self),
     };
-    child_ctx
-        .per_category_accum_value
-        .insert(cat, child_ctx.incoming_variable_placement.clone());
 
-    if let Some(cvl) = ty.container_var_layout() {
-        for cat in cvl.iter_category() {
-            assert_eq!(cvl.space(cat), 0);
-            println!(
-                "{}- cvl({:?}) {cat:?}: offset={}",
-                "  ".repeat(indent),
-                cvl.type_layout().kind(),
-                cvl.offset(cat)
-            );
-
-            match cat {
-                slang::reflection::ParameterCategory::DescriptorTableSlot => {
-                    child_ctx
-                        .per_category_accum_value
-                        .entry(cat)
-                        .or_insert(child_ctx.incoming_variable_placement.clone())
-                        .descriptor_binding_base += cvl.offset(cat);
-                }
-                slang::reflection::ParameterCategory::SubElementRegisterSpace => {
-                    child_ctx
-                        .per_category_accum_value
-                        .entry(cat)
-                        .or_insert(child_ctx.incoming_variable_placement.clone())
-                        .descriptor_set_base += cvl.offset(cat);
-                }
-                slang::reflection::ParameterCategory::Uniform => {
-                    child_ctx
-                        .per_category_accum_value
-                        .entry(cat)
-                        .or_insert(child_ctx.incoming_variable_placement.clone())
-                        .offset_base += cvl.offset(cat);
-                }
-                _ => (),
-            }
-        }
-    }
-
-    if let Some(cnvl) = ty.content_var_layout() {
-        for cat in cnvl.iter_category() {
-            assert_eq!(cnvl.space(cat), 0);
-            println!(
-                "{}- cnvl({:?}) {cat:?}: offset={}",
-                "  ".repeat(indent),
-                cnvl.type_layout().kind(),
-                cnvl.offset(cat),
-            );
-
-            match cat {
-                slang::reflection::ParameterCategory::DescriptorTableSlot => {
-                    child_ctx
-                        .per_category_accum_value
-                        .entry(cat)
-                        .or_insert(child_ctx.incoming_variable_placement.clone())
-                        .descriptor_binding_base += cnvl.offset(cat);
-                }
-                slang::reflection::ParameterCategory::SubElementRegisterSpace => {
-                    child_ctx
-                        .per_category_accum_value
-                        .entry(cat)
-                        .or_insert(child_ctx.incoming_variable_placement.clone())
-                        .descriptor_set_base += cnvl.offset(cat);
-                }
-                slang::reflection::ParameterCategory::Uniform => {
-                    child_ctx
-                        .per_category_accum_value
-                        .entry(cat)
-                        .or_insert(child_ctx.incoming_variable_placement.clone())
-                        .offset_base += cnvl.offset(cat);
-                }
-                _ => (),
-            }
-        }
-    }
+    //     if let Some(cvl) = ty.container_var_layout() {
+    //         // println!(
+    //         //     "{}- cvl: sub element register space size: {}",
+    //         //     "  ".repeat(indent),
+    //         //     cvl.type_layout()
+    //         //         .size(slang::reflection::ParameterCategory::SubElementRegisterSpace)
+    //         // );
+    //         // for cat in cvl.iter_category() {
+    //         //     println!(
+    //         //         "{}- cvl({:?}) {cat:?}: offset={}",
+    //         //         "  ".repeat(indent),
+    //         //         cvl.type_layout().kind(),
+    //         //         cvl.offset(cat)
+    //         //     );
+    //         // }
+    //
+    //         // containerはparameter category value stackにのせなくていい(Slang公式も含めてないっぽい)
+    //     }
 
     // Note: getElementTypeはgetContentTypeのサブセットっぽい(cpp見る感じでは)のでElementVarのほうは見なくてもよさそう
 
@@ -1343,21 +1516,24 @@ fn visit_global_input<'a>(
         slang::reflection::TypeKind::Struct => {
             // recurse members
             for f in ty.iter_field() {
-                visit_global_input(f, indent + 1, global_session, child_ctx.clone(), collected);
+                visit_global_input(f, indent + 1, global_session, &mut child_ctx, collected);
             }
         }
         slang::reflection::TypeKind::ParameterBlock
         | slang::reflection::TypeKind::ConstantBuffer => {
-            let content_vl = ty.content_var_layout().expect("no element var");
-            if content_vl.type_layout().kind() == slang::reflection::TypeKind::Struct {
-                for f in content_vl.type_layout().iter_field() {
-                    visit_global_input(f, indent + 1, global_session, child_ctx.clone(), collected);
-                }
-            } else {
-                todo!("direct value constant buffer");
-            }
+            visit_global_input(
+                ty.content_var_layout().expect("no element var"),
+                indent + 1,
+                global_session,
+                &mut child_ctx,
+                collected,
+            );
         }
-        _ => {}
+        slang::reflection::TypeKind::Scalar
+        | slang::reflection::TypeKind::Vector
+        | slang::reflection::TypeKind::Matrix
+        | slang::reflection::TypeKind::Resource => {}
+        t => tracing::warn!("unhandled type: {t:?}"),
     }
 }
 
@@ -1372,19 +1548,10 @@ fn dump_ty_layout(tl: &slang::reflection::TypeLayout, indent: usize) {
 }
 
 fn recursive_dump_ty_layout(tl: &slang::reflection::TypeLayout, indent: usize) {
+    dump_ty_layout(tl, indent);
+
     let prespace = "  ".repeat(indent);
-    let kind = tl.kind();
-
-    match tl.r#type() {
-        None => {
-            println!("{prespace}<Unknown Type>: {kind:?}");
-        }
-        Some(ty) => {
-            println!("{prespace}{:?}({:?}): {kind:?}", ty.name(), ty.full_name());
-        }
-    }
-
-    match kind {
+    match tl.kind() {
         slang::reflection::TypeKind::Vector | slang::reflection::TypeKind::Array => {
             println!(
                 "{prespace}- element count: {}",
@@ -1397,6 +1564,23 @@ fn recursive_dump_ty_layout(tl: &slang::reflection::TypeLayout, indent: usize) {
                 "{prespace}- element count: {}x{}",
                 ty.row_count(),
                 ty.column_count()
+            );
+        }
+        slang::reflection::TypeKind::Resource => {
+            let ty = tl.r#type().expect("no type?");
+            let shape = ty.resource_shape();
+            println!(
+                "{prespace}- resource: shape_base={} shape_ext=0x{:x} access={} result_ty={:?}",
+                shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
+                shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
+                ty.resource_access(),
+                ty.resource_result_type().expect("no result type").name()
+            );
+
+            println!("{prespace}  ResultType:");
+            recursive_dump_ty(
+                ty.resource_result_type().expect("no result type"),
+                indent + 2,
             );
         }
         _ => {}
@@ -1420,24 +1604,6 @@ fn recursive_dump_ty_layout(tl: &slang::reflection::TypeLayout, indent: usize) {
     for f in tl.iter_field() {
         recursive_dump_ty_layout(f.type_layout(), indent + 1);
     }
-
-    if kind == slang::reflection::TypeKind::Resource {
-        let ty = tl.r#type().expect("no type?");
-        let shape = ty.resource_shape();
-        println!(
-            "{prespace}- resource: shape_base={} shape_ext=0x{:x} access={} result_ty={:?}",
-            shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
-            shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
-            ty.resource_access(),
-            ty.resource_result_type().expect("no result type").name()
-        );
-
-        println!("{prespace}  ResultType:");
-        recursive_dump_ty(
-            ty.resource_result_type().expect("no result type"),
-            indent + 2,
-        );
-    }
 }
 fn recursive_dump_ty(ty: &slang::reflection::Type, indent: usize) {
     let prespace = "  ".repeat(indent);
@@ -1456,6 +1622,21 @@ fn recursive_dump_ty(ty: &slang::reflection::Type, indent: usize) {
                 ty.column_count()
             );
         }
+        slang::reflection::TypeKind::Resource => {
+            let shape = ty.resource_shape();
+            println!(
+                "{prespace}- resource: shape_base={} shape_ext=0x{:x} access={}",
+                shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
+                shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
+                ty.resource_access(),
+            );
+
+            println!("{prespace}  ResultType:");
+            recursive_dump_ty(
+                ty.resource_result_type().expect("no result type"),
+                indent + 2,
+            );
+        }
         _ => {}
     }
 
@@ -1466,151 +1647,6 @@ fn recursive_dump_ty(ty: &slang::reflection::Type, indent: usize) {
 
     for f in ty.iter_field() {
         recursive_dump_ty(f.r#type(), indent + 1);
-    }
-
-    if kind == slang::reflection::TypeKind::Resource {
-        let shape = ty.resource_shape();
-        println!(
-            "{prespace}- resource: shape_base={} shape_ext=0x{:x} access={}",
-            shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
-            shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
-            ty.resource_access(),
-        );
-
-        println!("{prespace}  ResultType:");
-        recursive_dump_ty(
-            ty.resource_result_type().expect("no result type"),
-            indent + 2,
-        );
-    }
-}
-
-fn visit_ty(tl: &slang::reflection::TypeLayout, indent: usize) {
-    match tl.r#type() {
-        None => {
-            println!("{}<Unknown Type>({:?})", "  ".repeat(indent), tl.kind());
-        }
-        Some(ty) => {
-            let f = ty.full_name();
-            println!(
-                "{}{:?}({f:?}): {:?}",
-                "  ".repeat(indent),
-                ty.name(),
-                tl.kind()
-            );
-        }
-    }
-
-    match tl.kind() {
-        slang::reflection::TypeKind::ParameterBlock
-        | slang::reflection::TypeKind::ConstantBuffer => {
-            visit_ty(
-                tl.content_var_layout()
-                    .expect("no content var?")
-                    .r#type_layout(),
-                indent + 1,
-            );
-        }
-        slang::reflection::TypeKind::Struct => {
-            // for f in tl.iter_field() {
-            //     visit_ty(f.type_layout(), indent + 1);
-            // }
-        }
-        slang::reflection::TypeKind::Vector => {
-            let ty = tl.r#type().expect("no type?");
-            println!(
-                "{}- vector: {}",
-                "  ".repeat(indent + 1),
-                ty.element_count(None),
-            );
-            visit_ty(
-                tl.element_type_layout().expect("no vector element type"),
-                indent + 1,
-            );
-        }
-        slang::reflection::TypeKind::Matrix => {
-            let ty = tl.r#type().expect("no type?");
-            println!(
-                "{}- matrix: {} x {}",
-                "  ".repeat(indent + 1),
-                ty.row_count(),
-                ty.column_count(),
-            );
-            visit_ty(
-                tl.element_type_layout().expect("no matrix element type"),
-                indent + 1,
-            );
-        }
-        slang::reflection::TypeKind::Resource => {
-            let ty = tl.r#type().expect("no type?");
-            let shape = ty.resource_shape();
-            println!(
-                "{}- resource: shape_base={} shape_ext=0x{:x} access={} result_ty={:?}",
-                "  ".repeat(indent + 1),
-                shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
-                shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
-                ty.resource_access(),
-                ty.resource_result_type().expect("no result type").name()
-            );
-
-            visit_ty_simple(
-                ty.resource_result_type().expect("no result type"),
-                indent + 1,
-            );
-        }
-        _ => (),
-    }
-}
-
-fn visit_ty_simple(ty: &slang::reflection::Type, indent: usize) {
-    let f = ty.full_name();
-    println!(
-        "{}{:?}({f:?}): {:?}",
-        "  ".repeat(indent),
-        ty.name(),
-        ty.kind()
-    );
-
-    match ty.kind() {
-        slang::reflection::TypeKind::ParameterBlock
-        | slang::reflection::TypeKind::ConstantBuffer
-        | slang::reflection::TypeKind::Struct => {
-            eprintln!("cannot descend");
-        }
-        slang::reflection::TypeKind::Vector => {
-            println!(
-                "{}- vector: {}",
-                "  ".repeat(indent + 1),
-                ty.element_count(None),
-            );
-            visit_ty_simple(ty.element_type().expect("no element type"), indent + 1);
-        }
-        slang::reflection::TypeKind::Matrix => {
-            println!(
-                "{}- matrix: {} x {}",
-                "  ".repeat(indent + 1),
-                ty.row_count(),
-                ty.column_count(),
-            );
-            visit_ty_simple(ty.element_type().expect("no element type"), indent + 1);
-        }
-        slang::reflection::TypeKind::Resource => {
-            let shape = ty.resource_shape();
-            println!(
-                "{}- resource: shape_base={} shape_ext=0x{:x} access={} result_ty={:?}",
-                "  ".repeat(indent + 1),
-                shape & slang::ffi::SLANG_RESOURCE_BASE_SHAPE_MASK,
-                shape & slang::ffi::SLANG_RESOURCE_EXT_SHAPE_MASK,
-                ty.resource_access(),
-                ty.resource_result_type().expect("no result type").name()
-            );
-
-            visit_ty_simple(
-                ty.resource_result_type().expect("no result type"),
-                indent + 1,
-            );
-        }
-        _ => (),
     }
 }
 
