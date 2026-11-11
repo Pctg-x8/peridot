@@ -619,13 +619,15 @@ impl RuntimeShader {
         &self,
         descriptor_sets: &[br::DescriptorSet],
         material_uniform_buffer: &'r (impl br::VkHandle<Handle = br::vk::VkBuffer> + ?Sized),
+        material_uniform_buffer_offset: br::DeviceSize,
         sink: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
     ) {
         for (&(set, binding), &range) in self.material_uniform_buffer_range_by_descriptor.iter() {
             sink.push(descriptor_sets[set as usize].binding_at(binding).write(
                 br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferInfo::new(
                     material_uniform_buffer,
-                    range.into(),
+                    range.start + material_uniform_buffer_offset
+                        ..range.end + material_uniform_buffer_offset,
                 )]),
             ))
         }

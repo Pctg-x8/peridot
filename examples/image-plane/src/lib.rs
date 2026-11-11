@@ -499,6 +499,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         shader_ref.write_descriptor_sets(
             &descriptors,
             &material_uniform_buffer.0,
+            material_uniform_buffer.offset(),
             &mut descriptor_writes,
         );
 

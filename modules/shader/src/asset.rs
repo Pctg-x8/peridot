@@ -16,7 +16,11 @@ impl peridot::LogicalAssetData for AssetCore {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AssetInputVariableType {
+    Float,
+    Float2,
+    Float3,
     Float4,
+    Float4x4,
     Texture2D,
 }
 impl AssetInputVariableType {
@@ -29,11 +33,23 @@ impl AssetInputVariableType {
                 None
             }
             slang::reflection::TypeKind::Array => todo!("array type property"),
+            slang::reflection::TypeKind::Scalar => {
+                let scalar_type = t.scalar_type();
+                match scalar_type {
+                    slang::reflection::ScalarType::Float32 => Some(Self::Float),
+                    t => {
+                        eprintln!("unknown scalar: {t:?}");
+                        None
+                    }
+                }
+            }
             slang::reflection::TypeKind::Vector => {
                 let element_count = t.element_count(None);
                 let element_type = t.element_type().expect("no vector element type");
                 let element_scalar_type = element_type.scalar_type();
                 match (element_scalar_type, element_count) {
+                    (slang::reflection::ScalarType::Float32, 2) => Some(Self::Float2),
+                    (slang::reflection::ScalarType::Float32, 3) => Some(Self::Float3),
                     (slang::reflection::ScalarType::Float32, 4) => Some(Self::Float4),
                     (t, c) => {
                         eprintln!("unknown vector element combination: {t:?} x {c}");
@@ -41,7 +57,21 @@ impl AssetInputVariableType {
                     }
                 }
             }
-            slang::reflection::TypeKind::Matrix => todo!("matrix type property"),
+            slang::reflection::TypeKind::Matrix => {
+                let row_count = t.row_count();
+                let column_count = t.column_count();
+                let element_type = t.element_type().expect("no matrix element type");
+                assert_eq!(element_type.kind(), slang::reflection::TypeKind::Scalar);
+                let scalar_type = element_type.scalar_type();
+
+                match (scalar_type, row_count, column_count) {
+                    (slang::reflection::ScalarType::Float32, 4, 4) => Some(Self::Float4x4),
+                    (t, r, c) => {
+                        eprintln!("unknown matrix element combination: {t:?} x {c} x {r}");
+                        None
+                    }
+                }
+            }
             slang::reflection::TypeKind::Resource => {
                 let shape = t.resource_shape();
                 let result_type = t.resource_result_type().expect("no result type");

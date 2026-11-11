@@ -10,6 +10,7 @@ edition = "2024"
 [dependencies]
 peridot = { path = "../../base" }
 bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot" }
+peridot-math = { path = "../../modules/math" }
 peridot-vertex-processing-pack = { path = "../../modules/vertex-processing-pack" }
 peridot-semantic-shader.path = "../../modules/semantic-shader"
 peridot-image = { path = "../../modules/image" }
@@ -18,3 +19,4 @@ peridot-command-object = { path = "../../modules/command-object", features = [
 ] }
 peridot-memory-manager = { path = "../../modules/memory-manager" }
 peridot-runtime-asset-manager = { path = "../../modules/runtime-asset-manager" }
+peridot-shader = { path = "../../modules/shader" }
