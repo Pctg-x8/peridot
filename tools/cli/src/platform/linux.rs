@@ -43,7 +43,12 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
-    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
+    steps::process_assets(
+        &ctx,
+        options.userlib,
+        options.ext_asset_path.as_deref(),
+        options.rebuild_runtime_assets,
+    );
     let runtime_asset_path =
         generated_runtime_assets_dir(options.userlib.canonicalize().expect("canonicalize"));
 

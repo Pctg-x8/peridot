@@ -36,6 +36,9 @@ pub struct Args {
     /// Release build
     #[arg(long)]
     release: bool,
+    /// Rebuilds all runtime assets(invalidate the current cache)
+    #[arg(long)]
+    rebuild_runtime_assets: bool,
 }
 impl Args {
     pub fn to_build_options<'s>(
@@ -82,6 +85,7 @@ impl Args {
                 .unwrap_or(project_config.app_package_id),
             fast_build: self.fast_build,
             release: self.release,
+            rebuild_runtime_assets: self.rebuild_runtime_assets,
         }
     }
 

@@ -40,6 +40,7 @@ pub struct BuildOptions<'s> {
     pub appid: &'s str,
     pub fast_build: bool,
     pub release: bool,
+    pub rebuild_runtime_assets: bool,
 }
 impl<'s> Default for BuildOptions<'s> {
     fn default() -> Self {
@@ -53,6 +54,7 @@ impl<'s> Default for BuildOptions<'s> {
             appid: "",
             fast_build: false,
             release: false,
+            rebuild_runtime_assets: false,
         }
     }
 }

@@ -179,11 +179,22 @@ pub fn process_assets(_: &BuildContext, _: &Path, _: Option<&Path>) {
     eprintln!("Warn: No process-assets feature enabled. skipping processing assets");
 }
 #[cfg(feature = "process-assets")]
-pub fn process_assets(ctx: &BuildContext, userlib_path: &Path, asset_path: Option<&Path>) {
+pub fn process_assets(
+    ctx: &BuildContext,
+    userlib_path: &Path,
+    asset_path: Option<&Path>,
+    rebuild_all: bool,
+) {
     // Pre-required built step
     let output_path = crate::path::generated_runtime_assets_dir(userlib_path);
     let builtin_assets_path = crate::path::builtin_assets_path();
 
+    if rebuild_all {
+        ctx.print_step("Invalidating current runtime assets...");
+        if let Err(e) = std::fs::remove_dir_all(&output_path) {
+            tracing::error!(reason = %e, "Failed to remove runtime assets");
+        }
+    }
     std::fs::create_dir_all(&output_path).expect("Failed to create runtime-assets dir");
 
     let processors: [Box<dyn peridot_asset_processing::AssetProcessor>; _] = [
