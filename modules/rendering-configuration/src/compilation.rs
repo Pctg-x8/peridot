@@ -334,7 +334,6 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             // ただ解放するのが正解だとはおもう......(slang側のバグのようにみえるが、詳細なドキュメントがないので不明)
             core::mem::forget(linked);
             core::mem::forget(program);
-            core::mem::forget(module);
 
             variants.insert(
                 v,
