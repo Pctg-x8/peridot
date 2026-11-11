@@ -9,7 +9,6 @@ use peridot::{CBSubmissionType, CommandBundle, SubpassDependencyTemplates};
 use peridot_image::StdTexture2DAsset;
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_rendering_configuration as prc;
 use peridot_runtime_asset_manager::RuntimeAssetManager;
 use std::collections::HashMap;
 use std::ffi::CString;
@@ -274,7 +273,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
     let shader = e
-        .load::<peridot_shader::AssetVk>("builtin.shaders.unlit_image2")
+        .load::<peridot_shader::asset::AssetVk>("builtin.shaders.unlit_image2")
         .expect("Loading shader");
     for x in shader.material_properties.iter() {
         println!("{x:?}");
@@ -286,7 +285,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let mut material_properties_sorted = shader
         .material_properties
         .iter()
-        .filter(|p| p.r#type != peridot_shader::AssetInputVariableType::Texture2D)
+        .filter(|p| p.r#type != peridot_shader::asset::AssetInputVariableType::Texture2D)
         .collect::<Vec<_>>();
     material_properties_sorted.sort_by(|a, b| {
         a.descriptor_set
@@ -385,11 +384,11 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 .iter()
                 .filter(|(k, _)| k.0 == set)
                 .map(|(k, v)| match v {
-                    peridot_shader::AssetInputVariableLayoutVk::CombinedImageSampler => {
+                    peridot_shader::asset::AssetInputVariableLayoutVk::CombinedImageSampler => {
                         pool_size.combined_image_sampler += 1;
                         br::DescriptorType::CombinedImageSampler.make_binding(k.1, 1)
                     }
-                    peridot_shader::AssetInputVariableLayoutVk::UniformBuffer { .. } => {
+                    peridot_shader::asset::AssetInputVariableLayoutVk::UniformBuffer { .. } => {
                         pool_size.uniform_buffer += 1;
                         br::DescriptorType::UniformBuffer.make_binding(k.1, 1)
                     }
