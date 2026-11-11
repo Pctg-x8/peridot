@@ -330,11 +330,6 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 }
             }
 
-            // TODO: slang v2025.17だとISession由来のオブジェクトをreleaseするとISession::releaseでおちるので、他オブジェクトはあえてreleaseしない(どうせSessionが消えたらこれらも消えるはず)
-            // ただ解放するのが正解だとはおもう......(slang側のバグのようにみえるが、詳細なドキュメントがないので不明)
-            core::mem::forget(linked);
-            core::mem::forget(program);
-
             variants.insert(
                 v,
                 Code {
