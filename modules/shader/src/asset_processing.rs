@@ -28,7 +28,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 )
                 .expect("nul in path"),
             },
-        )
+        )?
         .write(
             &mut std::fs::File::options()
                 .write(true)

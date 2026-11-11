@@ -26,7 +26,13 @@ pub struct Environment {
     pub peridot_stdlib_search_path: CString,
 }
 
-pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
+#[derive(thiserror::Error, Debug)]
+pub enum BuildError {
+    #[error("Failed to load source: {0}")]
+    SourceLoad(std::io::Error),
+}
+
+pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk, BuildError> {
     let source_path = source_path.as_ref();
 
     let session = slang::create_global_session(&slang::GlobalSessionDesc {
@@ -53,8 +59,8 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
     let module = local_session.load_module_from_source_string(
         c"main",
         &CString::new(source_path.to_str().expect("invalid path str")).expect("nul in path"),
-        &CString::new(std::fs::read_to_string(source_path).expect("file.read"))
-            .expect("nui in source"),
+        &CString::new(std::fs::read_to_string(source_path).map_err(BuildError::SourceLoad)?)
+            .expect("nul contained in source"),
         Some(&mut diag),
     );
     print_slang_diag(unsafe { diag.assume_init() });
@@ -64,26 +70,12 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         .iter_defined_entry_point()
         .collect::<Result<Vec<_>, _>>()
         .expect("entrypoints");
-    let mut program_components = Vec::<core::ptr::NonNull<core::ffi::c_void>>::with_capacity(
-        1 + module.get_defined_entry_point_count() as usize,
-    );
-    // Note: ここでclone_cast(というよりおそらくquery_interface)してはいけない(詳しくは不明だが二重解放がおきるらしい create_composite_component_typeには参照の配列で渡す必要がある)
-    // ロード済みmoduleをlocal_sessionに記録してるっぽいので、Moduleをcloneすると同じModuleが二重に登録されることになるのかもしれない
-    program_components.push(unsafe {
-        core::mem::transmute::<slang::IModulePtr, core::ptr::NonNull<core::ffi::c_void>>(module)
-    });
-    program_components.extend(entrypoints.iter().map(|e| unsafe {
-        *core::mem::transmute::<&slang::IEntryPointPtr, &core::ptr::NonNull<core::ffi::c_void>>(e)
-    }));
+    let program_components = core::iter::once(&**module)
+        .chain(entrypoints.iter().map(|e| &***e))
+        .collect::<Vec<&slang::IComponentTypePtr>>();
     let mut diag = core::mem::MaybeUninit::new(None);
-    let program = local_session.create_composite_component_type(
-        unsafe {
-            core::mem::transmute::<&[core::ptr::NonNull<core::ffi::c_void>], &[_]>(
-                &program_components,
-            )
-        },
-        Some(&mut diag),
-    );
+    let program =
+        local_session.create_composite_component_type(&program_components, Some(&mut diag));
     print_slang_diag(unsafe { diag.assume_init() });
     let program = program.expect("program.create");
 
@@ -125,7 +117,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
             let tl = vl.type_layout();
             assert_eq!(tl.kind(), slang::reflection::TypeKind::Struct);
             for f in tl.iter_field() {
-                visit_vsh_input(f, &session, 0, &mut vertex_inputs);
+                visit_vsh_input(f, &*session, 0, &mut vertex_inputs);
             }
         }
         if e.stage() == slang::ffi::SLANG_STAGE_FRAGMENT {
@@ -188,7 +180,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                 visit_global_input(
                     evl.type_layout().field(n).expect("no field"),
                     0,
-                    &session,
+                    &*session,
                     &mut VisitContext {
                         accumulated_offset_history_arena: &mut accumulated_offset_history_arena,
                         accumulated_offset_history_parent: None,
@@ -205,7 +197,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                 visit_global_input(
                     f,
                     0,
-                    &session,
+                    &*session,
                     &mut VisitContext {
                         accumulated_offset_history_arena: &mut accumulated_offset_history_arena,
                         accumulated_offset_history_parent: None,
@@ -398,7 +390,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
         }
     }
 
-    AssetVk {
+    let r = Ok(AssetVk {
         code_binary,
         vertex_entry_point_name,
         fragment_entry_point_name,
@@ -436,7 +428,9 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> AssetVk {
                 x.placement.descriptor_binding as u32,
             )
         }),
-    }
+    });
+
+    r
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -959,20 +953,18 @@ fn visit_global_input<'a>(
     );
 
     match input_var_type {
-        InputVarType::MaterialProperty => {
-            if v.category_count() == 1 {
-                let cat = v.category_by_index(0);
-                collected.input_vars.push(InputVariable {
-                    path: var_name_ref,
-                    var: v,
-                    r#type: ty,
-                    category: cat,
-                    placement: variable_placement,
-                    size: ty.size(cat),
-                    is_material_property,
-                    property_name_override,
-                });
-            }
+        InputVarType::MaterialProperty if v.category_count() == 1 => {
+            let cat = v.category_by_index(0);
+            collected.input_vars.push(InputVariable {
+                path: var_name_ref,
+                var: v,
+                r#type: ty,
+                category: cat,
+                placement: variable_placement,
+                size: ty.size(cat),
+                is_material_property,
+                property_name_override,
+            });
         }
         InputVarType::EngineObjectParameters => {
             if collected.object_parameters_var.is_some() {
@@ -990,7 +982,7 @@ fn visit_global_input<'a>(
                 placement: variable_placement,
             });
         }
-        InputVarType::Unknown => {
+        _ => {
             let mut variable_path = Vec::new();
             let mut ptr = Some(var_name_ref);
             while let Some(p) = ptr {
@@ -1041,7 +1033,8 @@ fn visit_global_input<'a>(
             }
         }
         slang::reflection::TypeKind::ParameterBlock
-        | slang::reflection::TypeKind::ConstantBuffer => {
+        | slang::reflection::TypeKind::ConstantBuffer
+        | slang::reflection::TypeKind::ShaderStorageBuffer => {
             visit_global_input(
                 ty.content_var_layout().expect("no element var"),
                 indent + 1,
@@ -1171,7 +1164,7 @@ fn recursive_dump_ty(ty: &slang::reflection::Type, indent: usize) {
     }
 }
 
-fn print_slang_diag(diag: Option<slang::IBlobPtr>) {
+fn print_slang_diag(diag: Option<slang::Owned<slang::IBlobPtr>>) {
     let Some(d) = diag else {
         return;
     };

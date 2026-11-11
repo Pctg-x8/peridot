@@ -2,7 +2,6 @@ use core::{
     cell::UnsafeCell,
     ffi::{CStr, c_float, c_int, c_uint},
     mem::MaybeUninit,
-    ptr::NonNull,
 };
 
 use crate::{ffi, support::CStrBlob, *};
@@ -242,7 +241,7 @@ impl Type {
     pub fn full_name(&self) -> crate::Result<CStrBlob<crate::IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         crate::rw(unsafe { ffi::spReflectionType_GetFullName(self.0.get(), o.as_mut_ptr()) })?;
-        let blob = IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) });
+        let blob = unsafe { Owned::<IBlobPtr>::from_ptr_unchecked(o.assume_init()) };
         assert!(!blob.get_buffer_pointer().is_null(), "null blob returned");
 
         Ok(CStrBlob(blob))
@@ -1811,12 +1810,8 @@ impl Shader {
     }
 
     #[inline]
-    pub fn session(&self) -> crate::ISessionPtr {
-        unsafe {
-            crate::ISessionPtr(NonNull::new_unchecked(ffi::spReflection_GetSession(
-                self.0.get(),
-            )))
-        }
+    pub fn session(&self) -> Owned<crate::ISessionPtr> {
+        unsafe { Owned::from_ptr_unchecked(ffi::spReflection_GetSession(self.0.get())) }
     }
 
     pub fn type_parameter(&self, index: c_uint) -> Option<&mut TypeParameter> {
@@ -2053,15 +2048,13 @@ impl Shader {
         }
     }
 
-    pub fn to_json(&self) -> crate::Result<crate::IBlobPtr> {
+    pub fn to_json(&self) -> crate::Result<Owned<crate::IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         crate::rw(unsafe {
             ffi::spReflection_ToJson(self.0.get(), core::ptr::null_mut(), o.as_mut_ptr())
         })?;
 
-        Ok(crate::IBlobPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 

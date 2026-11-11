@@ -116,7 +116,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 Some(&mut diag),
             );
             if let Some(d) = unsafe { diag.assume_init() } {
-                print_slang_diag(&d);
+                print_slang_diag(&*d);
             }
             let Some(module) = module else {
                 tracing::error!("Failed to load generated slang module");
@@ -124,33 +124,25 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
                 continue;
             };
 
-            let mut program_components = Vec::<slang::IComponentTypePtr>::with_capacity(
-                1 + module.get_defined_entry_point_count() as usize,
-            );
-            program_components.push(match module.clone_cast() {
-                Ok(x) => x,
-                Err(e) => {
-                    tracing::error!(reason = ?e, "Failed to cast module to IComponentType");
-                    has_failure = true;
-                    continue;
-                }
-            });
-            program_components.extend(
-                module.iter_defined_entry_point().filter_map(|e| {
+            let entry_points = module
+                .iter_defined_entry_point()
+                .filter_map(|e| {
                     e.inspect_err(|e| {
                         tracing::error!(reason = ?e, "Failed to iterate entry points");
                         has_failure = true;
-                    }).ok()?.clone_cast().inspect_err(|e| {
-                        tracing::error!(reason = ?e, "Failed to cast entry point object to IComponentType");
-                        has_failure = true;
-                    }).ok()
+                    })
+                    .ok()
                 })
-            );
+                .collect::<Vec<_>>();
+            let mut program_components =
+                Vec::<&slang::IComponentTypePtr>::with_capacity(1 + entry_points.len());
+            program_components.push(&**module);
+            program_components.extend(entry_points.iter().map(|x| &***x));
             let mut diag = core::mem::MaybeUninit::new(None);
             let program =
                 session.create_composite_component_type(&program_components, Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                print_slang_diag(&d);
+                print_slang_diag(&*d);
             }
             let program = match program {
                 Ok(x) => x,
@@ -164,7 +156,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let mut diag = core::mem::MaybeUninit::new(None);
             let linked = program.link(Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                print_slang_diag(&d);
+                print_slang_diag(&*d);
             }
             let linked = match linked {
                 Ok(x) => x,
@@ -178,7 +170,7 @@ pub fn compile(src: &str) -> Option<CompiledRenderingConfigurationVk> {
             let mut diag = core::mem::MaybeUninit::new(None);
             let code = linked.get_target_code(0, Some(&mut diag));
             if let Some(d) = unsafe { diag.assume_init() } {
-                print_slang_diag(&d);
+                print_slang_diag(&*d);
             }
             let code = match code {
                 Ok(x) => x,

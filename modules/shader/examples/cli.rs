@@ -12,7 +12,8 @@ fn main() {
             )
             .expect("nul in path"),
         },
-    );
+    )
+    .expect("build failed");
 
     println!("{:?}", asset.vertex_inputs);
     println!("{:?}", asset.material_properties);
