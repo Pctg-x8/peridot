@@ -274,7 +274,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .expect("Creating Sampler");
     let shader = runtime_asset_manager
         .load::<peridot_shader::asset::AssetCore>(
-            "builtin.shaders.unlit_image2",
+            "builtin.shaders.unlit_image",
             e,
             &mut memory_manager,
         )
