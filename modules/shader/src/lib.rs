@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map},
     ffi::CString,
     num::NonZeroUsize,
     path::Path,
@@ -13,8 +13,8 @@ pub mod asset;
 #[cfg(feature = "with-asset-processing")]
 mod asset_processing;
 use crate::asset::{
-    AssetDescriptorSlotFieldVk, AssetInputVariableLayoutVk, AssetInputVariableType,
-    AssetMaterialPropertyVk, AssetVertexInput, AssetVk,
+    AssetDescriptorPointer, AssetDescriptorSlotFieldVk, AssetInputVariableLayoutVk,
+    AssetInputVariableType, AssetMaterialPropertyVk, AssetVertexInput, AssetVk,
 };
 
 #[cfg(feature = "with-asset-processing")]
@@ -30,6 +30,8 @@ pub struct Environment {
 pub enum BuildError {
     #[error("Failed to load source: {0}")]
     SourceLoad(std::io::Error),
+    #[error("failed with some reason")]
+    GenericFailure,
 }
 
 pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk, BuildError> {
@@ -252,36 +254,21 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk
 
     let mut material_properties = Vec::new();
     let mut input_variable_layout = HashMap::new();
+    let mut failed = false;
     for v in collected.input_vars {
         if v.is_material_property {
-            let r#type =
-                AssetInputVariableType::from_slang_type(v.r#type.r#type().expect("no type?"))
-                    .expect("unsupported input variable type");
-            material_properties.push(AssetMaterialPropertyVk {
-                name: var_name_pool
-                    .query_chained(v.path)
-                    .iter()
-                    .flatten()
-                    .map(|x| x.to_str().expect("invalid path str"))
-                    .collect::<Vec<_>>()
-                    .join("."),
-                property_name_override: v.property_name_override.map(|x| {
-                    x.to_str()
-                        .expect("invalid property name override")
-                        .to_owned()
-                }),
-                r#type,
-                descriptor_binding: v.placement.descriptor_binding as _,
-                descriptor_set: v.placement.descriptor_set as _,
-                offset: v.placement.byte_offset as _,
-                size: v.size as _,
-            });
+            let Some(prop) = construct_asset_material_property_vk(&v, &var_name_pool) else {
+                failed = true;
+                continue;
+            };
+            material_properties.push(prop);
 
-            let input_variable_layout_key = (
-                v.placement.descriptor_set as u32,
-                v.placement.descriptor_binding as u32,
-            );
-            match v.category {
+            let Some(input_variable_layout_key) = try_make_asset_descriptor_pointer(&v.placement)
+            else {
+                failed = true;
+                continue;
+            };
+            let slot = match v.category {
                 slang::reflection::ParameterCategory::DescriptorTableSlot => {
                     // single descriptor
                     let sl_type = v.r#type;
@@ -318,18 +305,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk
                                     let element_scalar_type = element_type.scalar_type();
                                     match (element_scalar_type, element_count) {
                                         (slang::reflection::ScalarType::Float32, 4) => {
-                                            match input_variable_layout
-                                                .entry(input_variable_layout_key)
-                                            {
-                                                std::collections::hash_map::Entry::Vacant(
-                                                    entry,
-                                                ) => {
-                                                    entry.insert(AssetInputVariableLayoutVk::CombinedImageSampler);
-                                                }
-                                                std::collections::hash_map::Entry::Occupied(_) => {
-                                                    panic!("conflicting descriptor content");
-                                                }
-                                            }
+                                            AssetInputVariableLayoutVk::CombinedImageSampler
                                         }
                                         (t, c) => {
                                             todo!(
@@ -349,88 +325,218 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk
                     }
                 }
                 slang::reflection::ParameterCategory::Uniform => {
-                    match input_variable_layout.entry(input_variable_layout_key) {
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(AssetInputVariableLayoutVk::UniformBuffer {
-                                fields: vec![AssetDescriptorSlotFieldVk {
-                                    offset: v
-                                        .var
-                                        .offset(slang::reflection::ParameterCategory::Uniform)
-                                        as _,
-                                    size: v
-                                        .r#type
-                                        .size(slang::reflection::ParameterCategory::Uniform)
-                                        as _,
-                                }],
-                            });
-                        }
-                        std::collections::hash_map::Entry::Occupied(entry) => {
-                            match entry.into_mut() {
-                                AssetInputVariableLayoutVk::UniformBuffer { fields } => {
-                                    fields.push(AssetDescriptorSlotFieldVk {
-                                        offset: v
-                                            .var
-                                            .offset(slang::reflection::ParameterCategory::Uniform)
-                                            as _,
-                                        size: v
-                                            .r#type
-                                            .size(slang::reflection::ParameterCategory::Uniform)
-                                            as _,
-                                    });
-                                }
-                                AssetInputVariableLayoutVk::CombinedImageSampler => {
-                                    panic!("conflicting descriptor content");
-                                }
-                            }
-                        }
+                    AssetInputVariableLayoutVk::UniformBuffer {
+                        fields: vec![AssetDescriptorSlotFieldVk {
+                            offset: v.var.offset(slang::reflection::ParameterCategory::Uniform)
+                                as _,
+                            size: v.r#type.size(slang::reflection::ParameterCategory::Uniform) as _,
+                        }],
                     }
                 }
                 cat => unreachable!("unsupported parameter category? {cat:?}"),
+            };
+
+            match input_variable_layout.entry(input_variable_layout_key) {
+                hash_map::Entry::Vacant(e) => {
+                    e.insert(slot);
+                }
+                hash_map::Entry::Occupied(e) => match (slot, e.into_mut()) {
+                    (
+                        AssetInputVariableLayoutVk::UniformBuffer { fields },
+                        AssetInputVariableLayoutVk::UniformBuffer { fields: e_fields },
+                    ) => {
+                        // can be merged
+                        e_fields.extend(fields);
+                    }
+                    _ => {
+                        tracing::error!(
+                            set = input_variable_layout_key.set,
+                            binding = input_variable_layout_key.binding,
+                            "conflicting descriptor content"
+                        );
+                        failed = true;
+                    }
+                },
             }
         }
     }
+    if failed {
+        return Err(BuildError::GenericFailure);
+    }
 
-    let r = Ok(AssetVk {
+    let mut asset_vertex_inputs = HashMap::with_capacity(vertex_inputs.len());
+    let mut failed = false;
+    for x in vertex_inputs {
+        let semantic = match extract_vertex_semantic(&x.semantic_name, x.semantic_index) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::error!(reason = ?e, "invalid semantic");
+                failed = true;
+                continue;
+            }
+        };
+        let input = AssetVertexInput {
+            location: match x.location.try_into() {
+                Ok(x) => x,
+                Err(_) => {
+                    tracing::error!(location = x.location, "location is out of range(0..=255)");
+                    failed = true;
+                    continue;
+                }
+            },
+        };
+
+        match asset_vertex_inputs.entry(semantic) {
+            hash_map::Entry::Vacant(e) => {
+                e.insert(input);
+            }
+            hash_map::Entry::Occupied(mut e) => {
+                tracing::warn!(
+                    ?semantic,
+                    old_location = e.get().location,
+                    new_location = input.location,
+                    "conflicting semantic"
+                );
+                e.insert(input);
+            }
+        }
+    }
+    if failed {
+        return Err(BuildError::GenericFailure);
+    }
+
+    let object_parameters_placement = collected
+        .object_parameters_var
+        .map(|x| {
+            assert_eq!(
+                x.placement.byte_offset, 0,
+                "engine parameters placed on non-zero offset"
+            );
+
+            try_make_asset_descriptor_pointer(&x.placement).ok_or(())
+        })
+        .transpose();
+    let camera_parameters_placement = collected
+        .camera_parameters_var
+        .map(|x| {
+            assert_eq!(
+                x.placement.byte_offset, 0,
+                "engine parameters placed on non-zero offset"
+            );
+
+            try_make_asset_descriptor_pointer(&x.placement).ok_or(())
+        })
+        .transpose();
+    let (Ok(object_parameters_placement), Ok(camera_parameters_placement)) =
+        (object_parameters_placement, camera_parameters_placement)
+    else {
+        return Err(BuildError::GenericFailure);
+    };
+
+    Ok(AssetVk {
         code_binary,
         vertex_entry_point_name,
         fragment_entry_point_name,
-        vertex_inputs: vertex_inputs
-            .into_iter()
-            .map(|x| {
-                (
-                    extract_vertex_semantic(&x.semantic_name, x.semantic_index)
-                        .expect("invalid semantic"),
-                    AssetVertexInput {
-                        location: x.location as _,
-                    },
-                )
-            })
-            .collect(),
+        vertex_inputs: asset_vertex_inputs,
         material_properties,
         input_variable_layout,
-        object_parameters_placement: collected.object_parameters_var.map(|x| {
-            assert_eq!(
-                x.placement.byte_offset, 0,
-                "engine parameters placed on nonzero offset"
-            );
-            (
-                x.placement.descriptor_set as u32,
-                x.placement.descriptor_binding as u32,
-            )
-        }),
-        camera_parameters_placement: collected.camera_parameters_var.map(|x| {
-            assert_eq!(
-                x.placement.byte_offset, 0,
-                "engine parameters placed on nonzero offset"
-            );
-            (
-                x.placement.descriptor_set as u32,
-                x.placement.descriptor_binding as u32,
-            )
-        }),
-    });
+        object_parameters_placement,
+        camera_parameters_placement,
+    })
+}
 
-    r
+fn try_make_asset_descriptor_pointer(placement: &VarPlacement) -> Option<AssetDescriptorPointer> {
+    let set = placement
+        .descriptor_set
+        .try_into()
+        .inspect_err(|_| {
+            tracing::error!(
+                value = placement.descriptor_set,
+                "descriptor set is out of range"
+            )
+        })
+        .ok();
+    let binding = placement
+        .descriptor_binding
+        .try_into()
+        .inspect_err(|_| {
+            tracing::error!(
+                value = placement.descriptor_binding,
+                "descriptor binding is out of range"
+            )
+        })
+        .ok();
+
+    if let (Some(set), Some(binding)) = (set, binding) {
+        Some(AssetDescriptorPointer { set, binding })
+    } else {
+        None
+    }
+}
+
+fn construct_asset_material_property_vk(
+    v: &InputVariable,
+    var_name_pool: &VarNamePool,
+) -> Option<AssetMaterialPropertyVk> {
+    let r#type = AssetInputVariableType::from_slang_type(v.r#type.r#type().expect("no type?"));
+    let mut name = String::new();
+    let mut failed = false;
+    for x in var_name_pool.query_chained(v.path).iter().flatten() {
+        let Ok(x) = x
+            .to_str()
+            .inspect_err(|e| tracing::error!(reason = %e, text = ?x, "invalid path str"))
+        else {
+            failed = true;
+            continue;
+        };
+
+        if !name.is_empty() {
+            name.push('.');
+        }
+
+        name.push_str(x);
+    }
+
+    let property_name_override = v
+        .property_name_override
+        .as_deref()
+        .map(|x| {
+            x.to_str().inspect_err(
+                |e| tracing::error!(reason = %e, text = ?x, "invalid property name override"),
+            )
+        })
+        .transpose();
+    let descriptor = try_make_asset_descriptor_pointer(&v.placement);
+    let offset = v.placement.byte_offset.try_into().inspect_err(|_| {
+        tracing::error!(
+            value = v.placement.byte_offset,
+            name,
+            "byte offset is out of range"
+        )
+    });
+    let size = v
+        .size
+        .try_into()
+        .inspect_err(|_| tracing::error!(value = v.size, name, "too large variable size"));
+
+    let (Some(r#type), Ok(property_name_override), Some(descriptor), Ok(offset), Ok(size)) =
+        (r#type, property_name_override, descriptor, offset, size)
+    else {
+        return None;
+    };
+    if failed {
+        // name building failed
+        return None;
+    }
+
+    Some(AssetMaterialPropertyVk {
+        name,
+        property_name_override: property_name_override.map(ToOwned::to_owned),
+        r#type,
+        descriptor,
+        offset,
+        size,
+    })
 }
 
 #[derive(Debug, thiserror::Error)]

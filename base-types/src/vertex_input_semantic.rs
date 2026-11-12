@@ -4,7 +4,7 @@ use futures_io::AsyncRead;
 use pinned_futures_helper::read_exact_async_pinned;
 
 /// Represents the semantic of a vertex shader input.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum VertexInputSemantic {
     /// Position input
     Position(u8),

@@ -464,8 +464,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     {
         let mut descriptor_writes = Vec::with_capacity(3);
-        if let Some((set, binding)) = shader_ref.asset.object_parameters_placement {
-            descriptor_writes.push(descriptors[set as usize].binding_at(binding).write(
+        if let Some(dp) = shader_ref.asset.object_parameters_placement {
+            descriptor_writes.push(descriptors[dp.set as usize].binding_at(dp.binding).write(
                 br::DescriptorContents::UniformBuffer(vec![
                             engine_uniform_buffer
                                 .subslice_ref(
@@ -480,8 +480,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         ]),
             ));
         }
-        if let Some((set, binding)) = shader_ref.asset.camera_parameters_placement {
-            descriptor_writes.push(descriptors[set as usize].binding_at(binding).write(
+        if let Some(dp) = shader_ref.asset.camera_parameters_placement {
+            descriptor_writes.push(descriptors[dp.set as usize].binding_at(dp.binding).write(
                 br::DescriptorContents::UniformBuffer(vec![
                             engine_uniform_buffer
                                 .subslice_ref(

@@ -1,12 +1,30 @@
 use std::{
     collections::HashMap,
-    io::{BufRead, IoSlice, IoSliceMut, Write},
+    io::{BufRead, IoSlice, IoSliceMut, Read, Write},
 };
 
 use bitflags::bitflags;
 use peridot::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
 use vectored_io_helper::{read_vectored_all, write_vectored_all};
+
+macro_rules! mkioslicem_field {
+    ($sink: expr, $ty: ty, $field: ident) => {{
+        #[allow(invalid_value)]
+        let size: usize =
+            unsafe { core::mem::size_of_val(&core::mem::transmute::<usize, &$ty>(0).$field) };
+
+        IoSliceMut::new(unsafe {
+            core::slice::from_raw_parts_mut(
+                $sink
+                    .as_mut_ptr()
+                    .byte_add(core::mem::offset_of!($ty, $field))
+                    .cast(),
+                size,
+            )
+        })
+    }};
+}
 
 pub struct AssetCore;
 impl peridot::LogicalAssetData for AssetCore {
@@ -30,6 +48,7 @@ impl AssetInputVariableType {
             | slang::reflection::TypeKind::ParameterBlock
             | slang::reflection::TypeKind::Struct => {
                 // no support for compound objects
+                tracing::error!("type is compound");
                 None
             }
             slang::reflection::TypeKind::Array => todo!("array type property"),
@@ -38,7 +57,7 @@ impl AssetInputVariableType {
                 match scalar_type {
                     slang::reflection::ScalarType::Float32 => Some(Self::Float),
                     t => {
-                        eprintln!("unknown scalar: {t:?}");
+                        tracing::error!(?t, "unknown scalar");
                         None
                     }
                 }
@@ -52,7 +71,11 @@ impl AssetInputVariableType {
                     (slang::reflection::ScalarType::Float32, 3) => Some(Self::Float3),
                     (slang::reflection::ScalarType::Float32, 4) => Some(Self::Float4),
                     (t, c) => {
-                        eprintln!("unknown vector element combination: {t:?} x {c}");
+                        tracing::error!(
+                            ?t,
+                            element_count = c,
+                            "unknown vector element combination"
+                        );
                         None
                     }
                 }
@@ -67,7 +90,7 @@ impl AssetInputVariableType {
                 match (scalar_type, row_count, column_count) {
                     (slang::reflection::ScalarType::Float32, 4, 4) => Some(Self::Float4x4),
                     (t, r, c) => {
-                        eprintln!("unknown matrix element combination: {t:?} x {c} x {r}");
+                        tracing::error!(?t, col = c, row = r, "unknown matrix element combination");
                         None
                     }
                 }
@@ -87,15 +110,17 @@ impl AssetInputVariableType {
                         match (element_scalar_type, element_count) {
                             (slang::reflection::ScalarType::Float32, 4) => Some(Self::Texture2D),
                             (t, c) => {
-                                eprintln!(
-                                    "unknown resource result vector combination: {t:?} x {c}"
+                                tracing::error!(
+                                    ?t,
+                                    element_count = c,
+                                    "unknown resource result vector combination"
                                 );
                                 None
                             }
                         }
                     }
                     (s, k) => {
-                        eprintln!("unknown resource shape/result combination: {s:?}/{k:?}");
+                        tracing::error!(?s, ?k, "unknown resource shape/result combination");
                         None
                     }
                 }
@@ -110,13 +135,71 @@ pub struct AssetVertexInput {
     pub location: u8,
 }
 
+/// can be ordered: by set then by binding
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AssetDescriptorPointer {
+    pub set: u32,
+    pub binding: u32,
+}
+impl core::cmp::PartialOrd for AssetDescriptorPointer {
+    #[inline(always)]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl core::cmp::Ord for AssetDescriptorPointer {
+    #[inline(always)]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.set
+            .cmp(&other.set)
+            .then(self.binding.cmp(&other.binding))
+    }
+}
+impl AssetDescriptorPointer {
+    fn write_batches<'a>(&'a self) -> impl Iterator<Item = IoSlice<'a>> {
+        [mkioslice(&self.set), mkioslice(&self.binding)].into_iter()
+    }
+
+    fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        write_vectored_all(w, &mut self.write_batches().collect::<Vec<_>>())
+    }
+
+    fn read_batches<'a>(
+        sink: &'a mut core::mem::MaybeUninit<Self>,
+    ) -> impl Iterator<Item = IoSliceMut<'a>> {
+        [
+            mkioslicem_field!(sink, Self, set),
+            mkioslicem_field!(sink, Self, binding),
+        ]
+        .into_iter()
+    }
+
+    const unsafe fn assume_read(
+        sink: core::mem::MaybeUninit<Self>,
+        is_native_endian: bool,
+    ) -> Self {
+        let mut this = unsafe { sink.assume_init() };
+        if !is_native_endian {
+            this.set = this.set.swap_bytes();
+            this.binding = this.binding.swap_bytes();
+        }
+
+        this
+    }
+
+    fn read(r: &mut (impl Read + ?Sized), is_native_endian: bool) -> std::io::Result<Self> {
+        let mut sink = core::mem::MaybeUninit::uninit();
+        read_vectored_all(r, &mut Self::read_batches(&mut sink).collect::<Vec<_>>())?;
+        Ok(unsafe { Self::assume_read(sink, is_native_endian) })
+    }
+}
+
 #[derive(Debug)]
 pub struct AssetMaterialPropertyVk {
     pub name: String,
     pub property_name_override: Option<String>,
     pub r#type: AssetInputVariableType,
-    pub descriptor_binding: u32,
-    pub descriptor_set: u32,
+    pub descriptor: AssetDescriptorPointer,
     pub offset: u32,
     pub size: u32,
 }
@@ -124,16 +207,11 @@ impl AssetMaterialPropertyVk {
     fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         PascalStr(&self.name).write(w)?;
         PascalStr(self.property_name_override.as_deref().unwrap_or("")).write(w)?;
-        write_vectored_all(
-            w,
-            &mut [
-                IoSlice::new(&[self.r#type as u8]),
-                IoSlice::new(&self.descriptor_set.to_ne_bytes()),
-                IoSlice::new(&self.descriptor_binding.to_ne_bytes()),
-                IoSlice::new(&self.offset.to_ne_bytes()),
-                IoSlice::new(&self.size.to_ne_bytes()),
-            ],
-        )?;
+        let mut write_batches = Vec::with_capacity(5);
+        write_batches.push(mkioslice(&self.r#type));
+        write_batches.extend(self.descriptor.write_batches());
+        write_batches.extend([mkioslice(&self.offset), mkioslice(&self.size)]);
+        write_vectored_all(w, &mut write_batches)?;
 
         Ok(())
     }
@@ -147,23 +225,17 @@ impl AssetMaterialPropertyVk {
             Some(property_name_override.0)
         };
         let mut r#type = core::mem::MaybeUninit::<AssetInputVariableType>::uninit();
-        let mut descriptor_set = core::mem::MaybeUninit::<u32>::uninit();
-        let mut descriptor_binding = core::mem::MaybeUninit::<u32>::uninit();
+        let mut descriptor = core::mem::MaybeUninit::uninit();
         let mut offset = core::mem::MaybeUninit::<u32>::uninit();
         let mut size = core::mem::MaybeUninit::<u32>::uninit();
-        read_vectored_all(
-            r,
-            &mut [
-                mkioslicem(&mut r#type),
-                mkioslicem(&mut descriptor_set),
-                mkioslicem(&mut descriptor_binding),
-                mkioslicem(&mut offset),
-                mkioslicem(&mut size),
-            ],
-        )?;
+        let mut read_batches = Vec::with_capacity(5);
+        read_batches.push(mkioslicem(&mut r#type));
+        read_batches.extend(AssetDescriptorPointer::read_batches(&mut descriptor));
+        read_batches.extend([mkioslicem(&mut offset), mkioslicem(&mut size)]);
+        read_vectored_all(r, &mut read_batches)?;
         let r#type = unsafe { r#type.assume_init() };
-        let descriptor_set = unsafe { descriptor_set.assume_init() };
-        let descriptor_binding = unsafe { descriptor_binding.assume_init() };
+        let descriptor =
+            unsafe { AssetDescriptorPointer::assume_read(descriptor, is_native_endian) };
         let offset = unsafe { offset.assume_init() };
         let size = unsafe { size.assume_init() };
 
@@ -172,8 +244,7 @@ impl AssetMaterialPropertyVk {
                 name: name.0,
                 property_name_override,
                 r#type,
-                descriptor_set,
-                descriptor_binding,
+                descriptor,
                 offset,
                 size,
             })
@@ -182,8 +253,7 @@ impl AssetMaterialPropertyVk {
                 name: name.0,
                 property_name_override,
                 r#type,
-                descriptor_set: descriptor_set.swap_bytes(),
-                descriptor_binding: descriptor_binding.swap_bytes(),
+                descriptor,
                 offset: offset.swap_bytes(),
                 size: size.swap_bytes(),
             })
@@ -272,9 +342,9 @@ pub struct AssetVk {
     pub fragment_entry_point_name: Option<String>,
     pub vertex_inputs: HashMap<VertexInputSemantic, AssetVertexInput>,
     pub material_properties: Vec<AssetMaterialPropertyVk>,
-    pub input_variable_layout: HashMap<(u32, u32), AssetInputVariableLayoutVk>,
-    pub object_parameters_placement: Option<(u32, u32)>,
-    pub camera_parameters_placement: Option<(u32, u32)>,
+    pub input_variable_layout: HashMap<AssetDescriptorPointer, AssetInputVariableLayoutVk>,
+    pub object_parameters_placement: Option<AssetDescriptorPointer>,
+    pub camera_parameters_placement: Option<AssetDescriptorPointer>,
 }
 impl peridot::LogicalAssetData for AssetVk {
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SHADER;
@@ -328,13 +398,7 @@ impl AssetVk {
         let mut input_variable_layouts = self.input_variable_layout.iter().collect::<Vec<_>>();
         input_variable_layouts.sort_by_key(|&(k, _)| k);
         for (k, v) in input_variable_layouts {
-            write_vectored_all(
-                w,
-                &mut [
-                    IoSlice::new(&k.0.to_ne_bytes()),
-                    IoSlice::new(&k.1.to_ne_bytes()),
-                ],
-            )?;
+            k.write(w)?;
             v.write(w)?;
         }
 
@@ -343,24 +407,17 @@ impl AssetVk {
         if let Some(ref x) = self.fragment_entry_point_name {
             PascalStr(x).write(w)?;
         }
-        if let Some(ref x) = self.object_parameters_placement {
-            write_vectored_all(
-                w,
-                &mut [
-                    IoSlice::new(&x.0.to_ne_bytes()),
-                    IoSlice::new(&x.1.to_ne_bytes()),
-                ],
-            )?;
-        }
-        if let Some(ref x) = self.camera_parameters_placement {
-            write_vectored_all(
-                w,
-                &mut [
-                    IoSlice::new(&x.0.to_ne_bytes()),
-                    IoSlice::new(&x.1.to_ne_bytes()),
-                ],
-            )?;
-        }
+        let mut write_batches = self
+            .object_parameters_placement
+            .iter()
+            .flat_map(|x| x.write_batches())
+            .chain(
+                self.camera_parameters_placement
+                    .iter()
+                    .flat_map(|x| x.write_batches()),
+            )
+            .collect::<Vec<_>>();
+        write_vectored_all(w, &mut write_batches)?;
 
         // shader code
         VariableULong(self.code_binary.len() as _).write(w)?;
@@ -418,18 +475,10 @@ impl AssetVk {
         let input_variable_layout_count = VariableULong::read(r)?.0 as usize;
         let mut input_variable_layout = HashMap::with_capacity(input_variable_layout_count);
         for _ in 0..input_variable_layout_count {
-            let mut set = core::mem::MaybeUninit::<u32>::uninit();
-            let mut binding = core::mem::MaybeUninit::<u32>::uninit();
-            read_vectored_all(r, &mut [mkioslicem(&mut set), mkioslicem(&mut binding)])?;
-            let set = unsafe { set.assume_init() };
-            let binding = unsafe { binding.assume_init() };
+            let dp = AssetDescriptorPointer::read(r, is_native_endian)?;
             let content = AssetInputVariableLayoutVk::read(r, is_native_endian)?;
 
-            if is_native_endian {
-                input_variable_layout.insert((set, binding), content);
-            } else {
-                input_variable_layout.insert((set.swap_bytes(), binding.swap_bytes()), content);
-            }
+            input_variable_layout.insert(dp, content);
         }
 
         // shader props
@@ -440,38 +489,27 @@ impl AssetVk {
             } else {
                 None
             };
-        let object_parameters_placement =
-            if content_flags.contains(AssetVkContentFlags::HAS_OBJECT_PARAMETER) {
-                let mut set = core::mem::MaybeUninit::<u32>::uninit();
-                let mut binding = core::mem::MaybeUninit::<u32>::uninit();
-                read_vectored_all(r, &mut [mkioslicem(&mut set), mkioslicem(&mut binding)])?;
-                let set = unsafe { set.assume_init() };
-                let binding = unsafe { binding.assume_init() };
 
-                Some(if is_native_endian {
-                    (set, binding)
-                } else {
-                    (set.swap_bytes(), binding.swap_bytes())
-                })
-            } else {
-                None
-            };
-        let camera_parameters_placement =
-            if content_flags.contains(AssetVkContentFlags::HAS_CAMERA_PARAMETER) {
-                let mut set = core::mem::MaybeUninit::<u32>::uninit();
-                let mut binding = core::mem::MaybeUninit::<u32>::uninit();
-                read_vectored_all(r, &mut [mkioslicem(&mut set), mkioslicem(&mut binding)])?;
-                let set = unsafe { set.assume_init() };
-                let binding = unsafe { binding.assume_init() };
-
-                Some(if is_native_endian {
-                    (set, binding)
-                } else {
-                    (set.swap_bytes(), binding.swap_bytes())
-                })
-            } else {
-                None
-            };
+        let mut object_parameters_placement = content_flags
+            .contains(AssetVkContentFlags::HAS_OBJECT_PARAMETER)
+            .then_some(core::mem::MaybeUninit::uninit());
+        let mut camera_parameters_placement = content_flags
+            .contains(AssetVkContentFlags::HAS_CAMERA_PARAMETER)
+            .then_some(core::mem::MaybeUninit::uninit());
+        let mut read_batches = object_parameters_placement
+            .iter_mut()
+            .flat_map(AssetDescriptorPointer::read_batches)
+            .chain(
+                camera_parameters_placement
+                    .iter_mut()
+                    .flat_map(AssetDescriptorPointer::read_batches),
+            )
+            .collect::<Vec<_>>();
+        read_vectored_all(r, &mut read_batches)?;
+        let object_parameters_placement = object_parameters_placement
+            .map(|x| unsafe { AssetDescriptorPointer::assume_read(x, is_native_endian) });
+        let camera_parameters_placement = camera_parameters_placement
+            .map(|x| unsafe { AssetDescriptorPointer::assume_read(x, is_native_endian) });
 
         // shader code
         let code_binary_words = VariableULong::read(r)?.0 as usize;
@@ -511,6 +549,13 @@ bitflags! {
         const HAS_CAMERA_PARAMETER = 0x02;
         const HAS_FRAGMENT_ENTRY_POINT = 0x04;
     }
+}
+
+#[inline(always)]
+fn mkioslice<'a, T>(data: &'a T) -> IoSlice<'a> {
+    IoSlice::new(unsafe {
+        core::slice::from_raw_parts(core::ptr::from_ref(data).cast(), size_of::<T>())
+    })
 }
 
 #[inline(always)]

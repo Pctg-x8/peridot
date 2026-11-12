@@ -535,12 +535,12 @@ impl AssetResourceType for peridot_mesh::AssetCore {
 pub struct RuntimeShader {
     pub asset: peridot_shader::asset::AssetVk,
     pub module: br::ShaderModuleObject<peridot::VulkanGfx>,
-    pub shader_stages_with_entry_point_name: Vec<(br::ShaderStage, CString)>,
+    pub shader_stages_with_entry_point_name: Box<[(br::ShaderStage, CString)]>,
     pub material_uniform_buffer_range_by_descriptor:
-        HashMap<(u32, u32), core::range::Range<br::DeviceSize>>,
+        HashMap<peridot_shader::asset::AssetDescriptorPointer, core::range::Range<br::DeviceSize>>,
     pub material_uniform_buffer_size: br::DeviceSize,
-    pub descriptor_set_layouts: Vec<br::DescriptorSetLayoutObject<peridot::VulkanGfx>>,
-    pub descriptor_pool_size_per_set: Vec<RuntimeShaderDescriptorPoolSize>,
+    pub descriptor_set_layouts: Box<[br::DescriptorSetLayoutObject<peridot::VulkanGfx>]>,
+    pub descriptor_pool_size_per_set: Box<[RuntimeShaderDescriptorPoolSize]>,
 }
 impl RuntimeResource for RuntimeShader {
     #[inline(always)]
@@ -587,7 +587,7 @@ impl RuntimeShader {
             .find(|x| x.name == name)?;
         let base_for_descriptor = self
             .material_uniform_buffer_range_by_descriptor
-            .get(&(prop.descriptor_set, prop.descriptor_binding))?
+            .get(&prop.descriptor)?
             .start;
 
         Some(base_for_descriptor + prop.offset as br::DeviceSize)
@@ -608,8 +608,8 @@ impl RuntimeShader {
             .find(|x| x.name == name)
             .expect("no material property found");
         sink.push(
-            descriptor_sets[p.descriptor_set as usize]
-                .binding_at(p.descriptor_binding)
+            descriptor_sets[p.descriptor.set as usize]
+                .binding_at(p.descriptor.binding)
                 .write(br::DescriptorContents::CombinedImageSampler(vec![info])),
         );
     }
@@ -622,14 +622,18 @@ impl RuntimeShader {
         material_uniform_buffer_offset: br::DeviceSize,
         sink: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
     ) {
-        for (&(set, binding), &range) in self.material_uniform_buffer_range_by_descriptor.iter() {
-            sink.push(descriptor_sets[set as usize].binding_at(binding).write(
-                br::DescriptorContents::UniformBuffer(vec![br::DescriptorBufferInfo::new(
-                    material_uniform_buffer,
-                    range.start + material_uniform_buffer_offset
-                        ..range.end + material_uniform_buffer_offset,
-                )]),
-            ))
+        for (dp, &range) in self.material_uniform_buffer_range_by_descriptor.iter() {
+            sink.push(
+                descriptor_sets[dp.set as usize]
+                    .binding_at(dp.binding)
+                    .write(br::DescriptorContents::UniformBuffer(vec![
+                        br::DescriptorBufferInfo::new(
+                            material_uniform_buffer,
+                            range.start + material_uniform_buffer_offset
+                                ..range.end + material_uniform_buffer_offset,
+                        ),
+                    ])),
+            )
         }
     }
 }
@@ -672,49 +676,46 @@ impl AssetResourceType for peridot_shader::asset::AssetCore {
                 CString::new(x).expect("nul in entry point name"),
             )
         }))
-        .collect::<Vec<_>>();
+        .collect::<Box<[_]>>();
 
         let mut material_uniform_buffer_top = 0;
         let mut material_uniform_buffer_base = 0;
-        let mut material_uniform_buffer_range_by_descriptor =
-            HashMap::<(u32, u32), core::range::Range<br::DeviceSize>>::new();
+        let mut material_uniform_buffer_range_by_descriptor = HashMap::<
+            peridot_shader::asset::AssetDescriptorPointer,
+            core::range::Range<br::DeviceSize>,
+        >::new();
         let mut material_properties_sorted = asset
             .material_properties
             .iter()
             .filter(|p| p.r#type != peridot_shader::asset::AssetInputVariableType::Texture2D)
             .collect::<Vec<_>>();
         material_properties_sorted.sort_by(|a, b| {
-            a.descriptor_set
-                .cmp(&b.descriptor_set)
-                .then(a.descriptor_binding.cmp(&b.descriptor_binding))
+            a.descriptor
+                .cmp(&b.descriptor)
                 .then(a.offset.cmp(&b.offset))
         });
         let mut current_descriptor = None;
         for p in material_properties_sorted {
             let element_base = material_uniform_buffer_base + p.offset;
             material_uniform_buffer_top = element_base + p.size;
-            if current_descriptor
-                .is_none_or(|(s, b)| p.descriptor_set != s || p.descriptor_binding != b)
-            {
+            if current_descriptor.is_none_or(|d| p.descriptor != d) {
                 // descriptor changed
-                if let Some((s, b)) = current_descriptor {
+                if let Some(d) = current_descriptor {
                     material_uniform_buffer_range_by_descriptor
-                        .get_mut(&(s, b))
+                        .get_mut(&d)
                         .expect("not registered")
                         .end = element_base as _;
                 }
-                material_uniform_buffer_range_by_descriptor.insert(
-                    (p.descriptor_set, p.descriptor_binding),
-                    (element_base as _..element_base as _).into(),
-                );
+                material_uniform_buffer_range_by_descriptor
+                    .insert(p.descriptor, (element_base as _..element_base as _).into());
                 material_uniform_buffer_base = element_base;
-                current_descriptor = Some((p.descriptor_set, p.descriptor_binding));
+                current_descriptor = Some(p.descriptor);
             }
         }
-        if let Some((s, b)) = current_descriptor {
+        if let Some(d) = current_descriptor {
             // last
             material_uniform_buffer_range_by_descriptor
-                .get_mut(&(s, b))
+                .get_mut(&d)
                 .expect("not registered")
                 .end = material_uniform_buffer_top as _;
         }
@@ -726,7 +727,7 @@ impl AssetResourceType for peridot_shader::asset::AssetCore {
         let max_set_number = asset
             .input_variable_layout
             .keys()
-            .map(|k| k.0)
+            .map(|k| k.set)
             .max()
             .unwrap_or(0);
         let mut descriptor_set_layouts = Vec::with_capacity((max_set_number + 1) as _);
@@ -738,33 +739,33 @@ impl AssetResourceType for peridot_shader::asset::AssetCore {
             };
 
             let mut bindings = Vec::new();
-            if let Some((p_set, p_binding)) = asset.object_parameters_placement
-                && set == p_set
+            if let Some(pd) = asset.object_parameters_placement
+                && set == pd.set
             {
-                bindings.push(br::DescriptorType::UniformBuffer.make_binding(p_binding, 1));
+                bindings.push(br::DescriptorType::UniformBuffer.make_binding(pd.binding, 1));
                 pool_size.uniform_buffer += 1;
             }
-            if let Some((p_set, p_binding)) = asset.camera_parameters_placement
-                && set == p_set
+            if let Some(pd) = asset.camera_parameters_placement
+                && set == pd.set
             {
-                bindings.push(br::DescriptorType::UniformBuffer.make_binding(p_binding, 1));
+                bindings.push(br::DescriptorType::UniformBuffer.make_binding(pd.binding, 1));
                 pool_size.uniform_buffer += 1;
             }
             bindings.extend(
                 asset
                     .input_variable_layout
                     .iter()
-                    .filter(|(k, _)| k.0 == set)
+                    .filter(|(k, _)| k.set == set)
                     .map(|(k, v)| match v {
                         peridot_shader::asset::AssetInputVariableLayoutVk::CombinedImageSampler => {
                             pool_size.combined_image_sampler += 1;
-                            br::DescriptorType::CombinedImageSampler.make_binding(k.1, 1)
+                            br::DescriptorType::CombinedImageSampler.make_binding(k.binding, 1)
                         }
                         peridot_shader::asset::AssetInputVariableLayoutVk::UniformBuffer {
                             ..
                         } => {
                             pool_size.uniform_buffer += 1;
-                            br::DescriptorType::UniformBuffer.make_binding(k.1, 1)
+                            br::DescriptorType::UniformBuffer.make_binding(k.binding, 1)
                         }
                     }),
             );
@@ -786,8 +787,8 @@ impl AssetResourceType for peridot_shader::asset::AssetCore {
             shader_stages_with_entry_point_name,
             material_uniform_buffer_range_by_descriptor,
             material_uniform_buffer_size: material_uniform_buffer_top as _,
-            descriptor_set_layouts,
-            descriptor_pool_size_per_set,
+            descriptor_set_layouts: descriptor_set_layouts.into_boxed_slice(),
+            descriptor_pool_size_per_set: descriptor_pool_size_per_set.into_boxed_slice(),
         }))
     }
 }
