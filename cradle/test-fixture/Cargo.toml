@@ -1,0 +1,7 @@
+[package]
+name = "cradle-test-fixture"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot = { path = "../../base", features = ["mt"] }

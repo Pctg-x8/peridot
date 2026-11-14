@@ -1,0 +1,18 @@
+[package]
+name = "peridot-asset-processor-model"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot.path = "../../../base"
+peridot-asset-processing.path = "../../asset-processing"
+thiserror.workspace = true
+peridot-tp-gltf.path = "../../../thirdparty/gltf"
+serde_json = "1.0"
+peridot-mesh = { path = "../../mesh", features = [] }
+tracing.workspace = true
+rand.workspace = true
+rand_pcg.workspace = true
+
+[lints]
+workspace = true

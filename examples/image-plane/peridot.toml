@@ -1,0 +1,3 @@
+app_package_id = "io.ct2.peridot.examples.image_plane"
+title = "Peridot Examples - ImagePlane"
+asset_dir = "./assets"
