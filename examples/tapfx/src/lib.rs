@@ -1,23 +1,14 @@
 use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHandle};
-use br::{Device, Image};
-use peridot::mthelper::SharedRef;
+use br::Device;
+use peridot::{VertexInputSemantic, mthelper::SharedRef};
 use peridot_command_object::{
-    BeginRenderPass, BindGraphicsPipeline, BufferImageDataDesc, BufferUsage,
-    ColorAttachmentBlending, CopyBuffer, CopyBufferToImage, DescriptorSets, EndRenderPass,
-    GraphicsCommand, GraphicsCommandCombiner, GraphicsCommandSubmission, ImageResourceRange,
-    PipelineBarrier, RangedBuffer, RangedImage, StandardMesh,
+    BeginRenderPass, BindGraphicsPipeline, BufferUsage, ColorAttachmentBlending, CopyBuffer,
+    DescriptorSets, EndRenderPass, GraphicsCommand, GraphicsCommandCombiner,
+    GraphicsCommandSubmission, PipelineBarrier, RangedBuffer, StandardMesh,
 };
+use peridot_image::StdTexture2DAsset;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
-use peridot_semantic_shader::{ShaderPackAsset, VertexInputSemantic};
-
-#[repr(C)]
-#[derive(Clone)]
-pub struct UniformValues {
-    pub mat: peridot::math::Matrix4F32,
-    pub time: f32,
-    pub _resv: f32,
-    pub offset: peridot::math::Vector2F32,
-}
+use peridot_runtime_asset_manager::RuntimeAssetManager;
 
 pub const INPUT_PLANE_DOWN: u16 = 0;
 pub const INPUT_PLANE_LEFT: u8 = 0;
@@ -112,6 +103,9 @@ impl MainFramebuffer {
 pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinker>) {
     init_controls(e);
 
+    let mut memory_manager = MemoryManager::new(e.graphics());
+    let mut runtime_asset_manager = RuntimeAssetManager::new();
+
     let bb_size = e.back_buffer_size();
 
     let renderpass = br::RenderPassObject::new(
@@ -138,45 +132,22 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Failed to create sampler");
-    let dsl = br::DescriptorSetLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::UniformBuffer
-            .make_binding(0, 1)
-            .only_for_vertex()]),
-    )
-    .expect("Failed to create DescriptorSetLayout");
-    let dsl2 = br::DescriptorSetLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorSetLayoutCreateInfo::new(&[br::DescriptorType::CombinedImageSampler
-            .make_binding(0, 1)
-            .only_for_fragment()
-            .with_immutable_samplers(&[smp.as_transparent_ref()])]),
-    )
-    .expect("Failed to create DescriptorSetLayout for FragmentShader");
-    let mut dp = br::DescriptorPoolObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorPoolCreateInfo::new(
-            2,
-            &[
-                br::DescriptorType::UniformBuffer.make_size(1),
-                br::DescriptorType::CombinedImageSampler.make_size(1),
-            ],
-        ),
-    )
-    .expect("Failed to create DescriptorPool");
-    let [descriptor_obj, descriptor_tex] = dp
-        .alloc_array(&[dsl.as_transparent_ref(), dsl2.as_transparent_ref()])
-        .expect("Failed to alloc Required Descriptors");
 
-    let shaders = e
-        .load::<ShaderPackAsset>("shaders.blit")
+    let shader = runtime_asset_manager
+        .load::<peridot_shader::asset::AssetCore>("shaders.blit", e, &mut memory_manager)
         .expect("Failed to load blit shader asset")
-        .instantiate(e.graphics().device().clone())
-        .expect("Failed to instantiate blit shader");
+        .expect("Missing blit shader asset");
+    let shader_ref = runtime_asset_manager
+        .get_typed(&shader)
+        .expect("invalid ref");
     let pl = br::PipelineLayoutObject::new(
         e.graphics().device().clone(),
         &br::PipelineLayoutCreateInfo::new(
-            &[dsl.as_transparent_ref(), dsl2.as_transparent_ref()],
+            &shader_ref
+                .descriptor_set_layouts
+                .iter()
+                .map(|x| x.as_transparent_ref())
+                .collect::<Vec<_>>(),
             &[],
         ),
     )
@@ -191,10 +162,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             &[br::GraphicsPipelineCreateInfo::new(
                 &pl,
                 renderpass.subpass(0),
-                &[
-                    shaders.pipeline_vertex_shader(),
-                    shaders.pipeline_fragment_shader().expect("no fsh?"),
-                ],
+                &shader_ref.pipeline_shader_stages().collect::<Vec<_>>(),
                 &br::PipelineVertexInputStateCreateInfo::new(
                     &[br::VertexInputBindingDescription::per_vertex_typed::<
                         peridot::VertexUV2D,
@@ -203,10 +171,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         br::VertexInputAttributeDescription(
                             br::vk::VkVertexInputAttributeDescription {
                                 binding: 0,
-                                location: shaders
-                                    .resolve_input_semantic_location(VertexInputSemantic::Position(
-                                        0,
-                                    ))
+                                location: shader_ref
+                                    .vertex_input_semantic_to_location(
+                                        &VertexInputSemantic::Position(0),
+                                    )
                                     .expect("no position input?"),
                                 format: br::vk::VK_FORMAT_R32G32_SFLOAT,
                                 offset: core::mem::offset_of!(peridot::VertexUV2D, pos) as _,
@@ -215,10 +183,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                         br::VertexInputAttributeDescription(
                             br::vk::VkVertexInputAttributeDescription {
                                 binding: 0,
-                                location: shaders
-                                    .resolve_input_semantic_location(VertexInputSemantic::Texcoord(
-                                        0,
-                                    ))
+                                location: shader_ref
+                                    .vertex_input_semantic_to_location(
+                                        &VertexInputSemantic::Texcoord(0),
+                                    )
                                     .expect("no texcoord input?"),
                                 format: br::vk::VK_FORMAT_R32G32_SFLOAT,
                                 offset: core::mem::offset_of!(peridot::VertexUV2D, uv) as _,
@@ -245,19 +213,27 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         .expect("Failed to create GraphicsPipeline");
     let pipeline = pipeline.clone_parent();
 
-    let main_image_data: peridot_image::PNG = e
-        .load("images.peridot_default_tapfx_circle")
-        .expect("Failed to load main_image_data");
     let sprite_plane = peridot::Primitive::uv_plane_centric(32.0);
 
-    let mut memory_manager = MemoryManager::new(e.graphics());
+    let main_image = runtime_asset_manager
+        .load::<StdTexture2DAsset>(
+            "images.peridot_default_tapfx_circle",
+            e,
+            &mut memory_manager,
+        )
+        .expect("main_image.load")
+        .expect("main_image.missing");
+
+    let shader_ref = runtime_asset_manager
+        .get_typed(&shader)
+        .expect("invalid ref");
 
     let (buffer, offsets) = memory_manager
         .allocate_device_local_buffer_with_contents(
             e.graphics(),
             [
                 peridot::BufferContent::vertices_for(&sprite_plane.vertices),
-                peridot::BufferContent::uniform::<UniformValues>(),
+                peridot::BufferContent::Uniform(shader_ref.material_uniform_buffer_size, 16),
             ],
             br::BufferUsage::TRANSFER_DEST,
         )
@@ -265,71 +241,49 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let buffer = SharedRef::new(buffer);
     let vertex_buffer =
         RangedBuffer::from_offset_length(buffer.clone(), offsets[0], sprite_plane.byte_length());
-    let uniform_buffer = RangedBuffer::for_type::<UniformValues>(buffer.clone(), offsets[1]);
-    let main_image = memory_manager
-        .allocate_device_local_image(
-            e.graphics(),
-            br::ImageCreateInfo::new(main_image_data.0.size, main_image_data.0.format as _)
-                .with_usage(br::ImageUsageFlags::SAMPLED | br::ImageUsageFlags::TRANSFER_DEST)
-                .init_layout(br::ImageLayout::Preinitialized),
-        )
-        .expect("Failed to allocate main image");
+    let uniform_buffer = RangedBuffer::from_offset_length(
+        buffer.clone(),
+        offsets[1],
+        shader_ref.material_uniform_buffer_size as _,
+    );
 
-    let (main_image_byte_length, main_image_alignment, main_image_row_texels) = memory_manager
-        .compute_optimal_linear_image_buffer_layout(
-            *main_image_data.0.size.x(),
-            *main_image_data.0.size.y(),
-            main_image_data.0.format,
-        );
     let mut uniform_mut_buffer: RangedBuffer<_> = memory_manager
         .allocate_upload_buffer(
             e.graphics(),
-            br::BufferCreateInfo::new_for_type::<UniformValues>(br::BufferUsage::TRANSFER_SRC),
+            br::BufferCreateInfo::new(
+                shader_ref.material_uniform_buffer_size,
+                br::BufferUsage::TRANSFER_SRC,
+            ),
         )
         .expect("Failed to allocate mutable buffer")
         .into();
     let (mut staging_buffer, staging_offsets) = memory_manager
         .allocate_upload_buffer_with_contents(
             e.graphics(),
-            [
-                peridot::BufferContent::raw_for_slice(&sprite_plane.vertices),
-                peridot::BufferContent::Raw(main_image_byte_length, main_image_alignment),
-            ],
+            [peridot::BufferContent::raw_for_slice(
+                &sprite_plane.vertices,
+            )],
             br::BufferUsage::TRANSFER_SRC,
         )
         .expect("Failed to create staging buffer");
     staging_buffer
         .guard_map(BufferMapMode::Write, |ptr| unsafe {
             ptr.clone_slice_to(staging_offsets[0] as _, &sprite_plane.vertices);
-            ptr.copy_slice_to(staging_offsets[1] as _, main_image_data.0.u8_pixels());
         })
         .expect("Failed to stage initial vertex buffer memory");
 
     {
         let all_stg_buffer = RangedBuffer::from(&staging_buffer);
-        let image = RangedImage::single_color_plane(&main_image);
 
         let init_vertices = CopyBuffer::new(&staging_buffer, &vertex_buffer.0).with_range(
             staging_offsets[0],
             vertex_buffer.offset(),
             sprite_plane.byte_length(),
         );
-        let init_main_image = CopyBufferToImage::new(&staging_buffer, &main_image).with_range(
-            BufferImageDataDesc::new(staging_offsets[1], main_image_row_texels),
-            ImageResourceRange::for_single_color_from_rect2d(
-                main_image.size().wh().into_rect(br::vk::VkOffset2D::ZERO),
-            ),
-        );
-        let init = (init_vertices, init_main_image);
+        let init = init_vertices;
 
-        let [image_in_barrier, image_out_barrier] = image.barrier3(
-            br::ImageLayout::Preinitialized,
-            br::ImageLayout::TransferDestOpt,
-            br::ImageLayout::ShaderReadOnlyOpt,
-        );
         let in_barriers = PipelineBarrier::new()
             .by_region()
-            .with_barrier(image_in_barrier)
             .with_barrier(
                 vertex_buffer
                     .make_ref()
@@ -338,68 +292,118 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .with_barrier(
                 all_stg_buffer.usage_barrier(BufferUsage::HOST_RW, BufferUsage::TRANSFER_SRC),
             );
-        let out_barriers = PipelineBarrier::new()
-            .by_region()
-            .with_barrier(image_out_barrier)
-            .with_barriers([
-                vertex_buffer
-                    .make_ref()
-                    .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_BUFFER),
-                uniform_buffer
-                    .make_ref()
-                    .usage_barrier(BufferUsage::UNUSED, BufferUsage::VERTEX_UNIFORM),
-            ]);
+        let out_barriers = PipelineBarrier::new().by_region().with_barriers([
+            vertex_buffer
+                .make_ref()
+                .usage_barrier(BufferUsage::TRANSFER_DST, BufferUsage::VERTEX_BUFFER),
+            uniform_buffer
+                .make_ref()
+                .usage_barrier(BufferUsage::UNUSED, BufferUsage::VERTEX_UNIFORM),
+        ]);
 
         init.between(in_barriers, out_barriers)
             .submit(e)
             .expect("Failed to execute init command");
     }
 
-    let main_image_view = br::ImageViewBuilder::new(
-        main_image,
-        br::ImageSubresourceRange::new(br::AspectMask::COLOR, 0..1, 0..1),
+    let mut dp = br::DescriptorPoolObject::new(
+        e.graphics().device().clone(),
+        &br::DescriptorPoolCreateInfo::new(
+            shader_ref.descriptor_set_layouts.len() as _,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(
+                    shader_ref
+                        .descriptor_pool_size_per_set
+                        .iter()
+                        .map(|x| x.uniform_buffer)
+                        .sum::<u32>(),
+                ),
+                br::DescriptorType::CombinedImageSampler.make_size(
+                    shader_ref
+                        .descriptor_pool_size_per_set
+                        .iter()
+                        .map(|x| x.combined_image_sampler)
+                        .sum::<u32>(),
+                ),
+            ],
+        ),
     )
-    .create()
-    .expect("Failed to create main image view");
+    .expect("Failed to create DescriptorPool");
+    let descriptor_sets = dp
+        .alloc(
+            &shader_ref
+                .descriptor_set_layouts
+                .iter()
+                .map(|x| x.as_transparent_ref())
+                .collect::<Vec<_>>(),
+        )
+        .expect("Failed to alloc Required Descriptors");
 
-    e.graphics().device().update_descriptor_sets(
-        &[
-            descriptor_obj
-                .binding_at(0)
-                .write(br::DescriptorContents::UniformBuffer(vec![
-                    uniform_buffer.make_descriptor_buffer_ref()
-                ])),
-            descriptor_tex
-                .binding_at(0)
-                .write(br::DescriptorContents::CombinedImageSampler(vec![
-                    br::DescriptorImageInfo::new(
-                        &main_image_view,
-                        br::ImageLayout::ShaderReadOnlyOpt,
-                    ),
-                ])),
-        ],
-        &[],
+    let mut descriptor_writes = Vec::new();
+    shader_ref.write_descriptor_sets(
+        &descriptor_sets,
+        &uniform_buffer.0,
+        uniform_buffer.offset(),
+        &mut descriptor_writes,
     );
+    shader_ref.write_material_texture_property(
+        "params.tex",
+        br::DescriptorImageInfo::new(
+            &runtime_asset_manager
+                .get_typed(&main_image)
+                .expect("invalid ref")
+                .gfx_resource,
+            br::ImageLayout::ShaderReadOnlyOpt,
+        )
+        .with_sampler(&smp),
+        &descriptor_sets,
+        &mut descriptor_writes,
+    );
+    e.graphics()
+        .device()
+        .update_descriptor_sets(&descriptor_writes, &[]);
 
-    let mut update_data = UniformValues {
-        mat: peridot::math::Camera {
-            projection: Some(peridot::math::ProjectionMethod::UI {
-                design_width: bb_size.0 as _,
-                design_height: bb_size.1 as _,
-            }),
-            ..Default::default()
-        }
-        .projection_matrix(1.0),
-        time: 1.0,
-        offset: peridot::math::Vector2(0.0, 0.0),
-        _resv: 0.0,
-    };
+    let projection_prop_offset = shader_ref
+        .uniform_buffer_offset_for_material_property("params.projection")
+        .expect("no params.projection");
+    let time_prop_offset = shader_ref
+        .uniform_buffer_offset_for_material_property("params.time")
+        .expect("no params.time");
+    let offset_prop_offset = shader_ref
+        .uniform_buffer_offset_for_material_property("params.offset")
+        .expect("no params.offset");
+    let mut time = 1.0;
+    let mut offset = peridot_math::Vector2(0.0f32, 0.0f32);
+    uniform_mut_buffer
+        .0
+        .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
+            p.ptr().byte_add(projection_prop_offset as _).cast().write(
+                peridot::math::Camera {
+                    projection: Some(peridot::math::ProjectionMethod::UI {
+                        design_width: bb_size.0 as _,
+                        design_height: bb_size.1 as _,
+                    }),
+                    ..Default::default()
+                }
+                .projection_matrix(1.0),
+            );
+            p.ptr().byte_add(time_prop_offset as _).cast().write(time);
+            p.ptr()
+                .byte_add(offset_prop_offset as _)
+                .cast()
+                .write(offset);
+        })
+        .expect("Failed to write initial mut buffer content");
+
     let mut update_commands =
         peridot::CommandBundle::new(e.graphics(), peridot::CBSubmissionType::Transfer, 1)
             .expect("Failed to allocate update commands");
     {
-        let copy = CopyBuffer::new(&uniform_mut_buffer.0, &uniform_buffer.0)
-            .with_range_for_type::<UniformValues>(0, uniform_buffer.offset());
+        let copy = CopyBuffer::new(&uniform_mut_buffer.0, &uniform_buffer.0).with_range(
+            0,
+            uniform_buffer.offset(),
+            shader_ref.material_uniform_buffer_size as _,
+        );
 
         let [uniform_in_barrier, uniform_out_barrier] = uniform_buffer
             .make_ref()
@@ -424,7 +428,7 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             .expect("Failed to record commands");
     }
 
-    let descriptor_sets = DescriptorSets(vec![descriptor_obj, descriptor_tex]);
+    let descriptor_sets = DescriptorSets(descriptor_sets.to_vec());
     let mesh = StandardMesh {
         vertex_buffers: vec![vertex_buffer],
         vertex_count: 4,
@@ -466,21 +470,27 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             peridot::Event::NextFrame => {
                 let fd = e.prepare_frame().expect("Failed to prepare frame");
 
-                update_data.time += fd.delta_time.as_secs_f32();
+                time += fd.delta_time.as_secs_f32();
 
                 let current_mouse_input = e.input().button_pressing_time(INPUT_PLANE_DOWN)
                     > std::time::Duration::default();
                 if !last_mouse_input && current_mouse_input {
-                    update_data.time = 0.0;
+                    time = 0.0;
                     let (ox, oy) = e.input().get_plane_position(0).unwrap_or((0.0, 0.0));
-                    update_data.offset = peridot::math::Vector2(ox, oy);
+                    offset = peridot::math::Vector2(ox, oy);
                 }
                 last_mouse_input = current_mouse_input;
 
                 uniform_mut_buffer
                     .0
-                    .write_content(update_data.clone())
-                    .expect("Failed to map dynamic buffer");
+                    .guard_map(peridot_memory_manager::BufferMapMode::Write, |p| unsafe {
+                        p.ptr().byte_add(time_prop_offset as _).cast().write(time);
+                        p.ptr()
+                            .byte_add(offset_prop_offset as _)
+                            .cast()
+                            .write(offset);
+                    })
+                    .expect("Failed to update dynamic buffer");
 
                 let mut update_batch = peridot::SubmissionBatchBuilder::new();
                 let update_cb = update_commands.nth_ref(0);

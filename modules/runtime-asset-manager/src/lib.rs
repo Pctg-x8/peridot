@@ -1,6 +1,6 @@
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::{collections::HashMap, ffi::CString, num::NonZeroUsize};
 
-use bedrock::{self as br, ImageChild, TypedVulkanStructure};
+use bedrock::{self as br, ImageChild, ShaderModule, TypedVulkanStructure};
 use ktx::Texture;
 
 pub struct RuntimeAssetManager {
@@ -114,6 +114,7 @@ impl<T: RuntimeResource> TypedAssetResourceHandle<T> {
 pub enum AssetResource {
     Texture2D(RuntimeTexture2D),
     Mesh(RuntimeMesh),
+    Shader(RuntimeShader),
     Sprite(RuntimeSprite),
     SpriteAtlas(RuntimeSpriteAtlas),
 }
@@ -528,5 +529,266 @@ impl AssetResourceType for peridot_mesh::AssetCore {
             .expect("upload.cmd");
 
         Ok(AssetResource::Mesh(runtime_mesh))
+    }
+}
+
+pub struct RuntimeShader {
+    pub asset: peridot_shader::asset::AssetVk,
+    pub module: br::ShaderModuleObject<peridot::VulkanGfx>,
+    pub shader_stages_with_entry_point_name: Box<[(br::ShaderStage, CString)]>,
+    pub material_uniform_buffer_range_by_descriptor:
+        HashMap<peridot_shader::asset::AssetDescriptorPointer, core::range::Range<br::DeviceSize>>,
+    pub material_uniform_buffer_size: br::DeviceSize,
+    pub descriptor_set_layouts: Box<[br::DescriptorSetLayoutObject<peridot::VulkanGfx>]>,
+    pub descriptor_pool_size_per_set: Box<[RuntimeShaderDescriptorPoolSize]>,
+}
+impl RuntimeResource for RuntimeShader {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::Shader(x) => Some(x),
+            _ => None,
+        }
+    }
+}
+impl RuntimeShader {
+    #[inline(always)]
+    pub fn pipeline_shader_stages<'m, 's>(
+        &'m self,
+    ) -> impl Iterator<Item = br::PipelineShaderStage<'m, 's>>
+    where
+        'm: 's,
+    {
+        self.shader_stages_with_entry_point_name
+            .iter()
+            .map(move |&(s, ref e)| self.module.on_stage(s, e))
+    }
+
+    #[inline(always)]
+    pub fn vertex_input_semantic_to_location(
+        &self,
+        semantic: &peridot::VertexInputSemantic,
+    ) -> Option<u32> {
+        self.asset
+            .vertex_inputs
+            .get(semantic)
+            .map(|x| x.location as _)
+    }
+
+    #[inline(always)]
+    pub fn uniform_buffer_offset_for_material_property(
+        &self,
+        name: &str,
+    ) -> Option<br::DeviceSize> {
+        let prop = self
+            .asset
+            .material_properties
+            .iter()
+            .find(|x| x.name == name)?;
+        let base_for_descriptor = self
+            .material_uniform_buffer_range_by_descriptor
+            .get(&prop.descriptor)?
+            .start;
+
+        Some(base_for_descriptor + prop.offset as br::DeviceSize)
+    }
+
+    #[inline(always)]
+    pub fn write_material_texture_property<'r>(
+        &self,
+        name: &str,
+        info: br::DescriptorImageInfo<'r>,
+        descriptor_sets: &[br::DescriptorSet],
+        sink: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
+    ) {
+        let p = self
+            .asset
+            .material_properties
+            .iter()
+            .find(|x| x.name == name)
+            .expect("no material property found");
+        sink.push(
+            descriptor_sets[p.descriptor.set as usize]
+                .binding_at(p.descriptor.binding)
+                .write(br::DescriptorContents::CombinedImageSampler(vec![info])),
+        );
+    }
+
+    #[inline(always)]
+    pub fn write_descriptor_sets<'r>(
+        &self,
+        descriptor_sets: &[br::DescriptorSet],
+        material_uniform_buffer: &'r (impl br::VkHandle<Handle = br::vk::VkBuffer> + ?Sized),
+        material_uniform_buffer_offset: br::DeviceSize,
+        sink: &mut Vec<br::DescriptorSetWriteInfo<'r>>,
+    ) {
+        for (dp, &range) in self.material_uniform_buffer_range_by_descriptor.iter() {
+            sink.push(
+                descriptor_sets[dp.set as usize]
+                    .binding_at(dp.binding)
+                    .write(br::DescriptorContents::UniformBuffer(vec![
+                        br::DescriptorBufferInfo::new(
+                            material_uniform_buffer,
+                            range.start + material_uniform_buffer_offset
+                                ..range.end + material_uniform_buffer_offset,
+                        ),
+                    ])),
+            )
+        }
+    }
+}
+
+pub struct RuntimeShaderDescriptorPoolSize {
+    pub combined_image_sampler: u32,
+    pub uniform_buffer: u32,
+}
+
+impl AssetResourceType for peridot_shader::asset::AssetCore {
+    type Error = <peridot_shader::asset::AssetVk as peridot::FromAssetBlob>::Error;
+    type RuntimeResourceType = RuntimeShader;
+
+    fn load_core(
+        id: &peridot::AssetID,
+        _dep_loader: &mut RuntimeAssetManager,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        _mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<AssetResource, Self::Error> {
+        let asset = <peridot_shader::asset::AssetVk as peridot::FromAssetBlob>::from_asset_blob(
+            engine.open_raw_asset_by_id(id.clone())?,
+        )?;
+
+        for x in asset.material_properties.iter() {
+            println!("{x:?}");
+        }
+
+        let module = br::ShaderModuleObject::new(
+            engine.graphics().device().clone(),
+            &br::ShaderModuleCreateInfo::new(&asset.code_binary),
+        )
+        .expect("shader_module.create");
+        let shader_stages_with_entry_point_name = core::iter::once((
+            br::ShaderStage::Vertex,
+            CString::new(asset.vertex_entry_point_name.as_str()).expect("nul in entry point name"),
+        ))
+        .chain(asset.fragment_entry_point_name.as_deref().map(|x| {
+            (
+                br::ShaderStage::Fragment,
+                CString::new(x).expect("nul in entry point name"),
+            )
+        }))
+        .collect::<Box<[_]>>();
+
+        let mut material_uniform_buffer_top = 0;
+        let mut material_uniform_buffer_base = 0;
+        let mut material_uniform_buffer_range_by_descriptor = HashMap::<
+            peridot_shader::asset::AssetDescriptorPointer,
+            core::range::Range<br::DeviceSize>,
+        >::new();
+        let mut material_properties_sorted = asset
+            .material_properties
+            .iter()
+            .filter(|p| p.r#type != peridot_shader::asset::AssetInputVariableType::Texture2D)
+            .collect::<Vec<_>>();
+        material_properties_sorted.sort_by(|a, b| {
+            a.descriptor
+                .cmp(&b.descriptor)
+                .then(a.offset.cmp(&b.offset))
+        });
+        let mut current_descriptor = None;
+        for p in material_properties_sorted {
+            let element_base = material_uniform_buffer_base + p.offset;
+            material_uniform_buffer_top = element_base + p.size;
+            if current_descriptor.is_none_or(|d| p.descriptor != d) {
+                // descriptor changed
+                if let Some(d) = current_descriptor {
+                    material_uniform_buffer_range_by_descriptor
+                        .get_mut(&d)
+                        .expect("not registered")
+                        .end = element_base as _;
+                }
+                material_uniform_buffer_range_by_descriptor
+                    .insert(p.descriptor, (element_base as _..element_base as _).into());
+                material_uniform_buffer_base = element_base;
+                current_descriptor = Some(p.descriptor);
+            }
+        }
+        if let Some(d) = current_descriptor {
+            // last
+            material_uniform_buffer_range_by_descriptor
+                .get_mut(&d)
+                .expect("not registered")
+                .end = material_uniform_buffer_top as _;
+        }
+        println!("material_uniform_top: {material_uniform_buffer_top}");
+        println!(
+            "material_uniform_buffer_range_by_descriptor: {material_uniform_buffer_range_by_descriptor:?}"
+        );
+
+        let max_set_number = asset
+            .input_variable_layout
+            .keys()
+            .map(|k| k.set)
+            .max()
+            .unwrap_or(0);
+        let mut descriptor_set_layouts = Vec::with_capacity((max_set_number + 1) as _);
+        let mut descriptor_pool_size_per_set = Vec::with_capacity((max_set_number + 1) as _);
+        for set in 0..=max_set_number {
+            let mut pool_size = RuntimeShaderDescriptorPoolSize {
+                combined_image_sampler: 0,
+                uniform_buffer: 0,
+            };
+
+            let mut bindings = Vec::new();
+            if let Some(pd) = asset.object_parameters_placement
+                && set == pd.set
+            {
+                bindings.push(br::DescriptorType::UniformBuffer.make_binding(pd.binding, 1));
+                pool_size.uniform_buffer += 1;
+            }
+            if let Some(pd) = asset.camera_parameters_placement
+                && set == pd.set
+            {
+                bindings.push(br::DescriptorType::UniformBuffer.make_binding(pd.binding, 1));
+                pool_size.uniform_buffer += 1;
+            }
+            bindings.extend(
+                asset
+                    .input_variable_layout
+                    .iter()
+                    .filter(|(k, _)| k.set == set)
+                    .map(|(k, v)| match v {
+                        peridot_shader::asset::AssetInputVariableLayoutVk::CombinedImageSampler => {
+                            pool_size.combined_image_sampler += 1;
+                            br::DescriptorType::CombinedImageSampler.make_binding(k.binding, 1)
+                        }
+                        peridot_shader::asset::AssetInputVariableLayoutVk::UniformBuffer {
+                            ..
+                        } => {
+                            pool_size.uniform_buffer += 1;
+                            br::DescriptorType::UniformBuffer.make_binding(k.binding, 1)
+                        }
+                    }),
+            );
+
+            // TODO: cache same shape layout
+            descriptor_set_layouts.push(
+                br::DescriptorSetLayoutObject::new(
+                    engine.graphics().device().clone(),
+                    &br::DescriptorSetLayoutCreateInfo::new(&bindings),
+                )
+                .expect("Create DescriptorSetLayout"),
+            );
+            descriptor_pool_size_per_set.push(pool_size);
+        }
+
+        Ok(AssetResource::Shader(RuntimeShader {
+            asset,
+            module,
+            shader_stages_with_entry_point_name,
+            material_uniform_buffer_range_by_descriptor,
+            material_uniform_buffer_size: material_uniform_buffer_top as _,
+            descriptor_set_layouts: descriptor_set_layouts.into_boxed_slice(),
+            descriptor_pool_size_per_set: descriptor_pool_size_per_set.into_boxed_slice(),
+        }))
     }
 }

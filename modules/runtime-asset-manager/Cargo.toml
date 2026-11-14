@@ -11,6 +11,7 @@ peridot-math = { path = "../math" }
 peridot-image = { path = "../image" }
 ktx = { path = "../../thirdparty/ktx" }
 peridot-mesh = { path = "../mesh", features = ["with-loader-impl"] }
+peridot-shader = { path = "../shader" }
 bedrock.workspace = true
 tracing.workspace = true
 thiserror.workspace = true

@@ -52,7 +52,12 @@ pub fn build(
         &project_version,
         options.entry_fn_name,
     );
-    steps::process_assets(&ctx, options.userlib, options.ext_asset_path.as_deref());
+    steps::process_assets(
+        &ctx,
+        options.userlib,
+        options.ext_asset_path.as_deref(),
+        options.rebuild_runtime_assets,
+    );
 
     ctx.within_cradle_dir(|| {
         if options.update_deps {

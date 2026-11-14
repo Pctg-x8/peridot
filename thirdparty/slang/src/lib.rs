@@ -25,6 +25,9 @@ pub use ffi::{
     SlangSourceLanguage as SourceLanguage, SlangStage as Stage, SlangTargetFlags as TargetFlags,
 };
 pub mod reflection;
+pub mod support;
+
+pub use self::support::Owned;
 
 pub type Result<T> = core::result::Result<T, SlangResult>;
 #[inline(always)]
@@ -55,11 +58,11 @@ pub unsafe trait SlangInterfacePtr: Sized {
     const GUID: SlangUUID;
     type VTable;
 
-    unsafe fn from_ptr(ptr: NonNull<c_void>) -> Self;
-
     #[inline(always)]
-    fn thisptr(&self) -> *mut c_void {
-        unsafe { core::mem::transmute::<_, &NonNull<c_void>>(self).as_ptr() }
+    fn thisptr(&self) -> *mut core::ffi::c_void {
+        core::ptr::from_ref(self)
+            .cast::<core::ffi::c_void>()
+            .cast_mut()
     }
 
     #[inline(always)]
@@ -72,29 +75,20 @@ macro_rules! slang_interface_ptr {
     ($name: ident, $uuid: expr, $vtbl: ty) => {
         #[derive(Debug)]
         #[repr(transparent)]
-        pub struct $name(NonNull<c_void>);
+        pub struct $name(c_void);
         unsafe impl SlangInterfacePtr for $name {
             const GUID: SlangUUID = $uuid;
             type VTable = $vtbl;
+        }
+    };
+    ($name: ident($deref_target: ty), $uuid: expr, $vtbl: ty) => {
+        slang_interface_ptr!($name, $uuid, $vtbl);
+        impl core::ops::Deref for $name {
+            type Target = $deref_target;
 
             #[inline(always)]
-            unsafe fn from_ptr(ptr: NonNull<c_void>) -> Self {
-                Self(ptr)
-            }
-        }
-        impl Drop for $name {
-            #[inline(always)]
-            fn drop(&mut self) {
-                unsafe {
-                    self.release();
-                }
-            }
-        }
-        impl Clone for $name {
-            #[inline(always)]
-            fn clone(&self) -> Self {
-                self.add_ref();
-                Self(self.0)
+            fn deref(&self) -> &Self::Target {
+                unsafe { core::mem::transmute::<&Self, &Self::Target>(self) }
             }
         }
     };
@@ -127,11 +121,11 @@ pub trait IUnknown: SlangInterfacePtr {
     }
 
     #[inline]
-    fn clone_cast<T>(&self) -> Result<T>
+    fn clone_cast<T>(&self) -> Result<Owned<T>>
     where
-        T: SlangInterfacePtr,
+        T: SlangInterfacePtr + IUnknown,
     {
-        Ok(unsafe { T::from_ptr(self.query_interface(&T::GUID)?) })
+        Ok(unsafe { Owned::from_non_null_unchecked(self.query_interface(&T::GUID)?) })
     }
 
     #[inline(always)]
@@ -203,7 +197,7 @@ pub trait IBlob: IUnknown {
     }
 }
 
-slang_interface_ptr!(IBlobPtr, BLOB_IID, IBlobVTable);
+slang_interface_ptr!(IBlobPtr(IUnknownPtr), BLOB_IID, IBlobVTable);
 impl IUnknown for IBlobPtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -235,17 +229,21 @@ pub struct IFileSystemVTable {
 pub trait IFileSystem: ICastable {
     fn vt(&self) -> &IFileSystemVTable;
 
-    fn load_file(&self, path: &CStr) -> Result<IBlobPtr> {
+    fn load_file(&self, path: &CStr) -> Result<Owned<IBlobPtr>> {
         let mut o = core::mem::MaybeUninit::uninit();
         rw(unsafe {
             (IFileSystem::vt(self).load_file)(self.thisptr(), path.as_ptr(), o.as_mut_ptr())
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
-slang_interface_ptr!(IFileSystemPtr, FILE_SYSTEM_IID, IFileSystemVTable);
+slang_interface_ptr!(
+    IFileSystemPtr(IUnknownPtr),
+    FILE_SYSTEM_IID,
+    IFileSystemVTable
+);
 impl IUnknown for IFileSystemPtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -331,7 +329,7 @@ pub struct ISharedLibraryLoaderVTable {
 pub trait ISharedLibraryLoader: IUnknown {
     fn vt(&self) -> &ISharedLibraryLoaderVTable;
 
-    fn load_shared_library(&self, path: &CStr) -> Result<ISharedLibraryPtr> {
+    fn load_shared_library(&self, path: &CStr) -> Result<Owned<ISharedLibraryPtr>> {
         let mut o = core::mem::MaybeUninit::uninit();
         rw(unsafe {
             (ISharedLibraryLoader::vt(self).load_shared_library)(
@@ -341,14 +339,12 @@ pub trait ISharedLibraryLoader: IUnknown {
             )
         })?;
 
-        Ok(ISharedLibraryPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
 slang_interface_ptr!(
-    ISharedLibraryLoaderPtr,
+    ISharedLibraryLoaderPtr(IUnknownPtr),
     SHARED_LIBRARY_LOADER_IID,
     ISharedLibraryLoaderVTable
 );
@@ -611,15 +607,13 @@ pub trait IGlobalSession: IUnknown {
     fn vt(&self) -> &IGlobalSessionVTable;
 
     /// Create a new session for loading and compiling code.
-    fn create_session(&self, desc: &SessionDesc) -> Result<ISessionPtr> {
+    fn create_session(&self, desc: &SessionDesc) -> Result<Owned<ISessionPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IGlobalSession::vt(self).create_session)(self.thisptr(), desc, o.as_mut_ptr())
         })?;
 
-        Ok(ISessionPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     /// Look up the internal ID of a profile by its `name`.
@@ -682,7 +676,10 @@ pub trait IGlobalSession: IUnknown {
     ///
     /// A blob that holds the string of the prelude.
     #[deprecated = "Use get_language_prelude"]
-    fn get_downstream_compiler_prelude(&self, pass_through: PassThrough) -> Option<IBlobPtr> {
+    fn get_downstream_compiler_prelude(
+        &self,
+        pass_through: PassThrough,
+    ) -> Option<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         unsafe {
             (IGlobalSession::vt(self).get_downstream_compiler_prelude)(
@@ -692,7 +689,7 @@ pub trait IGlobalSession: IUnknown {
             );
         }
 
-        NonNull::new(unsafe { o.assume_init() }).map(IBlobPtr)
+        Some(unsafe { Owned::from_non_null_unchecked(NonNull::new(o.assume_init())?) })
     }
 
     /// Get the build version 'tag' string.
@@ -788,7 +785,7 @@ pub trait IGlobalSession: IUnknown {
     /// # Returns
     ///
     /// A blob that hold the string of the prelude.
-    fn get_language_prelude(&self, source_language: SourceLanguage) -> Option<IBlobPtr> {
+    fn get_language_prelude(&self, source_language: SourceLanguage) -> Option<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         unsafe {
             (IGlobalSession::vt(self).get_language_prelude)(
@@ -798,7 +795,7 @@ pub trait IGlobalSession: IUnknown {
             );
         }
 
-        NonNull::new(unsafe { o.assume_init() }).map(IBlobPtr)
+        Some(unsafe { Owned::from_non_null_unchecked(NonNull::new(o.assume_init())?) })
     }
 
     /// Create a compile request.
@@ -846,11 +843,13 @@ pub trait IGlobalSession: IUnknown {
     ///
     /// Gets the currently set loader. If returns `None`, it's the default loader
     #[inline]
-    fn get_shared_library_loader(&self) -> Option<ISharedLibraryLoaderPtr> {
-        NonNull::new(unsafe {
-            (IGlobalSession::vt(self).get_shared_library_loader)(self.thisptr())
+    fn get_shared_library_loader(&self) -> Option<Owned<ISharedLibraryLoaderPtr>> {
+        Some(unsafe {
+            Owned::from_non_null_unchecked(NonNull::new((IGlobalSession::vt(self)
+                .get_shared_library_loader)(
+                self.thisptr()
+            ))?)
         })
-        .map(ISharedLibraryLoaderPtr)
     }
 
     #[inline]
@@ -895,7 +894,7 @@ pub trait IGlobalSession: IUnknown {
         Ok(())
     }
 
-    fn save_core_module(&self, archive_type: ArchiveType) -> Result<IBlobPtr> {
+    fn save_core_module(&self, archive_type: ArchiveType) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IGlobalSession::vt(self).save_core_module)(
@@ -905,7 +904,7 @@ pub trait IGlobalSession: IUnknown {
             )
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     #[inline]
@@ -990,7 +989,7 @@ pub trait IGlobalSession: IUnknown {
         Ok(())
     }
 
-    fn get_session_desc_digest(&self, session_desc: &mut SessionDesc) -> Result<IBlobPtr> {
+    fn get_session_desc_digest(&self, session_desc: &mut SessionDesc) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IGlobalSession::vt(self).get_session_desc_digest)(
@@ -1000,7 +999,7 @@ pub trait IGlobalSession: IUnknown {
             )
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     #[inline]
@@ -1039,7 +1038,7 @@ pub trait IGlobalSession: IUnknown {
         &self,
         module: BuiltinModuleName,
         archive_type: ArchiveType,
-    ) -> Result<IBlobPtr> {
+    ) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IGlobalSession::vt(self).save_builtin_module)(
@@ -1050,7 +1049,7 @@ pub trait IGlobalSession: IUnknown {
             )
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
@@ -1187,53 +1186,64 @@ pub trait ISession: IUnknown {
     fn vt(&self) -> &ISessionVTable;
 
     #[inline]
-    fn get_global_session(&self) -> IGlobalSessionPtr {
-        IGlobalSessionPtr(unsafe {
-            NonNull::new_unchecked((ISession::vt(self).get_global_session)(self.thisptr()))
-        })
+    fn get_global_session(&self) -> Owned<IGlobalSessionPtr> {
+        unsafe {
+            Owned::from_ptr_unchecked((ISession::vt(self).get_global_session)(self.thisptr()))
+        }
     }
 
     #[inline]
-    fn load_module(
-        &self,
+    fn load_module<'a>(
+        &'a self,
         module_name: &CStr,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Option<IModulePtr> {
-        NonNull::new(unsafe {
-            (ISession::vt(self).load_module)(
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Option<&'a IModulePtr> {
+        Some(unsafe {
+            NonNull::new((ISession::vt(self).load_module)(
                 self.thisptr(),
                 module_name.as_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
-            )
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
+            ))?
+            .cast::<IModulePtr>()
+            .as_ref()
         })
-        .map(IModulePtr)
     }
 
+    // memo: Module系はどうやらOwnedではないらしい？(Sessionのライフタイムとマッチするっぽい)
+    // Ownedにすると二重解放してしまうので参照にする
+    //
+    // 公式のチュートリアル(https://docs.shader-slang.org/en/latest/compilation-api.html#load-modules)だとComPtrで受けているのでおそらくOwnedにするのが正解だとおもうんだけど、
+    // cpp見てもたしかに返すときAddRefしてないんだよな......
     #[inline]
-    fn load_module_from_source(
-        &self,
+    fn load_module_from_source<'a>(
+        &'a self,
         module_name: &CStr,
         path: &CStr,
         source: &impl IBlob,
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
-    ) -> Option<IModulePtr> {
-        NonNull::new(unsafe {
-            (ISession::vt(self).load_module_from_source)(
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Option<&'a IModulePtr> {
+        Some(unsafe {
+            NonNull::new((ISession::vt(self).load_module_from_source)(
                 self.thisptr(),
                 module_name.as_ptr(),
                 path.as_ptr(),
                 source.thisptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
-            )
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
+            ))?
+            .cast::<IModulePtr>()
+            .as_ref()
         })
-        .map(IModulePtr)
     }
 
     fn create_composite_component_type(
         &self,
-        component_types: &[IComponentTypePtr],
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IComponentTypePtr> {
+        component_types: &[&IComponentTypePtr],
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IComponentTypePtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (ISession::vt(self).create_composite_component_type)(
@@ -1241,13 +1251,13 @@ pub trait ISession: IUnknown {
                 component_types.as_ptr() as _,
                 component_types.len() as _,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IComponentTypePtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     #[inline]
@@ -1255,7 +1265,7 @@ pub trait ISession: IUnknown {
         &self,
         r#type: &mut SlangReflectionType,
         specialization_args: &[SpecializationArg],
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
     ) -> &mut SlangReflectionType {
         unsafe {
             &mut *(ISession::vt(self).specialize_type)(
@@ -1263,7 +1273,9 @@ pub trait ISession: IUnknown {
                 r#type,
                 specialization_args.as_ptr(),
                 specialization_args.len() as _,
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         }
     }
@@ -1274,7 +1286,7 @@ pub trait ISession: IUnknown {
         r#type: &mut SlangReflectionType,
         target_index: SlangInt,
         layout_rules: SlangLayoutRules,
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
     ) -> &mut reflection::TypeLayout {
         unsafe {
             reflection::TypeLayout::from_mut_ptr((ISession::vt(self).get_type_layout)(
@@ -1282,7 +1294,9 @@ pub trait ISession: IUnknown {
                 r#type,
                 target_index,
                 layout_rules,
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             ))
         }
     }
@@ -1292,14 +1306,16 @@ pub trait ISession: IUnknown {
         &self,
         element_type: &mut SlangReflectionType,
         container_type: ContainerType,
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
     ) -> &mut SlangReflectionType {
         unsafe {
             &mut *(ISession::vt(self).get_container_type)(
                 self.thisptr(),
                 element_type,
                 container_type,
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         }
     }
@@ -1309,20 +1325,23 @@ pub trait ISession: IUnknown {
         unsafe { &mut *(ISession::vt(self).get_dynamic_type)(self.thisptr()) }
     }
 
-    fn get_type_rtti_mangled_name(&self, r#type: &mut SlangReflectionType) -> Result<IBlobPtr> {
+    fn get_type_rtti_mangled_name(
+        &self,
+        r#type: &mut SlangReflectionType,
+    ) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (ISession::vt(self).get_type_rtti_mangled_name)(self.thisptr(), r#type, o.as_mut_ptr())
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_type_conformance_witness_mangled_name(
         &self,
         r#type: &mut SlangReflectionType,
         interface_type: &mut SlangReflectionType,
-    ) -> Result<IBlobPtr> {
+    ) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (ISession::vt(self).get_type_conformance_witness_mangled_name)(
@@ -1333,7 +1352,7 @@ pub trait ISession: IUnknown {
             )
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_type_conformance_witness_sequential_id(
@@ -1368,18 +1387,20 @@ pub trait ISession: IUnknown {
         &self,
         r#type: &mut SlangReflectionType,
         interface_type: &mut SlangReflectionType,
-        out_conformance: &mut [MaybeUninit<ITypeConformancePtr>],
+        out_conformance: &mut [MaybeUninit<Owned<ITypeConformancePtr>>],
         conformance_id_override: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
     ) -> Result<()> {
         rw(unsafe {
             (ISession::vt(self).create_type_conformance_component_type)(
                 self.thisptr(),
                 r#type,
                 interface_type,
-                out_conformance.as_mut_ptr() as _,
+                out_conformance.as_mut_ptr().cast(),
                 conformance_id_override,
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
@@ -1387,23 +1408,26 @@ pub trait ISession: IUnknown {
     }
 
     #[inline]
-    fn load_module_from_ir_blob(
-        &self,
+    fn load_module_from_ir_blob<'a>(
+        &'a self,
         module_name: &CStr,
         path: &CStr,
         source: &impl IBlob,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Option<IModulePtr> {
-        NonNull::new(unsafe {
-            (ISession::vt(self).load_module_from_ir_blob)(
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Option<&'a IModulePtr> {
+        Some(unsafe {
+            NonNull::new((ISession::vt(self).load_module_from_ir_blob)(
                 self.thisptr(),
                 module_name.as_ptr(),
                 path.as_ptr(),
                 source.thisptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
-            )
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
+            ))?
+            .cast::<IModulePtr>()
+            .as_ref()
         })
-        .map(IModulePtr)
     }
 
     #[inline]
@@ -1412,13 +1436,10 @@ pub trait ISession: IUnknown {
     }
 
     #[inline]
-    fn get_loaded_module(&self, index: SlangInt) -> IModulePtr {
-        IModulePtr(unsafe {
-            NonNull::new_unchecked((ISession::vt(self).get_loaded_module)(
-                self.thisptr(),
-                index,
-            ))
-        })
+    fn get_loaded_module<'a>(&'a self, index: SlangInt) -> &'a IModulePtr {
+        unsafe {
+            &*(ISession::vt(self).get_loaded_module)(self.thisptr(), index).cast::<IModulePtr>()
+        }
     }
 
     #[inline]
@@ -1437,23 +1458,26 @@ pub trait ISession: IUnknown {
     }
 
     #[inline]
-    fn load_module_from_source_string(
-        &self,
+    fn load_module_from_source_string<'a>(
+        &'a self,
         module_name: &CStr,
         path: &CStr,
         string: &CStr,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Option<IModulePtr> {
-        NonNull::new(unsafe {
-            (ISession::vt(self).load_module_from_source_string)(
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Option<&'a IModulePtr> {
+        Some(unsafe {
+            NonNull::new((ISession::vt(self).load_module_from_source_string)(
                 self.thisptr(),
                 module_name.as_ptr(),
                 path.as_ptr(),
                 string.as_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
-            )
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
+            ))?
+            .cast::<IModulePtr>()
+            .as_ref()
         })
-        .map(IModulePtr)
     }
 
     fn get_dynamic_object_rtti_bytes(
@@ -1500,7 +1524,7 @@ pub trait ISession: IUnknown {
     }
 }
 
-slang_interface_ptr!(ISessionPtr, SESSION_IID, ISessionVTable);
+slang_interface_ptr!(ISessionPtr(IUnknownPtr), SESSION_IID, ISessionVTable);
 impl IUnknown for ISessionPtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -1565,7 +1589,7 @@ pub trait IMetadata: ICastable {
     }
 }
 
-slang_interface_ptr!(IMetadataPtr, METADATA_IID, IMetadataVTable);
+slang_interface_ptr!(IMetadataPtr(IUnknownPtr), METADATA_IID, IMetadataVTable);
 impl IUnknown for IMetadataPtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -1611,26 +1635,28 @@ pub trait ICompileResult: ICastable {
         unsafe { (ICompileResult::vt(self).get_item_count)(self.thisptr()) }
     }
 
-    fn get_item_data(&self, index: u32) -> Result<IBlobPtr> {
+    fn get_item_data(&self, index: u32) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (ICompileResult::vt(self).get_item_data)(self.thisptr(), index, o.as_mut_ptr())
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
-    fn get_metadata(&self) -> Result<IMetadataPtr> {
+    fn get_metadata(&self) -> Result<Owned<IMetadataPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe { (ICompileResult::vt(self).get_metadata)(self.thisptr(), o.as_mut_ptr()) })?;
 
-        Ok(IMetadataPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
-slang_interface_ptr!(ICompileResultPtr, COMPILE_RESULT_IID, ICompileResultVTable);
+slang_interface_ptr!(
+    ICompileResultPtr(IUnknownPtr),
+    COMPILE_RESULT_IID,
+    ICompileResultVTable
+);
 impl IUnknown for ICompileResultPtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -1740,26 +1766,23 @@ pub trait IComponentType: IUnknown {
     fn vt(&self) -> &IComponentTypeVTable;
 
     #[inline]
-    fn get_session(&self) -> ISessionPtr {
-        unsafe {
-            ISessionPtr(NonNull::new_unchecked((IComponentType::vt(self)
-                .get_session)(
-                self.thisptr()
-            )))
-        }
+    fn get_session(&self) -> Owned<ISessionPtr> {
+        unsafe { Owned::from_ptr_unchecked((IComponentType::vt(self).get_session)(self.thisptr())) }
     }
 
     #[inline]
     fn get_layout(
         &self,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
     ) -> &mut reflection::Shader {
         unsafe {
             reflection::Shader::from_mut_ptr((IComponentType::vt(self).get_layout)(
                 self.thisptr(),
                 target_index,
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             ))
         }
     }
@@ -1773,8 +1796,8 @@ pub trait IComponentType: IUnknown {
         &self,
         entry_point_index: SlangInt,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IBlobPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).get_entry_point_code)(
@@ -1782,11 +1805,13 @@ pub trait IComponentType: IUnknown {
                 entry_point_index,
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(unsafe { IBlobPtr(NonNull::new_unchecked(o.assume_init())) })
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_result_as_file_system(
@@ -1811,7 +1836,7 @@ pub trait IComponentType: IUnknown {
         &self,
         entry_point_index: SlangInt,
         target_index: SlangInt,
-    ) -> IBlobPtr {
+    ) -> Owned<IBlobPtr> {
         let mut o = MaybeUninit::uninit();
         unsafe {
             (IComponentType::vt(self).get_entry_point_hash)(
@@ -1822,14 +1847,14 @@ pub trait IComponentType: IUnknown {
             );
         }
 
-        IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) })
+        unsafe { Owned::from_ptr_unchecked(o.assume_init()) }
     }
 
     fn specialize(
         &self,
         specialization_args: &[SpecializationArg],
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IComponentTypePtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IComponentTypePtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).specialize)(
@@ -1837,39 +1862,39 @@ pub trait IComponentType: IUnknown {
                 specialization_args.as_ptr(),
                 specialization_args.len() as _,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IComponentTypePtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn link(
         &self,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IComponentTypePtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IComponentTypePtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).link)(
                 self.thisptr(),
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IComponentTypePtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_entry_point_host_callable(
         &self,
         entry_point_index: c_int,
         target_index: c_int,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<ISharedLibraryPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<ISharedLibraryPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).get_entry_point_host_callable)(
@@ -1877,16 +1902,16 @@ pub trait IComponentType: IUnknown {
                 entry_point_index,
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(ISharedLibraryPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
-    fn rename_entry_point(&self, new_name: &CStr) -> Result<IComponentTypePtr> {
+    fn rename_entry_point(&self, new_name: &CStr) -> Result<Owned<IComponentTypePtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).rename_entry_point)(
@@ -1896,16 +1921,14 @@ pub trait IComponentType: IUnknown {
             )
         })?;
 
-        Ok(IComponentTypePtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn link_with_options(
         &self,
         compiler_option_entries: &mut [CompilerOptionEntry],
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IComponentTypePtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IComponentTypePtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).link_with_options)(
@@ -1913,59 +1936,61 @@ pub trait IComponentType: IUnknown {
                 o.as_mut_ptr(),
                 compiler_option_entries.len() as _,
                 compiler_option_entries.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IComponentTypePtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_target_code(
         &self,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IBlobPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).get_target_code)(
                 self.thisptr(),
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_target_metadata(
         &self,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IMetadataPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IMetadataPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).get_target_metadata)(
                 self.thisptr(),
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IMetadataPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_entry_point_metadata(
         &self,
         entry_point_index: SlangInt,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<Option<IBlobPtr>>>,
-    ) -> Result<IMetadataPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IMetadataPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType::vt(self).get_entry_point_metadata)(
@@ -1973,17 +1998,21 @@ pub trait IComponentType: IUnknown {
                 entry_point_index,
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IMetadataPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
-slang_interface_ptr!(IComponentTypePtr, COMPONENT_TYPE_IID, IComponentTypeVTable);
+slang_interface_ptr!(
+    IComponentTypePtr(IUnknownPtr),
+    COMPONENT_TYPE_IID,
+    IComponentTypeVTable
+);
 impl IUnknown for IComponentTypePtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -2018,7 +2047,11 @@ pub trait IEntryPoint: IComponentType {
     }
 }
 
-slang_interface_ptr!(IEntryPointPtr, ENTRY_POINT_IID, IEntryPointVTable);
+slang_interface_ptr!(
+    IEntryPointPtr(IComponentTypePtr),
+    ENTRY_POINT_IID,
+    IEntryPointVTable
+);
 impl IUnknown for IEntryPointPtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -2053,7 +2086,7 @@ pub trait ITypeConformance: IComponentType {
 }
 
 slang_interface_ptr!(
-    ITypeConformancePtr,
+    ITypeConformancePtr(IComponentTypePtr),
     TYPE_CONFORMANCE_IID,
     ITypeConformanceVTable
 );
@@ -2105,29 +2138,29 @@ pub trait IComponentType2: IUnknown {
     fn get_target_compile_result(
         &self,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
-    ) -> Result<ICompileResultPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<ICompileResultPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType2::vt(self).get_target_compile_result)(
                 self.thisptr(),
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(ICompileResultPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn get_entry_point_compile_result(
         &self,
         entry_point_index: SlangInt,
         target_index: SlangInt,
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
-    ) -> Result<ICompileResultPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<ICompileResultPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IComponentType2::vt(self).get_entry_point_compile_result)(
@@ -2135,18 +2168,18 @@ pub trait IComponentType2: IUnknown {
                 entry_point_index,
                 target_index,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(ICompileResultPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
 slang_interface_ptr!(
-    IComponentType2Ptr,
+    IComponentType2Ptr(IUnknownPtr),
     COMPONENT_TYPE2_IID,
     IComponentType2VTable
 );
@@ -2211,7 +2244,7 @@ pub struct IModuleVTable {
 pub trait IModule: IComponentType {
     fn vt(&self) -> &IModuleVTable;
 
-    fn find_entry_point_by_name(&self, name: &CStr) -> Result<IEntryPointPtr> {
+    fn find_entry_point_by_name(&self, name: &CStr) -> Result<Owned<IEntryPointPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IModule::vt(self).find_entry_point_by_name)(
@@ -2221,9 +2254,7 @@ pub trait IModule: IComponentType {
             )
         })?;
 
-        Ok(IEntryPointPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     #[inline(always)]
@@ -2231,27 +2262,27 @@ pub trait IModule: IComponentType {
         unsafe { (IModule::vt(self).get_defined_entry_point_count)(self.thisptr()) }
     }
 
-    fn get_defined_entry_point(&self, index: i32) -> Result<IEntryPointPtr> {
+    fn get_defined_entry_point(&self, index: i32) -> Result<Owned<IEntryPointPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IModule::vt(self).get_defined_entry_point)(self.thisptr(), index, o.as_mut_ptr())
         })?;
 
-        Ok(IEntryPointPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     #[inline(always)]
-    fn iter_defined_entry_point<'x>(&'x self) -> impl Iterator<Item = Result<IEntryPointPtr>> + 'x {
+    fn iter_defined_entry_point<'x>(
+        &'x self,
+    ) -> impl Iterator<Item = Result<Owned<IEntryPointPtr>>> + 'x {
         (0..self.get_defined_entry_point_count()).map(|n| self.get_defined_entry_point(n))
     }
 
-    fn serialize(&self) -> Result<IBlobPtr> {
+    fn serialize(&self) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe { (IModule::vt(self).serialize)(self.thisptr(), o.as_mut_ptr()) })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     fn write_to_file(&self, file_name: &CStr) -> Result<()> {
@@ -2279,8 +2310,8 @@ pub trait IModule: IComponentType {
         &self,
         name: &CStr,
         stage: Stage,
-        out_diagnostics: Option<&mut MaybeUninit<IBlobPtr>>,
-    ) -> Result<IEntryPointPtr> {
+        out_diagnostics: Option<&mut MaybeUninit<Option<Owned<IBlobPtr>>>>,
+    ) -> Result<Owned<IEntryPointPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe {
             (IModule::vt(self).find_and_check_entry_point)(
@@ -2288,13 +2319,13 @@ pub trait IModule: IComponentType {
                 name.as_ptr(),
                 stage,
                 o.as_mut_ptr(),
-                out_diagnostics.map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr) as _,
+                out_diagnostics
+                    .map_or_else(core::ptr::null_mut, MaybeUninit::as_mut_ptr)
+                    .cast(),
             )
         })?;
 
-        Ok(IEntryPointPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 
     #[inline]
@@ -2317,15 +2348,15 @@ pub trait IModule: IComponentType {
         unsafe { &mut *(IModule::vt(self).get_module_reflection)(self.thisptr()) }
     }
 
-    fn disassemble(&self) -> Result<IBlobPtr> {
+    fn disassemble(&self) -> Result<Owned<IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         rw(unsafe { (IModule::vt(self).disassemble)(self.thisptr(), o.as_mut_ptr()) })?;
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 
-slang_interface_ptr!(IModulePtr, MODULE_IID, IModuleVTable);
+slang_interface_ptr!(IModulePtr(IComponentTypePtr), MODULE_IID, IModuleVTable);
 impl IUnknown for IModulePtr {
     #[inline(always)]
     fn vt(&self) -> &IUnknownVTable {
@@ -2393,7 +2424,7 @@ impl PreprocessorMacroDesc {
 
 #[repr(C)]
 pub struct SessionDesc {
-    pub structure_size: u32,
+    pub structure_size: usize,
     pub targets: *const TargetDesc,
     pub target_count: SlangInt,
     pub flags: SessionFlags,
@@ -2412,7 +2443,7 @@ pub struct SessionDesc {
 impl Default for SessionDesc {
     fn default() -> Self {
         Self {
-            structure_size: core::mem::size_of::<Self>() as _,
+            structure_size: core::mem::size_of::<Self>(),
             targets: core::ptr::null(),
             target_count: 0,
             flags: SESSION_FLAGS_NONE,
@@ -2656,11 +2687,9 @@ pub union SpecializationArgValue {
     pub expr: *const core::ffi::c_char,
 }
 
-pub fn create_global_session(desc: &GlobalSessionDesc) -> Result<IGlobalSessionPtr> {
+pub fn create_global_session(desc: &GlobalSessionDesc) -> Result<Owned<IGlobalSessionPtr>> {
     let mut o = MaybeUninit::uninit();
     rw(unsafe { ffi::slang_createGlobalSession2(desc, o.as_mut_ptr()) })?;
 
-    Ok(IGlobalSessionPtr(unsafe {
-        NonNull::new_unchecked(o.assume_init())
-    }))
+    Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
 }

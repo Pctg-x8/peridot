@@ -1,0 +1,23 @@
+[package]
+name = "peridot-shader"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+with-asset-processing = ["dep:peridot-asset-processing"]
+
+[dependencies]
+peridot = { path = "../../base" }
+peridot-native-io = { path = "../native-io" }
+slang = { path = "../../thirdparty/slang" }
+tracing.workspace = true
+thiserror.workspace = true
+bitflags = "2.0"
+vectored-io-helper = { path = "../../base-lib/vectored-io-helper" }
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot-asset-processing = { path = "../asset-processing", optional = true }
+peridot-math = { path = "../math" }
+
+[lints]
+workspace = true

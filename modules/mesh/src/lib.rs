@@ -437,18 +437,15 @@ impl Attribute {
         }
     }
 
-    #[cfg(feature = "with-rendering-configuration")]
-    pub fn into_semantic(&self) -> peridot_rendering_configuration::VertexInputSemantic {
+    pub const fn to_semantic(&self) -> peridot_types::VertexInputSemantic {
         match self {
-            Self::Position => peridot_rendering_configuration::VertexInputSemantic::Position(0),
-            Self::Normal => peridot_rendering_configuration::VertexInputSemantic::Normal(0),
-            Self::Tangent => peridot_rendering_configuration::VertexInputSemantic::Tangent(0),
-            &Self::Texcoord(n) => peridot_rendering_configuration::VertexInputSemantic::Texcoord(n),
-            &Self::Color(n) => peridot_rendering_configuration::VertexInputSemantic::Color(n),
-            &Self::Joints(n) => peridot_rendering_configuration::VertexInputSemantic::BlendIndex(n),
-            &Self::Weights(n) => {
-                peridot_rendering_configuration::VertexInputSemantic::BlendWeight(n)
-            }
+            Self::Position => peridot_types::VertexInputSemantic::Position(0),
+            Self::Normal => peridot_types::VertexInputSemantic::Normal(0),
+            Self::Tangent => peridot_types::VertexInputSemantic::Tangent(0),
+            &Self::Texcoord(n) => peridot_types::VertexInputSemantic::Texcoord(n),
+            &Self::Color(n) => peridot_types::VertexInputSemantic::Color(n),
+            &Self::Joints(n) => peridot_types::VertexInputSemantic::BlendIndex(n),
+            &Self::Weights(n) => peridot_types::VertexInputSemantic::BlendWeight(n),
         }
     }
 

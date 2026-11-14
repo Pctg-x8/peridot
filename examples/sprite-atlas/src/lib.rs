@@ -206,13 +206,13 @@ pub async fn game_main(e: &mut peridot::Engine<'_, impl peridot::NativeLinker>) 
                         &[
                             br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                                 binding: 0,
-                                location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Position(0)],
+                                location: vertex_semantic_to_location[&peridot::VertexInputSemantic::Position(0)],
                                 format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
                                 offset: core::mem::offset_of!(peridot::VertexUV, pos) as _
                             }),
                             br::VertexInputAttributeDescription(br::vk::VkVertexInputAttributeDescription {
                                 binding: 0,
-                                location: vertex_semantic_to_location[&peridot_rendering_configuration::VertexInputSemantic::Texcoord(0)],
+                                location: vertex_semantic_to_location[&peridot::VertexInputSemantic::Texcoord(0)],
                                 format: br::vk::VK_FORMAT_R32G32B32A32_SFLOAT,
                                 offset: core::mem::offset_of!(peridot::VertexUV, uv) as _
                             })

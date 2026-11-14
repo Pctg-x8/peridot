@@ -2,10 +2,9 @@ use core::{
     cell::UnsafeCell,
     ffi::{CStr, c_float, c_int, c_uint},
     mem::MaybeUninit,
-    ptr::NonNull,
 };
 
-use crate::{ffi, *};
+use crate::{ffi, support::CStrBlob, *};
 
 pub use crate::ffi::{
     SlangReflectionGenericArg as GenericArg, SlangReflectionGenericArgType as GenericArgType,
@@ -239,11 +238,13 @@ impl Type {
         unsafe { CStr::from_ptr(ffi::spReflectionType_GetName(self.0.get())) }
     }
 
-    pub fn full_name(&self) -> crate::Result<crate::IBlobPtr> {
+    pub fn full_name(&self) -> crate::Result<CStrBlob<crate::IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         crate::rw(unsafe { ffi::spReflectionType_GetFullName(self.0.get(), o.as_mut_ptr()) })?;
+        let blob = unsafe { Owned::<IBlobPtr>::from_ptr_unchecked(o.assume_init()) };
+        assert!(!blob.get_buffer_pointer().is_null(), "null blob returned");
 
-        Ok(IBlobPtr(unsafe { NonNull::new_unchecked(o.assume_init()) }))
+        Ok(CStrBlob(blob))
     }
 
     #[inline(always)]
@@ -313,7 +314,7 @@ iter_something!(
     c_uint
 );
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u32)]
 pub enum ParameterCategory {
     None = ffi::SLANG_PARAMETER_CATEGORY_NONE,
@@ -379,8 +380,11 @@ impl TypeLayout {
     }
 
     #[inline]
-    pub fn r#type(&self) -> &mut Type {
-        unsafe { Type::from_mut_ptr(ffi::spReflectionTypeLayout_GetType(self.0.get())) }
+    pub fn r#type(&self) -> Option<&mut Type> {
+        match unsafe { ffi::spReflectionTypeLayout_GetType(self.0.get()) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { Type::from_mut_ptr(p) }),
+        }
     }
 
     #[inline]
@@ -446,11 +450,6 @@ impl TypeLayout {
         }
     }
 
-    #[inline(always)]
-    pub fn element_count(&self, reflection: Option<&Shader>) -> usize {
-        self.r#type().element_count(reflection)
-    }
-
     #[inline]
     pub fn element_stride(&self, category: ParameterCategory) -> usize {
         unsafe { ffi::spReflectionTypeLayout_GetElementStride(self.0.get(), category as _) }
@@ -476,6 +475,15 @@ impl TypeLayout {
 
     pub fn container_var_layout(&self) -> Option<&mut VariableLayout> {
         let p = unsafe { ffi::spReflectionTypeLayout_getContainerVarLayout(self.0.get()) };
+        if p.is_null() {
+            None
+        } else {
+            Some(unsafe { VariableLayout::from_mut_ptr(p) })
+        }
+    }
+
+    pub fn content_var_layout(&self) -> Option<&mut VariableLayout> {
+        let p = unsafe { ffi::spReflectionTypeLayout_GetContentVarLayout(self.0.get()) };
         if p.is_null() {
             None
         } else {
@@ -514,41 +522,6 @@ impl TypeLayout {
             current: 0,
             count: self.category_count(),
         }
-    }
-
-    #[inline(always)]
-    pub fn row_count(&self) -> c_uint {
-        self.r#type().row_count()
-    }
-
-    #[inline(always)]
-    pub fn column_count(&self) -> c_uint {
-        self.r#type().column_count()
-    }
-
-    #[inline(always)]
-    pub fn scalar_type(&self) -> ScalarType {
-        self.r#type().scalar_type()
-    }
-
-    #[inline(always)]
-    pub fn resource_result_type(&self) -> Option<&mut Type> {
-        self.r#type().resource_result_type()
-    }
-
-    #[inline(always)]
-    pub fn resource_shape(&self) -> crate::ResourceShape {
-        self.r#type().resource_shape()
-    }
-
-    #[inline(always)]
-    pub fn resource_access(&self) -> crate::ResourceAccess {
-        self.r#type().resource_access()
-    }
-
-    #[inline(always)]
-    pub fn name(&self) -> &CStr {
-        self.r#type().name()
     }
 
     #[inline]
@@ -1107,8 +1080,11 @@ impl Variable {
     }
 
     #[inline]
-    pub fn name(&self) -> &CStr {
-        unsafe { CStr::from_ptr(ffi::spReflectionVariable_GetName(self.0.get())) }
+    pub fn name(&self) -> Option<&CStr> {
+        match unsafe { ffi::spReflectionVariable_GetName(self.0.get()) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { CStr::from_ptr(p) }),
+        }
     }
 
     #[inline]
@@ -1219,18 +1195,21 @@ impl VariableLayout {
     }
 
     #[inline]
-    pub fn variable(&self) -> &mut Variable {
-        unsafe { Variable::from_mut_ptr(ffi::spReflectionVariableLayout_GetVariable(self.0.get())) }
+    pub fn variable(&self) -> Option<&mut Variable> {
+        match unsafe { ffi::spReflectionVariableLayout_GetVariable(self.0.get()) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { Variable::from_mut_ptr(p) }),
+        }
     }
 
     #[inline(always)]
-    pub fn name(&self) -> &CStr {
-        self.variable().name()
+    pub fn name(&self) -> Option<&CStr> {
+        self.variable()?.name()
     }
 
     #[inline(always)]
     pub fn find_modifier(&self, id: crate::ModifierID) -> Option<&mut Modifier> {
-        self.variable().find_modifier(id)
+        self.variable()?.find_modifier(id)
     }
 
     #[inline]
@@ -1266,8 +1245,8 @@ impl VariableLayout {
     }
 
     #[inline(always)]
-    pub fn r#type(&self) -> &mut Type {
-        self.variable().r#type()
+    pub fn r#type(&self) -> Option<&mut Type> {
+        Some(self.variable()?.r#type())
     }
 
     #[inline]
@@ -1831,12 +1810,8 @@ impl Shader {
     }
 
     #[inline]
-    pub fn session(&self) -> crate::ISessionPtr {
-        unsafe {
-            crate::ISessionPtr(NonNull::new_unchecked(ffi::spReflection_GetSession(
-                self.0.get(),
-            )))
-        }
+    pub fn session(&self) -> Owned<crate::ISessionPtr> {
+        unsafe { Owned::from_ptr_unchecked(ffi::spReflection_GetSession(self.0.get())) }
     }
 
     pub fn type_parameter(&self, index: c_uint) -> Option<&mut TypeParameter> {
@@ -2073,15 +2048,13 @@ impl Shader {
         }
     }
 
-    pub fn to_json(&self) -> crate::Result<crate::IBlobPtr> {
+    pub fn to_json(&self) -> crate::Result<Owned<crate::IBlobPtr>> {
         let mut o = MaybeUninit::uninit();
         crate::rw(unsafe {
             ffi::spReflection_ToJson(self.0.get(), core::ptr::null_mut(), o.as_mut_ptr())
         })?;
 
-        Ok(crate::IBlobPtr(unsafe {
-            NonNull::new_unchecked(o.assume_init())
-        }))
+        Ok(unsafe { Owned::from_ptr_unchecked(o.assume_init()) })
     }
 }
 

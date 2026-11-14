@@ -12,12 +12,14 @@
         "aarch64-darwin"
       ];
       NDK_PLATFORM_TARGET = "34";
-      android-composition = pkgs: pkgs.androidenv.composeAndroidPackages {
-        platformVersions = [NDK_PLATFORM_TARGET];
-        buildToolsVersions = ["34.0.0"];
-        abiVersions = ["arm64-v8a"];
-        includeNDK = true;
-      };
+      android-composition =
+        pkgs:
+        pkgs.androidenv.composeAndroidPackages {
+          platformVersions = [ NDK_PLATFORM_TARGET ];
+          buildToolsVersions = [ "34.0.0" ];
+          abiVersions = [ "arm64-v8a" ];
+          includeNDK = true;
+        };
       build-tools =
         pkgs:
         pkgs.writeShellApplication {
@@ -32,14 +34,16 @@
         };
       # haskell-pkgs: https://docs.haskellstack.org/en/stable/topics/nix_integration/#supporting-both-nix-and-non-nix-developers
       haskell-pkgs = pkgs: pkgs.haskell.packages.ghc9123;
-      stack-wrapped = pkgs: pkgs.symlinkJoin {
-        name = "stack";
-        paths = [ pkgs.stack ];
-        buildInputs = [ pkgs.makeWrapper ];
-        postBuild = ''
-          wrapProgram $out/bin/stack --add-flags "--no-nix --system-ghc --no-install-ghc"
-        '';
-      };
+      stack-wrapped =
+        pkgs:
+        pkgs.symlinkJoin {
+          name = "stack";
+          paths = [ pkgs.stack ];
+          buildInputs = [ pkgs.makeWrapper ];
+          postBuild = ''
+            wrapProgram $out/bin/stack --add-flags "--no-nix --system-ghc --no-install-ghc"
+          '';
+        };
       common-deps = pkgs: [
         pkgs.rustup
         # for building cdeps
@@ -72,100 +76,108 @@
       native-deps = pkgs: [ pkgs.pkg-config ];
       libclang-path = pkgs: "${pkgs.llvmPackages.libclang.lib}/lib";
     in
-    { devShells = builtins.foldl' (a: b: a // b) { } (
-      map (
-        system:
-        let
-          pkgs = import nixpkgs { inherit system; config.allowUnfree = true; config.android_sdk.accept_license = true; };
-          platform-deps =
-            if system == "x86_64-linux" then
-              [
-                # required libs for building engine (linux specific)
-                pkgs.udev
-                pkgs.wayland
-                pkgs.pulseaudio
-                pkgs.pipewire
-                pkgs.freetype
-                pkgs.fontconfig
-                # building cdeps(explicit compiler for linux)
-                pkgs.ninja
-                pkgs.pkg-config
-                pkgs.clang
-                pkgs.llvmPackages.libclang
-                # editor development deps(linux specific)
-                pkgs.harfbuzz
-                pkgs.icu76
-                pkgs.libxkbcommon
-                pkgs.dbus
-              ]
-            else
-              [ ];
-          LIBCLANG_PATH = if system == "x86_64-linux" then libclang-path pkgs else "";
-
-          rustc-system-triple = if system == "x86_64-linux" then "x86_64-unknown-linux-gnu" else "aarch64-apple-darwin";
-          shell-set-common-env-vars = ''
-            export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
-            # set library search paths for thirdparty
-            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}:${pkgs.vulkan-loader.outPath}/lib
-            # peridot specific env vars for development
-            export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
-            export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
-          '';
-          fishPrehook = pkgs.writeScriptBin "startup" ''
-            # prepend devenv prompt
-            functions -c fish_prompt __peridot_fish_prompt_org
-            function fish_prompt
-              # preserve status code
-              set -l last_status $status
-              printf "[Peridot] "
-              echo "exit $last_status" | .
-              __peridot_fish_prompt_org
-            end
-          '';
-          platform-extra-setup-script =
-            if system == "aarch64-darwin" then
-              ''
-                echo "export PATH=${pkgs.rustup.outPath}/bin:\$PATH" > editor/mac/marble-editor/.build.envrc
-              ''
-            else
-              "";
-          # android vars
-          ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
-          ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
-          mksh = if system == "x86_64-linux" then pkgs.mkShell else pkgs.mkShellNoCC;
-        in
-        {
-          "${system}" = {
-            default = mksh {
-              buildInputs = common-deps pkgs ++ platform-deps;
-              nativeBuildInputs = native-deps pkgs;
-              shellHook = ''
-                ${shell-set-common-env-vars}
-                ${platform-extra-setup-script}
-              '';
-
-              # このへんはないとエラーになる
-              inherit LIBCLANG_PATH;
-              # android
-              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
+    {
+      devShells = builtins.foldl' (a: b: a // b) { } (
+        map (
+          system:
+          let
+            pkgs = import nixpkgs {
+              inherit system;
+              config.allowUnfree = true;
+              config.android_sdk.accept_license = true;
             };
-            fish = mksh {
-              buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
-              nativeBuildInputs = native-deps pkgs;
-              shellHook = ''
-                ${shell-set-common-env-vars}
-                ${platform-extra-setup-script}
+            platform-deps =
+              if system == "x86_64-linux" then
+                [
+                  # required libs for building engine (linux specific)
+                  pkgs.udev
+                  pkgs.wayland
+                  pkgs.pulseaudio
+                  pkgs.pipewire
+                  pkgs.freetype
+                  pkgs.fontconfig
+                  # building cdeps(explicit compiler for linux)
+                  pkgs.ninja
+                  pkgs.pkg-config
+                  pkgs.clang
+                  pkgs.llvmPackages.libclang
+                  # editor development deps(linux specific)
+                  pkgs.harfbuzz
+                  pkgs.icu76
+                  pkgs.libxkbcommon
+                  pkgs.dbus
+                ]
+              else
+                [ ];
+            LIBCLANG_PATH = if system == "x86_64-linux" then libclang-path pkgs else "";
 
-                exec ${pkgs.fish.outPath}/bin/fish -C "source ${fishPrehook}/bin/startup"
-              '';
+            rustc-system-triple =
+              if system == "x86_64-linux" then "x86_64-unknown-linux-gnu" else "aarch64-apple-darwin";
+            shell-set-common-env-vars = ''
+              export PROJECT_ROOT=$(dirname $(realpath ./flake.nix))
+              # set library search paths for thirdparty
+              export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$PROJECT_ROOT/thirdparty/slang/source-repo/build/RelWithDebInfo/lib:$PROJECT_ROOT/thirdparty/ktx/cdeps-build/${rustc-system-triple}:${pkgs.vulkan-loader.outPath}/lib
+              # peridot specific env vars for development
+              export PERIDOT_CLI_BUILTIN_ASSETS_PATH=$PROJECT_ROOT/builtin-assets
+              export PERIDOT_CLI_CRADLE_BASE=$PROJECT_ROOT/cradle
+              export PERIDOT_SHADER_STDLIB_PATH=$PROJECT_ROOT/slangModules
+            '';
+            fishPrehook = pkgs.writeScriptBin "startup" ''
+              # prepend devenv prompt
+              functions -c fish_prompt __peridot_fish_prompt_org
+              function fish_prompt
+                # preserve status code
+                set -l last_status $status
+                printf "[Peridot] "
+                echo "exit $last_status" | .
+                __peridot_fish_prompt_org
+              end
+            '';
+            platform-extra-setup-script =
+              if system == "aarch64-darwin" then
+                ''
+                  echo "export PATH=${pkgs.rustup.outPath}/bin:\$PATH" > editor/mac/marble-editor/.build.envrc
+                ''
+              else
+                "";
+            # android vars
+            ANDROID_HOME = "${(android-composition pkgs).androidsdk}/libexec/android-sdk";
+            ANDROID_NDK = "${ANDROID_HOME}/ndk-bundle";
+            mksh = if system == "x86_64-linux" then pkgs.mkShell else pkgs.mkShellNoCC;
+          in
+          {
+            "${system}" = {
+              default = mksh {
+                buildInputs = common-deps pkgs ++ platform-deps;
+                nativeBuildInputs = native-deps pkgs;
+                shellHook = ''
+                  ${shell-set-common-env-vars}
+                  ${platform-extra-setup-script}
+                '';
 
-              # このへんはないとエラーになる
-              inherit LIBCLANG_PATH;
-              # android
-              inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
+                # このへんはないとエラーになる
+                inherit LIBCLANG_PATH;
+                # android
+                inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
+              };
+              fish = mksh {
+                buildInputs = common-deps pkgs ++ platform-deps ++ [ pkgs.fish ];
+                nativeBuildInputs = native-deps pkgs;
+                shellHook = ''
+                  ${shell-set-common-env-vars}
+                  ${platform-extra-setup-script}
+
+                  exec ${pkgs.fish.outPath}/bin/fish -C "source ${fishPrehook}/bin/startup"
+                '';
+
+                # このへんはないとエラーになる
+                inherit LIBCLANG_PATH;
+                # android
+                inherit ANDROID_HOME ANDROID_NDK NDK_PLATFORM_TARGET;
+              };
             };
-          };
-        }) target-systems
+          }
+        ) target-systems
       );
     };
 }

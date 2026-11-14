@@ -615,7 +615,7 @@ impl ShaderStageBits {
 
 #[repr(transparent)]
 #[derive(Debug)]
-pub struct VertexInputSemantic(pub peridot_semantic_shader::VertexInputSemantic);
+pub struct VertexInputSemantic(pub peridot_types::VertexInputSemantic);
 impl VertexInputSemantic {
     pub fn parse(tokenizer: &mut Tokenizer) -> Result<(Self, Location), ParseError> {
         let text = tokenizer
@@ -626,15 +626,13 @@ impl VertexInputSemantic {
         if let Some(left) = text_lc.strip_prefix("position") {
             if left.is_empty() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Position(0)),
+                    Self(peridot_types::VertexInputSemantic::Position(0)),
                     text.loc,
                 ));
             }
             if let Ok(index) = left.parse() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Position(
-                        index,
-                    )),
+                    Self(peridot_types::VertexInputSemantic::Position(index)),
                     text.loc,
                 ));
             }
@@ -642,13 +640,13 @@ impl VertexInputSemantic {
         if let Some(left) = text_lc.strip_prefix("normal") {
             if left.is_empty() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Normal(0)),
+                    Self(peridot_types::VertexInputSemantic::Normal(0)),
                     text.loc,
                 ));
             }
             if let Ok(index) = left.parse() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Normal(index)),
+                    Self(peridot_types::VertexInputSemantic::Normal(index)),
                     text.loc,
                 ));
             }
@@ -656,13 +654,13 @@ impl VertexInputSemantic {
         if let Some(left) = text_lc.strip_prefix("tangent") {
             if left.is_empty() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Tangent(0)),
+                    Self(peridot_types::VertexInputSemantic::Tangent(0)),
                     text.loc,
                 ));
             }
             if let Ok(index) = left.parse() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Tangent(index)),
+                    Self(peridot_types::VertexInputSemantic::Tangent(index)),
                     text.loc,
                 ));
             }
@@ -670,15 +668,13 @@ impl VertexInputSemantic {
         if let Some(left) = text_lc.strip_prefix("binormal") {
             if left.is_empty() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Binormal(0)),
+                    Self(peridot_types::VertexInputSemantic::Binormal(0)),
                     text.loc,
                 ));
             }
             if let Ok(index) = left.parse() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Binormal(
-                        index,
-                    )),
+                    Self(peridot_types::VertexInputSemantic::Binormal(index)),
                     text.loc,
                 ));
             }
@@ -686,15 +682,13 @@ impl VertexInputSemantic {
         if let Some(left) = text_lc.strip_prefix("texcoord") {
             if left.is_empty() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Texcoord(0)),
+                    Self(peridot_types::VertexInputSemantic::Texcoord(0)),
                     text.loc,
                 ));
             }
             if let Ok(index) = left.parse() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Texcoord(
-                        index,
-                    )),
+                    Self(peridot_types::VertexInputSemantic::Texcoord(index)),
                     text.loc,
                 ));
             }
@@ -705,7 +699,7 @@ impl VertexInputSemantic {
             }
             if let Ok(index) = left.parse() {
                 return Ok((
-                    Self(peridot_semantic_shader::VertexInputSemantic::Misc(index)),
+                    Self(peridot_types::VertexInputSemantic::Misc(index)),
                     text.loc,
                 ));
             }
@@ -1060,7 +1054,7 @@ pub enum GenContextError {
 pub struct CombinedShaderGenContext<'s> {
     vertex_inputs_ordered: Vec<(SourceRef<'s>, TypeSyntax<'s>)>,
     vertex_input_semantic_to_location_number:
-        HashMap<peridot_semantic_shader::VertexInputSemantic, (u32, Location)>,
+        HashMap<peridot_types::VertexInputSemantic, (u32, Location)>,
     vertex_outputs_ordered: Vec<(SourceRef<'s>, TypeSyntax<'s>)>,
     vertex_uniform_blocks: Vec<UniformDataBlock<'s>>,
     vertex_sampler2d_defs: Vec<Sampler2DDefinition<'s>>,
