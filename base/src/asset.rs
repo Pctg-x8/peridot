@@ -179,6 +179,42 @@ impl AssetDatabase {
         stmt.step().expect("stmt.step");
     }
 
+    pub fn validate_child_asset_conflicts(
+        &mut self,
+        group_id: &AssetID,
+        asset_id: &AssetID,
+        asset_type: AssetType,
+    ) -> ExistingAssetIDValidationResult {
+        let mut stmt = self
+            .db
+            .prepare(
+                "Select type, group_id from asset where id = ?",
+                PrepareFlags::empty(),
+            )
+            .expect("prepare failed");
+        unsafe {
+            stmt.bind_blob(1, asset_id.as_bytes())
+                .expect("stmt.bind_blob");
+        }
+        let has_next = stmt.step().expect("stmt.step");
+        if !has_next {
+            // no record matching asset id
+            return ExistingAssetIDValidationResult::NotRegistered;
+        }
+
+        let existing_type: AssetType = unsafe { stmt.column_int(0) }
+            .try_into()
+            .expect("type out of range");
+        assert_eq!(unsafe { stmt.column_bytes(1) }, 16);
+        let existing_group_id = AssetID::from_bytes(unsafe { *stmt.column_blob(1).cast() });
+
+        if existing_type == asset_type && &existing_group_id == group_id {
+            ExistingAssetIDValidationResult::Usable
+        } else {
+            ExistingAssetIDValidationResult::Drifting
+        }
+    }
+
     pub fn register_child_asset(
         &mut self,
         group_id: &AssetID,
@@ -224,6 +260,16 @@ impl AssetDatabase {
         }
         stmt.step().expect("stmt.step");
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExistingAssetIDValidationResult {
+    /// そもそもDBにない
+    NotRegistered,
+    /// DBに同一IDのエントリがあるがgroup_idかasset_typeが別のものになっている
+    Drifting,
+    /// DBに同一IDのエントリがあり、group_idやasset_typeも一致する
+    Usable,
 }
 
 pub struct AssetDatabaseUserAssetUpdateProcess<'a> {

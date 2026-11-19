@@ -21,7 +21,7 @@ pub trait AssetProcessor {
         source_path: &Path,
         data: &ProcessTargetFileData,
         asset_group_id: peridot::AssetID,
-        metadata: &HashMap<metadata::Key, String>,
+        metadata: &mut MetadataAccess,
         ctx: &mut AssetProcessContext,
     ) -> Result<AssetProcessResult, Box<dyn std::error::Error>>;
 }
@@ -29,6 +29,38 @@ pub trait AssetProcessor {
 pub enum AssetProcessResult {
     Ok,
     Skipped,
+}
+
+pub struct MetadataAccess {
+    map: HashMap<metadata::Key, String>,
+    needs_writeback: bool,
+}
+impl MetadataAccess {
+    pub fn load(path: impl AsRef<Path>) -> Self {
+        Self {
+            map: load_metadata(path),
+            needs_writeback: true,
+        }
+    }
+
+    pub fn process_dirty(&mut self, path: impl AsRef<Path>) {
+        if core::mem::replace(&mut self.needs_writeback, false) {
+            writeback_metadata(path, &self.map);
+        }
+    }
+
+    pub fn get<K>(&self, key: &K) -> Option<&str>
+    where
+        metadata::Key: core::borrow::Borrow<K>,
+        K: Eq + core::hash::Hash + ?Sized,
+    {
+        self.map.get(key).map(String::as_str)
+    }
+
+    pub fn set(&mut self, key: metadata::Key, value: String) {
+        self.map.insert(key, value);
+        self.needs_writeback = true;
+    }
 }
 
 pub struct AssetProcessContext<'a> {
@@ -67,16 +99,60 @@ impl<'a> AssetProcessContext<'a> {
         }
     }
 
-    pub fn register_child_asset(
+    pub fn acquire_asset_id(
         &mut self,
-        group_id: &peridot::AssetID,
+        metadata: &mut MetadataAccess,
+        metadata_key: metadata::Key,
+        asset_group_id: &peridot::AssetID,
         asset_type: peridot::AssetType,
         local_id: i32,
     ) -> peridot::AssetID {
-        let new_asset_id = self.asset_id_generator.generate();
+        'validate_existing: {
+            let Some(existing) = metadata.get(&metadata_key) else {
+                break 'validate_existing;
+            };
+            let Some(existing) = peridot::AssetID::deserialize_chars(existing.chars()) else {
+                tracing::warn!(
+                    ?existing,
+                    "invalid or corrupted asset id recorded in the metadata, issuing a new id"
+                );
+                break 'validate_existing;
+            };
+
+            match self
+                .assetdb
+                .validate_child_asset_conflicts(asset_group_id, &existing, asset_type)
+            {
+                peridot::ExistingAssetIDValidationResult::Usable => {
+                    // just use this
+                    return existing;
+                }
+                peridot::ExistingAssetIDValidationResult::Drifting => {
+                    tracing::warn!(
+                        ?existing,
+                        "recorded asset id is conflicting with existing in the AssetDB, issuing a new id"
+                    );
+                    break 'validate_existing;
+                }
+                peridot::ExistingAssetIDValidationResult::NotRegistered => {
+                    // issue record for this asset id
+                    self.assetdb.register_child_asset(
+                        asset_group_id,
+                        &existing,
+                        asset_type,
+                        local_id,
+                    );
+                    return existing;
+                }
+            }
+        }
+
+        // issue new asset id
+        let id = self.asset_id_generator.generate();
         self.assetdb
-            .register_child_asset(group_id, &new_asset_id, asset_type, local_id);
-        new_asset_id
+            .register_child_asset(asset_group_id, &id, asset_type, local_id);
+        metadata.set(metadata_key, id.serialize_chars().collect());
+        id
     }
 
     #[inline(always)]
@@ -522,14 +598,23 @@ pub fn process(
         return Err(ProcessError::MultipleAssetProcessor);
     }
 
+    let mut metadata = MetadataAccess {
+        map: load_metadata(&metadata_path),
+        needs_writeback: false,
+    };
     tracing::info!("Processing...");
     let result = match processor {
         None => {
             // Raw Asset Processing
             tracing::warn!("unknown assets(processed as raw)");
             if data.is_dirty {
-                let asset_id =
-                    ctx.register_child_asset(&data.asset_group_id, peridot::ASSET_TYPE_RAW, 0);
+                let asset_id = ctx.acquire_asset_id(
+                    &mut metadata,
+                    "io.ct2.peridot.asset-processor.raw.generated-asset-id".into(),
+                    &data.asset_group_id,
+                    peridot::ASSET_TYPE_RAW,
+                    0,
+                );
 
                 let dest_path = ctx.prepare_runtime_asset_output(&asset_id);
                 match std::fs::copy(source_path, dest_path) {
@@ -545,11 +630,16 @@ pub fn process(
                 source_path.as_ref(),
                 data,
                 data.asset_group_id.clone(),
-                &load_metadata(&metadata_path),
+                &mut metadata,
                 ctx,
             )
             .map_err(ProcessError::ProcessorFailure)?,
     };
+
+    if metadata.needs_writeback {
+        tracing::info!("writeback metadata changes");
+        writeback_metadata(&metadata_path, &metadata.map);
+    }
 
     match result {
         AssetProcessResult::Skipped => {
