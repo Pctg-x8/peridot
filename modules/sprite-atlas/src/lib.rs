@@ -228,6 +228,14 @@ pub enum ProcessError {
 #[cfg(feature = "with-asset-processing")]
 pub struct AssetProcessor;
 #[cfg(feature = "with-asset-processing")]
+impl AssetProcessor {
+    const META_GENERATED_ASSET_ID_KEY: &str = "io.ct2.peridot.sprite-atlas.generated-asset-id";
+    const META_GENERATED_TEXTURE_ASSET_ID_KEY: &str =
+        "io.ct2.peridot.sprite-atlas.generated-texture-asset-id";
+    const META_GENERATED_SPRITE_ASSET_ID_KEY: &str =
+        "io.ct2.peridot.sprite-atlas.generated-sprite-asset-id";
+}
+#[cfg(feature = "with-asset-processing")]
 impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn can_process(&self, source_path: &std::path::Path) -> bool {
         source_path.extension().is_some_and(|x| x == "spratlas")
@@ -235,7 +243,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
 
     #[tracing::instrument(
         name = "AssetProcessor::process",
-        skip(self, _metadata, ctx),
+        skip(self, metadata, ctx),
         fields(atlas_width, atlas_height)
     )]
     fn process(
@@ -243,7 +251,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path: &std::path::Path,
         data: &peridot_asset_processing::ProcessTargetFileData,
         asset_group_id: peridot::AssetID,
-        _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
+        metadata: &mut peridot_asset_processing::MetadataAccess,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<peridot_asset_processing::AssetProcessResult, Box<dyn std::error::Error>> {
         use ktx::Texture;
@@ -295,10 +303,17 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             return Ok(peridot_asset_processing::AssetProcessResult::Skipped);
         }
 
-        let asset_id =
-            ctx.register_child_asset(&asset_group_id, peridot::ASSET_TYPE_SPRITE_ATLAS, 0);
+        let asset_id = ctx.acquire_asset_id(
+            metadata,
+            Self::META_GENERATED_ASSET_ID_KEY.into(),
+            &asset_group_id,
+            peridot::ASSET_TYPE_SPRITE_ATLAS,
+            0,
+        );
         // not bound with any asset group(source file)
-        let texture_asset_id = ctx.register_child_asset(
+        let texture_asset_id = ctx.acquire_asset_id(
+            metadata,
+            Self::META_GENERATED_TEXTURE_ASSET_ID_KEY.into(),
             &AssetID::GLOBAL_ASSET_GROUP_ID,
             peridot::ASSET_TYPE_IMAGE2D,
             0,
@@ -384,14 +399,21 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
                 }
             }
 
-            let sprite_metadata =
-                peridot_asset_processing::load_metadata(path.with_extension("p-meta"));
-            let sprite_assigned_group_id =
-                peridot::AssetID::deserialize_chars(sprite_metadata["id"].chars())
-                    .expect("invalid sprite id");
+            let mut sprite_metadata =
+                peridot_asset_processing::MetadataAccess::load(path.with_extension("p-meta"));
+            let sprite_assigned_group_id = peridot::AssetID::deserialize_chars(
+                sprite_metadata.get("id").expect("no id").chars(),
+            )
+            .expect("invalid sprite id");
             // TODO: local_idどうするか(そもそもいる？)
-            let sprite_asset_id =
-                ctx.register_child_asset(&sprite_assigned_group_id, peridot::ASSET_TYPE_SPRITE, 0);
+            let sprite_asset_id = ctx.acquire_asset_id(
+                &mut sprite_metadata,
+                Self::META_GENERATED_SPRITE_ASSET_ID_KEY.into(),
+                &sprite_assigned_group_id,
+                peridot::ASSET_TYPE_SPRITE,
+                0,
+            );
+            sprite_metadata.process_dirty(path.with_extension("p-meta"));
             SpriteAsset {
                 atlas_texture_id: texture_asset_id.clone(),
                 left: s.left,

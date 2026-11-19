@@ -39,6 +39,7 @@ pub enum ProcessError {
 pub fn process(
     mut r: BufReader<File>,
     asset_group_id: peridot::AssetID,
+    metadata: &mut peridot_asset_processing::MetadataAccess,
     ctx: &mut peridot_asset_processing::AssetProcessContext,
 ) -> Result<(), ProcessError> {
     let _hdr = gltf::binary::Header::read(&mut r)?;
@@ -257,7 +258,9 @@ pub fn process(
             // println!("{index_source_data:#?}");
             // println!("{stream_attributes:#?}");
 
-            let asset_id = ctx.register_child_asset(
+            let asset_id = ctx.acquire_asset_id(
+                metadata,
+                crate::Processor::meta_generated_mesh_asset_id_key(mesh_index * 1000 + prim_index),
                 &asset_group_id,
                 peridot::ASSET_TYPE_MESH,
                 (mesh_index * 1000 + prim_index) as i32,
