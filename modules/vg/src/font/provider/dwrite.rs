@@ -189,6 +189,7 @@ impl IDWriteFontFileStream_Impl for AssetStreamBridge {
         Ok(0)
     }
 
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     fn ReadFileFragment(
         &self,
         fragment_start: *mut *mut core::ffi::c_void,
@@ -196,9 +197,18 @@ impl IDWriteFontFileStream_Impl for AssetStreamBridge {
         _fragment_size: u64,
         fragment_context: *mut *mut core::ffi::c_void,
     ) -> windows::core::Result<()> {
+        debug_assert!(!fragment_start.is_null());
+        debug_assert!(!fragment_context.is_null());
         unsafe {
-            *fragment_context = std::ptr::null_mut();
-            *fragment_start = self.asset.0.as_ptr().add(file_offset as _) as *mut _;
+            fragment_context.write(core::ptr::null_mut());
+            fragment_start.write(
+                self.asset
+                    .0
+                    .as_ptr()
+                    .add(file_offset as _)
+                    .cast_mut()
+                    .cast(),
+            );
         }
 
         Ok(())
