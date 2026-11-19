@@ -175,3 +175,9 @@ impl From<&'_ str> for Key {
         Self(s.to_lowercase())
     }
 }
+impl From<String> for Key {
+    #[inline(always)]
+    fn from(value: String) -> Self {
+        Self(value.to_lowercase())
+    }
+}

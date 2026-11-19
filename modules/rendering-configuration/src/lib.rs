@@ -60,6 +60,11 @@ pub enum AssetProcessError {
 #[cfg(feature = "with-asset-processing")]
 pub struct AssetProcessor;
 #[cfg(feature = "with-asset-processing")]
+impl AssetProcessor {
+    const META_GENERATED_ASSET_ID_KEY: &str =
+        "io.ct2.peridot.rendering-configuration.generated-asset-id";
+}
+#[cfg(feature = "with-asset-processing")]
 impl peridot_asset_processing::AssetProcessor for AssetProcessor {
     fn can_process(&self, source_path: &Path) -> bool {
         source_path.extension().is_some_and(|x| x == "prc")
@@ -70,7 +75,7 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
         source_path: &Path,
         data: &peridot_asset_processing::ProcessTargetFileData,
         asset_group_id: peridot::AssetID,
-        _metadata: &HashMap<peridot_asset_processing::metadata::Key, String>,
+        metadata: &mut peridot_asset_processing::MetadataAccess,
         ctx: &mut peridot_asset_processing::AssetProcessContext,
     ) -> Result<peridot_asset_processing::AssetProcessResult, Box<dyn std::error::Error>> {
         if !data.is_dirty {
@@ -81,7 +86,9 @@ impl peridot_asset_processing::AssetProcessor for AssetProcessor {
             std::fs::read_to_string(source_path).map_err(AssetProcessError::ReadingFailed)?;
         let asset =
             compilation::compile(&content).ok_or(AssetProcessError::GeneratingAssetFailure)?;
-        let asset_id = ctx.register_child_asset(
+        let asset_id = ctx.acquire_asset_id(
+            metadata,
+            Self::META_GENERATED_ASSET_ID_KEY.into(),
             &asset_group_id,
             peridot::ASSET_TYPE_COMPILED_RENDERING_CONFIGURATION_VK,
             0,
