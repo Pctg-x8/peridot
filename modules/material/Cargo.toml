@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+peridot = { path = "../../base" }
 peridot-types = { path = "../../base-types" }
 peridot-math = { path = "../math" }
+vectored-io-helper = { path = "../../base-lib/vectored-io-helper" }
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot-native-io = { path = "../native-io" }
 
 [lints]
 workspace = true
