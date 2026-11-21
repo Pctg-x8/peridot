@@ -29,5 +29,6 @@ peridot-archive = { path = "../../modules/archive", features = ["async-rt-async-
 futures-util = "0.3"
 tracing = "0.1"
 peridot-runtime-asset-manager = { path = "../../modules/runtime-asset-manager" }
+peridot-material = { path = "../../modules/material" }
 
 log = "0.4"

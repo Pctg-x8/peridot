@@ -4,7 +4,7 @@ use std::{
 };
 
 use peridot::{FromAssetBlob, LogicalAssetData};
-use peridot_math::Vector4F32;
+use peridot_math::{Vector4, Vector4F32};
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
 use peridot_types::AssetID;
 use vectored_io_helper::{
@@ -77,6 +77,14 @@ impl MaterialPropertySlot<AssetID> {
 pub struct MaterialPropertyBlock<ExternalAssetRef> {
     pub map: HashMap<String, MaterialPropertySlot<ExternalAssetRef>>,
 }
+impl<ExternalAssetRef> Default for MaterialPropertyBlock<ExternalAssetRef> {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+}
 impl<ExternalAssetRef> MaterialPropertyBlock<ExternalAssetRef> {
     pub fn new() -> Self {
         Self {
@@ -119,18 +127,20 @@ impl MaterialPropertyBlock<AssetID> {
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum CullingMode {
     None = 0,
     Front = 1,
+    #[default]
     Back = 2,
     Both = 3,
 }
 
 #[repr(u8)]
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum PrimitiveOrder {
-    Clcowise = 0,
+    Clockwise = 0,
+    #[default]
     CounterClockwise = 1,
 }
 
@@ -208,4 +218,217 @@ impl FromAssetBlob for MaterialAsset {
             peridot_native_io::RandomBlobReadSeekAdapter::new(blob),
         ))
     }
+}
+
+#[cfg(feature = "user-asset")]
+#[derive(Default)]
+pub struct MaterialUserAsset {
+    pub shader: Option<AssetID>,
+    pub properties: MaterialPropertyBlock<AssetID>,
+    pub wireframed: bool,
+    pub culling: CullingMode,
+    pub prim_order: PrimitiveOrder,
+}
+#[cfg(feature = "user-asset")]
+impl MaterialUserAsset {
+    pub fn read(r: &mut (impl BufRead + ?Sized)) -> Result<Self, UserAssetReadError> {
+        let mut sink = Self::default();
+
+        let mut has_illformed = false;
+        for line in r.lines() {
+            let line = line?;
+            let line = line.trim_start();
+
+            if line.is_empty() {
+                continue;
+            }
+
+            let Some((key, rest)) = line.split_once('=') else {
+                eprintln!("invalid kvp form");
+                continue;
+            };
+
+            match key.trim().to_lowercase().as_str() {
+                "shader" => {
+                    let Some(asset_id) = AssetID::deserialize_chars(rest.trim().chars()) else {
+                        eprintln!("invalid asset id");
+                        has_illformed = true;
+                        continue;
+                    };
+
+                    sink.shader = Some(asset_id);
+                }
+                "render-options.wireframed" => {
+                    sink.wireframed = rest.trim().eq_ignore_ascii_case("true");
+                }
+                "render-options.culling" => {
+                    sink.culling = match rest.trim().to_lowercase().as_str() {
+                        "none" => CullingMode::None,
+                        "front" => CullingMode::Front,
+                        "back" => CullingMode::Back,
+                        "both" => CullingMode::Both,
+                        x => {
+                            eprintln!("invalid culling mode: {x}");
+                            has_illformed = true;
+                            continue;
+                        }
+                    };
+                }
+                "render-options.prim_order" => {
+                    sink.prim_order = match rest.trim().to_lowercase().as_str() {
+                        "clockwise" => PrimitiveOrder::Clockwise,
+                        "counter-clockwise" => PrimitiveOrder::CounterClockwise,
+                        x => {
+                            eprintln!("invalid primitive order: {x}");
+                            has_illformed = true;
+                            continue;
+                        }
+                    }
+                }
+                x if x.starts_with("property.") => {
+                    let property_key = x.strip_prefix("property.").expect("not prefixed?");
+                    let Some((r#type, value)) = rest.split_once('=') else {
+                        eprintln!("invalid property value");
+                        has_illformed = true;
+                        continue;
+                    };
+
+                    sink.properties.map.insert(
+                        property_key.into(),
+                        match r#type.trim().to_lowercase().as_str() {
+                            "float4" => {
+                                let mut values = value.splitn(4, ',');
+                                let x = values.next().unwrap_or("0");
+                                let y = values.next().unwrap_or("0");
+                                let z = values.next().unwrap_or("0");
+                                let w = values.next().unwrap_or("0");
+                                let Ok(x) = x.trim().parse::<f32>() else {
+                                    eprintln!("invalid float4.x value");
+                                    has_illformed = true;
+                                    continue;
+                                };
+                                let Ok(y) = y.trim().parse::<f32>() else {
+                                    eprintln!("invalid float4.y value");
+                                    has_illformed = true;
+                                    continue;
+                                };
+                                let Ok(z) = z.trim().parse::<f32>() else {
+                                    eprintln!("invalid float4.z value");
+                                    has_illformed = true;
+                                    continue;
+                                };
+                                let Ok(w) = w.trim().parse::<f32>() else {
+                                    eprintln!("invalid float4.w value");
+                                    has_illformed = true;
+                                    continue;
+                                };
+
+                                MaterialPropertySlot::Float4(Vector4(x, y, z, w))
+                            }
+                            "texture2d" => {
+                                let Some(asset_id) =
+                                    AssetID::deserialize_chars(value.trim().chars())
+                                else {
+                                    eprintln!("invalid asset id");
+                                    has_illformed = true;
+                                    continue;
+                                };
+
+                                MaterialPropertySlot::Texture2D(asset_id)
+                            }
+                            x => {
+                                eprintln!("unsupported property type: {x}");
+                                has_illformed = true;
+                                continue;
+                            }
+                        },
+                    );
+                }
+                x => {
+                    eprintln!("unknown key: {x}");
+                    has_illformed = true;
+                    continue;
+                }
+            }
+        }
+
+        if has_illformed {
+            return Err(UserAssetReadError::Illformed);
+        }
+
+        Ok(sink)
+    }
+}
+
+#[cfg(feature = "user-asset")]
+#[derive(Debug, thiserror::Error)]
+pub enum UserAssetReadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error("illformed asset content")]
+    Illformed,
+}
+
+#[cfg(feature = "asset-processing")]
+pub struct AssetProcessor;
+#[cfg(feature = "asset-processing")]
+impl AssetProcessor {
+    const META_GENERATED_ASSET_KEY: &str =
+        "io.ct2.peridot.asset-processor.material.generated-asset-id";
+}
+#[cfg(feature = "asset-processing")]
+impl peridot_asset_processing::AssetProcessor for AssetProcessor {
+    fn can_process(&self, source_path: &std::path::Path) -> bool {
+        source_path.extension().is_some_and(|x| x == "p-mat")
+    }
+
+    fn process(
+        &self,
+        source_path: &std::path::Path,
+        data: &peridot_asset_processing::ProcessTargetFileData,
+        asset_group_id: peridot::AssetID,
+        metadata: &mut peridot_asset_processing::MetadataAccess,
+        ctx: &mut peridot_asset_processing::AssetProcessContext,
+    ) -> Result<peridot_asset_processing::AssetProcessResult, Box<dyn std::error::Error>> {
+        if !data.is_dirty {
+            return Ok(peridot_asset_processing::AssetProcessResult::Skipped);
+        }
+
+        let user_asset_data = MaterialUserAsset::read(&mut std::io::BufReader::new(
+            std::fs::File::open(source_path)?,
+        ))?;
+        let asset_data = MaterialAsset {
+            shader: user_asset_data
+                .shader
+                .ok_or(AssetProcessingError::NoShaderSpecified)?,
+            properties: user_asset_data.properties,
+            wireframed: user_asset_data.wireframed,
+            culling: user_asset_data.culling,
+            prim_order: user_asset_data.prim_order,
+        };
+
+        let asset_id = ctx.acquire_asset_id(
+            metadata,
+            Self::META_GENERATED_ASSET_KEY.into(),
+            &asset_group_id,
+            peridot::ASSET_TYPE_MATERIAL,
+            0,
+        );
+        asset_data.write(
+            &mut std::fs::File::options()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .open(ctx.prepare_runtime_asset_output(&asset_id))?,
+        )?;
+
+        Ok(peridot_asset_processing::AssetProcessResult::Ok)
+    }
+}
+
+#[cfg(feature = "asset-processing")]
+#[derive(Debug, thiserror::Error)]
+pub enum AssetProcessingError {
+    #[error("no shader specified")]
+    NoShaderSpecified,
 }

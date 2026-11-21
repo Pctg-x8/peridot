@@ -4,7 +4,6 @@ use parking_lot::RwLock;
 use peridot::audio::PreloadedPlayableWav;
 use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
 use peridot::{CBSubmissionType, CommandBundle, SubpassDependencyTemplates};
-use peridot_image::StdTexture2DAsset;
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_runtime_asset_manager::RuntimeAssetManager;
@@ -53,11 +52,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let mut memory_manager = MemoryManager::new(e.graphics());
     let mut runtime_asset_manager = RuntimeAssetManager::new();
-
-    let image = runtime_asset_manager
-        .load::<StdTexture2DAsset>("images.example", e, &mut memory_manager)
-        .expect("asset loading")
-        .expect("missing image asset");
 
     let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
     let mut cam = Camera {
@@ -272,16 +266,17 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
-    let shader = runtime_asset_manager
-        .load::<peridot_shader::asset::AssetCore>(
-            "builtin.shaders.unlit_image",
-            e,
-            &mut memory_manager,
-        )
-        .expect("Loading shader")
-        .expect("Missing shader");
+    let mat = runtime_asset_manager
+        .load::<peridot_material::MaterialAsset>("plane", e, &mut memory_manager)
+        .expect("loading plane mat")
+        .expect("missing plane mat");
+    let mat_ref = runtime_asset_manager.get_typed(&mat).expect("invalid ref");
+    println!(
+        "{} {:?} {:?}",
+        mat_ref.wireframed, mat_ref.culling, mat_ref.prim_order
+    );
     let shader_ref = runtime_asset_manager
-        .get_typed(&shader)
+        .get_typed(&mat_ref.shader)
         .expect("invalid ref");
 
     let pl = br::PipelineLayoutObject::new(
@@ -427,10 +422,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 .uniform_buffer_offset_for_material_property("materialProperties.colorTint")
                 .expect("no buffer offset for property?");
 
-            p.ptr()
-                .byte_add(value_offset as _)
-                .cast()
-                .write(peridot_math::Vector4(1.0f32, 1.0, 1.0, 1.0));
+            p.ptr().byte_add(value_offset as _).cast().write(
+                match mat_ref.properties.map["material-properties.color-tint"] {
+                    peridot_material::MaterialPropertySlot::Float4(v) => v,
+                    _ => panic!("invalid slot registered"),
+                },
+            )
         })
         .expect("Failed to write material uniform initial value");
     let material_sync_awaiter = e
@@ -508,7 +505,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             "materialProperties.tex",
             br::DescriptorImageInfo::new(
                 &runtime_asset_manager
-                    .get_typed(&image)
+                    .get_of::<peridot_runtime_asset_manager::RuntimeTexture2D>(
+                        match mat_ref.properties.map["material-properties.tex"] {
+                            peridot_material::MaterialPropertySlot::Texture2D(ref r) => r,
+                            _ => panic!("invalid slot registered"),
+                        },
+                    )
                     .expect("invalid ref")
                     .gfx_resource,
                 br::ImageLayout::ShaderReadOnlyOpt,
