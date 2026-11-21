@@ -2,6 +2,11 @@ use std::{collections::HashMap, ffi::CString, num::NonZeroUsize};
 
 use bedrock::{self as br, ImageChild, ShaderModule, TypedVulkanStructure};
 use ktx::Texture;
+use peridot::FromAssetBlob;
+use peridot_image::StdTexture2DAsset;
+use peridot_material::{
+    CullingMode, MaterialAsset, MaterialPropertyBlock, MaterialPropertySlot, PrimitiveOrder,
+};
 
 pub struct RuntimeAssetManager {
     loaded_assets: HashMap<peridot::AssetID, AssetResourceHandle>,
@@ -115,6 +120,7 @@ pub enum AssetResource {
     Texture2D(RuntimeTexture2D),
     Mesh(RuntimeMesh),
     Shader(RuntimeShader),
+    Material(RuntimeMaterial),
     Sprite(RuntimeSprite),
     SpriteAtlas(RuntimeSpriteAtlas),
 }
@@ -789,6 +795,65 @@ impl AssetResourceType for peridot_shader::asset::AssetCore {
             material_uniform_buffer_size: material_uniform_buffer_top as _,
             descriptor_set_layouts: descriptor_set_layouts.into_boxed_slice(),
             descriptor_pool_size_per_set: descriptor_pool_size_per_set.into_boxed_slice(),
+        }))
+    }
+}
+
+pub struct RuntimeMaterial {
+    pub shader: TypedAssetResourceHandle<RuntimeShader>,
+    pub properties: MaterialPropertyBlock<AssetResourceHandle>,
+    pub wireframed: bool,
+    pub culling: CullingMode,
+    pub prim_order: PrimitiveOrder,
+}
+impl RuntimeResource for RuntimeMaterial {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::Material(x) => Some(x),
+            _ => None,
+        }
+    }
+}
+
+impl AssetResourceType for MaterialAsset {
+    type RuntimeResourceType = RuntimeMaterial;
+    type Error = std::io::Error;
+
+    fn load_core(
+        id: &peridot::AssetID,
+        dep_loader: &mut RuntimeAssetManager,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<AssetResource, Self::Error> {
+        let content = Self::from_asset_blob(engine.open_raw_asset_by_id(id.clone())?)?;
+
+        let shader = dep_loader
+            .load_by_id::<peridot_shader::asset::AssetCore>(&content.shader, engine, mm)
+            .expect("dep shader")
+            .expect("no dep shader");
+        let mut properties = HashMap::with_capacity(content.properties.map.len());
+        for (k, v) in content.properties.map {
+            let v = match v {
+                MaterialPropertySlot::Float4(x) => MaterialPropertySlot::Float4(x),
+                MaterialPropertySlot::Texture2D(r) => MaterialPropertySlot::Texture2D(
+                    dep_loader
+                        .load_by_id::<StdTexture2DAsset>(&r, engine, mm)
+                        .expect("dep prop tex2d")
+                        .expect("no dep prop tex2d")
+                        .into_untyped(),
+                ),
+            };
+
+            properties.insert(k, v);
+        }
+
+        Ok(AssetResource::Material(RuntimeMaterial {
+            shader,
+            properties: MaterialPropertyBlock { map: properties },
+            wireframed: content.wireframed,
+            culling: content.culling,
+            prim_order: content.prim_order,
         }))
     }
 }
