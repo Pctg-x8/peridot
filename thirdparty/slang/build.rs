@@ -85,7 +85,12 @@ fn build_cdeps() {
     println!("cargo::rustc-link-lib=static=compiler-core");
     if !cfg!(windows) {
         // Windowsの場合はなしでいけるっぽい
-        println!("cargo::rustc-link-lib=stdc++");
+        if cfg!(target_os = "macos") {
+            // mac(Apple Clang)はlibc++(libstdc++はない)
+            println!("cargo::rustc-link-lib=c++");
+        } else {
+            println!("cargo::rustc-link-lib=stdc++");
+        }
     }
     println!(
         "cargo::rustc-link-search={}",
