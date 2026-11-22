@@ -2,8 +2,8 @@ use std::io::{BufRead, IoSlice, IoSliceMut, Read, SeekFrom, Write};
 
 use core::pin::Pin;
 use futures_io::{AsyncBufRead, AsyncRead};
-use peridot::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableUInt};
+use peridot_types::VertexInputSemantic;
 use pinned_futures_helper::{read_byte_async, read_exact_async_pinned};
 
 use crate::{
