@@ -1,11 +1,26 @@
-use std::{collections::HashMap, fs::File, io::BufReader, path::Path};
+use std::{fs::File, io::BufReader, path::Path};
 
 use peridot_asset_processing::{AssetProcessResult, AssetProcessor, ProcessTargetFileData};
 
 mod glb;
 
+pub(self) struct ProcessOptions {
+    extract_material: bool,
+}
+impl Default for ProcessOptions {
+    #[inline(always)]
+    fn default() -> Self {
+        Self {
+            extract_material: true,
+        }
+    }
+}
+
 pub struct Processor;
 impl Processor {
+    const META_OPT_EXTRACT_MATERIAL_KEY: &str =
+        "io.ct2.peridot.asset-processor.model.extract-material";
+
     pub(self) fn meta_generated_mesh_asset_id_key(
         index: usize,
     ) -> peridot_asset_processing::metadata::Key {
@@ -30,9 +45,14 @@ impl AssetProcessor for Processor {
             return Ok(AssetProcessResult::Skipped);
         }
 
+        let mut opts = ProcessOptions::default();
+        if let Some(x) = metadata.get(Self::META_OPT_EXTRACT_MATERIAL_KEY) {
+            opts.extract_material = x.eq_ignore_ascii_case("true");
+        }
+
         let mut r = BufReader::new(File::open(source_path)?);
         if peridot_tp_gltf::binary::try_verify_magic(&mut r) {
-            glb::process(r, asset_group_id, metadata, ctx)?;
+            glb::process(r, asset_group_id, opts, metadata, ctx)?;
             return Ok(AssetProcessResult::Ok);
         }
 

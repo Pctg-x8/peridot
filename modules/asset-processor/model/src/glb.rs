@@ -10,6 +10,8 @@ use peridot_mesh::{
 };
 use peridot_tp_gltf as gltf;
 
+use crate::ProcessOptions;
+
 macro_rules! file_assert {
     ($cond: expr, $msg: literal) => {
         if !$cond {
@@ -39,10 +41,13 @@ pub enum ProcessError {
 pub fn process(
     mut r: BufReader<File>,
     asset_group_id: peridot::AssetID,
+    opts: ProcessOptions,
     metadata: &mut peridot_asset_processing::MetadataAccess,
     ctx: &mut peridot_asset_processing::AssetProcessContext,
 ) -> Result<(), ProcessError> {
-    let _hdr = gltf::binary::Header::read(&mut r)?;
+    let hdr = gltf::binary::Header::read(&mut r)?;
+    // only v2 supported at this time
+    file_assert!(hdr.version == 2, "unsupported glb version");
 
     let chunk0_hdr = gltf::binary::ChunkHeader::read(&mut r)?;
     file_assert!(
@@ -91,6 +96,12 @@ pub fn process(
     } else {
         None
     };
+
+    if opts.extract_material {
+        for (mat_index, mat) in parsed.materials.into_iter().enumerate() {
+            eprintln!("todo: genmat {mat:#?}");
+        }
+    }
 
     for (mesh_index, x) in parsed.meshes.iter().enumerate() {
         if !x.weights.is_empty() {
