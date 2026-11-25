@@ -394,6 +394,11 @@ impl RuntimeResource for RuntimeMesh {
         }
     }
 }
+impl RuntimeMesh {
+    pub fn vk_pipeline_input_assembly_state(&self) -> br::PipelineInputAssemblyStateCreateInfo {
+        br::PipelineInputAssemblyStateCreateInfo::new(self.topology.into_vk())
+    }
+}
 
 impl AssetResourceType for peridot_mesh::AssetCore {
     type Error = std::io::Error;
@@ -579,6 +584,54 @@ impl RuntimeShader {
             .vertex_inputs
             .get(semantic)
             .map(|x| x.location as _)
+    }
+
+    pub fn pipeline_color_blend_attachment_state(
+        &self,
+        attachment_index: u32,
+    ) -> br::PipelineColorBlendAttachmentState {
+        let default = peridot_shader::PartialBlendingConfiguration::default();
+        let mut final_content = peridot_shader::BlendPreset::PremultipliedAlpha.make_content();
+        peridot_shader::resolve_attachment_blending_cascade(
+            &mut final_content,
+            self.asset
+                .blending
+                .per_attachment
+                .get(&attachment_index)
+                .unwrap_or(&default),
+            &self.asset.blending.default,
+        );
+
+        br::PipelineColorBlendAttachmentState(br::vk::VkPipelineColorBlendAttachmentState {
+            blendEnable: if final_content.enabled {
+                br::vk::VK_TRUE
+            } else {
+                br::vk::VK_FALSE
+            },
+            srcColorBlendFactor: final_content.src_color_factor.into_vk(),
+            dstColorBlendFactor: final_content.dst_color_factor.into_vk(),
+            colorBlendOp: final_content.color_op.into_vk(),
+            srcAlphaBlendFactor: final_content.src_alpha_factor.into_vk(),
+            dstAlphaBlendFactor: final_content.dst_alpha_factor.into_vk(),
+            alphaBlendOp: final_content.alpha_op.into_vk(),
+            colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                | br::vk::VK_COLOR_COMPONENT_G_BIT
+                | br::vk::VK_COLOR_COMPONENT_B_BIT
+                | br::vk::VK_COLOR_COMPONENT_A_BIT,
+        })
+    }
+
+    #[inline(always)]
+    pub fn pipeline_color_blend_state<'d>(
+        &self,
+        attachment_states: &'d [br::PipelineColorBlendAttachmentState],
+    ) -> br::PipelineColorBlendStateCreateInfo<'d> {
+        let mut blend_state = br::PipelineColorBlendStateCreateInfo::new(attachment_states);
+        if let Some(ref xs) = self.asset.blending.constant {
+            blend_state = blend_state.blend_constants(*xs);
+        }
+
+        blend_state
     }
 
     #[inline(always)]
@@ -813,6 +866,21 @@ impl RuntimeResource for RuntimeMaterial {
             AssetResource::Material(x) => Some(x),
             _ => None,
         }
+    }
+}
+impl RuntimeMaterial {
+    pub const fn vk_pipeline_rasterization_state<'a>(
+        &'a self,
+    ) -> br::PipelineRasterizationStateCreateInfo<'a> {
+        br::PipelineRasterizationStateCreateInfo::new(
+            if self.wireframed {
+                br::PolygonMode::Line
+            } else {
+                br::PolygonMode::Fill
+            },
+            self.culling.into_vk(),
+            self.prim_order.into_vk(),
+        )
     }
 }
 

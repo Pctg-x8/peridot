@@ -1,8 +1,14 @@
 use std::{ffi::CString, path::PathBuf};
 
 use peridot_shader::{Environment, build};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().pretty())
+        .with(tracing_subscriber::filter::EnvFilter::from_default_env())
+        .init();
+
     let asset = build(
         PathBuf::from(std::env::args_os().nth(1).expect("no input files")),
         &Environment {
