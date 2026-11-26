@@ -63,6 +63,11 @@ fn build_cdeps() {
             .arg("-DBUILD_SHARED_LIBS=OFF");
         }
 
+        if std::env::var_os("TARGET").is_some_and(|e| e == "aarch64-apple-darwin") {
+            // こっちもstatic libをつくる
+            cmd.arg("-DBUILD_SHARED_LIBS=OFF");
+        }
+
         let r = cmd
             .current_dir(&build_dir)
             .spawn()
