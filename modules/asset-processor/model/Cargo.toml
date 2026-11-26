@@ -13,6 +13,7 @@ peridot-mesh = { path = "../../mesh", features = [] }
 tracing.workspace = true
 rand.workspace = true
 rand_pcg.workspace = true
+peridot-material = { path = "../../material" }
 
 [lints]
 workspace = true

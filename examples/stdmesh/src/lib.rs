@@ -1,121 +1,53 @@
 use bedrock::{
-    self as br, CommandBufferMut, DescriptorPoolMut, Device, RenderPass, ShaderModule,
-    TypedVulkanStructure, VkHandle,
+    self as br, CommandBufferMut, DescriptorPoolMut, Device, RenderPass, TypedVulkanStructure,
+    VkHandle,
 };
-use futures_util::StreamExt;
 use peridot::math::One;
 use peridot_runtime_asset_manager::RuntimeAssetManager;
+use peridot_shader::engine_params::{CameraParameters, ObjectParameters};
 
 pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e, NL>) {
-    let mut backbuffer_size = e.back_buffer_size();
+    let mut memory_manager = peridot_memory_manager::MemoryManager::new(e.graphics());
+    let mut runtime_asset_manager = RuntimeAssetManager::new();
 
-    let shader = e
-        .load_async::<peridot_rendering_configuration::CompiledRenderingConfigurationVk>(
-            "shaders.test",
-        )
-        .await
-        .expect("shader load failed");
-    let peridot_rendering_configuration::ShadingPassVk::Custom { ref variants, .. } =
-        shader.passes["Unlit"]
-    else {
-        unreachable!();
-    };
-    let shading_variant =
-        &variants[&peridot_rendering_configuration::VariantKey { instancing: false }];
-    let shader_stage_with_entry_names = shading_variant
-        .vertex_entry_point_name
-        .as_deref()
-        .map(|e| {
-            (
-                br::ShaderStage::Vertex,
-                std::ffi::CString::new(e).expect("invalid entry point name"),
-            )
-        })
-        .into_iter()
-        .chain(
-            shading_variant
-                .fragment_entry_point_name
-                .as_deref()
-                .map(|e| {
-                    (
-                        br::ShaderStage::Fragment,
-                        std::ffi::CString::new(e).expect("invlaid entry point name"),
-                    )
-                })
-                .into_iter(),
-        )
-        .collect::<Vec<_>>();
-    let shader_module = br::ShaderModuleObject::new(
-        e.graphics_device().clone(),
-        &br::ShaderModuleCreateInfo::new(&shading_variant.words),
-    )
-    .expect("shnader_module.create");
-    let dsl_ub1 = br::DescriptorSetLayoutObject::new(
-        e.graphics().device().clone(),
-        &br::DescriptorSetLayoutCreateInfo::new(&[
-            br::DescriptorType::UniformBuffer.make_binding(0, 1)
-        ]),
-    )
-    .expect("dsl_ub1 new");
-    let pl = br::PipelineLayoutObject::new(
-        e.graphics_device().clone(),
-        &br::PipelineLayoutCreateInfo::new(
-            &[dsl_ub1.as_transparent_ref(), dsl_ub1.as_transparent_ref()],
-            &if shading_variant.push_constant_buffer_size_bytes > 0 {
-                vec![br::PushConstantRange::new(
-                    br::vk::VK_SHADER_STAGE_ALL,
-                    0..shading_variant.push_constant_buffer_size_bytes as _,
-                )]
-            } else {
-                vec![]
-            },
-        ),
-    )
-    .expect("pl.create");
-    let shader_stages = shader_stage_with_entry_names
-        .iter()
-        .map(|&(s, ref e)| shader_module.on_stage(s, e))
-        .collect::<Vec<_>>();
-    let rs_state = br::PipelineRasterizationStateCreateInfo::new(
-        br::PolygonMode::Fill,
-        br::CullModeFlags::BACK,
-        br::FrontFace::CounterClockwise,
-    );
+    let mut backbuffer_size = e.back_buffer_size();
 
     let mut camera = peridot::math::Camera {
         projection: Some(peridot::math::ProjectionMethod::Perspective {
             fov: 60.0f32.to_radians(),
         }),
-        position: peridot::math::Vector3(0.0, 2.0, -10.0),
+        position: peridot::math::Vector3(2.0, 5.0, -10.0),
         rotation: peridot::math::Quaternion::ONE,
         depth_range: 0.1..100.0,
     };
     camera.look_at(peridot::math::Vector3(0.0, 0.0, 0.0), None);
 
-    let mut memory_manager = peridot_memory_manager::MemoryManager::new(e.graphics());
-    let mut runtime_asset_manager = RuntimeAssetManager::new();
     let mesh = runtime_asset_manager
         .load::<peridot_mesh::AssetCore>("test", e, &mut memory_manager)
         .expect("asset.load")
         .expect("asset.missing");
+    let mat = runtime_asset_manager
+        .load::<peridot_material::MaterialAsset>("test", e, &mut memory_manager)
+        .expect("asset.mat.load")
+        .expect("asset.mat.missing");
+    let mat_ref = runtime_asset_manager.get_typed(&mat).expect("invalid ref");
+    let shader_ref = runtime_asset_manager
+        .get_typed(&mat_ref.shader)
+        .expect("invalid ref");
 
-    let (device_buffer, device_buffer_offsets) = memory_manager
-        .allocate_device_local_buffer_with_contents(
+    let (device_buffer, [camera_parameters_offset, object_parameters_offset]) = memory_manager
+        .allocate_device_local_buffer_with_content_array(
             e.graphics(),
-            [
-                peridot::BufferContent::uniform::<
-                    peridot_rendering_configuration::UniformCameraParameters,
-                >(),
-                peridot::BufferContent::uniform::<
-                    peridot_rendering_configuration::UniformObjectParameters,
-                >(),
+            &[
+                peridot::BufferContent::uniform::<CameraParameters>(),
+                peridot::BufferContent::uniform::<ObjectParameters>(),
             ],
             br::BufferUsage::TRANSFER_DEST,
         )
         .expect("device_buffer.alloc");
     struct BufferInitContent {
-        camera_parameters: peridot_rendering_configuration::UniformCameraParameters,
-        object_parameters: peridot_rendering_configuration::UniformObjectParameters,
+        camera_parameters: CameraParameters,
+        object_parameters: ObjectParameters,
     }
     let mut upload_buffer = memory_manager
         .allocate_upload_buffer(
@@ -133,12 +65,12 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
         upload_mapped.ptr().write_at(
             0,
             BufferInitContent {
-                camera_parameters: peridot_rendering_configuration::UniformCameraParameters {
+                camera_parameters: CameraParameters {
                     view_projection_matrix: camera.view_projection_matrix(
                         backbuffer_size.0 as f32 / backbuffer_size.1 as f32,
                     ),
                 },
-                object_parameters: peridot_rendering_configuration::UniformObjectParameters {
+                object_parameters: ObjectParameters {
                     transform_matrix: peridot::math::Matrix4::ONE,
                 },
             },
@@ -165,17 +97,13 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
             &upload_buffer,
             &device_buffer,
             &[
-                br::BufferCopy::copy_data::<
-                    peridot_rendering_configuration::UniformCameraParameters,
-                >(
+                br::BufferCopy::copy_data::<CameraParameters>(
                     core::mem::offset_of!(BufferInitContent, camera_parameters) as _,
-                    device_buffer_offsets[device_buffer_offsets.len() - 2],
+                    camera_parameters_offset,
                 ),
-                br::BufferCopy::copy_data::<
-                    peridot_rendering_configuration::UniformObjectParameters,
-                >(
+                br::BufferCopy::copy_data::<ObjectParameters>(
                     core::mem::offset_of!(BufferInitContent, object_parameters) as _,
-                    device_buffer_offsets[device_buffer_offsets.len() - 1],
+                    object_parameters_offset,
                 ),
             ],
         )
@@ -199,35 +127,61 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
 
     let mut dp = br::DescriptorPoolObject::new(
         e.graphics_device().clone(),
-        &br::DescriptorPoolCreateInfo::new(2, &[br::DescriptorType::UniformBuffer.make_size(2)]),
+        &br::DescriptorPoolCreateInfo::new(
+            shader_ref.descriptor_set_layouts.len() as _,
+            &[
+                br::DescriptorType::UniformBuffer.make_size(
+                    shader_ref
+                        .descriptor_pool_size_per_set
+                        .iter()
+                        .map(|x| x.uniform_buffer)
+                        .sum(),
+                ),
+                br::DescriptorType::CombinedImageSampler.make_size(
+                    shader_ref
+                        .descriptor_pool_size_per_set
+                        .iter()
+                        .map(|x| x.combined_image_sampler)
+                        .sum(),
+                ),
+            ],
+        ),
     )
     .expect("dp new");
-    let [camera_descriptor_set, object_descriptor_set] = dp
-        .alloc_array(&[dsl_ub1.as_transparent_ref(), dsl_ub1.as_transparent_ref()])
+    let descriptor_sets = dp
+        .alloc(
+            &shader_ref
+                .descriptor_set_layouts
+                .iter()
+                .map(|x| x.as_transparent_ref())
+                .collect::<Vec<_>>(),
+        )
         .expect("dp.alloc");
-    e.graphics_device().update_descriptor_sets(
-        &[
-            camera_descriptor_set
-                .binding_at(0)
+    let mut descriptor_writes = Vec::with_capacity(shader_ref.descriptor_set_layouts.len());
+    if let Some(ref dp) = shader_ref.asset.camera_parameters_placement {
+        descriptor_writes.push(
+            descriptor_sets[dp.set as usize]
+                .binding_at(dp.binding)
                 .write(br::DescriptorContents::uniform_buffer(
                     &device_buffer,
-                    device_buffer_offsets[device_buffer_offsets.len() - 2]
-                        ..device_buffer_offsets[device_buffer_offsets.len() - 2]
-                            + size_of::<peridot_rendering_configuration::UniformCameraParameters>()
-                                as u64,
+                    camera_parameters_offset
+                        ..camera_parameters_offset + size_of::<CameraParameters>() as u64,
                 )),
-            object_descriptor_set
-                .binding_at(0)
+        );
+    }
+    if let Some(ref dp) = shader_ref.asset.object_parameters_placement {
+        descriptor_writes.push(
+            descriptor_sets[dp.set as usize]
+                .binding_at(dp.binding)
                 .write(br::DescriptorContents::uniform_buffer(
                     &device_buffer,
-                    device_buffer_offsets[device_buffer_offsets.len() - 1]
-                        ..device_buffer_offsets[device_buffer_offsets.len() - 1]
-                            + size_of::<peridot_rendering_configuration::UniformObjectParameters>()
-                                as u64,
+                    object_parameters_offset
+                        ..object_parameters_offset + size_of::<ObjectParameters>() as u64,
                 )),
-        ],
-        &[],
-    );
+        );
+    }
+    e.graphics_device()
+        .update_descriptor_sets(&descriptor_writes, &[]);
 
     // mac(kosmickrisp?)だとどうやらD24_UNORM_S8_UINTが使えないっぽい（D16なら使える）
     #[cfg(target_os = "macos")]
@@ -334,10 +288,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
     let mut v_attributes = Vec::new();
     for (binding, vst) in asset.vertex_streams.iter().enumerate() {
         for (a, ad) in vst.attributes.iter() {
-            if let Some(&loc) = shading_variant
-                .vertex_semantic_to_location
-                .get(&a.to_semantic())
-            {
+            if let Some(loc) = shader_ref.vertex_input_semantic_to_location(&a.to_semantic()) {
                 v_attributes.push(br::VertexInputAttributeDescription(
                     br::vk::VkVertexInputAttributeDescription {
                         binding: binding as _,
@@ -358,6 +309,25 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
     }
     let vi_state = br::PipelineVertexInputStateCreateInfo::new(&v_bindings, &v_attributes);
     let ia_state = br::PipelineInputAssemblyStateCreateInfo::new(asset.topology.into_vk());
+
+    let pl = br::PipelineLayoutObject::new(
+        e.graphics_device().clone(),
+        &br::PipelineLayoutCreateInfo::new(
+            &shader_ref
+                .descriptor_set_layouts
+                .iter()
+                .map(|x| x.as_transparent_ref())
+                .collect::<Vec<_>>(),
+            &[],
+        ),
+    )
+    .expect("pl.create");
+    let shader_stages = shader_ref.pipeline_shader_stages().collect::<Vec<_>>();
+    let rs_state = br::PipelineRasterizationStateCreateInfo::new(
+        br::PolygonMode::Fill,
+        br::CullModeFlags::BACK,
+        br::FrontFace::CounterClockwise,
+    );
 
     let scissor_rects = [br::Extent2D::from(backbuffer_size).into_rect(br::Offset2D::ZERO)];
     let viewports = [scissor_rects[0].make_viewport(0.0..1.0)];
@@ -426,7 +396,7 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
             br::PipelineBindPoint::Graphics,
             &pl,
             0,
-            &[camera_descriptor_set, object_descriptor_set],
+            &descriptor_sets,
             &[],
         )
         .inject(|mut r| {

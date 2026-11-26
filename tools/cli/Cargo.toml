@@ -14,6 +14,8 @@ process-assets = [
   "dep:peridot-asset-processor-model",
   "dep:peridot-shader",
   "peridot-shader/with-asset-processing",
+  "dep:peridot-material",
+  "peridot-material/asset-processing",
 ]
 
 [[bin]]
@@ -38,6 +40,7 @@ peridot-sprite-atlas = { path = "../../modules/sprite-atlas", optional = true, f
 ] }
 peridot-asset-processor-model = { path = "../../modules/asset-processor/model", optional = true }
 peridot-shader = { path = "../../modules/shader", optional = true }
+peridot-material = { path = "../../modules/material", optional = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
 tracing.workspace = true
 serde_json = "1.0.151"

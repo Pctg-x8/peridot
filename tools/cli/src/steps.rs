@@ -204,6 +204,7 @@ pub fn process_assets(
         Box::new(peridot_sprite_atlas::AssetProcessor),
         Box::new(peridot_asset_processor_model::Processor),
         Box::new(peridot_shader::AssetProcessor),
+        Box::new(peridot_material::AssetProcessor),
     ];
     let mut assetdb = peridot::AssetDatabase::open_rw(&output_path).expect("assetdb.open");
     let mut asset_id_generator = peridot::AssetIDGenerator::new();

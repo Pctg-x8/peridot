@@ -34,6 +34,7 @@ members = [
   "base-lib/vectored-io-helper",
   "base-types",
   "modules/shader",
+  "modules/material",
 ]
 
 [workspace.dependencies]

@@ -341,7 +341,7 @@ pub struct Material {
     pub extensions: Extension,
     #[serde(default)]
     pub extras: Extras,
-    pub pbr_metallic_roughness: Option<MaterialPBRMetallicRoughness>,
+    pub pbr_metallic_roughness: MaterialPBRMetallicRoughness,
     pub normal_texture: Option<MaterialNormalTextureInfo>,
     pub occlusion_texture: Option<MaterialOcclusionTextureInfo>,
     pub emissive_texture: Option<TextureInfo>,

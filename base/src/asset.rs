@@ -35,6 +35,8 @@ pub const ASSET_TYPE_RAW: AssetType = 0;
 pub const ASSET_TYPE_MESH: AssetType = 1;
 /// シェーダ
 pub const ASSET_TYPE_SHADER: AssetType = 2;
+/// マテリアル(レンダリングパラメータセット)
+pub const ASSET_TYPE_MATERIAL: AssetType = 3;
 /// 2D画像
 pub const ASSET_TYPE_IMAGE2D: AssetType = 10;
 /// Sprite単体

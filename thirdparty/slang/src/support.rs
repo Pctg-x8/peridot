@@ -81,3 +81,9 @@ impl<Inner: IBlob> CStrBlob<Inner> {
         self.0
     }
 }
+impl<Inner: IBlob> core::cmp::PartialEq<core::ffi::CStr> for CStrBlob<Inner> {
+    #[inline(always)]
+    fn eq(&self, other: &core::ffi::CStr) -> bool {
+        self.as_cstr().eq(other)
+    }
+}

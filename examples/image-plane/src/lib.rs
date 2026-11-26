@@ -2,18 +2,17 @@ use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHan
 use br::Device;
 use parking_lot::RwLock;
 use peridot::audio::PreloadedPlayableWav;
-use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
+use peridot::math::{Camera, Matrix4, One, ProjectionMethod, Quaternion, Vector3};
 use peridot::{CBSubmissionType, CommandBundle, SubpassDependencyTemplates};
-use peridot_image::StdTexture2DAsset;
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_runtime_asset_manager::RuntimeAssetManager;
+use peridot_shader::engine_params::{CameraParameters, ObjectParameters};
 use std::sync::Arc;
 
 use peridot_command_object::{
-    BeginRenderPass, BindGraphicsPipeline, BufferUsage, ColorAttachmentBlending, DescriptorSets,
-    EndRenderPass, GraphicsCommand, GraphicsCommandCombiner, PipelineBarrier, RangedBuffer,
-    StandardMesh,
+    BeginRenderPass, BindGraphicsPipeline, BufferUsage, DescriptorSets, EndRenderPass,
+    GraphicsCommand, GraphicsCommandCombiner, PipelineBarrier, RangedBuffer, StandardMesh,
 };
 
 struct LocalImageView {
@@ -54,11 +53,6 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     let mut memory_manager = MemoryManager::new(e.graphics());
     let mut runtime_asset_manager = RuntimeAssetManager::new();
 
-    let image = runtime_asset_manager
-        .load::<StdTexture2DAsset>("images.example", e, &mut memory_manager)
-        .expect("asset loading")
-        .expect("missing image asset");
-
     let plane_mesh = peridot::Primitive::uv_plane_centric_xy(1.0, 0.0);
     let mut cam = Camera {
         projection: Some(ProjectionMethod::Physical {
@@ -74,12 +68,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     cam.look_at(Vector3::ZERO, None);
 
     let mut prealloc = peridot::BufferPrealloc::new(e.graphics());
-    let engine_uniform_camera_offset = prealloc.add(peridot::BufferContent::uniform::<
-        peridot_shader::engine_params::CameraParameters,
-    >());
-    let engine_uniform_object_offset = prealloc.add(peridot::BufferContent::uniform::<
-        peridot_shader::engine_params::ObjectParameters,
-    >());
+    let engine_uniform_camera_offset =
+        prealloc.add(peridot::BufferContent::uniform::<CameraParameters>());
+    let engine_uniform_object_offset =
+        prealloc.add(peridot::BufferContent::uniform::<ObjectParameters>());
     let [vertex_buffer, engine_uniform_buffer] = memory_manager
         .allocate_device_local_buffer_array(
             e.graphics(),
@@ -129,13 +121,13 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             p.ptr()
                 .byte_add(engine_uniform_camera_offset as _)
                 .cast()
-                .write(peridot_shader::engine_params::CameraParameters {
+                .write(CameraParameters {
                     view_projection_matrix: cam.view_projection_matrix(screen_aspect),
                 });
             p.ptr()
                 .byte_add(engine_uniform_object_offset as _)
                 .cast()
-                .write(peridot_shader::engine_params::ObjectParameters {
+                .write(ObjectParameters {
                     transform_matrix: Matrix4::ONE,
                 });
         })
@@ -272,16 +264,17 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let smp = br::SamplerObject::new(e.graphics().device().clone(), &br::SamplerCreateInfo::new())
         .expect("Creating Sampler");
-    let shader = runtime_asset_manager
-        .load::<peridot_shader::asset::AssetCore>(
-            "builtin.shaders.unlit_image",
-            e,
-            &mut memory_manager,
-        )
-        .expect("Loading shader")
-        .expect("Missing shader");
+    let mat = runtime_asset_manager
+        .load::<peridot_material::MaterialAsset>("plane", e, &mut memory_manager)
+        .expect("loading plane mat")
+        .expect("missing plane mat");
+    let mat_ref = runtime_asset_manager.get_typed(&mat).expect("invalid ref");
+    println!(
+        "{} {:?} {:?}",
+        mat_ref.wireframed, mat_ref.culling, mat_ref.prim_order
+    );
     let shader_ref = runtime_asset_manager
-        .get_typed(&shader)
+        .get_typed(&mat_ref.shader)
         .expect("invalid ref");
 
     let pl = br::PipelineLayoutObject::new(
@@ -299,6 +292,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
     let vp = [sc[0].make_viewport(0.0..1.0)];
+    // depending shader and render-target form
+    let attachment_color_blend_states = [shader_ref.pipeline_color_blend_attachment_state(0)];
+    let pipeline_color_blend_state =
+        shader_ref.pipeline_color_blend_state(&attachment_color_blend_states);
 
     let [gp] = e
         .graphics()
@@ -343,14 +340,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     br::PrimitiveTopology::TriangleStrip,
                 ),
                 &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
-                &br::PipelineRasterizationStateCreateInfo::new(
-                    br::PolygonMode::Fill,
-                    br::CullModeFlags::NONE,
-                    br::FrontFace::CounterClockwise,
-                ),
-                &br::PipelineColorBlendStateCreateInfo::new(&[
-                    ColorAttachmentBlending::Disabled.into_vk()
-                ]),
+                &mat_ref.vk_pipeline_rasterization_state(),
+                &pipeline_color_blend_state,
             )
             .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,
@@ -427,10 +418,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 .uniform_buffer_offset_for_material_property("materialProperties.colorTint")
                 .expect("no buffer offset for property?");
 
-            p.ptr()
-                .byte_add(value_offset as _)
-                .cast()
-                .write(peridot_math::Vector4(1.0f32, 1.0, 1.0, 1.0));
+            p.ptr().byte_add(value_offset as _).cast().write(
+                match mat_ref.properties.map["material-properties.color-tint"] {
+                    peridot_material::MaterialPropertySlot::Float4(v) => v,
+                    _ => panic!("invalid slot registered"),
+                },
+            )
         })
         .expect("Failed to write material uniform initial value");
     let material_sync_awaiter = e
@@ -467,34 +460,30 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         if let Some(dp) = shader_ref.asset.object_parameters_placement {
             descriptor_writes.push(descriptors[dp.set as usize].binding_at(dp.binding).write(
                 br::DescriptorContents::UniformBuffer(vec![
-                            engine_uniform_buffer
-                                .subslice_ref(
-                                    engine_uniform_object_offset
-                                        ..engine_uniform_object_offset
-                                            + size_of::<
-                                                peridot_shader::engine_params::ObjectParameters,
-                                            >()
-                                                as u64,
-                                )
-                                .into_descriptor_buffer_ref(),
-                        ]),
+                        engine_uniform_buffer
+                            .subslice_ref(
+                                engine_uniform_object_offset
+                                    ..engine_uniform_object_offset
+                                        + size_of::<ObjectParameters>() as u64,
+                            )
+                            .into_descriptor_buffer_ref(),
+                    ]),
             ));
         }
         if let Some(dp) = shader_ref.asset.camera_parameters_placement {
-            descriptor_writes.push(descriptors[dp.set as usize].binding_at(dp.binding).write(
-                br::DescriptorContents::UniformBuffer(vec![
-                            engine_uniform_buffer
-                                .subslice_ref(
-                                    engine_uniform_camera_offset
-                                        ..engine_uniform_camera_offset
-                                            + size_of::<
-                                                peridot_shader::engine_params::CameraParameters,
-                                            >()
-                                                as u64,
-                                )
-                                .into_descriptor_buffer_ref(),
-                        ]),
-            ));
+            descriptor_writes.push(
+                descriptors[dp.set as usize].binding_at(dp.binding).write(
+                    br::DescriptorContents::UniformBuffer(vec![
+                        engine_uniform_buffer
+                            .subslice_ref(
+                                engine_uniform_camera_offset
+                                    ..engine_uniform_camera_offset
+                                        + size_of::<CameraParameters>() as u64,
+                            )
+                            .into_descriptor_buffer_ref(),
+                    ]),
+                ),
+            );
         }
         shader_ref.write_descriptor_sets(
             &descriptors,
@@ -508,7 +497,12 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             "materialProperties.tex",
             br::DescriptorImageInfo::new(
                 &runtime_asset_manager
-                    .get_typed(&image)
+                    .get_of::<peridot_runtime_asset_manager::RuntimeTexture2D>(
+                        match mat_ref.properties.map["material-properties.tex"] {
+                            peridot_material::MaterialPropertySlot::Texture2D(ref r) => r,
+                            _ => panic!("invalid slot registered"),
+                        },
+                    )
                     .expect("invalid ref")
                     .gfx_resource,
                 br::ImageLayout::ShaderReadOnlyOpt,
@@ -664,10 +658,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 engine_uniform_buffer_stg
                     .0
                     .guard_map(BufferMapMode::Write, |ptr| unsafe {
-                        ptr.get_mut_at::<UniformObjectParameters>(
-                            engine_uniform_object_offset as _,
-                        )
-                        .object = Quaternion::new(rot, Vector3::up()).into();
+                        ptr.get_mut_at::<ObjectParameters>(engine_uniform_object_offset as _)
+                            .transform_matrix = Quaternion::new(rot, Vector3::up()).into();
                     })
                     .expect("Update DynamicStgBuffer");
 
@@ -753,14 +745,4 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     unsafe {
         e.graphics_device().wait().expect("Failed to wait for work");
     }
-}
-
-#[repr(C)]
-struct UniformCameraParameters {
-    pub camera: Matrix4F32,
-}
-
-#[repr(C)]
-struct UniformObjectParameters {
-    pub object: Matrix4F32,
 }

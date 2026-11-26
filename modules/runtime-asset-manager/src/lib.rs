@@ -2,6 +2,11 @@ use std::{collections::HashMap, ffi::CString, num::NonZeroUsize};
 
 use bedrock::{self as br, ImageChild, ShaderModule, TypedVulkanStructure};
 use ktx::Texture;
+use peridot::FromAssetBlob;
+use peridot_image::StdTexture2DAsset;
+use peridot_material::{
+    CullingMode, MaterialAsset, MaterialPropertyBlock, MaterialPropertySlot, PrimitiveOrder,
+};
 
 pub struct RuntimeAssetManager {
     loaded_assets: HashMap<peridot::AssetID, AssetResourceHandle>,
@@ -115,6 +120,7 @@ pub enum AssetResource {
     Texture2D(RuntimeTexture2D),
     Mesh(RuntimeMesh),
     Shader(RuntimeShader),
+    Material(RuntimeMaterial),
     Sprite(RuntimeSprite),
     SpriteAtlas(RuntimeSpriteAtlas),
 }
@@ -388,6 +394,11 @@ impl RuntimeResource for RuntimeMesh {
         }
     }
 }
+impl RuntimeMesh {
+    pub fn vk_pipeline_input_assembly_state(&self) -> br::PipelineInputAssemblyStateCreateInfo {
+        br::PipelineInputAssemblyStateCreateInfo::new(self.topology.into_vk())
+    }
+}
 
 impl AssetResourceType for peridot_mesh::AssetCore {
     type Error = std::io::Error;
@@ -573,6 +584,55 @@ impl RuntimeShader {
             .vertex_inputs
             .get(semantic)
             .map(|x| x.location as _)
+    }
+
+    pub fn pipeline_color_blend_attachment_state(
+        &self,
+        attachment_index: u32,
+    ) -> br::PipelineColorBlendAttachmentState {
+        let default = peridot_shader::config::blending::PartialBlendingConfiguration::default();
+        let mut final_content =
+            peridot_shader::config::blending::BlendPreset::PremultipliedAlpha.make_content();
+        peridot_shader::config::blending::resolve_cascade(
+            &mut final_content,
+            self.asset
+                .blending
+                .per_attachment
+                .get(&attachment_index)
+                .unwrap_or(&default),
+            &self.asset.blending.default,
+        );
+
+        br::PipelineColorBlendAttachmentState(br::vk::VkPipelineColorBlendAttachmentState {
+            blendEnable: if final_content.enabled {
+                br::vk::VK_TRUE
+            } else {
+                br::vk::VK_FALSE
+            },
+            srcColorBlendFactor: final_content.src_color_factor.into_vk(),
+            dstColorBlendFactor: final_content.dst_color_factor.into_vk(),
+            colorBlendOp: final_content.color_op.into_vk(),
+            srcAlphaBlendFactor: final_content.src_alpha_factor.into_vk(),
+            dstAlphaBlendFactor: final_content.dst_alpha_factor.into_vk(),
+            alphaBlendOp: final_content.alpha_op.into_vk(),
+            colorWriteMask: br::vk::VK_COLOR_COMPONENT_R_BIT
+                | br::vk::VK_COLOR_COMPONENT_G_BIT
+                | br::vk::VK_COLOR_COMPONENT_B_BIT
+                | br::vk::VK_COLOR_COMPONENT_A_BIT,
+        })
+    }
+
+    #[inline(always)]
+    pub fn pipeline_color_blend_state<'d>(
+        &self,
+        attachment_states: &'d [br::PipelineColorBlendAttachmentState],
+    ) -> br::PipelineColorBlendStateCreateInfo<'d> {
+        let mut blend_state = br::PipelineColorBlendStateCreateInfo::new(attachment_states);
+        if let Some(ref xs) = self.asset.blending.constant {
+            blend_state = blend_state.blend_constants(*xs);
+        }
+
+        blend_state
     }
 
     #[inline(always)]
@@ -789,6 +849,83 @@ impl AssetResourceType for peridot_shader::asset::AssetCore {
             material_uniform_buffer_size: material_uniform_buffer_top as _,
             descriptor_set_layouts: descriptor_set_layouts.into_boxed_slice(),
             descriptor_pool_size_per_set: descriptor_pool_size_per_set.into_boxed_slice(),
+        }))
+    }
+}
+
+pub struct RuntimeMaterial {
+    pub shader: TypedAssetResourceHandle<RuntimeShader>,
+    pub properties: MaterialPropertyBlock<AssetResourceHandle>,
+    pub wireframed: bool,
+    pub culling: CullingMode,
+    pub prim_order: PrimitiveOrder,
+}
+impl RuntimeResource for RuntimeMaterial {
+    #[inline(always)]
+    fn extract_ref(packed: &AssetResource) -> Option<&Self> {
+        match packed {
+            AssetResource::Material(x) => Some(x),
+            _ => None,
+        }
+    }
+}
+impl RuntimeMaterial {
+    pub const fn vk_pipeline_rasterization_state<'a>(
+        &'a self,
+    ) -> br::PipelineRasterizationStateCreateInfo<'a> {
+        br::PipelineRasterizationStateCreateInfo::new(
+            if self.wireframed {
+                br::PolygonMode::Line
+            } else {
+                br::PolygonMode::Fill
+            },
+            self.culling.into_vk(),
+            self.prim_order.into_vk(),
+        )
+    }
+}
+
+impl AssetResourceType for MaterialAsset {
+    type RuntimeResourceType = RuntimeMaterial;
+    type Error = std::io::Error;
+
+    fn load_core(
+        id: &peridot::AssetID,
+        dep_loader: &mut RuntimeAssetManager,
+        engine: &mut peridot::Engine<impl peridot::NativeLinker>,
+        mm: &mut peridot_memory_manager::MemoryManager,
+    ) -> Result<AssetResource, Self::Error> {
+        let content = Self::from_asset_blob(engine.open_raw_asset_by_id(id.clone())?)?;
+
+        let shader = dep_loader
+            .load_by_id::<peridot_shader::asset::AssetCore>(&content.shader, engine, mm)
+            .expect("dep shader")
+            .expect("no dep shader");
+        let mut properties = HashMap::with_capacity(content.properties.map.len());
+        for (k, v) in content.properties.map {
+            let v = match v {
+                MaterialPropertySlot::Float(x) => MaterialPropertySlot::Float(x),
+                MaterialPropertySlot::Float2(x) => MaterialPropertySlot::Float2(x),
+                MaterialPropertySlot::Float3(x) => MaterialPropertySlot::Float3(x),
+                MaterialPropertySlot::Float4(x) => MaterialPropertySlot::Float4(x),
+                MaterialPropertySlot::Texture2D(r) => MaterialPropertySlot::Texture2D(
+                    dep_loader
+                        .load_by_id::<StdTexture2DAsset>(&r, engine, mm)
+                        .expect("dep prop tex2d")
+                        .expect("no dep prop tex2d")
+                        .into_untyped(),
+                ),
+            };
+
+            properties.insert(k, v);
+        }
+
+        Ok(AssetResource::Material(RuntimeMaterial {
+            shader,
+            properties: MaterialPropertyBlock { map: properties },
+            wireframed: content.wireframed,
+            culling: content.culling,
+            prim_order: content.prim_order,
         }))
     }
 }
