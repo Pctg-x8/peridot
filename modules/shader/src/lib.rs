@@ -1,12 +1,16 @@
 use std::{
-    collections::{HashMap, HashSet, hash_map},
+    collections::{BTreeMap, HashMap, HashSet, hash_map},
     ffi::CString,
+    io::{BufRead, Read, Write},
     num::NonZeroUsize,
     path::Path,
 };
 
+use bedrock as br;
 use peridot::VertexInputSemantic;
+use peridot_serialization_utils::{VariableUInt, VariableULong};
 use slang::{IBlob, IComponentType, IGlobalSession, IModule, ISession};
+use vectored_io_helper::{mkioslice, mkioslicem, read_vectored_all, write_vectored_all};
 
 pub mod asset;
 
@@ -107,6 +111,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk
     let mut vertex_inputs = Vec::new();
     let mut vertex_entry_point_name = None;
     let mut fragment_entry_point_name = None;
+    let mut fragment_shader_blending_configuration = FragmentShaderBlendingConfiguration::default();
     for n in 0..rl.entry_point_count() {
         let Some(e) = rl.entry_point(n) else {
             continue;
@@ -124,6 +129,14 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk
         }
         if e.stage() == slang::ffi::SLANG_STAGE_FRAGMENT {
             fragment_entry_point_name = Some(e.name());
+            let additional_attributes = e
+                .function()
+                .iter_user_attribute()
+                .filter_map(|a| FragmentShaderAdditionalAttribute::parse(a))
+                .collect::<Vec<_>>();
+            println!("{additional_attributes:#?}");
+            fragment_shader_blending_configuration =
+                FragmentShaderBlendingConfiguration::collect(additional_attributes.iter());
         }
     }
     let vertex_entry_point_name = vertex_entry_point_name
@@ -442,6 +455,7 @@ pub fn build(source_path: impl AsRef<Path>, env: &Environment) -> Result<AssetVk
         input_variable_layout,
         object_parameters_placement,
         camera_parameters_placement,
+        blending: fragment_shader_blending_configuration,
     })
 }
 
@@ -537,6 +551,772 @@ fn construct_asset_material_property_vk(
         offset,
         size,
     })
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum BlendFactor {
+    SrcAlpha = 0,
+    DstAlpha = 1,
+    InvSrcAlpha = 2,
+    InvDstAlpha = 3,
+    SrcColor = 4,
+    DstColor = 5,
+    InvSrcColor = 6,
+    InvDstColor = 7,
+    Constant = 8,
+    ConstantOne = 9,
+    ConstantZero = 10,
+}
+impl BlendFactor {
+    #[tracing::instrument(skip(attr))]
+    fn from_attr_arg(attr: &slang::reflection::Attribute, index: u32) -> Option<Self> {
+        let value = match attr.argument_value_int(index) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, "attr.argument_value_int");
+                return None;
+            }
+        };
+
+        if Self::SrcAlpha as i32 <= value && value <= Self::ConstantZero as i32 {
+            Some(unsafe { core::mem::transmute(value as u8) })
+        } else {
+            tracing::warn!(value, "value out of range");
+            None
+        }
+    }
+
+    pub const fn into_vk(self) -> br::vk::VkBlendFactor {
+        match self {
+            Self::SrcAlpha => br::vk::VK_BLEND_FACTOR_SRC_ALPHA,
+            Self::DstAlpha => br::vk::VK_BLEND_FACTOR_DST_ALPHA,
+            Self::InvSrcAlpha => br::vk::VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+            Self::InvDstAlpha => br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA,
+            Self::SrcColor => br::vk::VK_BLEND_FACTOR_SRC_COLOR,
+            Self::DstColor => br::vk::VK_BLEND_FACTOR_DST_COLOR,
+            Self::InvSrcColor => br::vk::VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR,
+            Self::InvDstColor => br::vk::VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR,
+            // TODO: should split alpha/color?
+            Self::Constant => br::vk::VK_BLEND_FACTOR_CONSTANT_ALPHA,
+            Self::ConstantOne => br::vk::VK_BLEND_FACTOR_ONE,
+            Self::ConstantZero => br::vk::VK_BLEND_FACTOR_ZERO,
+        }
+    }
+
+    pub fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        w.write_all(&[*self as u8])
+    }
+
+    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+        let mut byte = [0u8];
+        r.read_exact(&mut byte)?;
+        match byte[0] {
+            v if Self::SrcAlpha as u8 <= v && v <= Self::ConstantZero as u8 => {
+                Ok(unsafe { core::mem::transmute(v) })
+            }
+            v => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("byte out of range: {v}"),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum BlendOp {
+    Add = 0,
+    Min = 1,
+    Max = 2,
+}
+impl BlendOp {
+    #[tracing::instrument(skip(attr))]
+    fn from_attr_arg(attr: &slang::reflection::Attribute, index: u32) -> Option<Self> {
+        let value = match attr.argument_value_int(index) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, "attr.argument_value_int");
+                return None;
+            }
+        };
+
+        if Self::Add as i32 <= value && value <= Self::Max as i32 {
+            Some(unsafe { core::mem::transmute(value as u8) })
+        } else {
+            tracing::warn!(value, "value out of range");
+            None
+        }
+    }
+
+    pub const fn into_vk(self) -> br::vk::VkBlendOp {
+        match self {
+            Self::Add => br::vk::VK_BLEND_OP_ADD,
+            Self::Min => br::vk::VK_BLEND_OP_MIN,
+            Self::Max => br::vk::VK_BLEND_OP_MAX,
+        }
+    }
+
+    pub fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        w.write_all(&[*self as u8])
+    }
+
+    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+        let mut byte = [0u8];
+        r.read_exact(&mut byte)?;
+        match byte[0] {
+            v if Self::Add as u8 <= v && v <= Self::Max as u8 => {
+                Ok(unsafe { core::mem::transmute(v) })
+            }
+            v => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("byte out of range: {v}"),
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+#[repr(u8)]
+pub enum BlendPreset {
+    Disabled = 0,
+    StraightAlpha = 1,
+    PremultipliedAlpha = 2,
+}
+impl BlendPreset {
+    #[tracing::instrument(skip(attr))]
+    fn from_attr_arg(attr: &slang::reflection::Attribute, index: u32) -> Option<Self> {
+        let value = match attr.argument_value_int(index) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, "attr.argument_value_int");
+                return None;
+            }
+        };
+
+        if Self::Disabled as i32 <= value && value <= Self::PremultipliedAlpha as i32 {
+            Some(unsafe { core::mem::transmute(value as u8) })
+        } else {
+            tracing::warn!(value, "value out of range");
+            None
+        }
+    }
+
+    pub fn make_content(&self) -> PresetBlendingConfigurationContent {
+        match self {
+            Self::Disabled => PresetBlendingConfigurationContent {
+                enabled: false,
+                ..Self::PremultipliedAlpha.make_content()
+            },
+            Self::StraightAlpha => PresetBlendingConfigurationContent {
+                enabled: true,
+                src_color_factor: BlendFactor::SrcAlpha,
+                dst_color_factor: BlendFactor::InvSrcAlpha,
+                color_op: BlendOp::Add,
+                src_alpha_factor: BlendFactor::SrcAlpha,
+                dst_alpha_factor: BlendFactor::InvSrcAlpha,
+                alpha_op: BlendOp::Add,
+            },
+            Self::PremultipliedAlpha => PresetBlendingConfigurationContent {
+                enabled: true,
+                src_color_factor: BlendFactor::ConstantOne,
+                dst_color_factor: BlendFactor::InvSrcAlpha,
+                color_op: BlendOp::Add,
+                src_alpha_factor: BlendFactor::ConstantOne,
+                dst_alpha_factor: BlendFactor::InvSrcAlpha,
+                alpha_op: BlendOp::Add,
+            },
+        }
+    }
+
+    pub fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        w.write_all(&[*self as u8])
+    }
+
+    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+        let mut byte = [0u8];
+        r.read_exact(&mut byte)?;
+        match byte[0] {
+            v if Self::Disabled as u8 <= v && v <= Self::PremultipliedAlpha as u8 => {
+                Ok(unsafe { core::mem::transmute(v) })
+            }
+            v => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("byte out of range: {v}"),
+            )),
+        }
+    }
+}
+
+pub struct PresetBlendingConfigurationContent {
+    pub enabled: bool,
+    pub src_color_factor: BlendFactor,
+    pub dst_color_factor: BlendFactor,
+    pub color_op: BlendOp,
+    pub src_alpha_factor: BlendFactor,
+    pub dst_alpha_factor: BlendFactor,
+    pub alpha_op: BlendOp,
+}
+impl PresetBlendingConfigurationContent {
+    pub fn apply_overrides(&mut self, overrides: BlendingConfigurationContentOverrides) {
+        self.enabled = overrides.enabled.unwrap_or(self.enabled);
+        self.src_color_factor = overrides.src_color_factor.unwrap_or(self.src_color_factor);
+        self.dst_color_factor = overrides.dst_color_factor.unwrap_or(self.dst_color_factor);
+        self.color_op = overrides.color_op.unwrap_or(self.color_op);
+        self.src_alpha_factor = overrides.src_alpha_factor.unwrap_or(self.src_alpha_factor);
+        self.dst_alpha_factor = overrides.dst_alpha_factor.unwrap_or(self.dst_alpha_factor);
+        self.alpha_op = overrides.alpha_op.unwrap_or(self.alpha_op);
+    }
+}
+
+pub struct BlendingConfigurationContentOverrides {
+    pub enabled: Option<bool>,
+    pub src_color_factor: Option<BlendFactor>,
+    pub dst_color_factor: Option<BlendFactor>,
+    pub color_op: Option<BlendOp>,
+    pub src_alpha_factor: Option<BlendFactor>,
+    pub dst_alpha_factor: Option<BlendFactor>,
+    pub alpha_op: Option<BlendOp>,
+}
+impl BlendingConfigurationContentOverrides {
+    pub fn merge_lower_cascade(&mut self, lower: Self) {
+        self.enabled = self.enabled.or(lower.enabled);
+        self.src_color_factor = self.src_color_factor.or(lower.src_color_factor);
+        self.dst_color_factor = self.dst_color_factor.or(lower.dst_color_factor);
+        self.color_op = self.color_op.or(lower.color_op);
+        self.src_alpha_factor = self.src_alpha_factor.or(lower.src_alpha_factor);
+        self.dst_alpha_factor = self.dst_alpha_factor.or(lower.dst_alpha_factor);
+        self.alpha_op = self.alpha_op.or(lower.alpha_op);
+    }
+}
+impl<'a> From<&'a PartialBlendingConfiguration> for BlendingConfigurationContentOverrides {
+    fn from(value: &'a PartialBlendingConfiguration) -> Self {
+        let preset = value.preset.map(|x| x.make_content());
+        let color = value.color.as_ref().or(value.base.as_ref());
+        let alpha = value.alpha.as_ref().or(value.base.as_ref());
+
+        Self {
+            enabled: if color.is_some() || alpha.is_some() {
+                // force true if there are some overrides
+                Some(true)
+            } else {
+                preset.as_ref().map(|x| x.enabled)
+            },
+            src_color_factor: color
+                .map(|x| x.src)
+                .or_else(|| preset.as_ref().map(|x| x.src_color_factor)),
+            dst_color_factor: color
+                .map(|x| x.dst)
+                .or_else(|| preset.as_ref().map(|x| x.dst_color_factor)),
+            color_op: color
+                .map(|x| x.op)
+                .or_else(|| preset.as_ref().map(|x| x.color_op)),
+            src_alpha_factor: alpha
+                .map(|x| x.src)
+                .or_else(|| preset.as_ref().map(|x| x.src_alpha_factor)),
+            dst_alpha_factor: alpha
+                .map(|x| x.dst)
+                .or_else(|| preset.as_ref().map(|x| x.dst_alpha_factor)),
+            alpha_op: alpha
+                .map(|x| x.op)
+                .or_else(|| preset.as_ref().map(|x| x.alpha_op)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum BlendingAttachment {
+    Default,
+    Specified(u32),
+}
+impl BlendingAttachment {
+    #[tracing::instrument(skip(attr))]
+    fn specified_from_attr_arg(attr: &slang::reflection::Attribute, index: u32) -> Option<Self> {
+        let value = match attr.argument_value_int(index) {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(reason = ?e, "attr.argument_value_int");
+                return None;
+            }
+        };
+
+        match u32::try_from(value) {
+            Ok(x) => Some(Self::Specified(x)),
+            Err(_) => {
+                tracing::warn!(value, "attachment index is out of range");
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Blending {
+    Preset(BlendPreset),
+    Specified {
+        src_factor: BlendFactor,
+        dst_factor: BlendFactor,
+        op: BlendOp,
+    },
+    Color {
+        src_factor: BlendFactor,
+        dst_factor: BlendFactor,
+        op: BlendOp,
+    },
+    Alpha {
+        src_factor: BlendFactor,
+        dst_factor: BlendFactor,
+        op: BlendOp,
+    },
+}
+
+#[derive(Debug)]
+pub enum FragmentShaderAdditionalAttribute {
+    Blending(BlendingAttachment, Blending),
+    BlendingConstant([f32; 4]),
+}
+impl FragmentShaderAdditionalAttribute {
+    #[tracing::instrument(skip(a), fields(name = ?a.name()))]
+    fn parse(a: &slang::reflection::Attribute) -> Option<Self> {
+        fn validate_argument_count(a: &slang::reflection::Attribute, count: u32) -> bool {
+            if a.argument_count() != count {
+                tracing::warn!(count = a.argument_count(), "argument count mismatched");
+                false
+            } else {
+                true
+            }
+        }
+
+        match a.name() {
+            x if x == c"peridot_blending" => {
+                if !validate_argument_count(a, 3) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::Default,
+                    Blending::Specified {
+                        src_factor: BlendFactor::from_attr_arg(a, 0)?,
+                        dst_factor: BlendFactor::from_attr_arg(a, 1)?,
+                        op: BlendOp::from_attr_arg(a, 2)?,
+                    },
+                ))
+            }
+            x if x == c"peridot_blending_preset" => {
+                if !validate_argument_count(a, 1) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::Default,
+                    Blending::Preset(BlendPreset::from_attr_arg(a, 0)?),
+                ))
+            }
+            x if x == c"peridot_blending_preset_for" => {
+                if !validate_argument_count(a, 2) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::specified_from_attr_arg(a, 0)?,
+                    Blending::Preset(BlendPreset::from_attr_arg(a, 1)?),
+                ))
+            }
+            x if x == c"peridot_blending_for" => {
+                if !validate_argument_count(a, 4) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::specified_from_attr_arg(a, 0)?,
+                    Blending::Specified {
+                        src_factor: BlendFactor::from_attr_arg(a, 1)?,
+                        dst_factor: BlendFactor::from_attr_arg(a, 2)?,
+                        op: BlendOp::from_attr_arg(a, 3)?,
+                    },
+                ))
+            }
+            x if x == c"peridot_blending_color" => {
+                if !validate_argument_count(a, 3) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::Default,
+                    Blending::Color {
+                        src_factor: BlendFactor::from_attr_arg(a, 0)?,
+                        dst_factor: BlendFactor::from_attr_arg(a, 1)?,
+                        op: BlendOp::from_attr_arg(a, 2)?,
+                    },
+                ))
+            }
+            x if x == c"peridot_blending_color_for" => {
+                if !validate_argument_count(a, 4) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::specified_from_attr_arg(a, 0)?,
+                    Blending::Color {
+                        src_factor: BlendFactor::from_attr_arg(a, 1)?,
+                        dst_factor: BlendFactor::from_attr_arg(a, 2)?,
+                        op: BlendOp::from_attr_arg(a, 3)?,
+                    },
+                ))
+            }
+            x if x == c"peridot_blending_alpha" => {
+                if !validate_argument_count(a, 3) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::Default,
+                    Blending::Alpha {
+                        src_factor: BlendFactor::from_attr_arg(a, 0)?,
+                        dst_factor: BlendFactor::from_attr_arg(a, 1)?,
+                        op: BlendOp::from_attr_arg(a, 2)?,
+                    },
+                ))
+            }
+            x if x == c"peridot_blending_alpha_for" => {
+                if !validate_argument_count(a, 4) {
+                    return None;
+                }
+
+                Some(Self::Blending(
+                    BlendingAttachment::specified_from_attr_arg(a, 0)?,
+                    Blending::Alpha {
+                        src_factor: BlendFactor::from_attr_arg(a, 1)?,
+                        dst_factor: BlendFactor::from_attr_arg(a, 2)?,
+                        op: BlendOp::from_attr_arg(a, 3)?,
+                    },
+                ))
+            }
+            x if x == c"peridot_blending_const" => {
+                if !validate_argument_count(a, 4) {
+                    return None;
+                }
+
+                Some(Self::BlendingConstant([
+                    a.argument_value_float(0)
+                        .inspect_err(|e| tracing::warn!(reason = ?e, "argument_value_float"))
+                        .ok()?,
+                    a.argument_value_float(1)
+                        .inspect_err(|e| tracing::warn!(reason = ?e, "argument_value_float"))
+                        .ok()?,
+                    a.argument_value_float(2)
+                        .inspect_err(|e| tracing::warn!(reason = ?e, "argument_value_float"))
+                        .ok()?,
+                    a.argument_value_float(3)
+                        .inspect_err(|e| tracing::warn!(reason = ?e, "argument_value_float"))
+                        .ok()?,
+                ]))
+            }
+            name => {
+                tracing::warn!(?name, "unknown fragment shader attribute");
+                None
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct PartialBlendingConfigurationCascadeLayer {
+    pub src: BlendFactor,
+    pub dst: BlendFactor,
+    pub op: BlendOp,
+}
+
+/// 上から下にオーバーライドできる構成
+/// (presetでベーズパラメータ決定->baseのパラメータで上書き->colorのパラメータでcolor関係を上書き->alphaのパラメータでalpha関係を上書き)
+///
+/// Blendingの有効/無効だけ特殊で、base/color/alphaいずれかの上書きがあればpresetがDisabledでもブレンディング有効になる
+#[derive(Debug, Default)]
+pub struct PartialBlendingConfiguration {
+    pub preset: Option<BlendPreset>,
+    pub base: Option<PartialBlendingConfigurationCascadeLayer>,
+    pub color: Option<PartialBlendingConfigurationCascadeLayer>,
+    pub alpha: Option<PartialBlendingConfigurationCascadeLayer>,
+}
+impl PartialBlendingConfiguration {
+    pub fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        let mut content_flags = PartialBlendingConfigurationContentFlags::empty();
+        if self.preset.is_some() {
+            content_flags |= PartialBlendingConfigurationContentFlags::HAS_PRESET;
+        }
+        if self.base.is_some() {
+            content_flags |= PartialBlendingConfigurationContentFlags::HAS_BASE;
+        }
+        if self.color.is_some() {
+            content_flags |= PartialBlendingConfigurationContentFlags::HAS_COLOR;
+        }
+        if self.alpha.is_some() {
+            content_flags |= PartialBlendingConfigurationContentFlags::HAS_ALPHA;
+        }
+
+        w.write_all(&[content_flags.bits()])?;
+        if let Some(p) = self.preset {
+            w.write_all(&[p as u8])?;
+        }
+        if let Some(ref p) = self.base {
+            w.write_all(&[p.src as u8, p.dst as u8, p.op as u8])?;
+        }
+        if let Some(ref p) = self.color {
+            w.write_all(&[p.src as u8, p.dst as u8, p.op as u8])?;
+        }
+        if let Some(ref p) = self.alpha {
+            w.write_all(&[p.src as u8, p.dst as u8, p.op as u8])?;
+        }
+
+        Ok(())
+    }
+
+    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+        let mut content_flags = [0u8];
+        r.read_exact(&mut content_flags)?;
+        let content_flags =
+            PartialBlendingConfigurationContentFlags::from_bits_retain(content_flags[0]);
+
+        let preset = if content_flags.contains(PartialBlendingConfigurationContentFlags::HAS_PRESET)
+        {
+            Some(BlendPreset::read(r)?)
+        } else {
+            None
+        };
+        let base = if content_flags.contains(PartialBlendingConfigurationContentFlags::HAS_BASE) {
+            let src = BlendFactor::read(r)?;
+            let dst = BlendFactor::read(r)?;
+            let op = BlendOp::read(r)?;
+
+            Some(PartialBlendingConfigurationCascadeLayer { src, dst, op })
+        } else {
+            None
+        };
+        let color = if content_flags.contains(PartialBlendingConfigurationContentFlags::HAS_COLOR) {
+            let src = BlendFactor::read(r)?;
+            let dst = BlendFactor::read(r)?;
+            let op = BlendOp::read(r)?;
+
+            Some(PartialBlendingConfigurationCascadeLayer { src, dst, op })
+        } else {
+            None
+        };
+        let alpha = if content_flags.contains(PartialBlendingConfigurationContentFlags::HAS_ALPHA) {
+            let src = BlendFactor::read(r)?;
+            let dst = BlendFactor::read(r)?;
+            let op = BlendOp::read(r)?;
+
+            Some(PartialBlendingConfigurationCascadeLayer { src, dst, op })
+        } else {
+            None
+        };
+
+        Ok(Self {
+            preset,
+            base,
+            color,
+            alpha,
+        })
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Clone, Copy)]
+    struct PartialBlendingConfigurationContentFlags : u8 {
+        const HAS_PRESET = 0x01;
+        const HAS_BASE = 0x02;
+        const HAS_COLOR = 0x04;
+        const HAS_ALPHA = 0x08;
+    }
+}
+
+pub fn resolve_attachment_blending_cascade(
+    target: &mut PresetBlendingConfigurationContent,
+    per_attachment: &PartialBlendingConfiguration,
+    default: &PartialBlendingConfiguration,
+) {
+    let mut overrides = BlendingConfigurationContentOverrides::from(per_attachment);
+    overrides.merge_lower_cascade(BlendingConfigurationContentOverrides::from(default));
+
+    target.apply_overrides(overrides);
+}
+
+#[derive(Debug, Default)]
+pub struct FragmentShaderBlendingConfiguration {
+    pub default: PartialBlendingConfiguration,
+    pub per_attachment: BTreeMap<u32, PartialBlendingConfiguration>,
+    pub constant: Option<[f32; 4]>,
+}
+impl FragmentShaderBlendingConfiguration {
+    pub fn collect<'a>(attrs: impl Iterator<Item = &'a FragmentShaderAdditionalAttribute>) -> Self {
+        let mut sink = Self::default();
+
+        for a in attrs {
+            match a {
+                FragmentShaderAdditionalAttribute::BlendingConstant(xs) => {
+                    if sink.constant.is_some() {
+                        tracing::warn!("overwriting blending constant");
+                    }
+
+                    sink.constant = Some(*xs);
+                }
+                FragmentShaderAdditionalAttribute::Blending(attachment_index, blending) => {
+                    let sink = match attachment_index {
+                        BlendingAttachment::Default => &mut sink.default,
+                        &BlendingAttachment::Specified(index) => {
+                            sink.per_attachment.entry(index).or_default()
+                        }
+                    };
+
+                    match *blending {
+                        Blending::Preset(preset) => {
+                            if sink.preset.is_some() {
+                                tracing::warn!("overwriting blending preset");
+                            }
+
+                            sink.preset = Some(preset);
+                        }
+                        Blending::Specified {
+                            src_factor,
+                            dst_factor,
+                            op,
+                        } => {
+                            if sink.base.is_some() {
+                                tracing::warn!("overwriting blending base override");
+                            }
+
+                            sink.base = Some(PartialBlendingConfigurationCascadeLayer {
+                                src: src_factor,
+                                dst: dst_factor,
+                                op,
+                            });
+                        }
+                        Blending::Color {
+                            src_factor,
+                            dst_factor,
+                            op,
+                        } => {
+                            if sink.color.is_some() {
+                                tracing::warn!("overwriting blending color override");
+                            }
+
+                            sink.color = Some(PartialBlendingConfigurationCascadeLayer {
+                                src: src_factor,
+                                dst: dst_factor,
+                                op,
+                            });
+                        }
+                        Blending::Alpha {
+                            src_factor,
+                            dst_factor,
+                            op,
+                        } => {
+                            if sink.alpha.is_some() {
+                                tracing::warn!("overwriting blending alpha override");
+                            }
+
+                            sink.alpha = Some(PartialBlendingConfigurationCascadeLayer {
+                                src: src_factor,
+                                dst: dst_factor,
+                                op,
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        sink
+    }
+
+    pub fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
+        self.default.write(w)?;
+        VariableULong(self.per_attachment.len() as _).write(w)?;
+        for (&a, x) in self.per_attachment.iter() {
+            VariableUInt(a).write(w)?;
+            x.write(w)?;
+        }
+
+        match self.constant {
+            None => {
+                w.write_all(&[0x00])?;
+            }
+            Some(ref xs) => {
+                write_vectored_all(
+                    w,
+                    &mut [
+                        mkioslice(&0x01u8),
+                        mkioslice(&xs[0]),
+                        mkioslice(&xs[1]),
+                        mkioslice(&xs[2]),
+                        mkioslice(&xs[3]),
+                    ],
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn read(r: &mut (impl BufRead + ?Sized), swap_bytes: bool) -> std::io::Result<Self> {
+        let default = PartialBlendingConfiguration::read(r)?;
+        let per_attachment_count = VariableULong::read(r)?;
+        let mut per_attachment = BTreeMap::new();
+        for _ in 0..per_attachment_count.0 {
+            let a = VariableUInt::read(r)?;
+            let x = PartialBlendingConfiguration::read(r)?;
+
+            per_attachment.insert(a.0, x);
+        }
+
+        let mut has_constant = [0u8];
+        r.read_exact(&mut has_constant)?;
+        let constant = if has_constant[0] == 0x00 {
+            None
+        } else {
+            let mut x = core::mem::MaybeUninit::<f32>::uninit();
+            let mut y = core::mem::MaybeUninit::<f32>::uninit();
+            let mut z = core::mem::MaybeUninit::<f32>::uninit();
+            let mut w = core::mem::MaybeUninit::<f32>::uninit();
+            read_vectored_all(
+                r,
+                &mut [
+                    mkioslicem(&mut x),
+                    mkioslicem(&mut y),
+                    mkioslicem(&mut z),
+                    mkioslicem(&mut w),
+                ],
+            )?;
+            if swap_bytes {
+                x.write(f32::from_bits(
+                    unsafe { x.assume_init() }.to_bits().swap_bytes(),
+                ));
+                y.write(f32::from_bits(
+                    unsafe { y.assume_init() }.to_bits().swap_bytes(),
+                ));
+                z.write(f32::from_bits(
+                    unsafe { z.assume_init() }.to_bits().swap_bytes(),
+                ));
+                w.write(f32::from_bits(
+                    unsafe { w.assume_init() }.to_bits().swap_bytes(),
+                ));
+            }
+
+            Some([
+                unsafe { x.assume_init() },
+                unsafe { y.assume_init() },
+                unsafe { z.assume_init() },
+                unsafe { w.assume_init() },
+            ])
+        };
+
+        Ok(Self {
+            default,
+            per_attachment,
+            constant,
+        })
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

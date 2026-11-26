@@ -10,9 +10,8 @@ use peridot_runtime_asset_manager::RuntimeAssetManager;
 use std::sync::Arc;
 
 use peridot_command_object::{
-    BeginRenderPass, BindGraphicsPipeline, BufferUsage, ColorAttachmentBlending, DescriptorSets,
-    EndRenderPass, GraphicsCommand, GraphicsCommandCombiner, PipelineBarrier, RangedBuffer,
-    StandardMesh,
+    BeginRenderPass, BindGraphicsPipeline, BufferUsage, DescriptorSets, EndRenderPass,
+    GraphicsCommand, GraphicsCommandCombiner, PipelineBarrier, RangedBuffer, StandardMesh,
 };
 
 struct LocalImageView {
@@ -294,6 +293,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
 
     let sc = [br::Extent2D::from(screen_size).into_rect(br::Offset2D::ZERO)];
     let vp = [sc[0].make_viewport(0.0..1.0)];
+    // depending shader and render-target form
+    let attachment_color_blend_states = [shader_ref.pipeline_color_blend_attachment_state(0)];
+    let pipeline_color_blend_state =
+        shader_ref.pipeline_color_blend_state(&attachment_color_blend_states);
 
     let [gp] = e
         .graphics()
@@ -338,14 +341,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                     br::PrimitiveTopology::TriangleStrip,
                 ),
                 &br::PipelineViewportStateCreateInfo::new_array(&vp, &sc),
-                &br::PipelineRasterizationStateCreateInfo::new(
-                    br::PolygonMode::Fill,
-                    br::CullModeFlags::NONE,
-                    br::FrontFace::CounterClockwise,
-                ),
-                &br::PipelineColorBlendStateCreateInfo::new(&[
-                    ColorAttachmentBlending::Disabled.into_vk()
-                ]),
+                &mat_ref.vk_pipeline_rasterization_state(),
+                &pipeline_color_blend_state,
             )
             .set_multisample_state(&br::PipelineMultisampleStateCreateInfo::new())],
             None::<&br::PipelineCacheObject<peridot::DeviceObject>>,

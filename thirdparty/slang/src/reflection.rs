@@ -55,11 +55,10 @@ impl Attribute {
     }
 
     #[inline(always)]
-    pub fn argument_type(&self, index: u32) -> &mut Type {
-        unsafe {
-            core::mem::transmute(UnsafeCell::from_mut(
-                &mut *ffi::spReflectionUserAttribute_GetArgumentType(self.0.get(), index),
-            ))
+    pub fn argument_type(&self, index: u32) -> Option<&mut Type> {
+        match unsafe { ffi::spReflectionUserAttribute_GetArgumentType(self.0.get(), index) } {
+            p if p.is_null() => None,
+            p => Some(unsafe { core::mem::transmute(UnsafeCell::from_mut(&mut *p)) }),
         }
     }
 

@@ -3,6 +3,7 @@ use std::{
     io::{BufRead, IoSlice, Read, Write},
 };
 
+use bedrock as br;
 use peridot::{FromAssetBlob, LogicalAssetData};
 use peridot_math::{Vector2F32, Vector3F32, Vector4, Vector4F32};
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
@@ -201,6 +202,17 @@ pub enum CullingMode {
     Back = 2,
     Both = 3,
 }
+impl CullingMode {
+    #[inline(always)]
+    pub const fn into_vk(self) -> br::CullModeFlags {
+        match self {
+            Self::None => br::CullModeFlags::NONE,
+            Self::Front => br::CullModeFlags::FRONT,
+            Self::Back => br::CullModeFlags::BACK,
+            Self::Both => br::CullModeFlags::FRONT_AND_BACK,
+        }
+    }
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -208,6 +220,15 @@ pub enum PrimitiveOrder {
     Clockwise = 0,
     #[default]
     CounterClockwise = 1,
+}
+impl PrimitiveOrder {
+    #[inline(always)]
+    pub const fn into_vk(self) -> br::FrontFace {
+        match self {
+            Self::Clockwise => br::FrontFace::Clockwise,
+            Self::CounterClockwise => br::FrontFace::CounterClockwise,
+        }
+    }
 }
 
 pub struct MaterialAsset {

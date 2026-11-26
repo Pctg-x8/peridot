@@ -8,6 +8,8 @@ use peridot::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
 use vectored_io_helper::{read_vectored_all, write_vectored_all};
 
+use crate::FragmentShaderBlendingConfiguration;
+
 macro_rules! mkioslicem_field {
     ($sink: expr, $ty: ty, $field: ident) => {{
         #[allow(invalid_value)]
@@ -345,6 +347,7 @@ pub struct AssetVk {
     pub input_variable_layout: HashMap<AssetDescriptorPointer, AssetInputVariableLayoutVk>,
     pub object_parameters_placement: Option<AssetDescriptorPointer>,
     pub camera_parameters_placement: Option<AssetDescriptorPointer>,
+    pub blending: FragmentShaderBlendingConfiguration,
 }
 impl peridot::LogicalAssetData for AssetVk {
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SHADER;
@@ -386,6 +389,9 @@ impl AssetVk {
         for p in self.material_properties.iter() {
             p.write(w)?;
         }
+
+        // blending
+        self.blending.write(w)?;
 
         // input layouts
         VariableULong(self.vertex_inputs.len() as _).write(w)?;
@@ -455,6 +461,9 @@ impl AssetVk {
         for _ in 0..material_property_count {
             material_properties.push(AssetMaterialPropertyVk::read(r, is_native_endian)?);
         }
+
+        // blending
+        let blending = FragmentShaderBlendingConfiguration::read(r, !is_native_endian)?;
 
         // input layouts
         let vertex_input_count = VariableULong::read(r)?.0 as usize;
@@ -538,6 +547,7 @@ impl AssetVk {
             input_variable_layout,
             object_parameters_placement,
             camera_parameters_placement,
+            blending,
         })
     }
 }

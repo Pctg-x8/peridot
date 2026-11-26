@@ -18,6 +18,10 @@ vectored-io-helper = { path = "../../base-lib/vectored-io-helper" }
 peridot-serialization-utils = { path = "../serialization-utils" }
 peridot-asset-processing = { path = "../asset-processing", optional = true }
 peridot-math = { path = "../math" }
+bedrock.workspace = true
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints]
 workspace = true

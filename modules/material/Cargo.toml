@@ -17,6 +17,7 @@ peridot-serialization-utils = { path = "../serialization-utils" }
 peridot-native-io = { path = "../native-io" }
 peridot-asset-processing = { path = "../asset-processing", optional = true }
 thiserror.workspace = true
+bedrock.workspace = true
 
 [lints]
 workspace = true

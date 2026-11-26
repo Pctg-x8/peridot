@@ -30,6 +30,7 @@ VertexOutput vertMain([peridot::vertex] float4 pos: POSITION0,
 }
 
 [shader("fragment")]
+[peridot::blending::preset(peridot::BlendPreset::PremultipliedAlpha)]
 float4 fragMain(FragmentInput input: Varyings) : SV_Target {
   return materialProperties.tex.Sample(input.uv) * materialProperties.colorTint;
 }
