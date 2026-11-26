@@ -8,7 +8,7 @@ use peridot::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
 use vectored_io_helper::{read_vectored_all, write_vectored_all};
 
-use crate::{BlendConfigurationReadError, FragmentShaderBlendingConfiguration};
+use crate::config::blending::{BlendConfigurationReadError, FragmentShaderBlendingConfiguration};
 
 macro_rules! mkioslicem_field {
     ($sink: expr, $ty: ty, $field: ident) => {{

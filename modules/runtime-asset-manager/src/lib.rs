@@ -590,9 +590,10 @@ impl RuntimeShader {
         &self,
         attachment_index: u32,
     ) -> br::PipelineColorBlendAttachmentState {
-        let default = peridot_shader::PartialBlendingConfiguration::default();
-        let mut final_content = peridot_shader::BlendPreset::PremultipliedAlpha.make_content();
-        peridot_shader::resolve_attachment_blending_cascade(
+        let default = peridot_shader::config::blending::PartialBlendingConfiguration::default();
+        let mut final_content =
+            peridot_shader::config::blending::BlendPreset::PremultipliedAlpha.make_content();
+        peridot_shader::config::blending::resolve_cascade(
             &mut final_content,
             self.asset
                 .blending
