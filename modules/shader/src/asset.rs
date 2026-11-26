@@ -8,7 +8,7 @@ use peridot::VertexInputSemantic;
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
 use vectored_io_helper::{read_vectored_all, write_vectored_all};
 
-use crate::FragmentShaderBlendingConfiguration;
+use crate::{BlendConfigurationReadError, FragmentShaderBlendingConfiguration};
 
 macro_rules! mkioslicem_field {
     ($sink: expr, $ty: ty, $field: ident) => {{
@@ -353,7 +353,7 @@ impl peridot::LogicalAssetData for AssetVk {
     const ASSET_TYPE: peridot::AssetType = peridot::ASSET_TYPE_SHADER;
 }
 impl peridot::FromAssetBlob for AssetVk {
-    type Error = std::io::Error;
+    type Error = AssetReadError;
 
     #[inline(always)]
     fn from_asset_blob<'a, Blob: peridot::AssetBlob + 'a>(blob: Blob) -> Result<Self, Self::Error> {
@@ -437,7 +437,7 @@ impl AssetVk {
         Ok(())
     }
 
-    pub fn read(r: &mut (impl BufRead + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(r: &mut (impl BufRead + ?Sized)) -> Result<Self, AssetReadError> {
         // head
         let mut endian_mark = core::mem::MaybeUninit::<u16>::uninit();
         let mut content_flags = core::mem::MaybeUninit::<AssetVkContentFlags>::uninit();
@@ -550,6 +550,14 @@ impl AssetVk {
             blending,
         })
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AssetReadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error(transparent)]
+    BlendConfig(#[from] BlendConfigurationReadError),
 }
 
 bitflags! {

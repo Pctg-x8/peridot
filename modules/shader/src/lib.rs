@@ -580,7 +580,7 @@ impl BlendFactor {
         };
 
         if Self::SrcAlpha as i32 <= value && value <= Self::ConstantZero as i32 {
-            Some(unsafe { core::mem::transmute(value as u8) })
+            Some(unsafe { core::mem::transmute::<u8, Self>(value as _) })
         } else {
             tracing::warn!(value, "value out of range");
             None
@@ -608,19 +608,24 @@ impl BlendFactor {
         w.write_all(&[*self as u8])
     }
 
-    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(r: &mut (impl Read + ?Sized)) -> Result<Self, BlendFactorReadError> {
         let mut byte = [0u8];
         r.read_exact(&mut byte)?;
         match byte[0] {
             v if Self::SrcAlpha as u8 <= v && v <= Self::ConstantZero as u8 => {
-                Ok(unsafe { core::mem::transmute(v) })
+                Ok(unsafe { core::mem::transmute::<u8, Self>(v) })
             }
-            v => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("byte out of range: {v}"),
-            )),
+            v => Err(BlendFactorReadError::ByteOutOfRange(v)),
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BlendFactorReadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error("blend factor byte out of range: {0}")]
+    ByteOutOfRange(u8),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -642,7 +647,7 @@ impl BlendOp {
         };
 
         if Self::Add as i32 <= value && value <= Self::Max as i32 {
-            Some(unsafe { core::mem::transmute(value as u8) })
+            Some(unsafe { core::mem::transmute::<u8, Self>(value as _) })
         } else {
             tracing::warn!(value, "value out of range");
             None
@@ -661,19 +666,24 @@ impl BlendOp {
         w.write_all(&[*self as u8])
     }
 
-    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(r: &mut (impl Read + ?Sized)) -> Result<Self, BlendOpReadError> {
         let mut byte = [0u8];
         r.read_exact(&mut byte)?;
         match byte[0] {
             v if Self::Add as u8 <= v && v <= Self::Max as u8 => {
-                Ok(unsafe { core::mem::transmute(v) })
+                Ok(unsafe { core::mem::transmute::<u8, Self>(v) })
             }
-            v => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("byte out of range: {v}"),
-            )),
+            v => Err(BlendOpReadError::ByteOutOfRange(v)),
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BlendOpReadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error("blend op byte out of range: {0}")]
+    ByteOutOfRange(u8),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -695,7 +705,7 @@ impl BlendPreset {
         };
 
         if Self::Disabled as i32 <= value && value <= Self::PremultipliedAlpha as i32 {
-            Some(unsafe { core::mem::transmute(value as u8) })
+            Some(unsafe { core::mem::transmute::<u8, Self>(value as _) })
         } else {
             tracing::warn!(value, "value out of range");
             None
@@ -733,19 +743,24 @@ impl BlendPreset {
         w.write_all(&[*self as u8])
     }
 
-    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(r: &mut (impl Read + ?Sized)) -> Result<Self, BlendPresetReadError> {
         let mut byte = [0u8];
         r.read_exact(&mut byte)?;
         match byte[0] {
             v if Self::Disabled as u8 <= v && v <= Self::PremultipliedAlpha as u8 => {
-                Ok(unsafe { core::mem::transmute(v) })
+                Ok(unsafe { core::mem::transmute::<u8, Self>(v) })
             }
-            v => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("byte out of range: {v}"),
-            )),
+            v => Err(BlendPresetReadError::ByteOutOfRange(v)),
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BlendPresetReadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error("blend preset byte out of range: {0}")]
+    ByteOutOfRange(u8),
 }
 
 pub struct PresetBlendingConfigurationContent {
@@ -1071,7 +1086,7 @@ impl PartialBlendingConfiguration {
         Ok(())
     }
 
-    pub fn read(r: &mut (impl Read + ?Sized)) -> std::io::Result<Self> {
+    pub fn read(r: &mut (impl Read + ?Sized)) -> Result<Self, BlendConfigurationReadError> {
         let mut content_flags = [0u8];
         r.read_exact(&mut content_flags)?;
         let content_flags =
@@ -1118,6 +1133,18 @@ impl PartialBlendingConfiguration {
             alpha,
         })
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BlendConfigurationReadError {
+    #[error(transparent)]
+    IO(#[from] std::io::Error),
+    #[error(transparent)]
+    BlendFactor(#[from] BlendFactorReadError),
+    #[error(transparent)]
+    BlendOp(#[from] BlendOpReadError),
+    #[error(transparent)]
+    BlendPreset(#[from] BlendPresetReadError),
 }
 
 bitflags::bitflags! {
@@ -1259,7 +1286,10 @@ impl FragmentShaderBlendingConfiguration {
         Ok(())
     }
 
-    pub fn read(r: &mut (impl BufRead + ?Sized), swap_bytes: bool) -> std::io::Result<Self> {
+    pub fn read(
+        r: &mut (impl BufRead + ?Sized),
+        swap_bytes: bool,
+    ) -> Result<Self, BlendConfigurationReadError> {
         let default = PartialBlendingConfiguration::read(r)?;
         let per_attachment_count = VariableULong::read(r)?;
         let mut per_attachment = BTreeMap::new();
