@@ -1,0 +1,8 @@
+[package]
+name = "peridot-marble-editor-shared"
+description = "shared library for peridot-marble-editor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+peridot-math.path = "../../../../modules/math"

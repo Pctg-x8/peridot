@@ -5,6 +5,7 @@ How to build Peridot for Android deployment
 
 - cargo-ndk
   - `cargo install cargo-ndk` でインストールする
+  - peridot-cliは2.x系が前提
 
 ## 環境変数
 
@@ -16,16 +17,7 @@ How to build Peridot for Android deployment
 
 ## コマンドライン
 
-`-Run`/`-r` をつけるとadb経由で実機に転送して自動起動する
+`{peridot root}/tools` にあるcliを使う
+executableの場所はツールのビルド設定によって異なる(デフォルトのdebugビルドなら`tools/target/debug/peridot`)
 
-### PowerShell
-
-```
-$ ./build.ps1 android {UserCode crateのパス} -AssetDirectory {アセット格納パス} -AppPackageID {APKのパッケージID}
-```
-
-### bash
-
-```
-$ ./build.sh android {UserCode crateのパス} -a {アセット格納パス} -p {APKのパッケージID}
-```
+`-r` をつけるとadb経由で実機に転送して自動起動する

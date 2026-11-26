@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+    <head>
+        <meta charset="utf-8" />
+        <title>Peridot Marble Editor / Profile Visualizer</title>
+        <link rel="stylesheet" href="./style.css" />
+    </head>
+    <body>
+        <header>
+            <form>
+                <button type="button" id="Header-LoadButton">読み込み</button>
+                <input type="file" id="Header-InputFile" />
+            </form>
+            <form id="Header-TabViewSelector">
+                <label><input type="radio" name="items" value="main" />Main</label>
+                <label><input type="radio" name="items" value="perRenderLoop" />Per-RenderLoop</label>
+            </form>
+            Horizontal Scale: x<input type="number" id="Header-HorizontalScaleInput" />
+        </header>
+        <section id="PerRenderLoopTab-Controls">
+            <span id="PerRenderLoopTab-CurrentFrameNumber">0</span>/<span id="PerRenderLoopTab-MaxFrameNumber">1024</span>
+            <input id="PerRenderLoopTab-FrameSlider" type="range" />
+            <button id="PerRenderLoopTab-PrevFrameButton" type="button">&lt;</button>
+            <button id="PerRenderLoopTab-NextFrameButton" type="button">&gt;</button>
+        </section>
+        <svg id="ChartSurface" xmlns="http://www.w3.org/2000/svg">
+            <style id="ChartStyleBox">
+                text {
+                    font-size: 7pt;
+                    pointer-events: none;
+                    &.eventLine {
+                        fill: #eee;
+                    }
+                }
+            </style>
+            <g id="ChartContainer"></g>
+        </svg>
+        <script src="./src/main.ts" type="module"></script>
+    </body>
+</html>

@@ -1,0 +1,24 @@
+[package]
+name = "peridot-material"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+asset-processing = ["dep:peridot-asset-processing", "user-asset"]
+user-asset = []
+
+[dependencies]
+peridot = { path = "../../base" }
+peridot-types = { path = "../../base-types" }
+peridot-math = { path = "../math" }
+vectored-io-helper = { path = "../../base-lib/vectored-io-helper" }
+peridot-serialization-utils = { path = "../serialization-utils" }
+peridot-native-io = { path = "../native-io" }
+peridot-asset-processing = { path = "../asset-processing", optional = true }
+tracing.workspace = true
+thiserror.workspace = true
+bedrock.workspace = true
+
+[lints]
+workspace = true

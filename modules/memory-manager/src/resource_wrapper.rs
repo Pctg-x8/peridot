@@ -1,0 +1,709 @@
+use bedrock::{self as br, DeviceMemoryMut};
+use br::{Device, DeviceChild, VkHandle};
+#[allow(unused_imports)]
+use peridot::mthelper::DynamicMutabilityProvider;
+use peridot::mthelper::SharedMutableRef;
+
+use crate::MemoryBlock;
+
+pub(crate) enum BackingMemory {
+    Managed(SharedMutableRef<MemoryBlock>),
+    Native(br::DeviceMemoryObject<peridot::VulkanGfx>),
+    NativeShared(SharedMutableRef<br::DeviceMemoryObject<peridot::VulkanGfx>>),
+}
+impl BackingMemory {
+    #[inline]
+    pub(crate) fn vk_handle(&self) -> br::vk::VkDeviceMemory {
+        match self {
+            Self::Managed(ref m) => m.borrow().handle,
+            Self::Native(ref m) => m.native_ptr(),
+            Self::NativeShared(ref m) => m.borrow().native_ptr(),
+        }
+    }
+}
+
+pub struct Image {
+    pub(crate) handle: br::vk::VkImage,
+    pub(crate) device: peridot::VulkanGfx,
+    pub(crate) memory_block: BackingMemory,
+    pub(crate) format: br::Format,
+    pub(crate) size: br::Extent3D,
+    pub(crate) image_type: br::vk::VkImageViewType,
+    #[allow(dead_code)]
+    pub(crate) offset: u64,
+    pub(crate) byte_length: usize,
+    pub(crate) malloc_offset: u64,
+}
+impl Drop for Image {
+    fn drop(&mut self) {
+        if let BackingMemory::Managed(ref b) = self.memory_block {
+            b.borrow_mut().free(self.byte_length, self.malloc_offset);
+        }
+
+        unsafe {
+            br::vkfn_wrapper::destroy_image(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for Image {
+    type Handle = <br::ImageObject<peridot::DeviceObject> as br::VkHandle>::Handle;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+impl br::VkHandleMut for Image {
+    fn native_ptr_mut(&mut self) -> Self::Handle {
+        self.handle
+    }
+}
+impl br::VkObject for Image {
+    const TYPE: br::vk::VkObjectType =
+        <br::ImageObject<peridot::DeviceObject> as br::VkObject>::TYPE;
+}
+impl br::DeviceChildHandle for Image {
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.device.native_ptr()
+    }
+}
+impl br::DeviceChild for Image {
+    type ConcreteDevice = peridot::VulkanGfx;
+
+    fn device(&self) -> &Self::ConcreteDevice {
+        &self.device
+    }
+}
+impl br::Image for Image {
+    fn format(&self) -> br::vk::VkFormat {
+        self.format
+    }
+
+    fn size(&self) -> &br::vk::VkExtent3D {
+        &self.size
+    }
+
+    fn dimension(&self) -> br::vk::VkImageViewType {
+        self.image_type
+    }
+}
+
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy, Hash)]
+pub struct AnyPointer(pub core::ptr::NonNull<u8>);
+impl AnyPointer {
+    pub const fn ptr(self) -> core::ptr::NonNull<u8> {
+        self.0
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    pub unsafe fn get_at<T>(&self, byte_offset: usize) -> &T {
+        (self.0.as_ptr().add(byte_offset) as *const T)
+            .as_ref()
+            .unwrap_unchecked()
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn get_mut_at<T>(&self, byte_offset: usize) -> &mut T {
+        (self.0.as_ptr().add(byte_offset) as *mut T)
+            .as_mut()
+            .unwrap_unchecked()
+    }
+
+    /// # Safety
+    ///
+    /// * `byte_offset` must be in the mapped range.
+    /// * The destination pointer must be valid for writing `T`.
+    pub unsafe fn write_at<T>(&self, byte_offset: usize, value: T) {
+        self.0
+            .as_ptr()
+            .byte_add(byte_offset)
+            .cast::<T>()
+            .write(value)
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    pub const unsafe fn slice<T>(&self, byte_offset: usize, len: usize) -> &[T] {
+        core::slice::from_raw_parts(self.0.as_ptr().add(byte_offset) as _, len)
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    #[allow(clippy::mut_from_ref)]
+    pub unsafe fn slice_mut<T>(&self, byte_offset: usize, len: usize) -> &mut [T] {
+        core::slice::from_raw_parts_mut(self.0.as_ptr().add(byte_offset) as _, len)
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    pub unsafe fn clone_to<T: Clone>(&self, byte_offset: usize, value: &T) {
+        self.get_mut_at::<T>(byte_offset).clone_from(value)
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    pub unsafe fn clone_slice_to<T: Clone>(&self, byte_offset: usize, values: &[T]) {
+        self.slice_mut(byte_offset, values.len())
+            .clone_from_slice(values)
+    }
+
+    /// # Safety
+    ///
+    /// Validity of returned reference will not be assumed by this function.
+    pub unsafe fn copy_slice_to<T: Copy>(&self, byte_offset: usize, values: &[T]) {
+        self.slice_mut(byte_offset, values.len())
+            .copy_from_slice(values)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BufferMapMode {
+    Unspecified,
+    Read,
+    Write,
+    ReadWrite,
+}
+impl BufferMapMode {
+    pub fn is_write(self) -> bool {
+        self == Self::Write || self == Self::ReadWrite
+    }
+
+    pub fn is_read(self) -> bool {
+        self == Self::Read || self == Self::ReadWrite
+    }
+}
+
+pub struct Buffer {
+    pub(crate) handle: br::vk::VkBuffer,
+    pub(crate) device: peridot::VulkanGfx,
+    pub(crate) memory_block: BackingMemory,
+    pub(crate) requires_flushing: bool,
+    pub(crate) offset: u64,
+    pub(crate) size: usize,
+    /// (size, offset)
+    pub(crate) malloc: (u64, u64),
+}
+impl Buffer {
+    pub const fn byte_length(&self) -> usize {
+        self.size
+    }
+
+    /// trueの場合、メモリ上のコンテンツをデバイスと同期するために明示的なFlush(書き込み)/Invalidate(読み取り)が必要
+    pub const fn requires_explicit_sync(&self) -> bool {
+        self.requires_flushing
+    }
+
+    /// # Safety
+    ///
+    /// very unsafe operation: no guarantees for under resource operations
+    pub unsafe fn map_raw(
+        &mut self,
+        range: core::ops::Range<br::DeviceSize>,
+    ) -> br::Result<AnyPointer> {
+        let p = match self.memory_block {
+            BackingMemory::Managed(ref m) => unsafe {
+                br::vkfn_wrapper::map_memory(
+                    self.device.as_transparent_ref(),
+                    br::VkHandleRefMut::dangling(m.borrow_mut().handle),
+                    self.offset + range.start..self.offset + range.end,
+                    0,
+                )
+            },
+            BackingMemory::Native(ref mut m) => {
+                m.map_raw(range.start + self.offset..range.end + self.offset)
+            }
+            BackingMemory::NativeShared(ref m) => m
+                .borrow_mut()
+                .map_raw(range.start + self.offset..range.end + self.offset),
+        }?;
+
+        Ok(AnyPointer(core::ptr::NonNull::new_unchecked(p as _)))
+    }
+
+    /// # Safety
+    ///
+    /// very unsafe operation: no guarantees for under resource operations
+    pub unsafe fn unmap_raw(&mut self) {
+        match self.memory_block {
+            BackingMemory::Managed(ref m) => {
+                let locked = m.borrow_mut();
+
+                unsafe {
+                    br::vkfn_wrapper::unmap_memory(
+                        locked.device.as_transparent_ref(),
+                        br::VkHandleRefMut::dangling(locked.handle),
+                    );
+                }
+            }
+            BackingMemory::Native(ref mut m) => m.unmap(),
+            BackingMemory::NativeShared(ref m) => m.borrow_mut().unmap(),
+        }
+    }
+
+    /// # Safety
+    ///
+    /// very unsafe operation: no guarantees for under resource operations
+    pub unsafe fn invalidate_ranges_raw(
+        &mut self,
+        ranges: &[core::ops::Range<br::DeviceSize>],
+    ) -> br::Result<()> {
+        match self.memory_block {
+            BackingMemory::Managed(ref m) => {
+                let locked = m.borrow_mut();
+
+                unsafe {
+                    locked.device.invalidate_memory_range(
+                        &ranges
+                            .iter()
+                            .map(|r| {
+                                br::MappedMemoryRange::new_raw(
+                                    locked.handle,
+                                    r.start,
+                                    r.end - r.start,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+            }
+            BackingMemory::Native(ref mut m) => m.device().invalidate_memory_range(
+                &ranges
+                    .iter()
+                    .map(|r| br::MappedMemoryRange::new(m, r.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            BackingMemory::NativeShared(ref m) => {
+                let locked = m.borrow_mut();
+
+                locked.device().invalidate_memory_range(
+                    &ranges
+                        .iter()
+                        .map(|r| br::MappedMemoryRange::new(&locked, r.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    }
+
+    /// # Safety
+    ///
+    /// very unsafe operation: no guarantees for under resource operations
+    pub unsafe fn flush_ranges_raw(
+        &mut self,
+        ranges: &[core::ops::Range<br::DeviceSize>],
+    ) -> br::Result<()> {
+        match self.memory_block {
+            BackingMemory::Managed(ref m) => {
+                let locked = m.borrow_mut();
+
+                unsafe {
+                    locked.device.flush_mapped_memory_ranges(
+                        &ranges
+                            .iter()
+                            .map(|r| {
+                                br::MappedMemoryRange::new_raw(
+                                    locked.handle,
+                                    r.start,
+                                    r.end - r.start,
+                                )
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+            }
+            BackingMemory::Native(ref mut m) => m.device().flush_mapped_memory_ranges(
+                &ranges
+                    .iter()
+                    .map(|r| br::MappedMemoryRange::new(m, r.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            BackingMemory::NativeShared(ref m) => {
+                let locked = m.borrow_mut();
+
+                locked.device().flush_mapped_memory_ranges(
+                    &ranges
+                        .iter()
+                        .map(|r| br::MappedMemoryRange::new(&locked, r.clone()))
+                        .collect::<Vec<_>>(),
+                )
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub fn map_and_invalidate_raw_with_mode(
+        &mut self,
+        mode: BufferMapMode,
+    ) -> br::Result<AnyPointer> {
+        let requires_explicit_sync = self.requires_explicit_sync();
+        let mapped_range = core::range::Range::from(self.offset..self.offset + self.size as u64);
+
+        match self.memory_block {
+            BackingMemory::Managed(ref m) => {
+                let mut locked = m.borrow_mut();
+
+                let ptr = locked.map(mapped_range, 0)?;
+                if requires_explicit_sync && mode.is_read() {
+                    unsafe {
+                        locked.invalidate_single_range(mapped_range)?;
+                    }
+                }
+
+                Ok(AnyPointer(unsafe {
+                    core::ptr::NonNull::new_unchecked(ptr.cast())
+                }))
+            }
+            BackingMemory::Native(ref mut m) => {
+                let ptr = unsafe { m.map_raw(mapped_range.into())? };
+                if requires_explicit_sync && mode.is_read() {
+                    unsafe {
+                        m.device()
+                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                m,
+                                mapped_range.into(),
+                            )])?;
+                    }
+                }
+
+                Ok(AnyPointer(unsafe {
+                    core::ptr::NonNull::new_unchecked(ptr.cast())
+                }))
+            }
+            BackingMemory::NativeShared(ref m) => {
+                let mut locked = m.borrow_mut();
+                let ptr = unsafe { locked.map_raw(mapped_range.into())? };
+                if requires_explicit_sync && mode.is_read() {
+                    unsafe {
+                        self.device
+                            .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                &locked,
+                                mapped_range.into(),
+                            )])?;
+                    }
+                }
+
+                Ok(AnyPointer(unsafe {
+                    core::ptr::NonNull::new_unchecked(ptr.cast())
+                }))
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn flush_and_unmap_raw_with_mode(&mut self, mode: BufferMapMode) -> br::Result<()> {
+        let requires_explicit_sync = self.requires_explicit_sync();
+        let mapped_range = core::range::Range::from(self.offset..self.offset + self.size as u64);
+
+        match self.memory_block {
+            BackingMemory::Managed(ref b) => {
+                let mut locked = b.borrow_mut();
+
+                if requires_explicit_sync && mode.is_write() {
+                    unsafe {
+                        locked.flush_single_range(mapped_range)?;
+                    }
+                }
+                unsafe {
+                    locked.unmap();
+                }
+            }
+            BackingMemory::Native(ref mut m) => {
+                if requires_explicit_sync && mode.is_write() {
+                    unsafe {
+                        m.device()
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                m,
+                                mapped_range.into(),
+                            )])?;
+                    }
+                }
+                unsafe {
+                    m.unmap();
+                }
+            }
+            BackingMemory::NativeShared(ref b) => {
+                let mut locked = b.borrow_mut();
+
+                if requires_explicit_sync && mode.is_write() {
+                    unsafe {
+                        self.device
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                &locked,
+                                mapped_range.into(),
+                            )])?;
+                    }
+                }
+                unsafe {
+                    locked.unmap();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn map<'b>(&'b mut self, mode: BufferMapMode) -> br::Result<BufferMapGuard<'b>> {
+        BufferMapGuard::begin(self, mode)
+    }
+
+    #[inline(always)]
+    pub fn guard_map<R>(
+        &mut self,
+        mode: BufferMapMode,
+        op: impl FnOnce(AnyPointer) -> R,
+    ) -> br::Result<R> {
+        Ok(op(self.map(mode)?.ptr))
+    }
+
+    /// Writes value as buffer content. checked whether value size and buffer size are equal.
+    pub fn write_content<T>(&mut self, value: T) -> br::Result<()> {
+        assert_eq!(self.size, core::mem::size_of::<T>());
+
+        unsafe { self.write_content_unchecked(value) }
+    }
+
+    /// # Safety
+    ///
+    /// Size of T must be smaller or equal to buffer size.
+    pub unsafe fn write_content_unchecked<T>(&mut self, value: T) -> br::Result<()> {
+        self.guard_map(BufferMapMode::Write, |ptr| {
+            *ptr.get_mut_at(0) = value;
+        })
+    }
+
+    pub fn clone_content_from_slice<T: Clone>(&mut self, values: &[T]) -> br::Result<()> {
+        assert!(self.size >= core::mem::size_of_val(values));
+
+        self.guard_map(BufferMapMode::Write, |ptr| unsafe {
+            ptr.clone_slice_to(0, values);
+        })
+    }
+
+    pub fn copy_content_from_slice<T: Copy>(&mut self, values: &[T]) -> br::Result<()> {
+        assert!(self.size >= core::mem::size_of_val(values));
+
+        self.guard_map(BufferMapMode::Write, |ptr| unsafe {
+            ptr.copy_slice_to(0, values);
+        })
+    }
+}
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        if let BackingMemory::Managed(ref b) = self.memory_block {
+            b.borrow_mut().free(self.malloc.0 as _, self.malloc.1);
+        }
+
+        unsafe {
+            br::vkfn_wrapper::destroy_buffer(
+                self.device.as_transparent_ref(),
+                br::VkHandleRefMut::dangling(self.handle),
+                None,
+            );
+        }
+    }
+}
+impl br::VkHandle for Buffer {
+    type Handle = br::vk::VkBuffer;
+
+    fn native_ptr(&self) -> Self::Handle {
+        self.handle
+    }
+}
+impl br::VkObject for Buffer {
+    const TYPE: br::vk::VkObjectType = br::vk::VK_OBJECT_TYPE_BUFFER;
+}
+impl br::VkHandleMut for Buffer {
+    fn native_ptr_mut(&mut self) -> Self::Handle {
+        self.handle
+    }
+}
+impl br::DeviceChildHandle for Buffer {
+    #[inline(always)]
+    fn device_handle(&self) -> bedrock::vk::VkDevice {
+        self.device.native_ptr()
+    }
+}
+impl br::DeviceChild for Buffer {
+    type ConcreteDevice = peridot::VulkanGfx;
+
+    fn device(&self) -> &Self::ConcreteDevice {
+        &self.device
+    }
+}
+impl br::Buffer for Buffer {}
+impl peridot::TransferrableBufferResource for Buffer {
+    fn grouping_key(&self) -> u64 {
+        unsafe { core::mem::transmute(self.handle) }
+    }
+
+    fn raw_handle(&self) -> br::vk::VkBuffer {
+        self.handle
+    }
+}
+
+pub struct LinearImageBuffer {
+    pub inner: Buffer,
+    pub row_texels: u32,
+    pub height: u32,
+}
+impl std::ops::Deref for LinearImageBuffer {
+    type Target = Buffer;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+impl std::ops::DerefMut for LinearImageBuffer {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+enum BufferMapGuardUnderlyingGuard<'b> {
+    Managed(<peridot::mthelper::DynamicMut<MemoryBlock> as peridot::mthelper::DynamicMutabilityProvider<'b, MemoryBlock>>::BorrowMutType),
+    Native(&'b mut br::DeviceMemoryObject<peridot::VulkanGfx>),
+    NativeShared(<peridot::mthelper::DynamicMut<br::DeviceMemoryObject<peridot::VulkanGfx>> as peridot::mthelper::DynamicMutabilityProvider<'b, br::DeviceMemoryObject<peridot::VulkanGfx>>>::BorrowMutType)
+}
+pub struct BufferMapGuard<'b> {
+    device: &'b peridot::VulkanGfx,
+    memlock: BufferMapGuardUnderlyingGuard<'b>,
+    mapped_range: core::range::Range<br::DeviceSize>,
+    requires_explicit_sync: bool,
+    mode: BufferMapMode,
+    ptr: AnyPointer,
+}
+impl<'b> Drop for BufferMapGuard<'b> {
+    #[inline(always)]
+    fn drop(&mut self) {
+        self.flush_and_unmap()
+            .expect("buffer_map_guard.flush_and_unmap");
+    }
+}
+impl<'b> BufferMapGuard<'b> {
+    pub fn begin(target: &'b mut Buffer, mode: BufferMapMode) -> br::Result<Self> {
+        let requires_explicit_sync = target.requires_explicit_sync();
+        let mapped_range =
+            core::range::Range::from(target.offset..target.offset + target.size as br::DeviceSize);
+        let (ptr, memlock) =
+            match target.memory_block {
+                BackingMemory::Managed(ref m) => {
+                    let mut locked = m.borrow_mut();
+
+                    let ptr = locked.map(mapped_range, 0)?;
+                    if requires_explicit_sync && mode.is_read() {
+                        unsafe {
+                            locked.invalidate_single_range(mapped_range)?;
+                        }
+                    }
+
+                    (ptr, BufferMapGuardUnderlyingGuard::Managed(locked))
+                }
+                BackingMemory::Native(ref mut m) => {
+                    let ptr = unsafe { m.map_raw(mapped_range.into())? };
+                    if requires_explicit_sync && mode.is_read() {
+                        unsafe {
+                            m.device()
+                                .invalidate_memory_range(&[br::MappedMemoryRange::new(
+                                    m,
+                                    mapped_range.into(),
+                                )])?;
+                        }
+                    }
+
+                    (ptr, BufferMapGuardUnderlyingGuard::Native(m))
+                }
+                BackingMemory::NativeShared(ref m) => {
+                    let mut locked = m.borrow_mut();
+                    let ptr = unsafe { locked.map_raw(mapped_range.into())? };
+                    if requires_explicit_sync && mode.is_read() {
+                        unsafe {
+                            target.device().invalidate_memory_range(&[
+                                br::MappedMemoryRange::new(&locked, mapped_range.into()),
+                            ])?;
+                        }
+                    }
+
+                    (ptr, BufferMapGuardUnderlyingGuard::NativeShared(locked))
+                }
+            };
+
+        Ok(Self {
+            device: &target.device,
+            memlock,
+            mapped_range,
+            requires_explicit_sync,
+            mode,
+            ptr: AnyPointer(unsafe { core::ptr::NonNull::new_unchecked(ptr as _) }),
+        })
+    }
+
+    fn flush_and_unmap(&mut self) -> br::Result<()> {
+        match self.memlock {
+            BufferMapGuardUnderlyingGuard::Managed(ref mut locked) => {
+                if self.requires_explicit_sync && self.mode.is_write() {
+                    unsafe {
+                        locked.flush_single_range(self.mapped_range)?;
+                    }
+                }
+                unsafe {
+                    locked.unmap();
+                }
+            }
+            BufferMapGuardUnderlyingGuard::Native(ref mut m) => {
+                if self.requires_explicit_sync && self.mode.is_write() {
+                    unsafe {
+                        m.device()
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                m,
+                                self.mapped_range.into(),
+                            )])?;
+                    }
+                }
+                unsafe {
+                    m.unmap();
+                }
+            }
+            BufferMapGuardUnderlyingGuard::NativeShared(ref mut locked) => {
+                if self.requires_explicit_sync && self.mode.is_write() {
+                    unsafe {
+                        self.device
+                            .flush_mapped_memory_ranges(&[br::MappedMemoryRange::new(
+                                locked,
+                                self.mapped_range.into(),
+                            )])?;
+                    }
+                }
+                unsafe {
+                    locked.unmap();
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    pub fn handled_end(mut self) -> br::Result<()> {
+        self.flush_and_unmap()
+    }
+
+    #[inline(always)]
+    pub const fn ptr(&self) -> AnyPointer {
+        self.ptr
+    }
+}
