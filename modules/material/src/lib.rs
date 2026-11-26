@@ -331,14 +331,14 @@ impl MaterialUserAsset {
             }
 
             let Some((key, rest)) = line.split_once('=') else {
-                eprintln!("invalid kvp form");
+                tracing::error!(line, "invalid kvp form");
                 continue;
             };
 
             match key.trim().to_lowercase().as_str() {
                 "shader" => {
                     let Some(asset_id) = AssetID::deserialize_chars(rest.trim().chars()) else {
-                        eprintln!("invalid asset id");
+                        tracing::error!(value = rest.trim(), "invalid asset id");
                         has_illformed = true;
                         continue;
                     };
@@ -355,7 +355,7 @@ impl MaterialUserAsset {
                         "back" => CullingMode::Back,
                         "both" => CullingMode::Both,
                         x => {
-                            eprintln!("invalid culling mode: {x}");
+                            tracing::error!(value = x, "invalid culling mode");
                             has_illformed = true;
                             continue;
                         }
@@ -366,7 +366,7 @@ impl MaterialUserAsset {
                         "clockwise" => PrimitiveOrder::Clockwise,
                         "counter-clockwise" => PrimitiveOrder::CounterClockwise,
                         x => {
-                            eprintln!("invalid primitive order: {x}");
+                            tracing::error!(value = x, "invalid primitive order");
                             has_illformed = true;
                             continue;
                         }
@@ -375,7 +375,7 @@ impl MaterialUserAsset {
                 x if x.starts_with("property.") => {
                     let property_key = x.strip_prefix("property.").expect("not prefixed?");
                     let Some((r#type, value)) = rest.split_once('=') else {
-                        eprintln!("invalid property value");
+                        tracing::error!(value = rest, "invalid property value");
                         has_illformed = true;
                         continue;
                     };
@@ -390,22 +390,22 @@ impl MaterialUserAsset {
                                 let z = values.next().unwrap_or("0");
                                 let w = values.next().unwrap_or("0");
                                 let Ok(x) = x.trim().parse::<f32>() else {
-                                    eprintln!("invalid float4.x value");
+                                    tracing::error!(value = x.trim(), "invalid float4.x value");
                                     has_illformed = true;
                                     continue;
                                 };
                                 let Ok(y) = y.trim().parse::<f32>() else {
-                                    eprintln!("invalid float4.y value");
+                                    tracing::error!(value = y.trim(), "invalid float4.y value");
                                     has_illformed = true;
                                     continue;
                                 };
                                 let Ok(z) = z.trim().parse::<f32>() else {
-                                    eprintln!("invalid float4.z value");
+                                    tracing::error!(value = z.trim(), "invalid float4.z value");
                                     has_illformed = true;
                                     continue;
                                 };
                                 let Ok(w) = w.trim().parse::<f32>() else {
-                                    eprintln!("invalid float4.w value");
+                                    tracing::error!(value = w.trim(), "invalid float4.w value");
                                     has_illformed = true;
                                     continue;
                                 };
@@ -416,7 +416,7 @@ impl MaterialUserAsset {
                                 let Some(asset_id) =
                                     AssetID::deserialize_chars(value.trim().chars())
                                 else {
-                                    eprintln!("invalid asset id");
+                                    tracing::error!(value = value.trim(), "invalid asset id");
                                     has_illformed = true;
                                     continue;
                                 };
@@ -424,7 +424,7 @@ impl MaterialUserAsset {
                                 MaterialPropertySlot::Texture2D(asset_id)
                             }
                             x => {
-                                eprintln!("unsupported property type: {x}");
+                                tracing::error!(type = x, "unsupported property type");
                                 has_illformed = true;
                                 continue;
                             }
@@ -432,7 +432,7 @@ impl MaterialUserAsset {
                     );
                 }
                 x => {
-                    eprintln!("unknown key: {x}");
+                    tracing::error!(key = x, "unknown key");
                     has_illformed = true;
                     continue;
                 }
