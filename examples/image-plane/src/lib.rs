@@ -2,11 +2,12 @@ use bedrock::{self as br, CommandBufferMut, DescriptorPoolMut, RenderPass, VkHan
 use br::Device;
 use parking_lot::RwLock;
 use peridot::audio::PreloadedPlayableWav;
-use peridot::math::{Camera, Matrix4, Matrix4F32, One, ProjectionMethod, Quaternion, Vector3};
+use peridot::math::{Camera, Matrix4, One, ProjectionMethod, Quaternion, Vector3};
 use peridot::{CBSubmissionType, CommandBundle, SubpassDependencyTemplates};
 use peridot_math::Zero;
 use peridot_memory_manager::{BufferMapMode, MemoryManager};
 use peridot_runtime_asset_manager::RuntimeAssetManager;
+use peridot_shader::engine_params::{CameraParameters, ObjectParameters};
 use std::sync::Arc;
 
 use peridot_command_object::{
@@ -67,12 +68,10 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     cam.look_at(Vector3::ZERO, None);
 
     let mut prealloc = peridot::BufferPrealloc::new(e.graphics());
-    let engine_uniform_camera_offset = prealloc.add(peridot::BufferContent::uniform::<
-        peridot_shader::engine_params::CameraParameters,
-    >());
-    let engine_uniform_object_offset = prealloc.add(peridot::BufferContent::uniform::<
-        peridot_shader::engine_params::ObjectParameters,
-    >());
+    let engine_uniform_camera_offset =
+        prealloc.add(peridot::BufferContent::uniform::<CameraParameters>());
+    let engine_uniform_object_offset =
+        prealloc.add(peridot::BufferContent::uniform::<ObjectParameters>());
     let [vertex_buffer, engine_uniform_buffer] = memory_manager
         .allocate_device_local_buffer_array(
             e.graphics(),
@@ -122,13 +121,13 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
             p.ptr()
                 .byte_add(engine_uniform_camera_offset as _)
                 .cast()
-                .write(peridot_shader::engine_params::CameraParameters {
+                .write(CameraParameters {
                     view_projection_matrix: cam.view_projection_matrix(screen_aspect),
                 });
             p.ptr()
                 .byte_add(engine_uniform_object_offset as _)
                 .cast()
-                .write(peridot_shader::engine_params::ObjectParameters {
+                .write(ObjectParameters {
                     transform_matrix: Matrix4::ONE,
                 });
         })
@@ -461,34 +460,30 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
         if let Some(dp) = shader_ref.asset.object_parameters_placement {
             descriptor_writes.push(descriptors[dp.set as usize].binding_at(dp.binding).write(
                 br::DescriptorContents::UniformBuffer(vec![
-                            engine_uniform_buffer
-                                .subslice_ref(
-                                    engine_uniform_object_offset
-                                        ..engine_uniform_object_offset
-                                            + size_of::<
-                                                peridot_shader::engine_params::ObjectParameters,
-                                            >()
-                                                as u64,
-                                )
-                                .into_descriptor_buffer_ref(),
-                        ]),
+                        engine_uniform_buffer
+                            .subslice_ref(
+                                engine_uniform_object_offset
+                                    ..engine_uniform_object_offset
+                                        + size_of::<ObjectParameters>() as u64,
+                            )
+                            .into_descriptor_buffer_ref(),
+                    ]),
             ));
         }
         if let Some(dp) = shader_ref.asset.camera_parameters_placement {
-            descriptor_writes.push(descriptors[dp.set as usize].binding_at(dp.binding).write(
-                br::DescriptorContents::UniformBuffer(vec![
-                            engine_uniform_buffer
-                                .subslice_ref(
-                                    engine_uniform_camera_offset
-                                        ..engine_uniform_camera_offset
-                                            + size_of::<
-                                                peridot_shader::engine_params::CameraParameters,
-                                            >()
-                                                as u64,
-                                )
-                                .into_descriptor_buffer_ref(),
-                        ]),
-            ));
+            descriptor_writes.push(
+                descriptors[dp.set as usize].binding_at(dp.binding).write(
+                    br::DescriptorContents::UniformBuffer(vec![
+                        engine_uniform_buffer
+                            .subslice_ref(
+                                engine_uniform_camera_offset
+                                    ..engine_uniform_camera_offset
+                                        + size_of::<CameraParameters>() as u64,
+                            )
+                            .into_descriptor_buffer_ref(),
+                    ]),
+                ),
+            );
         }
         shader_ref.write_descriptor_sets(
             &descriptors,
@@ -663,10 +658,8 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
                 engine_uniform_buffer_stg
                     .0
                     .guard_map(BufferMapMode::Write, |ptr| unsafe {
-                        ptr.get_mut_at::<UniformObjectParameters>(
-                            engine_uniform_object_offset as _,
-                        )
-                        .object = Quaternion::new(rot, Vector3::up()).into();
+                        ptr.get_mut_at::<ObjectParameters>(engine_uniform_object_offset as _)
+                            .transform_matrix = Quaternion::new(rot, Vector3::up()).into();
                     })
                     .expect("Update DynamicStgBuffer");
 
@@ -752,14 +745,4 @@ pub async fn game_main<'q>(e: &mut peridot::Engine<'q, impl peridot::NativeLinke
     unsafe {
         e.graphics_device().wait().expect("Failed to wait for work");
     }
-}
-
-#[repr(C)]
-struct UniformCameraParameters {
-    pub camera: Matrix4F32,
-}
-
-#[repr(C)]
-struct UniformObjectParameters {
-    pub object: Matrix4F32,
 }
