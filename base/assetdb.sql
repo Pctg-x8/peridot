@@ -12,7 +12,7 @@ Create table asset(
     `name` text,
     `group_id` blob(16) not null,
     `local_id` int not null,
-    unique (`group_id`, `local_id`)
+    unique (`group_id`, `type`, `local_id`)
     foreign key (`group_id`) references asset_group(`id`)
 );
 
