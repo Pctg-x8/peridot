@@ -16,6 +16,12 @@ impl Default for ProcessOptions {
     }
 }
 
+// 一旦固定値を埋め込み
+// TODO: ファイルから取得した方がいいか......？
+pub(self) const DEFAULT_3D_PBR_SHADER_ASSET_ID: peridot::AssetID = peridot::AssetID::from_bytes([
+    0xfb, 0x23, 0x22, 0x97, 0x6d, 0xcc, 0xaf, 0x68, 0x7b, 0x3e, 0x27, 0x08, 0x0b, 0xc5, 0x6f, 0x03,
+]);
+
 pub struct Processor;
 impl Processor {
     const META_OPT_EXTRACT_MATERIAL_KEY: &str =
@@ -25,6 +31,12 @@ impl Processor {
         index: usize,
     ) -> peridot_asset_processing::metadata::Key {
         format!("io.ct2.peridot.asset-processor.model.generated-asset-id.mesh[{index}]").into()
+    }
+
+    pub(self) fn meta_generated_material_asset_id_key(
+        index: usize,
+    ) -> peridot_asset_processing::metadata::Key {
+        format!("io.ct2.peridot.asset-processor.model.generated-asset-id.material[{index}]").into()
     }
 }
 impl AssetProcessor for Processor {

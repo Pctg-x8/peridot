@@ -835,6 +835,9 @@ impl AssetResourceType for MaterialAsset {
         let mut properties = HashMap::with_capacity(content.properties.map.len());
         for (k, v) in content.properties.map {
             let v = match v {
+                MaterialPropertySlot::Float(x) => MaterialPropertySlot::Float(x),
+                MaterialPropertySlot::Float2(x) => MaterialPropertySlot::Float2(x),
+                MaterialPropertySlot::Float3(x) => MaterialPropertySlot::Float3(x),
                 MaterialPropertySlot::Float4(x) => MaterialPropertySlot::Float4(x),
                 MaterialPropertySlot::Texture2D(r) => MaterialPropertySlot::Texture2D(
                     dep_loader

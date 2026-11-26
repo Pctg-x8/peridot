@@ -4,7 +4,7 @@ use std::{
 };
 
 use peridot::{FromAssetBlob, LogicalAssetData};
-use peridot_math::{Vector4, Vector4F32};
+use peridot_math::{Vector2F32, Vector3F32, Vector4, Vector4F32};
 use peridot_serialization_utils::{PascalStr, PascalString, VariableULong};
 use peridot_types::AssetID;
 use vectored_io_helper::{
@@ -12,16 +12,33 @@ use vectored_io_helper::{
 };
 
 pub enum MaterialPropertySlot<ExternalAssetRef> {
+    Float(f32),
+    Float2(Vector2F32),
+    Float3(Vector3F32),
     Float4(Vector4F32),
     Texture2D(ExternalAssetRef),
 }
 impl MaterialPropertySlot<AssetID> {
     fn write(&self, w: &mut (impl Write + ?Sized)) -> std::io::Result<()> {
         match self {
+            Self::Float(v) => write_vectored_all(w, &mut [IoSlice::new(&[0x00]), mkioslice(&v)]),
+            Self::Float2(v) => write_vectored_all(
+                w,
+                &mut [IoSlice::new(&[0x01]), mkioslice(&v.0), mkioslice(&v.1)],
+            ),
+            Self::Float3(v) => write_vectored_all(
+                w,
+                &mut [
+                    IoSlice::new(&[0x02]),
+                    mkioslice(&v.0),
+                    mkioslice(&v.1),
+                    mkioslice(&v.2),
+                ],
+            ),
             Self::Float4(v) => write_vectored_all(
                 w,
                 &mut [
-                    IoSlice::new(&[0x00]),
+                    IoSlice::new(&[0x03]),
                     mkioslice(&v.0),
                     mkioslice(&v.1),
                     mkioslice(&v.2),
@@ -40,6 +57,55 @@ impl MaterialPropertySlot<AssetID> {
 
         match first_byte[0] {
             0x00 => {
+                let mut v = core::mem::MaybeUninit::<f32>::uninit();
+                read_vectored_all(r, &mut [mkioslicem(&mut v)])?;
+
+                if swap_bytes {
+                    let v = unsafe { v.assume_init_mut() };
+                    *v = f32::from_bits(v.to_bits().swap_bytes());
+                }
+
+                Ok(Self::Float(unsafe { v.assume_init() }))
+            }
+            0x01 => {
+                let mut v = core::mem::MaybeUninit::<Vector2F32>::uninit();
+                read_vectored_all(
+                    r,
+                    &mut [
+                        mkioslicem_field!(v, Vector2F32, 0),
+                        mkioslicem_field!(v, Vector2F32, 1),
+                    ],
+                )?;
+
+                if swap_bytes {
+                    let v = unsafe { v.assume_init_mut() };
+                    v.0 = f32::from_bits(v.0.to_bits().swap_bytes());
+                    v.1 = f32::from_bits(v.1.to_bits().swap_bytes());
+                }
+
+                Ok(Self::Float2(unsafe { v.assume_init() }))
+            }
+            0x02 => {
+                let mut v = core::mem::MaybeUninit::<Vector3F32>::uninit();
+                read_vectored_all(
+                    r,
+                    &mut [
+                        mkioslicem_field!(v, Vector3F32, 0),
+                        mkioslicem_field!(v, Vector3F32, 1),
+                        mkioslicem_field!(v, Vector3F32, 2),
+                    ],
+                )?;
+
+                if swap_bytes {
+                    let v = unsafe { v.assume_init_mut() };
+                    v.0 = f32::from_bits(v.0.to_bits().swap_bytes());
+                    v.1 = f32::from_bits(v.1.to_bits().swap_bytes());
+                    v.2 = f32::from_bits(v.2.to_bits().swap_bytes());
+                }
+
+                Ok(Self::Float3(unsafe { v.assume_init() }))
+            }
+            0x03 => {
                 let mut f4 = core::mem::MaybeUninit::<Vector4F32>::uninit();
                 read_vectored_all(
                     r,

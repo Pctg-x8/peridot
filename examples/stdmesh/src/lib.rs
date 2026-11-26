@@ -12,15 +12,6 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
 
     let mut backbuffer_size = e.back_buffer_size();
 
-    let shader = runtime_asset_manager
-        .load::<peridot_shader::asset::AssetCore>(
-            "builtin.shaders.default-3d-pbr",
-            e,
-            &mut memory_manager,
-        )
-        .expect("shader.load")
-        .expect("shader.missing");
-
     let mut camera = peridot::math::Camera {
         projection: Some(peridot::math::ProjectionMethod::Perspective {
             fov: 60.0f32.to_radians(),
@@ -35,8 +26,13 @@ pub async fn game_main<'e, NL: peridot::NativeLinker>(e: &mut peridot::Engine<'e
         .load::<peridot_mesh::AssetCore>("test", e, &mut memory_manager)
         .expect("asset.load")
         .expect("asset.missing");
+    let mat = runtime_asset_manager
+        .load::<peridot_material::MaterialAsset>("test", e, &mut memory_manager)
+        .expect("asset.mat.load")
+        .expect("asset.mat.missing");
+    let mat_ref = runtime_asset_manager.get_typed(&mat).expect("invalid ref");
     let shader_ref = runtime_asset_manager
-        .get_typed(&shader)
+        .get_typed(&mat_ref.shader)
         .expect("invalid ref");
 
     let (device_buffer, [camera_parameters_offset, object_parameters_offset]) = memory_manager

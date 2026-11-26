@@ -4,13 +4,16 @@ use std::{
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
 };
 
+use peridot_material::{
+    CullingMode, MaterialAsset, MaterialPropertyBlock, MaterialPropertySlot, PrimitiveOrder,
+};
 use peridot_mesh::{
     Attribute, AttributeData, BufferElementType, Header, IndexStream, IndexType, PrimitiveTopology,
     SIGNATURE, StreamBuffer, VertexStream,
 };
 use peridot_tp_gltf as gltf;
 
-use crate::ProcessOptions;
+use crate::{DEFAULT_3D_PBR_SHADER_ASSET_ID, ProcessOptions};
 
 macro_rules! file_assert {
     ($cond: expr, $msg: literal) => {
@@ -99,7 +102,38 @@ pub fn process(
 
     if opts.extract_material {
         for (mat_index, mat) in parsed.materials.into_iter().enumerate() {
-            eprintln!("todo: genmat {mat:#?}");
+            let mat = MaterialAsset {
+                shader: DEFAULT_3D_PBR_SHADER_ASSET_ID,
+                properties: MaterialPropertyBlock {
+                    map: [(
+                        "materialProperties.roughness".into(),
+                        MaterialPropertySlot::Float(mat.pbr_metallic_roughness.roughness_factor),
+                    )]
+                    .into_iter()
+                    .collect(),
+                },
+                wireframed: false,
+                culling: if mat.double_sided {
+                    CullingMode::None
+                } else {
+                    CullingMode::Back
+                },
+                prim_order: PrimitiveOrder::CounterClockwise,
+            };
+            let mat_asset_id = ctx.acquire_asset_id(
+                metadata,
+                crate::Processor::meta_generated_material_asset_id_key(mat_index).into(),
+                &asset_group_id,
+                peridot::ASSET_TYPE_MATERIAL,
+                mat_index.try_into().expect("too many materials"),
+            );
+            mat.write(
+                &mut std::fs::File::options()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(ctx.prepare_runtime_asset_output(&mat_asset_id))?,
+            )?;
         }
     }
 

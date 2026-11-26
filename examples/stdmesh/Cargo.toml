@@ -13,5 +13,6 @@ bedrock = { git = "https://github.com/Pctg-x8/bedrock", branch = "peridot", feat
 ] }
 peridot-runtime-asset-manager = { path = "../../modules/runtime-asset-manager" }
 peridot-shader = { path = "../../modules/shader" }
+peridot-material = { path = "../../modules/material" }
 tracing = "0.1"
 futures-util = "0.3"
